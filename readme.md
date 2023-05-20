@@ -38,8 +38,8 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 - Zig is still a evolving language.
 - Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.11`.
 - This library was compiled and tested using `0.11.0-dev.3218+b873ce1e0` (master).
-- Zig is targeting May 30th, 2023 for [`0.11` milestone](https://github.com/ziglang/zig/milestone/17).
-- Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests.
+- Zig is targeting end of Q2 2023 for [`0.11` milestone](https://github.com/ziglang/zig/milestone/17).
+- Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests, fix is in works.
   <br/>
   <br/>
 
