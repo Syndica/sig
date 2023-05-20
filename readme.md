@@ -1,7 +1,7 @@
 <br/>
 
 <p align="center">
-  <h1>&nbsp;🤖  &nbsp;&nbsp;Sig - a Solana Zig RPC client</h1>
+  <h1>&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana Zig RPC client</h1>
     <br/>
     <br/>
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
@@ -21,9 +21,9 @@ _Sig_ is a Solana RPC client implementation written in Zig.
 
 Zig's own definition: `Zig is a general-purpose programming language and toolchain for maintaining robust, optimal and reusable software.`
 
-1. **Optimized performance**: Zig provides control over how your program runs at a low level, similar to languages like C or C++. It allows fine-grained control over aspects such as memory management and system calls, which can lead to improved performance.
+1. **Optimized performance**: Zig provides control over how your program runs at a low level, similar to languages like C. It allows fine-grained control over aspects such as memory management and system calls, which can lead to improved performance.
 
-2. **Safety focus**: Zig has features built in to prevent common bugs and safety issues. For example, it includes built-in testing and bounds checking, which can help avoid problems such as buffer overflows and undefined behavior.
+2. **Safety focus**: Zig has features built in to prevent common bugs and safety issues common in C. For example, it includes built-in testing and bounds checking, which can help avoid problems such as buffer overflows and undefined behavior.
 
 3. **Readability and maintainability**: Zig syntax is designed to be straightforward and clear. This can make the code easier to understand, more maintainable, and less prone to bugs.
 
@@ -31,9 +31,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 5. **Integration with C**: Zig has excellent interoperation with C. You can directly include C libraries and headers in a Zig program, which can save time when using existing C libraries.
 
-6. **Cross-compiling**: Zig has out-of-the-box support for cross-compilation, making it easy to compile your code for different platforms and architectures from a single system.
-
-7. **Custom allocators**: Zig allows you to define custom memory allocation strategies for different parts of your program. This provides the flexibility to optimize memory usage for specific use-cases or workloads.
+6. **Custom allocators**: Zig allows you to define custom memory allocation strategies for different parts of your program. This provides the flexibility to optimize memory usage for specific use-cases or workloads.
 
 ## Notes:
 
@@ -123,13 +121,94 @@ Add `Sig` to your Zig project using `build.zig.zon` file (available for Zig >= 0
    </details>
    <br/>
 
-### API Reference
+## Usage
+
+### `Pubkey` - API Reference
+
+A struct which holds a Public Key of a Solana account (`[32]u8`).
+
+<br/>
+
+From a string:
+
+```zig
+const Pubkey = @import("sig").core.Pubkey;
+
+fn main() !void {
+
+    const pubkey = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
+
+}
+```
+
+<br/>
+
+From raw bytes:
+
+```zig
+const Pubkey = @import("sig").core.Pubkey;
+
+fn main() !void {
+
+    // Automatically encodes and caches the string value
+    const pubkey = try Pubkey.fromBytes(
+        &[32]u8{
+            44, 64, 232, 153, 35, 67, 7, 9, 46, 6, 87, 76, 55, 55, 65, 5,
+            99, 0, 48, 64, 75, 8, 127, 53, 57, 12, 7, 54, 8, 133, 246, 4,
+        },
+        .{},
+    );
+
+
+    // Optionally skip encoding if (in the rare scenario) you will never call the string() method, you can
+    // set this option to true and it will not decode & cache the encoded value. This can be helpful in
+    // scenarios where you plan to only use the bytes and want to save on expensive base58 encoding.
+    const pubkey = try Pubkey.fromBytes(
+       &[32]u8{
+            44, 64, 232, 153, 35, 67, 7, 9, 46, 6, 87, 76, 55, 55, 65, 5,
+            99, 0, 48, 64, 75, 8, 127, 53, 57, 12, 7, 54, 8, 133, 246, 4,
+        },
+        .{ .skip_encoding = true },
+    );
+
+}
+```
+
+<br/>
+
+### `rpc.Client` - API Reference
+
+<br/>
+
+A struct which allows you to interact with a Solana cluster via JSON RPC. You can instantiate a client like so:
+
+```zig
+const rpc = @import("sig").rpc;
+
+const HTTP_ENDPOINT = "https://api.mainnet-beta.solana.com";
+
+fn main() !void {
+    var customHeaders = [_][2][]const u8{
+        .{ "Cache-Control", "no-cache" },
+        .{ "Authorization", "Bearer <SOME-TOKEN>" },
+    };
+
+    var client = try rpc.Client.init(allocator, .{
+        .http_endpoint = HTTP_ENDPOINT,
+        .http_headers = &customHeaders,
+    });
+    defer client.deinit();
+}
+```
+
+<br/>
+<br/>
 
 <details>
-<summary><code>getAccountInfo: (address: Pubkey, options: GetAccountInfoOptions)</code></summary>
+<summary><code>getAccountInfo</code> - Returns all information associated with the account of provided Pubkey</summary>
 <br/>
-Returns all information associated with the account of provided Pubkey
-<br/>
+
+**Params:** <code>(address: Pubkey, options: GetAccountInfoOptions)</code>
 <br/>
 
 **Options**
@@ -148,13 +227,14 @@ const GetAccountInfoOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const Pubkey = sig.Pubkey;
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+const Pubkey = sig.core.Pubkey;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     const pubkey = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
@@ -174,10 +254,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBalance: (pubkey: Pubkey)</code></summary>
+<summary><code>getBalance</code> - Returns the balance of the account of provided Pubkey</summary>
 <br/>
-Returns the balance of the account of provided Pubkey
-<br/>
+
+**Params:** <code>(pubkey: Pubkey)</code>
+
 <br/>
 
 **Usage**
@@ -186,8 +267,9 @@ Returns the balance of the account of provided Pubkey
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const Pubkey = sig.Pubkey;
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+const Pubkey = sig.core.Pubkey;
+
 
 const allocator = std.heap.page_allocator;
 
@@ -209,10 +291,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockHeight: ()</code></summary>
+<summary><code>getBlockHeight</code> - Returns the current block height of the node</summary>
 <br/>
-Returns the current block height of the node
-<br/>
+
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -221,12 +304,13 @@ Returns the current block height of the node
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlockHeight();
@@ -244,10 +328,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlock: (slot: u64, options: GetBlockOptions)</code></summary>
+<summary><code>getBlock</code> - Returns identity and transaction information about a confirmed block in the ledger</summary>
 <br/>
-Returns identity and transaction information about a confirmed block in the ledger
-<br/>
+
+**Params:** <code>(slot: u64, options: GetBlockOptions)</code>
+
 <br/>
 
 **Options**
@@ -270,12 +355,13 @@ const GetBlockOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlock(500, .{});
@@ -293,10 +379,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockProduction: (options: GetBlockOptions)</code></summary>
+<summary><code>getBlockProduction</code> - Returns recent block production information from the current or previous epoch.</summary>
 <br/>
-Returns recent block production information from the current or previous epoch.
-<br/>
+
+**Params:** <code>(options: GetBlockOptions)</code>
+
 <br/>
 
 **Options**
@@ -319,12 +406,13 @@ const GetBlockProductionOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlockProduction(.{ .identity = "1EWZm7aZYxfZHbyiELXtTgN1yT2vU1HF9d8DWswX2Tp" });
@@ -342,10 +430,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockCommitment: (slot: u64)</code></summary>
+<summary><code>getBlockCommitment</code> - Returns commitment for particular block</summary>
 <br/>
-Returns commitment for particular block
-<br/>
+
+**Params:** <code>(slot: u64)</code>
+
 <br/>
 
 **Usage**
@@ -354,12 +443,13 @@ Returns commitment for particular block
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlockCommitment(400);
@@ -377,11 +467,12 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlocks: (startSlot: u64, endSlot: ?u64, options: GetBlocksOptions)</code></summary>
+<summary><code>getBlocks</code> - Returns a list of confirmed blocks between two slots.
+</summary>
 <br/>
-Returns a list of confirmed blocks between two slots
 
-<br/>
+**Params:** <code>(startSlot: u64, endSlot: ?u64, options: GetBlocksOptions)</code>
+
 <br/>
 
 **Options**
@@ -399,12 +490,13 @@ const GetBlocksOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlocks(400, 500, .{});
@@ -422,11 +514,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlocksWithLimit: (startSlot: u64, limit: ?u64, options: GetBlocksOptions)</code></summary>
+<summary><code>getBlocksWithLimit</code> - Returns a list of confirmed blocks starting at the given slot</summary>
 <br/>
-Returns a list of confirmed blocks starting at the given slot
 
-<br/>
+**Params:** <code>(startSlot: u64, limit: ?u64, options: GetBlocksOptions)</code>
+
 <br/>
 
 **Options**
@@ -444,12 +536,13 @@ const GetBlocksOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlocksWithLimit(400, 25, .{});
@@ -467,11 +560,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getBlockTime: (slot: u64)</code></summary>
+<summary><code>getBlockTime</code> - Returns the estimated production time of a block</summary>
 <br/>
-Returns the estimated production time of a block.
 
-<br/>
+**Params:** <code>(slot: u64)</code>
+
 <br/>
 
 **Usage**
@@ -480,12 +573,13 @@ Returns the estimated production time of a block.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getBlockTime(163954396);
@@ -503,11 +597,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getClusterNodes: ()</code></summary>
+<summary><code>getClusterNodes</code> - Returns information about all the nodes participating in the cluster</summary>
 <br/>
-Returns information about all the nodes participating in the cluster
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -516,12 +610,13 @@ Returns information about all the nodes participating in the cluster
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getClusterNodes();
@@ -539,11 +634,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getEpochInfo: (options: GetEpochInfoOptions)</code></summary>
+<summary><code>getEpochInfo</code> - Returns information about the current epoch</summary>
 <br/>
-Returns information about the current epoch
 
-<br/>
+**Params:** <code>(options: GetEpochInfoOptions)</code>
+
 <br/>
 
 **Options**
@@ -561,12 +656,13 @@ const GetEpochInfoOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getEpochInfo(.{});
@@ -584,11 +680,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getEpochSchedule: ()</code></summary>
+<summary><code>getEpochSchedule</code> - Returns the epoch schedule information from this cluster</summary>
 <br/>
-Returns the epoch schedule information from this cluster
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -597,12 +693,13 @@ Returns the epoch schedule information from this cluster
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getEpochSchedule();
@@ -620,11 +717,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getFeeForMessage: (message: []const u8, options: GetFeeForMessageOptions)</code></summary>
+<summary><code>getFeeForMessage</code> - Get the fee the network will charge for a particular Message</summary>
 <br/>
-Get the fee the network will charge for a particular Message
 
-<br/>
+**Params:** <code>(message: []const u8, options: GetFeeForMessageOptions)</code>
+
 <br/>
 
 **Options**
@@ -642,12 +739,13 @@ const GetFeeForMessageOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getFeeForMessage("AQABAgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEBAQAA", .{});
@@ -665,11 +763,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getFirstAvailableBlock: ()</code></summary>
+<summary><code>getFirstAvailableBlock</code> - Returns the slot of the lowest confirmed block that has not been purged from the ledger</summary>
 <br/>
-Returns the slot of the lowest confirmed block that has not been purged from the ledger
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -678,12 +776,13 @@ Returns the slot of the lowest confirmed block that has not been purged from the
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getFirstAvailableBlock();
@@ -701,11 +800,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getGenesisHash: ()</code></summary>
+<summary><code>getGenesisHash</code> - Returns the genesis hash</summary>
 <br/>
-Returns the genesis hash.
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -714,7 +813,8 @@ Returns the genesis hash.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
@@ -734,13 +834,13 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getHealth: ()</code></summary>
+<summary><code>getHealth</code> - Returns the current health of the node</summary>
 <br/>
-Returns the current health of the node.
 
-NOTE: If one or more --known-validator arguments are provided to solana-validator - "ok" is returned when the node has within HEALTH_CHECK_SLOT_DISTANCE slots of the highest known validator, otherwise an error is returned. "ok" is always returned if no known validators are provided.
+_NOTE:_ If one or more --known-validator arguments are provided to solana-validator - "ok" is returned when the node has within HEALTH_CHECK_SLOT_DISTANCE slots of the highest known validator, otherwise an error is returned. "ok" is always returned if no known validators are provided.
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -749,12 +849,13 @@ NOTE: If one or more --known-validator arguments are provided to solana-validato
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getHealth();
@@ -772,12 +873,13 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getHighestSnapshotSlot: ()</code></summary>
+<summary><code>getHighestSnapshotSlot</code> - Returns the highest slot information that the node has snapshots for</summary>
 <br/>
-Returns the highest slot information that the node has snapshots for.
 
-This will find the highest full snapshot slot, and the highest incremental snapshot slot based on the full snapshot slot, if there is one.
-<br/>
+_NOTE:_ This will find the highest full snapshot slot, and the highest incremental snapshot slot based on the full snapshot slot, if there is one.
+
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -786,12 +888,13 @@ This will find the highest full snapshot slot, and the highest incremental snaps
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getHighestSnapshotSlot();
@@ -809,11 +912,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getIdentity: ()</code></summary>
+<summary><code>getIdentity</code> - Returns the identity pubkey for the current node</summary>
 <br/>
-Returns the identity pubkey for the current node.
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -822,12 +925,13 @@ Returns the identity pubkey for the current node.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getIdentity();
@@ -845,11 +949,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getInflationGovernor: (options: GetInflationGovernorOptions)</code></summary>
+<summary><code>getInflationGovernor</code> - Returns the current inflation governor</summary>
 <br/>
-Returns the current inflation governor.
 
-<br/>
+**Params:** <code>(options: GetInflationGovernorOptions)</code>
+
 <br/>
 
 **Options**
@@ -867,12 +971,13 @@ const GetInflationGovernorOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getInflationGovernor(.{});
@@ -890,11 +995,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getInflationRate: ()</code></summary>
+<summary><code>getInflationRate</code> - Returns the specific inflation values for the current epoch</summary>
 <br/>
-Returns the specific inflation values for the current epoch
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -903,12 +1008,13 @@ Returns the specific inflation values for the current epoch
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getInflationRate();
@@ -926,11 +1032,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getInflationReward: (accounts: []Pubkey, options: GetInflationRewardOptions)</code></summary>
+<summary><code>getInflationReward</code> - Returns the inflation / staking reward for a list of addresses for an epoch</summary>
 <br/>
-Returns the inflation / staking reward for a list of addresses for an epoch.
 
-<br/>
+**Params:** <code>(accounts: []Pubkey, options: GetInflationRewardOptions)</code>
+
 <br/>
 
 **Options**
@@ -950,12 +1056,13 @@ const GetInflationRewardOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var accounts = [2]Pubkey{
@@ -981,11 +1088,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getLargestAccounts: (options: GetLargestAccountsOptions)</code></summary>
+<summary><code>getLargestAccounts</code> - Returns the 20 largest accounts, by lamport balance (results may be cached up to two hours)</summary>
 <br/>
-Returns the 20 largest accounts, by lamport balance (results may be cached up to two hours)
 
-<br/>
+**Params:** <code>(options: GetLargestAccountsOptions)</code>
+
 <br/>
 
 **Options**
@@ -1004,12 +1111,13 @@ const GetLargestAccountsOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getLargestAccounts(.{});
@@ -1027,11 +1135,12 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getLatestBlockhash: (options: GetLatestBlockhashOptions)</code></summary>
+<summary><code>getLatestBlockhash</code> - Returns the latest blockhash</summary>
 <br/>
-Returns the latest blockhash.
+.
 
-<br/>
+**Params:** <code>(options: GetLatestBlockhashOptions)</code>
+
 <br/>
 
 **Options**
@@ -1050,12 +1159,13 @@ const GetLatestBlockhashOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getLatestBlockhash(.{});
@@ -1073,11 +1183,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getLeaderSchedule: (epoch: ?u64, options: GetLeaderScheduleOptions)</code></summary>
+<summary><code>getLeaderSchedule</code> - Returns the leader schedule for an epoch</summary>
 <br/>
-Returns the leader schedule for an epoch.
 
-<br/>
+**Params:** <code>(epoch: ?u64, options: GetLeaderScheduleOptions)</code>
+
 <br/>
 
 **Options**
@@ -1096,12 +1206,13 @@ const GetLeaderScheduleOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getLeaderSchedule(null, .{ .identity = "GRmtMtAeSL8HgX1p815ATQjaYU4Sk7XCP21i4yoFd3KS" });
@@ -1119,11 +1230,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMaxRetransmitSlot: ()</code></summary>
+<summary><code>getMaxRetransmitSlot</code> - Get the max slot seen from retransmit stage</summary>
 <br/>
-Get the max slot seen from retransmit stage.
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -1132,12 +1243,13 @@ Get the max slot seen from retransmit stage.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getMaxRetransmitSlot();
@@ -1155,11 +1267,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMaxShredInsertSlot: ()</code></summary>
+<summary><code>getMaxShredInsertSlot</code> - Get the max slot seen from after shred insert</summary>
 <br/>
-Get the max slot seen from after shred insert.
 
-<br/>
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -1168,12 +1280,13 @@ Get the max slot seen from after shred insert.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getMaxShredInsertSlot();
@@ -1191,11 +1304,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMinimumBalanceForRentExemption: (size: usize)</code></summary>
+<summary><code>getMinimumBalanceForRentExemption</code> - Returns minimum balance required to make account rent exempt</summary>
 <br/>
-Returns minimum balance required to make account rent exempt.
 
-<br/>
+**Params:** <code>(size: usize)</code>
+
 <br/>
 
 **Usage**
@@ -1204,12 +1317,13 @@ Returns minimum balance required to make account rent exempt.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getMinimumBalanceForRentExemption(1000);
@@ -1227,11 +1341,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getMultipleAccounts: (pubkeys: []Pubkey, options: GetMultipleAccountsOptions)</code></summary>
-<br/> 
-Returns the account information for a list of Pubkeys.
-
+<summary><code>getMultipleAccounts</code> - Returns the account information for a list of Pubkeys</summary>
 <br/>
+
+**Params:** <code>(pubkeys: []Pubkey, options: GetMultipleAccountsOptions)</code>
+
 <br/>
 
 **Options**
@@ -1250,12 +1364,13 @@ const GetMultipleAccountsOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var accounts2 = [2]Pubkey{
@@ -1281,11 +1396,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getProgramAccounts: (program: Pubkey, options: GetProgramAccountsOptions)</code></summary>
-<br/> 
-Returns all accounts owned by the provided program Pubkey.
-
+<summary><code>getProgramAccounts</code> - Returns all accounts owned by the provided program Pubkey</summary>
 <br/>
+
+**Params:** <code>(pubkeys: []Pubkey, options: GetMultipleAccountsOptions)</code>
+
 <br/>
 
 **Options**
@@ -1310,12 +1425,13 @@ pub const GetProgramAccountsOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var filters = [1]Filter{.{ .memcmp = .{ .offset = 0, .bytes = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" } }};
@@ -1337,11 +1453,13 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getRecentPerformanceSamples: (limit: ?u64)</code></summary>
-<br/> 
-Returns a list of recent performance samples, in reverse slot order. Performance samples are taken every 60 seconds and include the number of transactions and slots that occur in a given time window.
-
+<summary><code>getRecentPerformanceSamples</code> - Returns a list of recent performance samples, in reverse slot order</summary>
 <br/>
+
+_NOTE:_ Performance samples are taken every 60 seconds and include the number of transactions and slots that occur in a given time window.
+
+**Params:** <code>(limit: ?u64)</code>
+
 <br/>
 
 **Usage**
@@ -1350,12 +1468,13 @@ Returns a list of recent performance samples, in reverse slot order. Performance
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getRecentPerformanceSamples(null);
@@ -1373,11 +1492,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getRecentPrioritizationFees: (pubkeys: ?[]Pubkey)</code></summary>
-<br/> 
-Returns a list of prioritization fees from recent blocks.
-
+<summary><code>getRecentPrioritizationFees</code> - Returns a list of prioritization fees from recent blocks</summary>
 <br/>
+
+**Params:** <code>(pubkeys: ?[]Pubkey)</code>
+
 <br/>
 
 **Usage**
@@ -1386,12 +1505,13 @@ Returns a list of prioritization fees from recent blocks.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getRecentPrioritizationFees(null);
@@ -1409,11 +1529,13 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSignaturesForAddress: (pubkey: Pubkey, options: GetSignaturesForAddressOptions)</code></summary>
-<br/> 
-Returns signatures for confirmed transactions that include the given address in their accountKeys list. Returns signatures backwards in time from the provided signature or most recent confirmed block.
-
+<summary><code>getSignaturesForAddress</code> - Returns signatures for confirmed transactions that include the given address in their accountKeys list</summary>
 <br/>
+
+_NOTE:_ Returns signatures backwards in time from the provided signature or most recent confirmed block.
+
+**Params:** <code>(pubkey: Pubkey, options: GetSignaturesForAddressOptions)</code>
+
 <br/>
 
 **Options**
@@ -1435,12 +1557,13 @@ pub const GetSignaturesForAddressOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getSignaturesForAddress(try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa"), .{ .limit = 10 });
@@ -1458,11 +1581,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSignatureStatuses: (pubkey: Pubkey, options: GetSignatureStatusesOptions)</code></summary>
-<br/> 
-Returns the statuses of a list of signatures. Each signature must be a txid, the first signature of a transaction.
-
+<summary><code>getSignatureStatuses</code> - Returns the statuses of a list of signatures</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, options: GetSignatureStatusesOptions)</code>
+
 <br/>
 
 **Options**
@@ -1480,12 +1603,13 @@ const GetSignatureStatusesOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var signatures = [2][]const u8{
@@ -1507,11 +1631,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSlotLeader: (options: GetSlotLeaderOptions)</code></summary>
-<br/> 
-Returns the current slot leader.
-
+<summary><code>getSlotLeader</code> - Returns the current slot leader</summary>
 <br/>
+
+**Params:** <code>(options: GetSlotLeaderOptions)</code>
+
 <br/>
 
 **Options**
@@ -1530,12 +1654,13 @@ const GetSlotLeaderOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getSlotLeader(.{});
@@ -1553,11 +1678,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSlotLeaders: (startSlot: ?u64, limit: ?u64)</code></summary>
-<br/> 
-Returns the slot leaders for a given slot range.
-
+<summary><code>getSlotLeaders</code> - Returns the slot leaders for a given slot range</summary>
 <br/>
+
+**Params:** <code>(startSlot: ?u64, limit: ?u64)</code>
+
 <br/>
 
 **Usage**
@@ -1566,12 +1691,13 @@ Returns the slot leaders for a given slot range.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getSlotLeaders(193536000, 10);
@@ -1589,11 +1715,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getStakeActivation: (pubkey: Pubkey, options: GetStakeActivationOptions)</code></summary>
-<br/> 
-Returns epoch activation information for a stake account.
-
+<summary><code>getStakeActivation</code> - Returns epoch activation information for a stake account</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, options: GetStakeActivationOptions)</code>
+
 <br/>
 
 **Options**
@@ -1613,12 +1739,13 @@ pub const GetStakeActivationOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getStakeActivation(try Pubkey.fromString(
@@ -1638,11 +1765,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getStakeMinimumDelegation: (options: GetStakeMinimumDelegationOptions)</code></summary>
-<br/> 
-Returns epoch activation information for a stake account.
-
+<summary><code>getStakeMinimumDelegation</code> - Returns epoch activation information for a stake account</summary>
 <br/>
+
+**Params:** <code>(options: GetStakeMinimumDelegationOptions)</code>
+
 <br/>
 
 **Options**
@@ -1660,12 +1787,13 @@ const GetStakeMinimumDelegationOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getStakeMinimumDelegation(.{});
@@ -1683,11 +1811,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getSupply: (options: GetSupplyOptions)</code></summary>
-<br/> 
-Returns information about the current supply.
-
+<summary><code>getSupply</code> - Returns information about the current supply</summary>
 <br/>
+
+**Params:** <code>(options: GetSupplyOptions)</code>
+
 <br/>
 
 **Options**
@@ -1706,12 +1834,13 @@ const GetSupplyOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getSupply(.{ .excludeNonCirculatingAccountsList = false });
@@ -1729,11 +1858,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenAccountBalance: (pubkey: Pubkey, options: GetTokenAccountBalanceOptions)</code></summary>
-<br/> 
-Returns the token balance of an SPL Token account.
-
+<summary><code>getTokenAccountBalance</code> - Returns the token balance of an SPL Token account</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, options: GetTokenAccountBalanceOptions)</code>
+
 <br/>
 
 **Options**
@@ -1751,12 +1880,13 @@ const GetTokenAccountBalanceOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var pubkey = try Pubkey.fromString(
@@ -1777,11 +1907,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenAccountsByDelegate: (pubkey: Pubkey, mintOrProgramId: MintOrProgramIdParam, options: GetTokenAccountsByDelegateOptions)</code></summary>
-<br/> 
-Returns all SPL Token accounts by approved Delegate.
-
+<summary><code>getTokenAccountsByDelegate</code> - Returns all SPL Token accounts by approved Delegate</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, mintOrProgramId: MintOrProgramIdParam, options: GetTokenAccountsByDelegateOptions)</code>
+
 <br/>
 
 **Options**
@@ -1807,12 +1937,13 @@ const GetTokenAccountsByDelegateOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var programPubkey = try Pubkey.fromString(
@@ -1836,11 +1967,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenAccountsByOwner: (pubkey: Pubkey, mintOrProgramId: MintOrProgramIdParam, options: GetTokenAccountsByOwnerOptions)</code></summary>
-<br/> 
-Returns all SPL Token accounts by token owner.
-
+<summary><code>getTokenAccountsByOwner</code> - Returns all SPL Token accounts by token owner</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, mintOrProgramId: MintOrProgramIdParam, options: GetTokenAccountsByOwnerOptions)</code>
+
 <br/>
 
 **Options**
@@ -1866,12 +1997,13 @@ const GetTokenAccountsByOwnerOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var mintPubkey = try Pubkey.fromString(
@@ -1895,11 +2027,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenLargestAccounts: (pubkey: Pubkey, options: GetTokenLargestAccountsOptions)</code></summary>
-<br/> 
-Returns the 20 largest accounts of a particular SPL Token type.
-
+<summary><code>getTokenLargestAccounts</code> - Returns the 20 largest accounts of a particular SPL Token type</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, options: GetTokenLargestAccountsOptions)</code>
+
 <br/>
 
 **Options**
@@ -1917,12 +2049,13 @@ const GetTokenLargestAccountsOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var mintPubkey = try Pubkey.fromString(
@@ -1943,11 +2076,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTokenSupply: (pubkey: Pubkey, options: GetTokenSupplyOptions)</code></summary>
-<br/> 
-Returns the total supply of an SPL Token type.
-
+<summary><code>getTokenSupply</code> - Returns the total supply of an SPL Token type</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, options: GetTokenSupplyOptions)</code>
+
 <br/>
 
 **Options**
@@ -1965,12 +2098,13 @@ const GetTokenSupplyOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var mintPubkey = try Pubkey.fromString(
@@ -1991,11 +2125,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTransaction: (signature: []const u8, options: GetTransactionOptions)</code></summary>
-<br/> 
-Returns transaction details for a confirmed transaction.
-
+<summary><code>getTransaction</code> - Returns transaction details for a confirmed transaction</summary>
 <br/>
+
+**Params:** <code>(signature: []const u8, options: GetTransactionOptions)</code>
+
 <br/>
 
 **Options**
@@ -2016,12 +2150,13 @@ const GetTransactionOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var txSig = "5UfDuX7WXY18keiz9mZ6zKkY8JyNuLDFz2QycQcr7skRkgVaNmo6tgFbsePRrX5C6crvycJ2A3txSdGgjPHvPbTZ";
@@ -2040,11 +2175,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getTransactionCount: (options: GetTransactionOptions)</code></summary>
-<br/> 
-Returns the current Transaction count from the ledger.
-
+<summary><code>getTransactionCount</code> - Returns the current Transaction count from the ledger</summary>
 <br/>
+
+**Params:** <code>(options: GetTransactionOptions)</code>
+
 <br/>
 
 **Options**
@@ -2063,12 +2198,13 @@ const GetTransactionCountOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getTransactionCount(.{});
@@ -2086,11 +2222,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getVersion: ()</code></summary>
-<br/> 
-Returns the current Solana version running on the node.
-
+<summary><code>getVersion</code> - Returns the current Solana version running on the node</summary>
 <br/>
+
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -2099,12 +2235,13 @@ Returns the current Solana version running on the node.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.getVersion();
@@ -2122,11 +2259,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>getVoteAccounts: (options: GetVoteAccountsOptions)</code></summary>
-<br/> 
-Returns the account info and associated stake for all the voting accounts in the current bank.
-
+<summary><code>getVoteAccounts</code> - Returns the account info and associated stake for all the voting accounts in the current bank</summary>
 <br/>
+
+**Params:** <code>(options: GetVoteAccountsOptions)</code>
+
 <br/>
 
 **Options**
@@ -2147,12 +2284,13 @@ const GetVoteAccountsOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var votePubkey = try Pubkey.fromString(
@@ -2173,11 +2311,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>isBlockhashValid: (blockhash: []const u8, options: IsBlockhashValidOptions)</code></summary>
-<br/> 
-Returns whether a blockhash is still valid or not.
-
+<summary><code>isBlockhashValid</code> - Returns whether a blockhash is still valid or not</summary>
 <br/>
+
+**Params:** <code>(blockhash: []const u8, options: IsBlockhashValidOptions)</code>
+
 <br/>
 
 **Options**
@@ -2196,12 +2334,13 @@ pub const IsBlockhashValidOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.isBlockhashValid("AaPs8sYJjnDLMMAADYj2fPyDyNzp9to9v4J6c5gevxpX", .{});
@@ -2219,11 +2358,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>minimumLedgerSlot: ()</code></summary>
-<br/> 
-Returns the lowest slot that the node has information about in its ledger.
-
+<summary><code>minimumLedgerSlot</code> - Returns the lowest slot that the node has information about in its ledger</summary>
 <br/>
+
+**Params:** <code>None</code>
+
 <br/>
 
 **Usage**
@@ -2232,12 +2371,13 @@ Returns the lowest slot that the node has information about in its ledger.
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.minimumLedgerSlot();
@@ -2255,11 +2395,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>requestAirdrop: (pubkey: Pubkey, lamports: u64, options: RequestAirdropOptions)</code></summary>
-<br/> 
-Requests an airdrop of lamports to a Pubkey.
-
+<summary><code>requestAirdrop</code> - Requests an airdrop of lamports to a Pubkey</summary>
 <br/>
+
+**Params:** <code>(pubkey: Pubkey, lamports: u64, options: RequestAirdropOptions)</code>
+
 <br/>
 
 **Options**
@@ -2277,12 +2417,13 @@ const RequestAirdropOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var pubkey = try Pubkey.fromString(
@@ -2303,10 +2444,10 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>sendTransaction: (encoded: []const u8)</code></summary>
-<br/> 
-Submits a signed transaction to the cluster for processing.
+<summary><code>sendTransaction</code> - Submits a signed transaction to the cluster for processing</summary>
+<br/>
 
+_NOTE:_
 This method does not alter the transaction in any way; it relays the transaction created by clients to the node as-is.
 
 If the node's rpc service receives the transaction, this method immediately succeeds, without waiting for any confirmations. A successful response from this method does not guarantee the transaction is processed or confirmed by the cluster.
@@ -2321,7 +2462,8 @@ The transaction signatures are verified
 The transaction is simulated against the bank slot specified by the preflight commitment. On failure an error will be returned. Preflight checks may be disabled if desired. It is recommended to specify the same commitment and preflight commitment to avoid confusing behavior.
 The returned signature is the first signature in the transaction, which is used to identify the transaction (transaction id). This identifier can be easily extracted from the transaction data before submission.
 
-<br/>
+**Params:** <code>(encoded: []const u8)</code>
+
 <br/>
 
 **Usage**
@@ -2330,12 +2472,13 @@ The returned signature is the first signature in the transaction, which is used 
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.sendTransaction(
@@ -2356,11 +2499,11 @@ pub fn main() !void {
 </details>
 
 <details>
-<summary><code>simulateTransaction: (encoded: []const u8, options: SimulateTransactionOptions)</code></summary>
-<br/> 
-Simulate sending a transaction.
-
+<summary><code>simulateTransaction</code> - Simulate sending a transaction</summary>
 <br/>
+
+**Params:** <code>(encoded: []const u8, options: SimulateTransactionOptions)</code>
+
 <br/>
 
 **Options**
@@ -2388,12 +2531,13 @@ const SimulateTransactionOptions = struct {
 ```zig
 const std = @import("std");
 const sig = @import("sig");
-const RpcClient = sig.RpcClient;
+const rpc = sig.rpc;
+
 
 const allocator = std.heap.page_allocator;
 
 pub fn main() !void {
-    var client = try RpcClient.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
+    var client = try rpc.Client.init(allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
     var resp = try client.simulateTransaction(

@@ -1,0 +1,23 @@
+name: Bugs
+description: Found a bug? File it here!
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A description of what the issue is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to Reproduce the Bug
+      description: What can someone else do in order to observe the problem that you saw?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context or screenshots about your bug.

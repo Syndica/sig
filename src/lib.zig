@@ -1,3 +1,12 @@
-pub const RpcClient = @import("./rpc/client.zig").RpcClient;
-pub const RpcTypes = @import("./rpc/types.zig");
-pub const Pubkey = @import("./core/pubkey.zig").Pubkey;
+pub const rpc = struct {
+    usingnamespace @import("./rpc/client.zig");
+    const types = struct {
+        usingnamespace @import("./rpc/types.zig");
+    };
+};
+
+pub const core = struct {
+    usingnamespace @import("./core/pubkey.zig");
+    usingnamespace @import("./core/account.zig");
+    usingnamespace @import("./core/transaction.zig");
+};

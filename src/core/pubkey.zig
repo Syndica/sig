@@ -35,8 +35,7 @@ pub const Pubkey = struct {
     /// Options:
     /// - `skip_encoding`: If (in the unlikely scenario) you will never call the string() method, you can
     /// set this option to true and it will not decode & cache the encoded value. This can be helpful in
-    /// scenarios where you plan to only use the bytes and want to save on expensive base58 encoding. This is
-    /// only valid if `bytes` union was passed to ***from***.
+    /// scenarios where you plan to only use the bytes and want to save on expensive base58 encoding.
     ///
     pub fn fromBytes(bytes: []const u8, opts: struct { skip_encoding: bool = false }) !Self {
         if (bytes.len != 32) {
@@ -63,6 +62,10 @@ pub const Pubkey = struct {
             return &self.cached_str.?[0..].*;
         }
         @panic("call to Pubkey.string() after opt `skip_encoding` asserted");
+    }
+
+    pub fn equals(self: *const Self, other: *Pubkey) bool {
+        return std.mem.eql(u8, &self.data, &other.data);
     }
 };
 

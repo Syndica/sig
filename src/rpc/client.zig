@@ -12,7 +12,7 @@ const Response = jsonrpc.ResponsePayload;
 
 const logger = std.log.scoped(.rpc_client);
 
-pub const RpcClient = struct {
+pub const Client = struct {
     http_endpoint: Uri,
     client: http.Client,
     default_http_headers: http.Headers,
