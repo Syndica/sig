@@ -1,0 +1,10 @@
+.{
+    .name = "sig",
+    .version = "0.1.0",
+    .dependencies = .{
+        .@"base58-zig" = .{
+            .url = "https://github.com/ultd/base58-zig/archive/6ddf85b0efc9b00aec0572180b9ac56bb2765d2a.tar.gz",
+            .hash = "1220ba01a1823d97d5d55450283966a775c34242c92820e56421dca48545381f67d2",
+        },
+    },
+}
