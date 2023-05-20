@@ -1,7 +1,7 @@
 <br/>
 
 <p align="center">
-  <h1>&nbsp;🤖  &nbsp;&nbsp;Sig - a Zig Solana RPC client</h1>
+  <h1>&nbsp;🤖  &nbsp;&nbsp;Sig - a Solana Zig RPC client</h1>
     <br/>
     <br/>
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
