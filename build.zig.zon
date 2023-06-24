@@ -6,5 +6,17 @@
             .url = "https://github.com/ultd/base58-zig/archive/6ddf85b0efc9b00aec0572180b9ac56bb2765d2a.tar.gz",
             .hash = "1220ba01a1823d97d5d55450283966a775c34242c92820e56421dca48545381f67d2",
         },
+        .@"zig-network" = .{
+            .url = "https://github.com/MasterQ32/zig-network/archive/86c315be67c7567195cc426615d81202a39bbb91.tar.gz",
+            .hash = "1220746fef79fb9774d76a0a5d746ccf30cfc847bce4a3a7388c3451817b7ab92869",
+        },
+        .@"bincode-zig" = .{
+            .url = "https://github.com/ultd/bincode-zig/archive/661a36d79487f3a41b20a5fc279f47411398c0f5.tar.gz",
+            .hash = "1220a7c1bace7786948db90f896e5cdafcb5ff632d59ad1a7d46001688b1b48524df",
+        },
+        .@"zig-cli" = .{
+            .url = "https://github.com/ultd/zig-cli/archive/59d4b29d3a0362f66c064ffc3473dccecd873ccf.tar.gz",
+            .hash = "1220dd7dcff9b97dd68a75e90e25e749b31e3f71f97be2a733595b721e0fd5354533",
+        },
     },
 }

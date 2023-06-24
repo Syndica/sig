@@ -1,12 +1,13 @@
 const std = @import("std");
-const base58 = @import("base58");
-
+const base58 = @import("base58-zig");
+const bincode = @import("bincode-zig");
+const Ed25519 = std.crypto.sign.Ed25519;
 const encoder = base58.Encoder.init(.{});
 const decoder = base58.Decoder.init(.{});
 
 pub const Pubkey = struct {
     data: [32]u8,
-    cached_str: ?[44]u8,
+    cached_str: ?[44]u8 = null,
 
     const Self = @This();
 
@@ -64,9 +65,35 @@ pub const Pubkey = struct {
         @panic("call to Pubkey.string() after opt `skip_encoding` asserted");
     }
 
+    /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
+    pub fn random(options: struct { skip_encoding: bool = false }) Self {
+        var bytes: [32]u8 = undefined;
+        var rand = std.rand.DefaultPrng.init(@intCast(u64, std.time.milliTimestamp()));
+        rand.fill(&bytes);
+        var dest: [44]u8 = .{
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        };
+        if (options.skip_encoding) {
+            return Self{ .data = bytes[0..32].*, .cached_str = null };
+        }
+        var written = encoder.encode(&bytes, &dest) catch @panic("could not encode pubkey");
+        if (written != 44) {
+            std.debug.panic("written is not 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
+        }
+        return Self{ .data = bytes[0..32].*, .cached_str = dest[0..44].* };
+    }
+
     pub fn equals(self: *const Self, other: *Pubkey) bool {
         return std.mem.eql(u8, &self.data, &other.data);
     }
+
+    pub fn fromPublicKey(public_key: *const Ed25519.PublicKey, skip_bs58_encoding: bool) Self {
+        return Self.fromBytes(public_key.bytes[0..], .{ .skip_encoding = skip_bs58_encoding }) catch unreachable;
+    }
+
+    pub const @"!bincode-config:cached_str" = bincode.FieldConfig{ .skip = true };
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

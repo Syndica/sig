@@ -1,4 +1,4 @@
-const Pubkey = @import("./pubkey.zig").Pubkey;
+const Pubkey = @import("pubkey.zig").Pubkey;
 const std = @import("std");
 
 pub const Account = struct {
