@@ -18,7 +18,7 @@ var gossip_port_option = cli.Option{
     .value_name = "Gossip Port",
 };
 
- var app = &cli.App{
+var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
     .version = "0.1.1",
@@ -27,24 +27,18 @@ var gossip_port_option = cli.Option{
         &cli.Command{
             .name = "identity",
             .help = "Get own identity",
-            .description = 
+            .description =
             \\Gets own identity (Pubkey) or creates one if doesn't exist.
             \\
             \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
             ,
             .action = identity,
         },
-        &cli.Command{
-            .name = "gossip",
-            .help = "Run gossip client",
-            .description = 
-            \\Start Solana gossip client on specified port.
-            ,
-            .action = gossip,
-            .options = &.{
-                &gossip_port_option,
-            }
-        },
+        &cli.Command{ .name = "gossip", .help = "Run gossip client", .description = 
+        \\Start Solana gossip client on specified port.
+        , .action = gossip, .options = &.{
+            &gossip_port_option,
+        } },
     },
 };
 
