@@ -17,13 +17,16 @@ var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
 
 const PacketChannel = Channel(Packet);
+// const ProtocolChannel = Channel(Protocol);
+
 const logger = std.log.scoped(.gossip_service);
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
     gossip_socket: UdpSocket,
     exit_sig: AtomicBool,
-    packet_chan: PacketChannel,
+    packet_channel: PacketChannel,
+    responder_channel: PacketChannel,
 
     const Self = @This();
 
@@ -33,18 +36,21 @@ pub const GossipService = struct {
         gossip_socket: UdpSocket,
         exit: AtomicBool,
     ) Self {
-        var channel = PacketChannel.init(allocator, 10000);
+        var packet_channel = PacketChannel.init(allocator, 10000);
+        var responder_channel = PacketChannel.init(allocator, 10000);
 
         return Self{
             .cluster_info = cluster_info,
             .gossip_socket = gossip_socket,
             .exit_sig = exit,
-            .packet_chan = channel,
+            .packet_channel = packet_channel,
+            .responder_channel = responder_channel,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.packet_chan.deinit();
+        self.packet_channel.deinit();
+        self.responder_channel.deinit();
     }
 
     pub fn run(self: *Self) !void {
@@ -57,30 +63,46 @@ pub const GossipService = struct {
         var packet_handle = try Thread.spawn(.{}, ClusterInfo.processPackets, .{
             self.cluster_info,
             gpa,
-            &self.packet_chan,
+            &self.packet_channel,
         });
         var random_packet_handle = try Thread.spawn(.{}, Self.generate_random_ping_protocols, .{self});
+        var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
 
+        // TODO: push contact info through gossip 
+
+
+        responder_handle.join();
         gossip_handle.join();
         packet_handle.join();
         random_packet_handle.join();
     }
 
+    fn responder(self: *Self) !void { 
+        while (self.responder_channel.receive()) |p| { 
+            _ = try self.gossip_socket.sendTo(p.from, p.data[0..p.size]);
+        }
+    }
+
     fn generate_random_ping_protocols(self: *Self) !void {
+        // solana-gossip spy -- local node for testing
+        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
+
         while (true) {
-            std.time.sleep(std.time.ns_per_s * 1);
             var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
             var out = [_]u8{0} ** PACKET_DATA_SIZE;
             var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
-            self.packet_chan.send(
-                Packet.init(SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1000).toEndpoint(), out, bytes.len),
+
+            self.responder_channel.send(
+                Packet.init(peer, out, bytes.len),
             );
+
+            std.time.sleep(std.time.ns_per_s * 1);
         }
     }
 
     fn read_gossip_socket(self: *Self) !void {
         // we close the chan if no more packet's can ever be produced
-        defer self.packet_chan.close();
+        defer self.packet_channel.close();
 
         // handle packet reads
         var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -98,7 +120,7 @@ pub const GossipService = struct {
             bytes_read = recv_meta.numberOfBytes;
 
             // send packet through channel
-            self.packet_chan.send(Packet.init(recv_meta.sender, read_buf, recv_meta.numberOfBytes));
+            self.packet_channel.send(Packet.init(recv_meta.sender, read_buf, bytes_read));
 
             // reset buffer
             @memset(&read_buf, 0);
