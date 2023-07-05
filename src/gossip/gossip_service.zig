@@ -60,16 +60,14 @@ pub const GossipService = struct {
 
         // spawn gossip udp receiver thread
         var gossip_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{self});
-        var packet_handle = try Thread.spawn(.{}, ClusterInfo.processPackets, .{
-            self.cluster_info,
+        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{
+            self,
             gpa,
-            &self.packet_channel,
         });
         var random_packet_handle = try Thread.spawn(.{}, Self.generate_random_ping_protocols, .{self});
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
 
         // TODO: push contact info through gossip 
-
 
         responder_handle.join();
         gossip_handle.join();
@@ -109,13 +107,7 @@ pub const GossipService = struct {
         @memset(&read_buf, 0);
 
         var bytes_read: usize = undefined;
-        var first_run = true;
-        while (first_run or bytes_read != 0) {
-            if (first_run) {
-                first_run = false;
-                continue;
-            }
-
+        while (bytes_read != 0) {
             var recv_meta = try self.gossip_socket.receiveFrom(&read_buf);
             bytes_read = recv_meta.numberOfBytes;
 
@@ -124,6 +116,20 @@ pub const GossipService = struct {
 
             // reset buffer
             @memset(&read_buf, 0);
+        }
+
+        logger.debug("reading gossip exiting...", .{});
+    }
+
+    pub fn process_packets(self: *Self, allocator: std.mem.Allocator) !void {
+        while (self.packet_channel.receive()) |p| {
+            // note: to recieve PONG messages (from a local spy node) from a PING
+            // you need to modify: streamer/src/streamer.rs recv_send: 
+            // comment out this line --> // socket_addr_space.check(&addr).then_some((data, addr))
+            // bc it doesnt support loopback IPV4 socketaddrs
+
+            var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
+            logger.debug("got a protocol message: {any}", .{protocol_message});
         }
     }
 };
