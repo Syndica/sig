@@ -286,6 +286,28 @@ test "new contact info" {
     defer ci.deinit();
 }
 
+test "socketaddr bincode serialize matches rust" { 
+    const Tmp = struct { 
+        addr: SocketAddr,
+    };
+    const tmp = Tmp{ .addr = SocketAddr.init_ipv4(.{127, 0, 0, 1}, 1234) };
+    var buf = [_]u8{0} ** 1024;
+    var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
+
+    std.debug.print("tmp socketaddr serialized: {any}\n", .{bytes});
+
+    // #[derive(Serialize, Debug, Clone, Copy)]
+    // pub struct Tmp { 
+    //     addr: SocketAddr
+    // }
+    // let tmp = Tmp { addr: socketaddr!(Ipv4Addr::LOCALHOST, 1234) };
+    // println!("{:?}", bincode::serialize(&tmp).unwrap());
+
+    // Enum discriminants are encoded as u32 (4 leading zeros)
+    const rust_bytes = [_]u8 { 0, 0, 0, 0, 127, 0, 0, 1, 210, 4 };
+    try testing.expectEqualSlices(u8, rust_bytes[0..rust_bytes.len], bytes);
+}
+
 test "set & get socket on contact info" {
     var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @intCast(u64, std.time.microTimestamp()), 1000);
     defer ci.deinit();

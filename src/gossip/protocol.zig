@@ -4,11 +4,16 @@ const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const bincode = @import("bincode-zig");
 const Channel = @import("../sync/channel");
-const CrdsValue = @import("crds.zig").CrdsValue;
-const CrdsData = @import("crds.zig").CrdsData;
-const CrdsFilter = @import("crds.zig").CrdsFilter;
-const Version = @import("crds.zig").Version;
-const LegacyVersion2 = @import("crds.zig").LegacyVersion2;
+const SocketAddr = @import("net.zig").SocketAddr;
+
+const crds = @import("crds.zig");
+const CrdsValue = crds.CrdsValue;
+const CrdsData = crds.CrdsData;
+const CrdsFilter = crds.CrdsFilter;
+const Version = crds.Version;
+const LegacyVersion2 = crds.LegacyVersion2;
+const LegacyContactInfo = crds.LegacyContactInfo;
+
 const Option = @import("../option.zig").Option;
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -162,4 +167,69 @@ test "gossip.protocol: ping message serializes and deserializes" {
     try testing.expect(std.mem.eql(u8, rust_bytes[0..], serialized));
     try testing.expect(std.meta.eql(original, deserialized));
     try testing.expect(try deserialized.PullRequest.@"1".verify(pubkey));
+}
+
+test "gossip.protocol: push message serializes and deserializes correctly" {
+    // var kp_bytes = [_]u8{1} ** 32;
+    // const kp = try KeyPair.create(kp_bytes);
+    // const pk = kp.public_key;
+    // const id = Pubkey.fromPublicKey(&pk, true);
+
+    // const gossip_addr = SocketAddr.init_ipv4(.{127, 0, 0, 1}, 1234);
+    // const unspecified_addr = SocketAddr.unspecified();
+
+    // var buf = [_]u8{0} ** 1024;
+
+    // var legacy_contact_info = LegacyContactInfo {
+    //     .id = id,
+    //     .gossip = gossip_addr,
+    //     .tvu = unspecified_addr,
+    //     .tvu_forwards = unspecified_addr,
+    //     .repair = unspecified_addr,
+    //     .tpu = unspecified_addr,
+    //     .tpu_forwards = unspecified_addr,
+    //     .tpu_vote = unspecified_addr,
+    //     .rpc = unspecified_addr,
+    //     .rpc_pubsub = unspecified_addr,
+    //     .serve_repair = unspecified_addr,
+    //     .wallclock = 0,
+    //     .shred_version = 0,
+    // };
+    // // legacy for fixed len encoding (used in labs codebase)
+    // var rust_crds_data = [_]u8 { 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
+
+    // std.debug.print("serialized: {any}\n", .{bytes});
+    // std.debug.print("rust target: {any}\n", .{rust_crds_data[0..bytes.len]});
+
+    // try testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
+
+    // var crds_data = crds.CrdsData {
+    //     .LegacyContactInfo = legacy_contact_info,
+    // };
+    // // legacy for fixed len encoding (used in labs codebase)
+    // var rust_crds_data = [_]u8 { 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // var bytes = try bincode.writeToSlice(buf[0..], crds_data, bincode.Params.standard);
+
+    // std.debug.print("serialized: {any}\n", .{bytes});
+    // std.debug.print("rust target: {any}\n", .{rust_crds_data[0..bytes.len]});
+
+    // try testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
+
+    // var rust_bytes = [_]u8{2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    // var crds_value = try crds.CrdsValue.initSigned(crds_data, kp);
+    // var values = [_]crds.CrdsValue{ crds_value };
+    // var pushmsg = Protocol { 
+    //     .PushMessage = .{ 
+    //         id, 
+    //         &values
+    //     }
+    // };
+    // // legacy for fixed len encoding (used in labs codebase)
+    // var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
+    // // std.debug.print("serialized: {any}\n", .{bytes});
+    // // std.debug.print("rust target: {any}\n", .{rust_bytes[0..bytes.len]});
+
+    // // try testing.expectEqual(rust_bytes.len, bytes.len); // lengths arent the same 
+    // try testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_bytes[0..bytes.len]);
 }

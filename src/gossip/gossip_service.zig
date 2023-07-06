@@ -12,6 +12,7 @@ const SocketAddr = @import("net.zig").SocketAddr;
 const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
+const crds = @import("../gossip/crds.zig");
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
@@ -68,6 +69,45 @@ pub const GossipService = struct {
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
 
         // TODO: push contact info through gossip 
+        const id = self.cluster_info.our_contact_info.pubkey;
+        const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
+        const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
+        const unspecified_addr = SocketAddr.init_ipv4(.{0, 0, 0, 0}, 0);
+        const wallclock = @intCast(u64, std.time.milliTimestamp());
+
+        var legacy_contact_info = crds.LegacyContactInfo {
+            .id = id,
+            .gossip = gossip_addr,
+            .tvu = unspecified_addr,
+            .tvu_forwards = unspecified_addr,
+            .repair = unspecified_addr,
+            .tpu = unspecified_addr,
+            .tpu_forwards = unspecified_addr,
+            .tpu_vote = unspecified_addr,
+            .rpc = unspecified_addr,
+            .rpc_pubsub = unspecified_addr,
+            .serve_repair = unspecified_addr,
+            .wallclock = wallclock,
+            .shred_version = 0,
+        };
+        var crds_data = crds.CrdsData {
+            .LegacyContactInfo = legacy_contact_info,
+        };
+        var crds_value = try crds.CrdsValue.initSigned(crds_data, self.cluster_info.our_keypair);
+        var values = [_]crds.CrdsValue{ crds_value };
+
+        const msg = Protocol {
+            .PushMessage = .{
+                id, 
+                &values 
+            },
+        };
+
+        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
+        var buf = [_]u8{0} ** PACKET_DATA_SIZE;
+        var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
+        const packet = Packet.init(peer, buf, bytes.len);
+        self.responder_channel.send(packet);
 
         responder_handle.join();
         gossip_handle.join();
@@ -125,7 +165,8 @@ pub const GossipService = struct {
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/streamer.rs recv_send: 
-            // comment out this line --> // socket_addr_space.check(&addr).then_some((data, addr))
+            // comment out this line --> // socket_addr_space.check(&addr).then_some((data, addr)) 
+            //      =change_to=> Some((data, addr))
             // bc it doesnt support loopback IPV4 socketaddrs
 
             var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
