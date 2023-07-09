@@ -68,7 +68,15 @@ pub const GossipService = struct {
         var random_packet_handle = try Thread.spawn(.{}, Self.generate_random_ping_protocols, .{self});
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
 
-        // TODO: push contact info through gossip 
+        try self.push_contact_info();
+
+        responder_handle.join();
+        gossip_handle.join();
+        packet_handle.join();
+        random_packet_handle.join();
+    }
+
+    fn push_contact_info(self: *Self) !void { 
         const id = self.cluster_info.our_contact_info.pubkey;
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
@@ -109,10 +117,6 @@ pub const GossipService = struct {
         const packet = Packet.init(peer, buf, bytes.len);
         self.responder_channel.send(packet);
 
-        responder_handle.join();
-        gossip_handle.join();
-        packet_handle.join();
-        random_packet_handle.join();
     }
 
     fn responder(self: *Self) !void { 
