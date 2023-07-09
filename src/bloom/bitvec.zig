@@ -1,6 +1,5 @@
 const std = @import("std");
 const DynamicBitSet = std.bit_set.DynamicBitSet;
-const Option = @import("../option.zig").Option;
 const bincode = @import("bincode-zig");
 const testing = std.testing;
 
@@ -16,7 +15,7 @@ var gpa = gpa_allocator.allocator();
 /// serializes/deserializes differently thus why we need this
 /// intermediary type.
 pub const BitVec = struct {
-    bits: Option([]u64),
+    bits: ?[]u64,
     len: u64,
 
     const Self = @This();
@@ -24,25 +23,22 @@ pub const BitVec = struct {
     pub fn initFromBitSet(bitset: DynamicBitSet) Self {
         if (bitset.capacity() > 0) {
             return Self{
-                .bits = Option([]u64).Some(bitset.unmanaged.masks[0..(bitset.unmanaged.bit_length / 64)]),
+                .bits = bitset.unmanaged.masks[0..(bitset.unmanaged.bit_length / 64)],
                 .len = @as(u64, bitset.unmanaged.bit_length),
             };
         }
         return Self{
-            .bits = Option([]u64).None(),
+            .bits = null,
             .len = @as(u64, bitset.unmanaged.bit_length),
         };
     }
 
     pub fn toBitSet(self: *const Self, allocator: std.mem.Allocator) !DynamicBitSet {
         var bitset = try DynamicBitSet.initEmpty(allocator, self.len);
-        switch (self.bits) {
-            .some => |bits| {
-                for (0..(self.len / 64)) |i| {
-                    bitset.unmanaged.masks[i] = bits[i];
-                }
-            },
-            else => {},
+        if (self.bits) |bits| { 
+            for (0..(self.len / 64)) |i| {
+                bitset.unmanaged.masks[i] = bits[i];
+            }
         }
         return bitset;
     }
@@ -75,6 +71,6 @@ test "bitvec serializes/deserializes and matches Rust's BitVec" {
     var deserialied = try bincode.readFromSlice(testing.allocator, BitVec, out, bincode.Params.standard);
     defer bincode.readFree(testing.allocator, deserialied);
 
-    try testing.expect(std.mem.eql(u64, original.bits.some[0..], deserialied.bits.some[0..]));
-    try testing.expect(std.mem.eql(u8, rust_bit_vec_serialized[0..], out[0..]));
+    try testing.expect(std.mem.eql(u64, original.bits.?[0..], deserialied.bits.?[0..]));
+    try testing.expectEqualSlices(u8, rust_bit_vec_serialized[0..], out[0..]);
 }

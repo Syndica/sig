@@ -11,8 +11,8 @@
             .hash = "1220746fef79fb9774d76a0a5d746ccf30cfc847bce4a3a7388c3451817b7ab92869",
         },
         .@"bincode-zig" = .{
-            .url = "https://github.com/ultd/bincode-zig/archive/661a36d79487f3a41b20a5fc279f47411398c0f5.tar.gz",
-            .hash = "1220a7c1bace7786948db90f896e5cdafcb5ff632d59ad1a7d46001688b1b48524df",
+            .url = "https://github.com/0xNineteen/bincode-zig/archive/e96a08e83ff9ce164ca077fd630d2d504fe7d090.tar.gz",
+            .hash = "122025ae8a4252a58999cf380ba0fd975d51541fc5e390566182027a0d2d6ac409d3"
         },
         .@"zig-cli" = .{
             .url = "https://github.com/ultd/zig-cli/archive/59d4b29d3a0362f66c064ffc3473dccecd873ccf.tar.gz",
