@@ -50,7 +50,7 @@ pub const Ping = struct {
 
     pub fn random(keypair: KeyPair) Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
-        var rand = DefaultPrng.init(@intCast(u64, std.time.milliTimestamp()));
+        var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         rand.fill(&token);
         var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
         var self = Self{

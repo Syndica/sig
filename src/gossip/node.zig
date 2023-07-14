@@ -60,7 +60,7 @@ pub const ContactInfo = struct {
     const Self = @This();
 
     pub fn toNodeInstance(self: *Self) NodeInstance {
-        return NodeInstance.init(self.Pubkey, @intCast(u64, std.time.milliTimestamp()));
+        return NodeInstance.init(self.Pubkey, @intCast(std.time.milliTimestamp()));
     }
 
     pub fn deinit(self: Self) void {
@@ -69,7 +69,7 @@ pub const ContactInfo = struct {
     }
 
     pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !Self {
-        var contact_info = Self.init(allocator, id, @intCast(u64, std.time.microTimestamp()), shred_version);
+        var contact_info = Self.init(allocator, id, @intCast(std.time.microTimestamp()), shred_version);
         try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_socket_addr);
         return contact_info;
     }
@@ -80,7 +80,7 @@ pub const ContactInfo = struct {
         wallclock: u64,
         shred_version: u16,
     ) Self {
-        var outset = @intCast(u64, std.time.microTimestamp());
+        var outset = @as(u64, @intCast(std.time.microTimestamp()));
         return Self{
             .pubkey = pubkey,
             .wallclock = wallclock,
@@ -282,12 +282,12 @@ fn socket_addrs_unspecified() [13]SocketAddr {
 const logger = std.log.scoped(.node_tests);
 
 test "new contact info" {
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @intCast(u64, std.time.microTimestamp()), 1000);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
 }
 
 test "set & get socket on contact info" {
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @intCast(u64, std.time.microTimestamp()), 1000);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
     try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899));
 

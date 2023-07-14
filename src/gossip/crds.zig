@@ -247,7 +247,7 @@ pub const Version = struct {
     pub fn default(from: Pubkey) Self {
         return Self{
             .from = from,
-            .wallclock = @intCast(u64, std.time.milliTimestamp()),
+            .wallclock = @intCast(std.time.milliTimestamp()),
             .version = LegacyVersion2.CURRENT,
         };
     }
@@ -284,11 +284,11 @@ pub const NodeInstance = struct {
     const Self = @This();
 
     pub fn init(from: Pubkey, wallclock: u64) Self {
-        var rng = std.rand.DefaultPrng.init(@intCast(u64, std.time.milliTimestamp()));
+        var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         return Self{
             .from = from,
             .wallclock = wallclock,
-            .timestamp = @intCast(u64, std.time.microTimestamp()),
+            .timestamp = @intCast(std.time.microTimestamp()),
             .token = rng.random().int(u64),
         };
     }

@@ -76,7 +76,7 @@ fn testSender(chan: *BlockChannel) void {
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         std.time.sleep(std.time.ns_per_ms * 100);
-        chan.send(Block{ .num = @intCast(u32, i) });
+        chan.send(Block{ .num = @intCast(i) });
     }
     logger.debug("closing chan..", .{});
     chan.close();
