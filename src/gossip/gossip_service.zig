@@ -111,12 +111,13 @@ pub const GossipService = struct {
             },
         };
 
+        // TODO: store list of peers (FIX: tmp local peer)
         const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
+
         var buf = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
         const packet = Packet.init(peer, buf, bytes.len);
         self.responder_channel.send(packet);
-
     }
 
     fn responder(self: *Self) !void { 
@@ -168,10 +169,10 @@ pub const GossipService = struct {
     pub fn process_packets(self: *Self, allocator: std.mem.Allocator) !void {
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
-            // you need to modify: streamer/src/streamer.rs recv_send: 
-            // comment out this line --> // socket_addr_space.check(&addr).then_some((data, addr)) 
-            //      =change_to=> Some((data, addr))
-            // bc it doesnt support loopback IPV4 socketaddrs
+            // you need to modify: streamer/src/socket.rs
+            // pub fn check(&self, addr: &SocketAddr) -> bool {
+            //     return true;
+            // }
 
             var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
             logger.debug("got a protocol message: {any}", .{protocol_message});
