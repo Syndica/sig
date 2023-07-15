@@ -19,7 +19,18 @@ const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
 };
 
-const PruneData = struct {};
+const PruneData = struct {
+    /// Pubkey of the node that sent this prune data
+    pubkey: Pubkey,
+    /// Pubkeys of nodes that should be pruned
+    prunes: []Pubkey,
+    /// Signature of this Prune Message
+    signature: Signature,
+    /// The Pubkey of the intended node/destination for this message
+    destination: Pubkey,
+    /// Wallclock of the node that generated this message
+    wallclock: u64,
+};
 
 /// Gossip protocol messages
 pub const Protocol = union(enum(u32)) {
