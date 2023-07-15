@@ -15,8 +15,8 @@
             .hash = "1220d47d04a72072a4bb1ab3ebfc34b3e3873d77d58486cde1f5bc82d22c5c776ae6",
         },
         .@"zig-cli" = .{
-            .url = "https://github.com/ultd/zig-cli/archive/59d4b29d3a0362f66c064ffc3473dccecd873ccf.tar.gz",
-            .hash = "1220dd7dcff9b97dd68a75e90e25e749b31e3f71f97be2a733595b721e0fd5354533",
+            .url = "https://github.com/sam701/zig-cli/archive/ea92821a797bdefb5df41ce602f8c7f387bcfb93.tar.gz",
+            .hash = "122044525df0d1896556da08c5ed50b456a672a52ab86a65834bb1e27d3ae7a847f2",
         },
     },
 }
