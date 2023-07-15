@@ -3,20 +3,20 @@
     .version = "0.1.0",
     .dependencies = .{
         .@"base58-zig" = .{
-            .url = "https://github.com/ultd/base58-zig/archive/6ddf85b0efc9b00aec0572180b9ac56bb2765d2a.tar.gz",
-            .hash = "1220ba01a1823d97d5d55450283966a775c34242c92820e56421dca48545381f67d2",
+            .url = "https://github.com/ultd/base58-zig/archive/fe23d156211edbfcede019970d1619184aadb83b.tar.gz",
+            .hash = "1220227d746ee3f156059a22b0044c6d8ad062a7cfb15b060cc2e7cbae4d0631f34e",
         },
         .@"zig-network" = .{
-            .url = "https://github.com/MasterQ32/zig-network/archive/86c315be67c7567195cc426615d81202a39bbb91.tar.gz",
-            .hash = "1220746fef79fb9774d76a0a5d746ccf30cfc847bce4a3a7388c3451817b7ab92869",
+            .url = "https://github.com/MasterQ32/zig-network/archive/7b5f76ea09626b96755c027bf4bd5b7e45297027.tar.gz",
+            .hash = "122090e7cb4459c2224399a45c56f47462733b919aa547c96b8c14ee705bfa22976e",
         },
         .@"bincode-zig" = .{
-            .url = "https://github.com/0xNineteen/bincode-zig/archive/e96a08e83ff9ce164ca077fd630d2d504fe7d090.tar.gz",
-            .hash = "122025ae8a4252a58999cf380ba0fd975d51541fc5e390566182027a0d2d6ac409d3"
+            .url = "https://github.com/ultd/bincode-zig/archive/0e38a40b5e962d3dd7ce3c4ec8ccfc43fcbc26c6.tar.gz",
+            .hash = "1220d47d04a72072a4bb1ab3ebfc34b3e3873d77d58486cde1f5bc82d22c5c776ae6",
         },
         .@"zig-cli" = .{
-            .url = "https://github.com/ultd/zig-cli/archive/59d4b29d3a0362f66c064ffc3473dccecd873ccf.tar.gz",
-            .hash = "1220dd7dcff9b97dd68a75e90e25e749b31e3f71f97be2a733595b721e0fd5354533",
+            .url = "https://github.com/sam701/zig-cli/archive/ea92821a797bdefb5df41ce602f8c7f387bcfb93.tar.gz",
+            .hash = "122044525df0d1896556da08c5ed50b456a672a52ab86a65834bb1e27d3ae7a847f2",
         },
     },
 }

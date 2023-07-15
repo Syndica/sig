@@ -9,11 +9,11 @@ pub const varint_config = bincode.FieldConfig{
 pub fn serilaize_varint(writer: anytype, data: anytype, _: bincode.Params) !void {
     var v = data;
     while (v >= 0x80) {
-        var byte = @intCast(u8, ((v & 0x7F) | 0x80));
+        var byte = @as(u8, @intCast(((v & 0x7F) | 0x80)));
         v >>= 7;
         try writer.writeByte(byte);
     }
-    try writer.writeByte(@intCast(u8, v));
+    try writer.writeByte(@as(u8, @intCast(v)));
     return;
 }
 
@@ -39,9 +39,9 @@ pub fn deserialize_varint(_: std.mem.Allocator, comptime T: type, reader: anytyp
     var shift: u32 = 0;
     while (shift < t_bits) {
         const byte: u8 = try reader.readByte();
-        out |= @intCast(T, (byte & 0x7F)) << @intCast(ShiftT, shift);
+        out |= @as(T, @intCast((byte & 0x7F))) << @as(ShiftT, @intCast(shift));
         if (byte & 0x80 == 0) {
-            if (@intCast(u8, out >> @intCast(ShiftT, shift)) != byte) {
+            if (@as(u8, @intCast(out >> @as(ShiftT, @intCast(shift)))) != byte) {
                 return error.TruncatedLastByte;
             }
             if (byte == 0 and (shift != 0 or out != 0)) {
@@ -57,7 +57,7 @@ pub fn deserialize_varint(_: std.mem.Allocator, comptime T: type, reader: anytyp
 pub fn serialize_short_u16(writer: anytype, data: anytype, _: bincode.Params) !void {
     var val: u16 = data;
     while (true) {
-        var elem = @intCast(u8, (val & 0x7f));
+        var elem = @as(u8, @intCast((val & 0x7f)));
         val >>= 7;
         if (val == 0) {
             try writer.writeByte(elem);
@@ -101,7 +101,7 @@ pub fn visit_byte(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
 
     var value = @as(u32, val);
     var element = @as(u32, elem);
-    var elem_val: u8 = @intCast(u8, element & 0x7f);
+    var elem_val: u8 = @as(u8, @intCast(element & 0x7f));
     var elem_done = (element & 0x80) == 0;
 
     if (nth_byte >= MAX_ENCODING_LENGTH) {
@@ -112,7 +112,7 @@ pub fn visit_byte(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
 
     var shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
 
-    var shift_res = @shlWithOverflow(elem_val, @intCast(u3, shift));
+    var shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
     if (shift_res.@"1" == 1) {
         elem_val = U32_MAX;
     } else {
@@ -147,7 +147,7 @@ pub fn visit_byte_2(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
 
     var shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
 
-    var shift_res = @shlWithOverflow(elem_val, @intCast(u3, shift));
+    var shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
     var result = shift_res.@"0";
     var overflow_bit = shift_res.@"1";
     if (overflow_bit == 1) {

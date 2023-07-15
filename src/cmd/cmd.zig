@@ -52,7 +52,7 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var gossip_port: u16 = @intCast(u16, gossip_port_option.value.int.?);
+    var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var entrypoints = std.ArrayList(LegacyContactInfo).init(gpa);
     try gossipCmd.runGossipService(gossip_port, entrypoints);
 }

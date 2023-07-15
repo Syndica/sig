@@ -36,24 +36,19 @@ pub fn build(b: *std.Build) void {
     // expose Sig as a module
     _ = b.addModule(package_name, .{
         .source_file = .{ .path = package_path },
-        .dependencies = &.{
-            .{
-                .name = "zig-network",
-                .module = zig_network_module,
-            },
-            .{
-                .name = "base58-zig",
-                .module = base58_module,
-            },
-            .{
-                .name = "bincode-zig",
-                .module = bincode_module,
-            },
-            .{
-                .name = "zig-cli", 
-                .module = zig_cli_module,
-            }
-        },
+        .dependencies = &.{ .{
+            .name = "zig-network",
+            .module = zig_network_module,
+        }, .{
+            .name = "base58-zig",
+            .module = base58_module,
+        }, .{
+            .name = "bincode-zig",
+            .module = bincode_module,
+        }, .{
+            .name = "zig-cli",
+            .module = zig_cli_module,
+        } },
     });
 
     lib.addModule("base58-zig", base58_module);
@@ -104,7 +99,6 @@ pub fn build(b: *std.Build) void {
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
-        
     });
 
     exe.addModule("base58-zig", base58_module);

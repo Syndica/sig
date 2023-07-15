@@ -24,7 +24,18 @@ const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
 };
 
-const PruneData = struct {};
+const PruneData = struct {
+    /// Pubkey of the node that sent this prune data
+    pubkey: Pubkey,
+    /// Pubkeys of nodes that should be pruned
+    prunes: []Pubkey,
+    /// Signature of this Prune Message
+    signature: Signature,
+    /// The Pubkey of the intended node/destination for this message
+    destination: Pubkey,
+    /// Wallclock of the node that generated this message
+    wallclock: u64,
+};
 
 /// Gossip protocol messages
 pub const Protocol = union(enum(u32)) {
@@ -55,7 +66,7 @@ pub const Ping = struct {
 
     pub fn random(keypair: KeyPair) Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
-        var rand = DefaultPrng.init(@intCast(u64, std.time.milliTimestamp()));
+        var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         rand.fill(&token);
         var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
         var self = Self{

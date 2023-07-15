@@ -222,7 +222,7 @@ pub const Client = struct {
 
         var arrList = std.ArrayList(json.Value).init(self.allocator);
         defer arrList.deinit();
-        try arrList.append(.{ .integer = @intCast(i64, slot) });
+        try arrList.append(.{ .integer = @intCast(slot) });
         try arrList.append(.{ .object = optionsObj });
 
         var params = .{ .array = arrList };
@@ -251,9 +251,9 @@ pub const Client = struct {
         if (options.range) |range| {
             var rangeObj = std.StringArrayHashMap(json.Value).init(self.allocator);
             defer rangeObj.deinit();
-            try rangeObj.put("firstSlot", .{ .integer = @intCast(i64, range.firstSlot) });
+            try rangeObj.put("firstSlot", .{ .integer = @as(i64, @intCast(range.firstSlot)) });
             if (range.lastSlot) |lastSlot| {
-                try rangeObj.put("lastSlot", .{ .integer = @intCast(i64, lastSlot) });
+                try rangeObj.put("lastSlot", .{ .integer = @as(i64, @intCast(lastSlot)) });
             }
         }
 
@@ -286,7 +286,7 @@ pub const Client = struct {
         while (iter.next()) |entry| {
             var vals = std.ArrayList(u64).init(responseAllocator);
             for (entry.value_ptr.*.array.items) |val| {
-                try vals.append(@intCast(u64, val.integer));
+                try vals.append(@as(u64, @intCast(val.integer)));
             }
             try byIdentity.put(entry.key_ptr.*, vals.items);
         }
@@ -295,10 +295,10 @@ pub const Client = struct {
             arena,
             Result{ .jsonrpc = "2.0", .id = id, .result = .{ .context = .{
                 .apiVersion = context.object.get("apiVersion").?.string,
-                .slot = @intCast(u64, context.object.get("slot").?.integer),
+                .slot = @as(u64, @intCast(context.object.get("slot").?.integer)),
             }, .value = .{ .byIdentity = byIdentity, .range = .{
-                .firstSlot = @intCast(u64, value.object.get("range").?.object.get("firstSlot").?.integer),
-                .lastSlot = @intCast(u64, value.object.get("range").?.object.get("firstSlot").?.integer),
+                .firstSlot = @as(u64, @intCast(value.object.get("range").?.object.get("firstSlot").?.integer)),
+                .lastSlot = @as(u64, @intCast(value.object.get("range").?.object.get("firstSlot").?.integer)),
             } } } },
             tree,
         );
@@ -320,9 +320,9 @@ pub const Client = struct {
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
-        try paramsList.append(.{ .integer = @intCast(i64, startSlot) });
+        try paramsList.append(.{ .integer = @as(i64, @intCast(startSlot)) });
         if (endSlot) |slot| {
-            try paramsList.append(.{ .integer = @intCast(i64, slot) });
+            try paramsList.append(.{ .integer = @as(i64, @intCast(slot)) });
         }
         try paramsList.append(.{ .object = optionsObj });
         var params = json.Value{ .array = paramsList };
@@ -337,9 +337,9 @@ pub const Client = struct {
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
-        try paramsList.append(.{ .integer = @intCast(i64, startSlot) });
+        try paramsList.append(.{ .integer = @as(i64, @intCast(startSlot)) });
         if (limit) |v| {
-            try paramsList.append(.{ .integer = @intCast(i64, v) });
+            try paramsList.append(.{ .integer = @as(i64, @intCast(v)) });
         }
         try paramsList.append(.{ .object = optionsObj });
         var params = json.Value{ .array = paramsList };
@@ -444,10 +444,10 @@ pub const Client = struct {
         defer optionsObj.deinit();
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
         if (options.epoch) |epoch| {
-            try optionsObj.put("epoch", .{ .integer = @intCast(i64, epoch) });
+            try optionsObj.put("epoch", .{ .integer = @as(i64, @intCast(epoch)) });
         }
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -504,7 +504,7 @@ pub const Client = struct {
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
@@ -529,7 +529,7 @@ pub const Client = struct {
         var arrList = std.ArrayList(json.Value).init(self.allocator);
         defer arrList.deinit();
         if (epoch) |v| {
-            try arrList.append(.{ .integer = @intCast(i64, v) });
+            try arrList.append(.{ .integer = @as(i64, @intCast(v)) });
         }
         try arrList.append(.{ .object = optionsObj });
         var params = .{ .array = arrList };
@@ -568,7 +568,7 @@ pub const Client = struct {
             while (iter.next()) |entry| {
                 var vals = std.ArrayList(u64).init(responseAllocator);
                 for (entry.value_ptr.*.array.items) |val| {
-                    try vals.append(@intCast(u64, val.integer));
+                    try vals.append(@as(u64, @intCast(val.integer)));
                 }
                 try leaderSchedule.put(entry.key_ptr.*, vals.items);
             }
@@ -663,14 +663,14 @@ pub const Client = struct {
         try optionsObj.put("withContext", .{ .bool = true });
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         if (options.dataSlice) |dataSlice| {
             var dataSliceObj = std.StringArrayHashMap(json.Value).init(self.allocator);
             defer dataSliceObj.deinit();
-            try dataSliceObj.put("length", .{ .integer = @intCast(i64, dataSlice.length) });
-            try dataSliceObj.put("offset", .{ .integer = @intCast(i64, dataSlice.offset) });
+            try dataSliceObj.put("length", .{ .integer = @as(i64, @intCast(dataSlice.length)) });
+            try dataSliceObj.put("offset", .{ .integer = @as(i64, @intCast(dataSlice.offset)) });
             try optionsObj.put("dataSlice", .{ .object = dataSliceObj });
         }
 
@@ -685,12 +685,12 @@ pub const Client = struct {
                     var memcmpObj = std.StringArrayHashMap(json.Value).init(self.allocator);
                     defer memcmpObj.deinit();
                     try memcmpObj.put("bytes", .{ .string = memcmp.bytes });
-                    try memcmpObj.put("offset", .{ .integer = @intCast(i64, memcmp.offset) });
+                    try memcmpObj.put("offset", .{ .integer = @as(i64, @intCast(memcmp.offset)) });
                     try memcmpObj.put("encoding", .{ .string = memcmp.encoding.string() });
 
                     try filterObj.put("memcmp", .{ .object = filterObj });
                 } else if (filter.dataSize) |dataSize| {
-                    try filterObj.put("dataSize", .{ .integer = @intCast(i64, dataSize) });
+                    try filterObj.put("dataSize", .{ .integer = @as(i64, @intCast(dataSize)) });
                 }
 
                 try filtersList.append(.{ .object = filterObj });
@@ -751,7 +751,7 @@ pub const Client = struct {
         try optionsObj.put("limit", .{ .integer = @as(i64, options.limit) });
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         if (options.before) |before| {
@@ -808,7 +808,7 @@ pub const Client = struct {
         defer optionsObj.deinit();
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -824,8 +824,8 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        try paramsList.append(.{ .integer = @intCast(i64, startSlot) });
-        try paramsList.append(.{ .integer = @intCast(i64, limit) });
+        try paramsList.append(.{ .integer = @as(i64, @intCast(startSlot)) });
+        try paramsList.append(.{ .integer = @as(i64, @intCast(limit)) });
 
         var params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([][]const u8, json.Value, "getSlotLeaders", "1", params);
@@ -842,10 +842,10 @@ pub const Client = struct {
         defer optionsObj.deinit();
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
         if (options.epoch) |epoch| {
-            try optionsObj.put("epoch", .{ .integer = @intCast(i64, epoch) });
+            try optionsObj.put("epoch", .{ .integer = @as(i64, @intCast(epoch)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -938,14 +938,14 @@ pub const Client = struct {
         try optionsObj.put("encoding", .{ .string = options.encoding.string() });
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         if (options.dataSlice) |dataSlice| {
             var dataSliceObj = std.StringArrayHashMap(json.Value).init(self.allocator);
             defer dataSliceObj.deinit();
-            try dataSliceObj.put("length", .{ .integer = @intCast(i64, dataSlice.length) });
-            try dataSliceObj.put("offset", .{ .integer = @intCast(i64, dataSlice.offset) });
+            try dataSliceObj.put("length", .{ .integer = @as(i64, @intCast(dataSlice.length)) });
+            try dataSliceObj.put("offset", .{ .integer = @as(i64, @intCast(dataSlice.offset)) });
             try optionsObj.put("dataSlice", .{ .object = dataSliceObj });
         }
 
@@ -988,14 +988,14 @@ pub const Client = struct {
         try optionsObj.put("encoding", .{ .string = options.encoding.string() });
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         if (options.dataSlice) |dataSlice| {
             var dataSliceObj = std.StringArrayHashMap(json.Value).init(self.allocator);
             defer dataSliceObj.deinit();
-            try dataSliceObj.put("length", .{ .integer = @intCast(i64, dataSlice.length) });
-            try dataSliceObj.put("offset", .{ .integer = @intCast(i64, dataSlice.offset) });
+            try dataSliceObj.put("length", .{ .integer = @as(i64, @intCast(dataSlice.length)) });
+            try dataSliceObj.put("offset", .{ .integer = @as(i64, @intCast(dataSlice.offset)) });
             try optionsObj.put("dataSlice", .{ .object = dataSliceObj });
         }
 
@@ -1096,7 +1096,7 @@ pub const Client = struct {
         defer optionsObj.deinit();
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -1130,7 +1130,7 @@ pub const Client = struct {
             try optionsObj.put("keepUnstakedDelinquents", .{ .bool = keepUnstakedDelinquents });
         }
         if (options.delinquentSlotDistance) |delinquentSlotDistance| {
-            try optionsObj.put("delinquentSlotDistance", .{ .integer = @intCast(i64, delinquentSlotDistance) });
+            try optionsObj.put("delinquentSlotDistance", .{ .integer = @as(i64, @intCast(delinquentSlotDistance)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -1152,7 +1152,7 @@ pub const Client = struct {
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -1184,7 +1184,7 @@ pub const Client = struct {
         var str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
-        try paramsList.append(.{ .integer = @intCast(i64, lamports) });
+        try paramsList.append(.{ .integer = @as(i64, @intCast(lamports)) });
         try paramsList.append(.{ .object = optionsObj });
 
         var params = json.Value{ .array = paramsList };
@@ -1215,7 +1215,7 @@ pub const Client = struct {
         }
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
@@ -1257,7 +1257,7 @@ pub const Client = struct {
         }
 
         if (options.minContextSlot) |minContextSlot| {
-            try optionsObj.put("minContextSlot", .{ .integer = @intCast(i64, minContextSlot) });
+            try optionsObj.put("minContextSlot", .{ .integer = @as(i64, @intCast(minContextSlot)) });
         }
 
         if (options.accounts) |accounts| {

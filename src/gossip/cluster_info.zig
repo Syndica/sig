@@ -40,7 +40,7 @@ pub const ClusterInfo = struct {
     pub fn init(allocator: std.mem.Allocator, keypair: KeyPair, entrypoints: ArrayList(LegacyContactInfo), contact_info: ContactInfo) !Self {
         var outbound = try UdpSocket.create(.ipv4, .udp);
         try outbound.bindToPort(0);
-        var node_instance = NodeInstance.init(Pubkey.fromPublicKey(&keypair.public_key, false), @intCast(u64, std.time.microTimestamp()));
+        var node_instance = NodeInstance.init(Pubkey.fromPublicKey(&keypair.public_key, false), @intCast(std.time.microTimestamp()));
         return Self{
             .our_keypair = keypair,
             .our_contact_info = contact_info,
@@ -87,7 +87,7 @@ pub const ClusterInfo = struct {
 
     pub fn gossip(self: *Self) !void {
         var crds_data_version: CrdsData = .{ .Version = Version.default(self.our_contact_info.pubkey) };
-        var crds_data_instance: CrdsData = .{ .NodeInstance = self.our_node_instance.withWallclock(@intCast(u64, std.time.milliTimestamp())) };
+        var crds_data_instance: CrdsData = .{ .NodeInstance = self.our_node_instance.withWallclock(@as(u64, @intCast(std.time.milliTimestamp()))) };
         self.push_messages_rwlock.lock();
         defer self.push_messages_rwlock.unlock();
         try self.push_messages.append(try CrdsValue.initSigned(crds_data_version, self.our_keypair));
