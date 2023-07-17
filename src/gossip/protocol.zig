@@ -130,7 +130,7 @@ test "gossip.protocol: ping message matches rust bytes" {
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-// // TODO: FIX
+// // TODO: FIX (need to fix the bloom ser/deser test first)
 // test "gossip.protocol: pull request serializes and deserializes" {
 //     var rust_bytes = [_]u8{
 //         0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,

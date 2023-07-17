@@ -22,7 +22,7 @@ pub const BitVec = struct {
 
     pub fn initFromBitSet(bitset: DynamicBitSet) Self {
         if (bitset.capacity() > 0) {
-            return Self{
+            return Self {
                 .bits = bitset.unmanaged.masks[0..(bitset.unmanaged.bit_length / 64)],
                 .len = @as(u64, bitset.unmanaged.bit_length),
             };
@@ -35,6 +35,8 @@ pub const BitVec = struct {
 
     pub fn toBitSet(self: *const Self, allocator: std.mem.Allocator) !DynamicBitSet {
         var bitset = try DynamicBitSet.initEmpty(allocator, self.len);
+        errdefer bitset.deinit();
+
         if (self.bits) |bits| { 
             for (0..(self.len / 64)) |i| {
                 bitset.unmanaged.masks[i] = bits[i];

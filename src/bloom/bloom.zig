@@ -21,17 +21,21 @@ pub const Bloom = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, num_bits: u64, keys: ArrayList(u64)) Self {
+    pub fn init(allocator: std.mem.Allocator, num_bits: u64) Self {
         return Self{
-            .keys = keys,
+            .keys = ArrayList(u64).init(allocator),
             .bits = DynamicBitSet.initEmpty(allocator, num_bits) catch unreachable,
             .num_bits_set = 0,
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         self.bits.deinit();
         self.keys.deinit();
+    }
+
+    pub fn add_key(self: *Self, key: u64) !void { 
+        try self.keys.append(key);
     }
 
     pub fn add(self: *Self, key: []const u8) void {
@@ -64,34 +68,47 @@ fn bincode_serialize_bit_vec(writer: anytype, data: anytype, params: bincode.Par
 
 fn bincode_deserialize_bit_vec(allocator: std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
     var bitvec = try bincode.read(allocator, BitVec, reader, params);
-    return try bitvec.toBitSet(allocator);
+    defer bincode.readFree(allocator, bitvec);
+
+    var dynamic_bitset = try bitvec.toBitSet(allocator);
+    return dynamic_bitset;
 }
 
-// // TODO: Finish test
-// test "bloom serializes/deserializes correctly" {
-//     var keys = ArrayList(u64).init(testing.allocator);
-//     _ = keys;
-//     var bloom = Bloom.init(testing.allocator);
-//     var buf: [10000]u8 = undefined;
+// TODO: Finish test
+test "bloom: serializes/deserializes correctly" {
+    var bloom = Bloom.init(testing.allocator, 0);
 
-//     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    var buf: [10000]u8 = undefined;
+    var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    std.log.debug("out: {any}", .{out});
 
+    var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
+}
 
-//     std.log.debug("out: {any}", .{out});
+test "bloom: serializes/deserializes correctly with set bits" {
+    var bloom = Bloom.init(testing.allocator, 100);
+    try bloom.add_key(10);
+    // required for memory leaks
+    defer bloom.deinit();
 
-//     var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    var buf: [10000]u8 = undefined;
+    var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    std.log.debug("out: {any}", .{out});
 
-//     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
-// }
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    defer deserialized.deinit();
 
-// // TODO: fix 
-// test "compare bloom to rust" {
-//     var keys = ArrayList(u64).init(testing.allocator);
-//     try keys.append(1);
-//     try keys.append(2);
-//     try keys.append(3);
+    try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
+}
 
-//     var bloom = Bloom.init(testing.allocator, 100, keys);
+// // TODO: is failing rn - need to fix 
+// test "bloom: compare bytes to rust" {
+//     var bloom = Bloom.init(testing.allocator, 100);
+//     try bloom.add_key(1);
+//     try bloom.add_key(2);
+//     try bloom.add_key(3);
+
 //     var buf: [10000]u8 = undefined;
 
 //     const v: [1]u8 = .{ 1 };
