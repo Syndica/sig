@@ -23,7 +23,9 @@ pub const Bloom = struct {
 
     pub fn init(allocator: std.mem.Allocator, num_bits: u64) Self {
         // need to be power of 2 for serialization to match rust
-        std.debug.assert((num_bits != 0) and (num_bits & (num_bits - 1) == 0));
+        if (num_bits != 0) { 
+            std.debug.assert((num_bits & (num_bits - 1) == 0));
+        }
         return Self{
             .keys = ArrayList(u64).init(allocator),
             .bits = DynamicBitSet.initEmpty(allocator, num_bits) catch unreachable,
@@ -89,7 +91,7 @@ test "bloom: serializes/deserializes correctly" {
 }
 
 test "bloom: serializes/deserializes correctly with set bits" {
-    var bloom = Bloom.init(testing.allocator, 100);
+    var bloom = Bloom.init(testing.allocator, 128);
     try bloom.add_key(10);
     // required for memory leaks
     defer bloom.deinit();
