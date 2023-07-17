@@ -68,12 +68,36 @@ pub const GossipService = struct {
         var random_packet_handle = try Thread.spawn(.{}, Self.generate_random_ping_protocols, .{self});
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
 
-        try self.push_contact_info();
-
         responder_handle.join();
         gossip_handle.join();
         packet_handle.join();
         random_packet_handle.join();
+    }
+
+
+    fn responder(self: *Self) !void { 
+        while (self.responder_channel.receive()) |p| { 
+            _ = try self.gossip_socket.sendTo(p.from, p.data[0..p.size]);
+        }
+    }
+
+    fn generate_random_ping_protocols(self: *Self) !void {
+        // solana-gossip spy -- local node for testing
+        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
+
+        while (true) {
+            var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
+            var out = [_]u8{0} ** PACKET_DATA_SIZE;
+            var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
+
+            self.responder_channel.send(
+                Packet.init(peer, out, bytes.len),
+            );
+
+            try self.push_contact_info();
+
+            std.time.sleep(std.time.ns_per_s * 1);
+        }
     }
 
     fn push_contact_info(self: *Self) !void { 
@@ -118,29 +142,6 @@ pub const GossipService = struct {
         var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
         const packet = Packet.init(peer, buf, bytes.len);
         self.responder_channel.send(packet);
-    }
-
-    fn responder(self: *Self) !void { 
-        while (self.responder_channel.receive()) |p| { 
-            _ = try self.gossip_socket.sendTo(p.from, p.data[0..p.size]);
-        }
-    }
-
-    fn generate_random_ping_protocols(self: *Self) !void {
-        // solana-gossip spy -- local node for testing
-        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
-
-        while (true) {
-            var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
-            var out = [_]u8{0} ** PACKET_DATA_SIZE;
-            var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
-
-            self.responder_channel.send(
-                Packet.init(peer, out, bytes.len),
-            );
-
-            std.time.sleep(std.time.ns_per_s * 1);
-        }
     }
 
     fn read_gossip_socket(self: *Self) !void {
