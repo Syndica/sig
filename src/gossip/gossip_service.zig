@@ -81,7 +81,7 @@ pub const GossipService = struct {
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
         const unspecified_addr = SocketAddr.init_ipv4(.{0, 0, 0, 0}, 0);
-        const wallclock = @intCast(u64, std.time.milliTimestamp());
+        const wallclock = @as(u64, @intCast(std.time.milliTimestamp()));
 
         var legacy_contact_info = crds.LegacyContactInfo {
             .id = id,
