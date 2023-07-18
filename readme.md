@@ -1,7 +1,7 @@
 <br/>
 
 <p align="center">
-  <h1>&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana Zig client</h1>
+  <h1>&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana Zig validator client</h1>
     <br/>
     <br/>
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
@@ -13,9 +13,11 @@
 
 ## Overview
 
-_Sig_ is a Solana RPC client implementation written in Zig.
+_Sig_ is a Solana validator client implementation written in Zig.
 <br/>
 <br/>
+
+⚠️ NOTE: This is a WIP, please open any issues for any bugs/improvements.
 
 ## Why Zig?
 
@@ -37,7 +39,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 - Zig is still a evolving language.
 - Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.11`.
-- This library was compiled and tested using `0.11.0-dev.3218+b873ce1e0` (master).
+- This library was compiled and tested using `0.11.0-dev.3997+546212ff7` (master).
 - Zig is targeting end of Q2 2023 for [`0.11` milestone](https://github.com/ziglang/zig/milestone/17).
 - Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests, fix is in works.
   <br/>
@@ -45,7 +47,11 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 ## Modules:
 
-- **RPC Client** - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
+- **Gossip** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
+
+- **Core** - Core data structures shared across modules
+
+- **RPC Client** - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions
 
 ## Installation
 
