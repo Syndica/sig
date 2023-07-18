@@ -1,6 +1,7 @@
 const std = @import("std");
 const ClusterInfo = @import("cluster_info.zig").ClusterInfo;
 const network = @import("zig-network");
+const EndPoint = network.EndPoint;
 const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 const Channel = @import("../sync/channel.zig").Channel;
@@ -55,23 +56,23 @@ pub const GossipService = struct {
     }
 
     pub fn run(self: *Self) !void {
-        logger.info("running gossip service on at {any}", .{self.gossip_socket.getLocalEndPoint()});
+        logger.info("running gossip service at {any}", .{self.gossip_socket.getLocalEndPoint()});
 
         defer self.deinit();
 
         // spawn gossip udp receiver thread
-        var gossip_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{self});
+        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{self});
         var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{
             self,
             gpa,
         });
-        var random_packet_handle = try Thread.spawn(.{}, Self.generate_random_ping_protocols, .{self});
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
+        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self});
 
         responder_handle.join();
-        gossip_handle.join();
+        receiver_handle.join();
         packet_handle.join();
-        random_packet_handle.join();
+        gossip_loop_handle.join();
     }
 
 
@@ -81,26 +82,28 @@ pub const GossipService = struct {
         }
     }
 
-    fn generate_random_ping_protocols(self: *Self) !void {
+    fn gossip_loop(self: *Self) !void {
         // solana-gossip spy -- local node for testing
         const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
 
         while (true) {
-            var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
-            var out = [_]u8{0} ** PACKET_DATA_SIZE;
-            var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
-
-            self.responder_channel.send(
-                Packet.init(peer, out, bytes.len),
-            );
-
-            try self.push_contact_info();
+            try self.send_ping(&peer);
+            try self.push_contact_info(&peer);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }
     }
 
-    fn push_contact_info(self: *Self) !void { 
+    fn send_ping(self: *Self, peer: *const EndPoint) !void { 
+        var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
+        var out = [_]u8{0} ** PACKET_DATA_SIZE;
+        var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
+        self.responder_channel.send(
+            Packet.init(peer.*, out, bytes.len),
+        );
+    }
+
+    fn push_contact_info(self: *Self, peer: *const EndPoint) !void { 
         const id = self.cluster_info.our_contact_info.pubkey;
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
@@ -135,12 +138,9 @@ pub const GossipService = struct {
             },
         };
 
-        // TODO: store list of peers (FIX: tmp local peer)
-        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
-
         var buf = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
-        const packet = Packet.init(peer, buf, bytes.len);
+        const packet = Packet.init(peer.*, buf, bytes.len);
         self.responder_channel.send(packet);
     }
 
