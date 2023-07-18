@@ -160,6 +160,8 @@ pub const GossipService = struct {
     }
 
     pub fn process_packets(self: *Self, allocator: std.mem.Allocator, logger: *Logger) !void {
+        var failed_protocol_msgs = 0; 
+
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/socket.rs
@@ -167,7 +169,11 @@ pub const GossipService = struct {
             //     return true;
             // }
 
-            var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
+            var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch { 
+                failed_protocol_msgs += 1;
+                logger.debug("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
+            };
+
             switch (protocol_message) {
                 .PongMessage => |*pong| {
                     if (pong.signature.verify(pong.from, &pong.hash.data)) {
@@ -176,6 +182,13 @@ pub const GossipService = struct {
                         logger.debugf("pong message verification failed...", .{});
                     }
                 }, 
+                .PingMessage => |*ping| {
+                    if (ping.signature.verify(ping.from, &ping.hash.data)) {
+                        logger.debug("got a ping message", .{});
+                    } else { 
+                        logger.debug("ping message verification failed...", .{});
+                    }
+                },
                 else => { 
                     logger.debugf("got a protocol message: {any}", .{protocol_message});
                 }
