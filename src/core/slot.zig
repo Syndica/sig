@@ -27,7 +27,5 @@ test "slot bincode serializes properly" {
     var ser = try bincode.writeAlloc(testing.allocator, slot, bincode.Params.standard);
     defer testing.allocator.free(ser);
 
-    logger.debug("encoded: {any}", .{ser});
-
     try testing.expect(std.mem.eql(u8, ser, rust_serialized[0..]));
 }
