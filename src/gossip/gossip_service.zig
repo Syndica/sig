@@ -56,8 +56,8 @@ pub const GossipService = struct {
     }
 
     pub fn run(self: *Self) !void {
-        logger.info("running gossip service at {any}", .{self.gossip_socket.getLocalEndPoint()});
-
+        const id = self.cluster_info.our_contact_info.pubkey;
+        logger.info("running gossip service at {any} with pubkey {s}", .{self.gossip_socket.getLocalEndPoint(), id.cached_str.?});
         defer self.deinit();
 
         // spawn gossip udp receiver thread
@@ -83,7 +83,7 @@ pub const GossipService = struct {
 
     fn gossip_loop(self: *Self) !void {
         // solana-gossip spy -- local node for testing
-        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
+        const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
 
         while (true) {
             try self.send_ping(&peer);
@@ -97,6 +97,8 @@ pub const GossipService = struct {
         var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
+        
+        logger.debug("sending a ping message to: {any}", .{ peer });
         self.responder_channel.send(
             Packet.init(peer.*, out, bytes.len),
         );
@@ -164,7 +166,7 @@ pub const GossipService = struct {
     }
 
     pub fn process_packets(self: *Self, allocator: std.mem.Allocator) !void {
-        var failed_protocol_msgs = 0; 
+        var failed_protocol_msgs: usize = 0; 
 
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
@@ -176,18 +178,19 @@ pub const GossipService = struct {
             var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch { 
                 failed_protocol_msgs += 1;
                 logger.debug("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
+                continue;
             };
 
             switch (protocol_message) {
                 .PongMessage => |*pong| {
                     if (pong.signature.verify(pong.from, &pong.hash.data)) {
-                        logger.debug("got a pong message", .{});
+                        logger.debug("got a pong message from {any}", .{ p.from });
                     } else { 
                         logger.debug("pong message verification failed...", .{});
                     }
                 }, 
                 .PingMessage => |*ping| {
-                    if (ping.signature.verify(ping.from, &ping.hash.data)) {
+                    if (ping.signature.verify(ping.from, &ping.token)) {
                         logger.debug("got a ping message", .{});
                     } else { 
                         logger.debug("ping message verification failed...", .{});

@@ -57,7 +57,7 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
 
 pub fn runGossipService(gossip_port: u16, entrypoints: ArrayList(LegacyContactInfo)) !void {
     var exit = AtomicBool.init(false);
-    var gossip_socket_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, gossip_port);
+    var gossip_socket_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
 
     var spy = try ClusterInfo.initSpy(gpa_allocator, gossip_socket_addr, entrypoints);
 
