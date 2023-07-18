@@ -168,7 +168,21 @@ pub const GossipService = struct {
             // }
 
             var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
-            logger.debugf("got a protocol message: {any}", .{protocol_message});
+            switch (protocol_message) {
+                .PongMessage => |pong| {
+                    // verification 
+                    var pong_hash = pong.hash.data; 
+                    const valid_pong = pong.signature.verify(pong.from, &pong_hash) catch false;
+                    if (valid_pong) {
+                        logger.debugf("got a pong message", .{});
+                    } else { 
+                        logger.debugf("pong message verification failed...", .{});
+                    }
+                }, 
+                else => { 
+                    logger.debugf("got a protocol message: {any}", .{protocol_message});
+                }
+            }
         }
     }
 };
