@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
 
     const opts = .{ .target = target, .optimize = optimize };
     const base58_module = b.dependency("base58-zig", opts).module("base58-zig");
+    const zig_network_module = b.dependency("zig-network", opts).module("network");
+    const bincode_module = b.dependency("bincode-zig", opts).module("bincode");
+    const zig_cli_module = b.dependency("zig-cli", opts).module("zig-cli");
 
     const lib = b.addStaticLibrary(.{
         .name = "sig",
@@ -30,13 +33,28 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // expose Base58-zig as a module
+    // expose Sig as a module
     _ = b.addModule(package_name, .{
         .source_file = .{ .path = package_path },
-        .dependencies = &.{},
+        .dependencies = &.{ .{
+            .name = "zig-network",
+            .module = zig_network_module,
+        }, .{
+            .name = "base58-zig",
+            .module = base58_module,
+        }, .{
+            .name = "bincode-zig",
+            .module = bincode_module,
+        }, .{
+            .name = "zig-cli",
+            .module = zig_cli_module,
+        } },
     });
 
-    lib.addModule("base58", base58_module);
+    lib.addModule("base58-zig", base58_module);
+    lib.addModule("zig-network", zig_network_module);
+    lib.addModule("bincode-zig", bincode_module);
+    lib.addModule("zig-cli", zig_cli_module);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -53,19 +71,66 @@ pub fn build(b: *std.Build) void {
 
     // const run_main_tests = b.addRunArtifact(main_tests);
 
-    const rpc_client_tests = b.addTest(.{
+    const tests = b.addTest(.{
         .root_source_file = .{ .path = "src/tests.zig" },
         .target = target,
         .optimize = optimize,
+        .filter = if (b.args) |args| args[0] else null, // filter tests like so: zig build test -- "<FILTER>"
     });
 
-    rpc_client_tests.addModule("base58", base58_module);
+    tests.addModule("zig-network", zig_network_module);
+    tests.addModule("base58-zig", base58_module);
+    tests.addModule("bincode-zig", bincode_module);
+    tests.addModule("zig-cli", zig_cli_module);
 
-    const run_rpc_client_tests = b.addRunArtifact(rpc_client_tests);
+    const run_tests = b.addRunArtifact(tests);
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build test`
     // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&run_rpc_client_tests.step);
+    test_step.dependOn(&lib.step);
+    test_step.dependOn(&run_tests.step);
+
+    const exe = b.addExecutable(.{
+        .name = "sig",
+        // In this case the main source file is merely a path, however, in more
+        // complicated build scripts, this could be a generated file.
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.addModule("base58-zig", base58_module);
+    exe.addModule("zig-network", zig_network_module);
+    exe.addModule("bincode-zig", bincode_module);
+    exe.addModule("zig-cli", zig_cli_module);
+
+    // This declares intent for the executable to be installed into the
+    // standard location when the user invokes the "install" step (the default
+    // step when running `zig build`).
+    b.installArtifact(exe);
+
+    // This *creates* a Run step in the build graph, to be executed when another
+    // step is evaluated that depends on it. The next line below will establish
+    // such a dependency.
+    const run_cmd = b.addRunArtifact(exe);
+
+    // By making the run step depend on the install step, it will be run from the
+    // installation directory rather than directly from within the cache directory.
+    // This is not necessary, however, if the application depends on other installed
+    // files, this ensures they will be present and in the expected location.
+    run_cmd.step.dependOn(b.getInstallStep());
+
+    // This allows the user to pass arguments to the application in the build
+    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
+    // This creates a build step. It will be visible in the `zig build --help` menu,
+    // and can be selected like this: `zig build run`
+    // This will evaluate the `run` step rather than the default, which is "install".
+    const run_step = b.step("run", "Run the app");
+    run_step.dependOn(&run_cmd.step);
 }

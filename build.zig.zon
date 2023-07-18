@@ -3,8 +3,20 @@
     .version = "0.1.0",
     .dependencies = .{
         .@"base58-zig" = .{
-            .url = "https://github.com/ultd/base58-zig/archive/6ddf85b0efc9b00aec0572180b9ac56bb2765d2a.tar.gz",
-            .hash = "1220ba01a1823d97d5d55450283966a775c34242c92820e56421dca48545381f67d2",
+            .url = "https://github.com/ultd/base58-zig/archive/fe23d156211edbfcede019970d1619184aadb83b.tar.gz",
+            .hash = "1220227d746ee3f156059a22b0044c6d8ad062a7cfb15b060cc2e7cbae4d0631f34e",
+        },
+        .@"zig-network" = .{
+            .url = "https://github.com/MasterQ32/zig-network/archive/7b5f76ea09626b96755c027bf4bd5b7e45297027.tar.gz",
+            .hash = "122090e7cb4459c2224399a45c56f47462733b919aa547c96b8c14ee705bfa22976e",
+        },
+        .@"bincode-zig" = .{
+            .url = "https://github.com/ultd/bincode-zig/archive/adb1b6da05052b3f3a8cef2a5cbc2cc359acb91c.tar.gz",
+            .hash = "122024b878fc84c240e5e3551cf86dd9c8ac5ff547deddf34e978f8c45b591cc7543",
+        },
+        .@"zig-cli" = .{
+            .url = "https://github.com/sam701/zig-cli/archive/ea92821a797bdefb5df41ce602f8c7f387bcfb93.tar.gz",
+            .hash = "122044525df0d1896556da08c5ed50b456a672a52ab86a65834bb1e27d3ae7a847f2",
         },
     },
 }
