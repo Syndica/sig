@@ -1,6 +1,6 @@
-# Sig Gossip - Solana's gossip protocol
+# Sig Gossip - Solana's gossip protocol notes
 
-The Solana gossip protocol is a variation of the ["Minimum-Cost First-Push-Then-Pull Gossip" Algorithm](https://apps.dtic.mil/sti/trecms/pdf/AD1108603.pdf).
+The Solana gossip protocol is a variation of the ["Plum Tree"](https://www.dpss.inesc-id.pt/~ler/reports/srds07.pdf).
 
 ### `ClusterInfo::run_socket_consume` - Packets consumed from UdpSocket
 
