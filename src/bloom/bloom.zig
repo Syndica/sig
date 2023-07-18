@@ -23,7 +23,7 @@ pub const Bloom = struct {
 
     pub fn init(allocator: std.mem.Allocator, num_bits: u64) Self {
         // need to be power of 2 for serialization to match rust
-        if (num_bits != 0) { 
+        if (num_bits != 0) {
             std.debug.assert((num_bits & (num_bits - 1) == 0));
         }
         return Self{
@@ -38,7 +38,7 @@ pub const Bloom = struct {
         self.keys.deinit();
     }
 
-    pub fn add_key(self: *Self, key: u64) !void { 
+    pub fn add_key(self: *Self, key: u64) !void {
         try self.keys.append(key);
     }
 
@@ -112,13 +112,13 @@ test "bloom: rust: serialized bytes equal rust (no keys)" {
     defer bloom.deinit();
     try bloom.add_key(1);
 
-    const v: [1]u8 = .{ 1 };
+    const v: [1]u8 = .{1};
     bloom.add(&v);
 
     var buf: [10000]u8 = undefined;
     var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-    const rust_bytes = .{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0}; 
+    const rust_bytes = .{ 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
 
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }
@@ -146,7 +146,7 @@ test "bloom: rust: serialized bytes equal rust (multiple keys)" {
     // bloom.add(&[3, 4]);
     // println!("{:?}", bincode::serialize(&bloom).unwrap());
 
-    const rust_bytes = .{3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66, 16, 32, 0, 128, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0}; 
+    const rust_bytes = .{ 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66, 16, 32, 0, 128, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0 };
 
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }

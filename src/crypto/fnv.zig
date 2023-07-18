@@ -46,16 +46,16 @@ pub const FnvHasher = struct {
 };
 
 test "fnv hasher with default is correct" {
-    const exp: u64 = 12638152016183539244; 
+    const exp: u64 = 12638152016183539244;
 
     var hasher = FnvHasher.init();
-    hasher.update(&.{ 1 });
+    hasher.update(&.{1});
     const result = hasher.final();
     try std.testing.expectEqual(exp, result);
 }
 
 test "fnv hasher with offset is correct" {
-    const exp: u64 = 11233064889143142093; 
+    const exp: u64 = 11233064889143142093;
 
     var hasher = FnvHasher.initWithOffset(19);
     hasher.update(&.{ 1, 2, 3 });

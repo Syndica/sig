@@ -75,9 +75,8 @@ pub const GossipService = struct {
         gossip_loop_handle.join();
     }
 
-
-    fn responder(self: *Self) !void { 
-        while (self.responder_channel.receive()) |p| { 
+    fn responder(self: *Self) !void {
+        while (self.responder_channel.receive()) |p| {
             _ = try self.gossip_socket.sendTo(p.from, p.data[0..p.size]);
         }
     }
@@ -94,7 +93,7 @@ pub const GossipService = struct {
         }
     }
 
-    fn send_ping(self: *Self, peer: *const EndPoint) !void { 
+    fn send_ping(self: *Self, peer: *const EndPoint) !void {
         var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
@@ -103,14 +102,14 @@ pub const GossipService = struct {
         );
     }
 
-    fn push_contact_info(self: *Self, peer: *const EndPoint) !void { 
+    fn push_contact_info(self: *Self, peer: *const EndPoint) !void {
         const id = self.cluster_info.our_contact_info.pubkey;
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
-        const unspecified_addr = SocketAddr.init_ipv4(.{0, 0, 0, 0}, 0);
+        const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
         const wallclock = @as(u64, @intCast(std.time.milliTimestamp()));
 
-        var legacy_contact_info = crds.LegacyContactInfo {
+        var legacy_contact_info = crds.LegacyContactInfo{
             .id = id,
             .gossip = gossip_addr,
             .tvu = unspecified_addr,
@@ -125,17 +124,14 @@ pub const GossipService = struct {
             .wallclock = wallclock,
             .shred_version = 0,
         };
-        var crds_data = crds.CrdsData {
+        var crds_data = crds.CrdsData{
             .LegacyContactInfo = legacy_contact_info,
         };
         var crds_value = try crds.CrdsValue.initSigned(crds_data, self.cluster_info.our_keypair);
-        var values = [_]crds.CrdsValue{ crds_value };
+        var values = [_]crds.CrdsValue{crds_value};
 
-        const msg = Protocol {
-            .PushMessage = .{
-                id, 
-                &values 
-            },
+        const msg = Protocol{
+            .PushMessage = .{ id, &values },
         };
 
         var buf = [_]u8{0} ** PACKET_DATA_SIZE;

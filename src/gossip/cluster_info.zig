@@ -101,5 +101,4 @@ pub const ClusterInfo = struct {
             std.time.sleep(std.time.ns_per_ms(GOSSIP_SLEEP_MILLIS - elapsed));
         }
     }
-
 };

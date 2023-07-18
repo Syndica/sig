@@ -331,9 +331,8 @@ pub const SnapshotHashes = struct {
     wallclock: u64,
 };
 
-
 test "gossip.crds: default crds filter matches rust bytes" {
-    const rust_bytes = [_]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0};
+    const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
     var filter = CrdsFilter.init(std.testing.allocator);
     defer filter.deinit();
 
@@ -342,18 +341,18 @@ test "gossip.crds: default crds filter matches rust bytes" {
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
 }
 
-test "gossip.crds: contact info serialization matches rust" { 
+test "gossip.crds: contact info serialization matches rust" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk, true);
 
-    const gossip_addr = SocketAddr.init_ipv4(.{127, 0, 0, 1}, 1234);
+    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
 
     var buf = [_]u8{0} ** 1024;
 
-    var legacy_contact_info = LegacyContactInfo {
+    var legacy_contact_info = LegacyContactInfo{
         .id = id,
         .gossip = gossip_addr,
         .tvu = unspecified_addr,
@@ -369,7 +368,7 @@ test "gossip.crds: contact info serialization matches rust" {
         .shred_version = 0,
     };
 
-    var contact_info_rust = [_]u8 { 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var contact_info_rust = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], contact_info_rust[0..bytes.len]);
 }
@@ -380,12 +379,12 @@ test "gossip.crds: crds data serialization matches rust" {
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk, true);
 
-    const gossip_addr = SocketAddr.init_ipv4(.{127, 0, 0, 1}, 1234);
+    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
 
     var buf = [_]u8{0} ** 1024;
 
-    var legacy_contact_info = LegacyContactInfo {
+    var legacy_contact_info = LegacyContactInfo{
         .id = id,
         .gossip = gossip_addr,
         .tvu = unspecified_addr,
@@ -401,11 +400,11 @@ test "gossip.crds: crds data serialization matches rust" {
         .shred_version = 0,
     };
 
-    var crds_data = CrdsData {
+    var crds_data = CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
-    var rust_crds_data = [_]u8 { 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var rust_crds_data = [_]u8{ 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var bytes = try bincode.writeToSlice(buf[0..], crds_data, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
 }

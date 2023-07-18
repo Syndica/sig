@@ -35,9 +35,11 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
             error.FileNotFound => {
                 // create ~/.sig dir
                 var dir = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR });
-                std.fs.makeDirAbsolute(dir) catch { logger.debug("sig directory already exists...", .{}); };
+                std.fs.makeDirAbsolute(dir) catch {
+                    logger.debug("sig directory already exists...", .{});
+                };
 
-                // create new keypair 
+                // create new keypair
                 const file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
                 defer file.close();
 
