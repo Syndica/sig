@@ -39,10 +39,14 @@ pub const CrdsFilter = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .filter = Bloom.init(allocator),
+            .filter = Bloom.init(allocator, 0),
             .mask = 18_446_744_073_709_551_615,
             .mask_bits = 0,
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.filter.deinit();
     }
 };
 

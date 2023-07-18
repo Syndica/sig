@@ -130,58 +130,65 @@ test "gossip.protocol: ping message matches rust bytes" {
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-// // TODO: FIX (need to fix the bloom ser/deser test first)
-// test "gossip.protocol: pull request serializes and deserializes" {
-//     var rust_bytes = [_]u8{
-//         0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
-//         255, 255, 255, 255, 255, 255, 255, 255, 0,   0,   0,   0,   220, 64,  225, 78,  22,  90,  232, 152, 207, 56,  205, 161, 228, 200, 208, 60,  94,
-//         182, 94,  193, 169, 20,  89,  77,  29,  57,  214, 252, 199, 219, 181, 196, 254, 186, 170, 233, 141, 65,  129, 66,  222, 199, 161, 219, 45,  64,
-//         65,  179, 236, 234, 226, 27,  41,  106, 134, 167, 159, 38,  162, 92,  15,  180, 135, 1,   7,   0,   0,   0,   25,  117, 21,  11,  61,  170, 38,
-//         18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230, 121, 12,  227, 248, 199, 156, 253, 144, 175, 67,  100, 0,   0,   0,
-//         0,   0,   0,   0,   1,   0,   2,   0,   3,   0,   0,   4,   0,   0,   0,
-//     };
-//     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
-//         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
-//         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
-//         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
-//         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
-//     }));
+test "gossip.protocol: default crds filter matches rust bytes" {
+    const rust_bytes = [_]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0};
+    var filter = CrdsFilter.init(testing.allocator);
+    defer filter.deinit();
 
-//     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
+    var buf = [_]u8{0} ** 1024;
+    var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
+    try testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
+}
 
-//     var crds_value = CrdsValue.init(CrdsData{
-//         .Version = Version.init(
-//             pubkey,
-//             100,
-//             LegacyVersion2.init(1, 2, 3, Option(u32).None(), 4),
-//         ),
-//     });
+test "gossip.protocol: pull request serializes and deserializes" {
+    var rust_bytes = [_]u8{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 190, 193, 13, 216, 175, 227, 117, 168, 246, 219, 213, 39, 67, 249, 88, 3, 238, 151, 144, 15, 23, 142, 153, 198, 47, 221, 117, 132, 218, 28, 29, 115, 248, 253, 211, 101, 137, 19, 174, 112, 43, 57, 251, 110, 173, 14, 71, 0, 186, 24, 36, 61, 75, 241, 119, 73, 86, 93, 136, 249, 167, 40, 134, 14, 0, 0, 0, 0, 25, 117, 21, 11, 61, 170, 38, 18, 67, 196, 242, 219, 50, 154, 4, 254, 79, 227, 253, 229, 188, 230, 121, 12, 227, 248, 199, 156, 253, 144, 175, 67, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
+        125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
+        115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
+        61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
+        121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
+    }));
 
-//     try crds_value.sign(keypair);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
 
-//     var original = Protocol{ .PullRequest = .{
-//         CrdsFilter.init(testing.allocator),
-//         crds_value,
-//     } };
+    // pull requests only use ContactInfo CRDS data
+    const gossip_addr = SocketAddr.init_ipv4(.{127, 0, 0, 1}, 1234);
+    const unspecified_addr = SocketAddr.unspecified();
+    var legacy_contact_info = LegacyContactInfo {
+        .id = pubkey,
+        .gossip = gossip_addr,
+        .tvu = unspecified_addr,
+        .tvu_forwards = unspecified_addr,
+        .repair = unspecified_addr,
+        .tpu = unspecified_addr,
+        .tpu_forwards = unspecified_addr,
+        .tpu_vote = unspecified_addr,
+        .rpc = unspecified_addr,
+        .rpc_pubsub = unspecified_addr,
+        .serve_repair = unspecified_addr,
+        .wallclock = 0,
+        .shred_version = 0,
+    };
+    var crds_data = crds.CrdsData {
+        .LegacyContactInfo = legacy_contact_info,
+    };
+    var crds_value = try crds.CrdsValue.initSigned(crds_data, keypair);
 
-//     std.debug.print("original: {any}\n", .{original});
+    var filter = CrdsFilter.init(testing.allocator);
+    defer filter.deinit();
 
-//     var buf = [_]u8{0} ** 1232;
+    var pull = Protocol{ .PullRequest = .{
+        filter,
+        crds_value,
+    }};
 
-//     var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
+    var buf = [_]u8{0} ** 1232;
+    var serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
+    try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
-//     std.debug.print("serialized: {any}\n", .{serialized});
-
-//     var deserialized = try bincode.readFromSlice(testing.allocator, Protocol, serialized, bincode.Params.standard);
-
-//     std.debug.print("deserialized: {any}\n", .{deserialized});
-
-//     // try testing.expect(std.mem.eql(u8, rust_bytes[0..], serialized));
-//     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
-
-//     try testing.expect(std.meta.eql(original, deserialized));
-//     try testing.expect(try deserialized.PullRequest.@"1".verify(pubkey));
-// }
+    var deserialized = try bincode.readFromSlice(testing.allocator, Protocol, serialized, bincode.Params.standard);
+    try testing.expect(std.meta.eql(pull, deserialized));
+}
 
 test "gossip.protocol: push message serializes and deserializes correctly" {
     var kp_bytes = [_]u8{1} ** 32;
