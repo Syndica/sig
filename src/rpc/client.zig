@@ -1328,11 +1328,9 @@ test "pubkey equality works" {
 }
 
 test "pubkey randome works" {
-    var pubkey = Pubkey.random(.{});
-
-    std.log.debug("random pubkey: {s}", .{pubkey.string()});
-
-    try testing.expect(true);
+    var pubkey = Pubkey.random(.{ .seed = 20 });
+    var pubkey_2 = Pubkey.random(.{ .seed = 19 });
+    try testing.expect(!pubkey_2.equals(&pubkey));
 }
 
 test "make 'getAccountInfo' rpc call successfully" {
