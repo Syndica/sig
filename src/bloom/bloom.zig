@@ -21,22 +21,30 @@ pub const Bloom = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, num_bits: u64) Self {
+        // need to be power of 2 for serialization to match rust
+        if (num_bits != 0) { 
+            std.debug.assert((num_bits & (num_bits - 1) == 0));
+        }
         return Self{
             .keys = ArrayList(u64).init(allocator),
-            .bits = DynamicBitSet.initEmpty(allocator, 0) catch unreachable,
+            .bits = DynamicBitSet.initEmpty(allocator, num_bits) catch unreachable,
             .num_bits_set = 0,
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         self.bits.deinit();
         self.keys.deinit();
     }
 
-    pub fn add(self: *Self, key: u64) void {
-        for (self.keys.items) |k| {
-            var i = self.pos(key, k);
+    pub fn add_key(self: *Self, key: u64) !void { 
+        try self.keys.append(key);
+    }
+
+    pub fn add(self: *Self, key: []const u8) void {
+        for (self.keys.items) |hash_index| {
+            var i = self.pos(key, hash_index);
             if (!self.bits.isSet(i)) {
                 self.num_bits_set +|= 1;
                 self.bits.set(i);
@@ -44,28 +52,15 @@ pub const Bloom = struct {
         }
     }
 
-    pub fn pos(self: *Self, key: u64, k: u64) u64 {
-        return self.hash_at_index(key, k) % @bitSizeOf(u64);
+    pub fn pos(self: *Self, bytes: []const u8, hash_index: u64) u64 {
+        return hash_at_index(bytes, hash_index) % @as(u64, self.bits.capacity());
     }
 
-    pub fn hash_at_index(key: u64, hash_index: u64) u64 {
-        var bytes = std.mem.asBytes(&key);
+    pub fn hash_at_index(bytes: []const u8, hash_index: u64) u64 {
         var hasher = FnvHasher.initWithOffset(hash_index);
         hasher.update(bytes);
         return hasher.final();
     }
-
-    // pub fn pos()
-
-    // pub fn add(self: *Self) void {
-    //      for (self.keys) |key| {
-    //         let pos = self.pos(key, *k);
-    //         if !self.bits.get(pos) {
-    //             self.num_bits_set = self.num_bits_set.saturating_add(1);
-    //             self.bits.set(pos, true);
-    //         }
-    //     }
-    // }
 };
 
 fn bincode_serialize_bit_vec(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -77,21 +72,81 @@ fn bincode_serialize_bit_vec(writer: anytype, data: anytype, params: bincode.Par
 
 fn bincode_deserialize_bit_vec(allocator: std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
     var bitvec = try bincode.read(allocator, BitVec, reader, params);
-    return try bitvec.toBitSet(allocator);
+    defer bincode.readFree(allocator, bitvec);
+
+    var dynamic_bitset = try bitvec.toBitSet(allocator);
+    return dynamic_bitset;
 }
 
 // TODO: Finish test
-test "bloom serializes/deserializes correctly" {
-    var keys = ArrayList(u64).init(testing.allocator);
-    _ = keys;
-    var bloom = Bloom.init(testing.allocator);
+test "bloom: serializes/deserializes correctly" {
+    var bloom = Bloom.init(testing.allocator, 0);
+
     var buf: [10000]u8 = undefined;
-
     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
-
     std.log.debug("out: {any}", .{out});
 
     var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
+}
+
+test "bloom: serializes/deserializes correctly with set bits" {
+    var bloom = Bloom.init(testing.allocator, 128);
+    try bloom.add_key(10);
+    // required for memory leaks
+    defer bloom.deinit();
+
+    var buf: [10000]u8 = undefined;
+    var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    std.log.debug("out: {any}", .{out});
+
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    defer deserialized.deinit();
 
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
+}
+
+test "bloom: rust: serialized bytes equal rust (no keys)" {
+    // note: need to init with len 2^i
+    var bloom = Bloom.init(testing.allocator, 128);
+    defer bloom.deinit();
+    try bloom.add_key(1);
+
+    const v: [1]u8 = .{ 1 };
+    bloom.add(&v);
+
+    var buf: [10000]u8 = undefined;
+    var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+
+    const rust_bytes = .{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0}; 
+
+    try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+}
+
+test "bloom: rust: serialized bytes equal rust (multiple keys)" {
+    var bloom = Bloom.init(testing.allocator, 128);
+    defer bloom.deinit();
+
+    try bloom.add_key(1);
+    try bloom.add_key(2);
+    try bloom.add_key(3);
+
+    var buf: [10000]u8 = undefined;
+
+    const v: [2]u8 = .{ 1, 2 };
+    bloom.add(&v);
+
+    const x: [2]u8 = .{ 3, 4 };
+    bloom.add(&x);
+
+    var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+
+    // let mut bloom = Bloom::new(128, vec![1, 2, 3]);
+    // bloom.add(&[1, 2]);
+    // bloom.add(&[3, 4]);
+    // println!("{:?}", bincode::serialize(&bloom).unwrap());
+
+    const rust_bytes = .{3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66, 16, 32, 0, 128, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0}; 
+
+    try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }

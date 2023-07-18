@@ -102,12 +102,4 @@ pub const ClusterInfo = struct {
         }
     }
 
-    pub fn processPackets(self: *Self, allocator: std.mem.Allocator, receiver: *Channel(Packet)) !void {
-        _ = self;
-        while (receiver.receive()) |p| {
-            var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
-
-            logger.debug("got a protocol message: {any}", .{protocol_message});
-        }
-    }
 };

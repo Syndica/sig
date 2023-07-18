@@ -42,6 +42,7 @@ var app = &cli.App{
     },
 };
 
+// prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
     const id = try gossipCmd.getOrInitIdentity(gpa);
     var pk: [50]u8 = undefined;
@@ -49,6 +50,7 @@ fn identity(_: []const []const u8) !void {
     try std.io.getStdErr().writer().print("Identity: {s}\n", .{pk[0..size]});
 }
 
+// gossip entrypoint
 fn gossip(_: []const []const u8) !void {
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var entrypoints = std.ArrayList(LegacyContactInfo).init(gpa);

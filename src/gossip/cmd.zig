@@ -12,11 +12,15 @@ const LegacyContactInfo = @import("crds.zig").LegacyContactInfo;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa_allocator = gpa.allocator();
 
-const IDENTITY_KEYPAIR_PATH = "/.sig/identity.key";
+const logger = std.log.scoped(.cmd);
+
+const IDENTITY_KEYPAIR_DIR = "/.sig";
+const IDENTITY_KEYPAIR_PATH = "/identity.key";
 
 pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
     const home_dir = std.os.getenv("HOME") orelse return error.UnableDetectHomeDir;
-    var path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_PATH });
+    var path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR, IDENTITY_KEYPAIR_PATH });
+
     if (std.fs.openFileAbsolute(path, .{})) |file| {
         try file.seekTo(0);
 
@@ -29,11 +33,16 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
     } else |err| {
         switch (err) {
             error.FileNotFound => {
+                // create ~/.sig dir
+                var dir = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR });
+                std.fs.makeDirAbsolute(dir) catch { logger.debug("sig directory already exists...", .{}); };
+
+                // create new keypair 
                 const file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
                 defer file.close();
 
                 const kp = try Keypair.create(null);
-                try file.writeAll(kp.secret_key.toBytes()[0..]);
+                try file.writeAll(&kp.secret_key.toBytes());
 
                 return kp;
             },
