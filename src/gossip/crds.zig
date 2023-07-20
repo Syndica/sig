@@ -1,5 +1,4 @@
 const std = @import("std");
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("net.zig").SocketAddr;
 const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
@@ -13,6 +12,7 @@ const ArrayList = std.ArrayList;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
 
 pub const CrdsFilter = struct {
     filter: Bloom,
@@ -77,7 +77,7 @@ pub const CrdsValue = struct {
         return self.signature.verify(pubkey, msg);
     }
 
-    pub fn id(self: *Self) Pubkey {
+    pub fn id(self: *const Self) Pubkey {
         return switch (self.data) {
             .LegacyContactInfo => |*v| {
                 return v.id;
@@ -118,7 +118,7 @@ pub const CrdsValue = struct {
         };
     }
 
-    pub fn label(self: *Self) CrdsValueLabel {
+    pub fn label(self: *const Self) CrdsValueLabel {
         return switch (self.data) {
             .LegacyContactInfo => {
                 return CrdsValueLabel{ .LegacyContactInfo = self.id() };
