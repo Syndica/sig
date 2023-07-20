@@ -63,7 +63,7 @@ pub const GossipService = struct {
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
         var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self, gpa, logger });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
-        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self});
+        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self, logger});
 
         responder_handle.join();
         receiver_handle.join();
@@ -77,24 +77,24 @@ pub const GossipService = struct {
         }
     }
 
-    fn gossip_loop(self: *Self) !void {
+    fn gossip_loop(self: *Self, logger: *Logger) !void {
         // solana-gossip spy -- local node for testing
         const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
 
         while (true) {
-            try self.send_ping(&peer);
+            try self.send_ping(&peer, logger);
             try self.push_contact_info(&peer);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }
     }
 
-    fn send_ping(self: *Self, peer: *const EndPoint) !void {
+    fn send_ping(self: *Self, peer: *const EndPoint, logger: *Logger) !void {
         var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
-        
-        logger.debug("sending a ping message to: {any}", .{ peer });
+
+        logger.debugf("sending a ping message to: {any}", .{peer});
         self.responder_channel.send(
             Packet.init(peer.*, out, bytes.len),
         );
@@ -171,9 +171,9 @@ pub const GossipService = struct {
             //     return true;
             // }
 
-            var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch { 
+            var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch {
                 failed_protocol_msgs += 1;
-                logger.debug("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
+                logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
                 continue;
             };
 
@@ -184,12 +184,12 @@ pub const GossipService = struct {
                     } else { 
                         logger.debugf("pong message verification failed...", .{});
                     }
-                }, 
+                },
                 .PingMessage => |*ping| {
                     if (ping.signature.verify(ping.from, &ping.token)) {
-                        logger.debug("got a ping message", .{});
-                    } else { 
-                        logger.debug("ping message verification failed...", .{});
+                        logger.debugf("got a ping message", .{});
+                    } else {
+                        logger.debugf("ping message verification failed...", .{});
                     }
                 },
                 else => { 

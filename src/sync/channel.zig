@@ -85,10 +85,10 @@ test "sync: channel works" {
     var ch = BlockChannel.init(testing.allocator, 100);
     defer ch.deinit();
 
-    var recv_count: usize = 0; 
+    var recv_count: usize = 0;
     var send_count: usize = 0;
-    var join1 = try std.Thread.spawn(.{}, testReceiver, .{&ch, &recv_count});
-    var join2 = try std.Thread.spawn(.{}, testSender, .{&ch, &send_count});
+    var join1 = try std.Thread.spawn(.{}, testReceiver, .{ &ch, &recv_count });
+    var join2 = try std.Thread.spawn(.{}, testSender, .{ &ch, &send_count });
 
     join1.join();
     join2.join();
