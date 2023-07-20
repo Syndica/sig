@@ -9,26 +9,10 @@ const Slot = @import("../core/slot.zig").Slot;
 const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("bincode-zig");
-const AutoArrayHashMap = std.AutoArrayHashMap;
 const ArrayList = std.ArrayList;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
-/// Cluster Replicated Data Store
-pub const Crds = struct {
-    store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{ .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator) };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.store.deinit();
-    }
-};
 
 pub const CrdsFilter = struct {
     filter: Bloom,
@@ -91,6 +75,88 @@ pub const CrdsValue = struct {
         var buf = [_]u8{0} ** 1500;
         var msg = try bincode.writeToSlice(buf[0..], self.data, bincode.Params.standard);
         return self.signature.verify(pubkey, msg);
+    }
+
+    pub fn id(self: *Self) Pubkey {
+        return switch (self.data) {
+            .LegacyContactInfo => |*v| {
+                return v.id;
+            },
+            .Vote => |*v| {
+                return v[1].from;
+            },
+            .LowestSlot => |*v| {
+                return v[1].from;
+            },
+            .LegacySnapshotHashes => |*v| {
+                return v.from;
+            },
+            .AccountsHashes => |*v| {
+                return v.from;
+            },
+            .EpochSlots => |*v| {
+                return v[1].from;
+            },
+            .LegacyVersion => |*v| {
+                return v.from;
+            },
+            .Version => |*v| {
+                return v.from;
+            },
+            .NodeInstance => |*v| {
+                return v.from;
+            },
+            .DuplicateShred => |*v| {
+                return v[1].from;
+            },
+            .SnapshotHashes => |*v| {
+                return v.from;
+            },
+            .ContactInfo => |*v| {
+                return v.pubkey;
+            },
+        };
+    }
+
+    pub fn label(self: *Self) CrdsValueLabel {
+        return switch (self.data) {
+            .LegacyContactInfo => {
+                return CrdsValueLabel{ .LegacyContactInfo = self.id() };
+            },
+            .Vote => |*v| {
+                return CrdsValueLabel{ .Vote = .{ v[0], self.id() } };
+            },
+            .LowestSlot => {
+                return CrdsValueLabel{ .LowestSlot = self.id() };
+            },
+            .LegacySnapshotHashes => {
+                return CrdsValueLabel{ .LegacySnapshotHashes = self.id() };
+            },
+            .AccountsHashes => {
+                return CrdsValueLabel{ .AccountsHashes = self.id() };
+            },
+            .EpochSlots => |*v| {
+                return CrdsValueLabel{ .EpochSlots = .{ v[0], self.id() } };
+            },
+            .LegacyVersion => {
+                return CrdsValueLabel{ .LegacyVersion = self.id() };
+            },
+            .Version => {
+                return CrdsValueLabel{ .Version = self.id() };
+            },
+            .NodeInstance => {
+                return CrdsValueLabel{ .NodeInstance = self.id() };
+            },
+            .DuplicateShred => |*v| {
+                return CrdsValueLabel{ .DuplicateShred = .{ v[0], self.id() } };
+            },
+            .SnapshotHashes => {
+                return CrdsValueLabel{ .SnapshotHashes = self.id() };
+            },
+            .ContactInfo => {
+                return CrdsValueLabel{ .ContactInfo = self.id() };
+            },
+        };
     }
 };
 
@@ -330,6 +396,44 @@ pub const SnapshotHashes = struct {
     incremental: []struct { Slot, Hash },
     wallclock: u64,
 };
+
+test "gossip.crds: test CrdsValue label() and id() methods" {
+    var kp_bytes = [_]u8{1} ** 32;
+    var kp = try KeyPair.create(kp_bytes);
+    const pk = kp.public_key;
+    var id = Pubkey.fromPublicKey(&pk, true);
+    const unspecified_addr = SocketAddr.unspecified();
+    var legacy_contact_info = LegacyContactInfo{
+        .id = id,
+        .gossip = unspecified_addr,
+        .tvu = unspecified_addr,
+        .tvu_forwards = unspecified_addr,
+        .repair = unspecified_addr,
+        .tpu = unspecified_addr,
+        .tpu_forwards = unspecified_addr,
+        .tpu_vote = unspecified_addr,
+        .rpc = unspecified_addr,
+        .rpc_pubsub = unspecified_addr,
+        .serve_repair = unspecified_addr,
+        .wallclock = 0,
+        .shred_version = 0,
+    };
+
+    var crds_value = try CrdsValue.initSigned(CrdsData{
+        .LegacyContactInfo = legacy_contact_info,
+    }, kp);
+
+    try std.testing.expect(crds_value.id().equals(&id));
+
+    switch (crds_value.label()) {
+        .LegacyContactInfo => |*v| {
+            try std.testing.expect(v.equals(&id));
+        },
+        else => {
+            unreachable;
+        },
+    }
+}
 
 test "gossip.crds: default crds filter matches rust bytes" {
     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
