@@ -8,16 +8,15 @@ const AtomicBool = std.atomic.Atomic(bool);
 const SocketAddr = @import("net.zig").SocketAddr;
 const ArrayList = std.ArrayList;
 const LegacyContactInfo = @import("crds.zig").LegacyContactInfo;
+const Logger = @import("../trace/log.zig").Logger;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa_allocator = gpa.allocator();
 
-const logger = std.log.scoped(.cmd);
-
 const IDENTITY_KEYPAIR_DIR = "/.sig";
 const IDENTITY_KEYPAIR_PATH = "/identity.key";
 
-pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
+pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: *Logger) !Keypair {
     const home_dir = std.os.getenv("HOME") orelse return error.UnableDetectHomeDir;
     var path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR, IDENTITY_KEYPAIR_PATH });
 
@@ -36,7 +35,7 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
                 // create ~/.sig dir
                 var dir = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR });
                 std.fs.makeDirAbsolute(dir) catch {
-                    logger.debug("sig directory already exists...", .{});
+                    logger.debugf("sig directory already exists...", .{});
                 };
 
                 // create new keypair
@@ -55,15 +54,15 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator) !Keypair {
     }
 }
 
-pub fn runGossipService(gossip_port: u16, entrypoints: ArrayList(LegacyContactInfo)) !void {
+pub fn runGossipService(gossip_port: u16, entrypoints: ArrayList(LegacyContactInfo), logger: *Logger) !void {
     var exit = AtomicBool.init(false);
     var gossip_socket_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, gossip_port);
 
-    var spy = try ClusterInfo.initSpy(gpa_allocator, gossip_socket_addr, entrypoints);
+    var spy = try ClusterInfo.initSpy(gpa_allocator, gossip_socket_addr, entrypoints, logger);
 
     var gossip_service = GossipService.init(gpa_allocator, &spy.cluster_info, spy.gossip_socket, exit);
 
-    var handle = try std.Thread.spawn(.{}, GossipService.run, .{&gossip_service});
+    var handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service, logger });
 
     handle.join();
 }

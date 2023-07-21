@@ -44,7 +44,7 @@ pub const Entry = struct {
         return self;
     }
 
-    pub fn info(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
         var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
         std.fmt.format(message.writer(), fmt, args) catch @panic("could not format");
         self.message = message;
@@ -53,7 +53,7 @@ pub const Entry = struct {
         self.logger.appendEntry(self);
     }
 
-    pub fn debug(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
         var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
         std.fmt.format(message.writer(), fmt, args) catch @panic("could not format");
         self.message = message;
@@ -62,7 +62,7 @@ pub const Entry = struct {
         self.logger.appendEntry(self);
     }
 
-    pub fn err(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
         var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
         std.fmt.format(message.writer(), fmt, args) catch @panic("could not format");
         self.message = message;
@@ -71,9 +71,45 @@ pub const Entry = struct {
         self.logger.appendEntry(self);
     }
 
-    pub fn warn(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
         var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
         std.fmt.format(message.writer(), fmt, args) catch @panic("could not format");
+        self.message = message;
+        self.time = time.DateTime.now();
+        self.level = .warn;
+        self.logger.appendEntry(self);
+    }
+
+    pub fn info(self: *Self, comptime msg: []const u8) void {
+        var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
+        message.appendSlice(msg[0..]) catch @panic("could not appendSlice for message");
+        self.message = message;
+        self.time = time.DateTime.now();
+        self.level = .info;
+        self.logger.appendEntry(self);
+    }
+
+    pub fn debug(self: *Self, comptime msg: []const u8) void {
+        var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
+        message.appendSlice(msg[0..]) catch @panic("could not appendSlice for message");
+        self.message = message;
+        self.time = time.DateTime.now();
+        self.level = .debug;
+        self.logger.appendEntry(self);
+    }
+
+    pub fn err(self: *Self, comptime msg: []const u8) void {
+        var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
+        message.appendSlice(msg[0..]) catch @panic("could not appendSlice for message");
+        self.message = message;
+        self.time = time.DateTime.now();
+        self.level = .err;
+        self.logger.appendEntry(self);
+    }
+
+    pub fn warn(self: *Self, comptime msg: []const u8) void {
+        var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
+        message.appendSlice(msg[0..]) catch @panic("could not appendSlice for message");
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .warn;
@@ -112,7 +148,7 @@ test "trace.entry: should info log correctly" {
         .field("name", "a-mod")
         .field("elapsed", @as(i48, 135133340042))
         .field("possible_value", anull)
-        .info("hello, {s}", .{"world!"});
+        .infof("hello, {s}", .{"world!"});
 
     std.debug.print("{any}\n\n", .{logger});
 }
