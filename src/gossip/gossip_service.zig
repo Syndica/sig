@@ -14,14 +14,13 @@ const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
 const crds = @import("../gossip/crds.zig");
+const Logger = @import("../trace/log.zig").Logger;
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
 
 const PacketChannel = Channel(Packet);
 // const ProtocolChannel = Channel(Protocol);
-
-const logger = std.log.scoped(.gossip_service);
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
@@ -55,17 +54,14 @@ pub const GossipService = struct {
         self.responder_channel.deinit();
     }
 
-    pub fn run(self: *Self) !void {
-        logger.info("running gossip service at {any}", .{self.gossip_socket.getLocalEndPoint()});
+    pub fn run(self: *Self, logger: *Logger) !void {
+        logger.infof("running gossip service at {any}", .{self.gossip_socket.getLocalEndPoint()});
 
         defer self.deinit();
 
         // spawn gossip udp receiver thread
-        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{self});
-        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{
-            self,
-            gpa,
-        });
+        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
+        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self, gpa, logger });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
         var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self});
 
@@ -140,7 +136,7 @@ pub const GossipService = struct {
         self.responder_channel.send(packet);
     }
 
-    fn read_gossip_socket(self: *Self) !void {
+    fn read_gossip_socket(self: *Self, logger: *Logger) !void {
         // we close the chan if no more packet's can ever be produced
         defer self.packet_channel.close();
 
@@ -160,10 +156,10 @@ pub const GossipService = struct {
             @memset(&read_buf, 0);
         }
 
-        logger.debug("reading gossip exiting...", .{});
+        logger.debugf("reading gossip exiting...", .{});
     }
 
-    pub fn process_packets(self: *Self, allocator: std.mem.Allocator) !void {
+    pub fn process_packets(self: *Self, allocator: std.mem.Allocator, logger: *Logger) !void {
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/socket.rs
@@ -172,7 +168,7 @@ pub const GossipService = struct {
             // }
 
             var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
-            logger.debug("got a protocol message: {any}", .{protocol_message});
+            logger.debugf("got a protocol message: {any}", .{protocol_message});
         }
     }
 };

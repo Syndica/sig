@@ -15,13 +15,12 @@ const bincode = @import("bincode-zig");
 const CrdsValue = @import("crds.zig").CrdsValue;
 const CrdsData = @import("crds.zig").CrdsData;
 const Version = @import("crds.zig").Version;
+const Logger = @import("../trace/log.zig").Logger;
 const RwLock = std.Thread.RwLock;
 
 const GOSSIP_SLEEP_MILLIS: i64 = 100;
 
 const GossipController = struct {};
-
-const logger = std.log.scoped(.cluster_info);
 
 pub const ClusterInfo = struct {
     gossip_controller: GossipController = .{},
@@ -58,13 +57,13 @@ pub const ClusterInfo = struct {
         keypair: KeyPair,
     };
 
-    pub fn initSpy(allocator: std.mem.Allocator, gossip_socket_addr: SocketAddr, entrypoints: ArrayList(LegacyContactInfo)) !ClusterInfoPlus {
+    pub fn initSpy(allocator: std.mem.Allocator, gossip_socket_addr: SocketAddr, entrypoints: ArrayList(LegacyContactInfo), logger: *Logger) !ClusterInfoPlus {
         // bind to gosssip socket port
         var gossip_socket = try UdpSocket.create(.ipv4, .udp);
         try gossip_socket.bind(gossip_socket_addr.toEndpoint());
 
         // get or init our keypair
-        var keypair = try cmd.getOrInitIdentity(allocator);
+        var keypair = try cmd.getOrInitIdentity(allocator, logger);
 
         // build our spy contact info
         var our_contact_info = try ContactInfo.initSpy(

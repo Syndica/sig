@@ -39,7 +39,7 @@ pub const Logger = struct {
     }
 
     fn run(self: *Self) void {
-        var stdErrConsumer = BasicSink(std.io.getStdErr().writer()){};
+        var stdErrConsumer = BasicStdErrSink{};
         var runs: u8 = 0;
         while (runs < 5) : (runs += 1) {
             self.mux.lock();
@@ -61,19 +61,35 @@ pub const Logger = struct {
         return Entry.init(self.allocator, self).field(name, value);
     }
 
-    pub fn info(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.allocator, self).info(fmt, args);
+    pub fn info(self: *Self, comptime msg: []const u8) void {
+        Entry.init(self.allocator, self).infof(msg, .{});
     }
 
-    pub fn debug(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.allocator, self).debug(fmt, args);
+    pub fn debug(self: *Self, comptime msg: []const u8) void {
+        Entry.init(self.allocator, self).debugf(msg, .{});
     }
 
-    pub fn warn(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    pub fn warn(self: *Self, comptime msg: []const u8) void {
+        Entry.init(self.allocator, self).warn(msg, .{});
+    }
+
+    pub fn err(self: *Self, comptime msg: []const u8) void {
+        Entry.init(self.allocator, self).err(msg, .{});
+    }
+
+    pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        Entry.init(self.allocator, self).infof(fmt, args);
+    }
+
+    pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        Entry.init(self.allocator, self).debugf(fmt, args);
+    }
+
+    pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
         Entry.init(self.allocator, self).warn(fmt, args);
     }
 
-    pub fn err(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
         Entry.init(self.allocator, self).err(fmt, args);
     }
 
@@ -84,23 +100,29 @@ pub const Logger = struct {
     }
 };
 
-fn BasicSink(comptime writer: anytype) type {
-    return struct {
-        const Self = @This();
+const BasicStdErrSink = struct {
+    const Self = @This();
 
-        pub fn consumeEntries(self: Self, entries: []*Entry) void {
-            _ = self;
-            for (entries) |e| {
-                logfmt.formatter(e, writer) catch unreachable;
-            }
-        }
+    pub fn consumeEntries(_: Self, entries: []*Entry) void {
+        var std_err_writer = std.io.getStdErr().writer();
+        var std_err_mux = std.debug.getStderrMutex();
+        std_err_mux.lock();
+        defer std_err_mux.unlock();
 
-        pub fn consumeEntry(self: Self, e: *Entry) void {
-            _ = self;
-            logfmt.formatter(e, writer) catch unreachable;
+        for (entries) |e| {
+            logfmt.formatter(e, std_err_writer) catch unreachable;
         }
-    };
-}
+    }
+
+    pub fn consumeEntry(_: Self, e: *Entry) void {
+        var std_err_writer = std.io.getStdErr().writer();
+        var std_err_mux = std.debug.getStderrMutex();
+        std_err_mux.lock();
+        defer std_err_mux.unlock();
+
+        logfmt.formatter(e, std_err_writer) catch unreachable;
+    }
+};
 
 test "trace.logger: works" {
     var logger = Logger.init(testing.allocator, .info);
@@ -108,19 +130,19 @@ test "trace.logger: works" {
 
     logger.spawn();
 
-    logger.field("elapsed", 4245).debug("request with id {s} succeeded", .{"abcd1234"});
-    logger.field("kind", .some_enum_kind).info("operation was done", .{});
-    logger.field("authorized", false).warn("api call received at {d} not authorized", .{10004});
-    logger.field("error", "IOError").err("api call received at {d} broke the system!", .{10005});
+    logger.field("elapsed", 4245).debugf("request with id {s} succeeded", .{"abcd1234"});
+    logger.field("kind", .some_enum_kind).infof("operation was done", .{});
+    logger.field("authorized", false).warnf("api call received at {d} not authorized", .{10004});
+    logger.field("error", "IOError").errf("api call received at {d} broke the system!", .{10005});
 
     std.time.sleep(std.time.ns_per_ms * 100);
 
     try testing.expect(logger.pending_entries.items.len == 0);
 
-    logger.field("elapsed", 4245).debug("request with id {s} succeeded", .{"abcd1234"});
-    logger.field("kind", .some_enum_kind).info("operation was done", .{});
-    logger.field("authorized", false).warn("api call received at {d} not authorized", .{10004});
-    logger.field("error", "IOError").err("api call received at {d} broke the system!", .{10005});
+    logger.field("elapsed", 4245).debug("request with id succeeded");
+    logger.field("kind", .some_enum_kind).info("operation was done");
+    logger.field("authorized", false).warn("api call received at not authorized");
+    logger.field("error", "IOError").err("api call received broke the system!");
 
     std.time.sleep(std.time.ns_per_ms * 100);
 }
