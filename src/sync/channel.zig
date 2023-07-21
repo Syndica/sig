@@ -64,32 +64,34 @@ const BlockChannel = Channel(Block);
 
 const logger = std.log.scoped(.sync_channel_tests);
 
-fn testReceiver(chan: *BlockChannel) void {
+fn testReceiver(chan: *BlockChannel, recv_count: *usize) void {
     while (true) {
-        var item = chan.receive() orelse break;
-        logger.debug("got item: {any}", .{item});
+        _ = chan.receive() orelse break;
+        recv_count.* += 1;
     }
-    logger.debug("chan closed!", .{});
 }
 
-fn testSender(chan: *BlockChannel) void {
+fn testSender(chan: *BlockChannel, send_count: *usize) void {
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         std.time.sleep(std.time.ns_per_ms * 100);
         chan.send(Block{ .num = @intCast(i) });
+        send_count.* += 1;
     }
-    logger.debug("closing chan..", .{});
     chan.close();
 }
 
 test "sync: channel works" {
-    logger.debug("testing channel..", .{});
     var ch = BlockChannel.init(testing.allocator, 100);
     defer ch.deinit();
 
-    var join1 = try std.Thread.spawn(.{}, testReceiver, .{&ch});
-    var join2 = try std.Thread.spawn(.{}, testSender, .{&ch});
+    var recv_count: usize = 0;
+    var send_count: usize = 0;
+    var join1 = try std.Thread.spawn(.{}, testReceiver, .{ &ch, &recv_count });
+    var join2 = try std.Thread.spawn(.{}, testSender, .{ &ch, &send_count });
 
     join1.join();
     join2.join();
+
+    try testing.expect(recv_count == send_count);
 }

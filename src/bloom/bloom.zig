@@ -78,13 +78,11 @@ fn bincode_deserialize_bit_vec(allocator: std.mem.Allocator, comptime T: type, r
     return dynamic_bitset;
 }
 
-// TODO: Finish test
 test "bloom: serializes/deserializes correctly" {
     var bloom = Bloom.init(testing.allocator, 0);
 
     var buf: [10000]u8 = undefined;
     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
-    std.log.debug("out: {any}", .{out});
 
     var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
@@ -98,7 +96,6 @@ test "bloom: serializes/deserializes correctly with set bits" {
 
     var buf: [10000]u8 = undefined;
     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
-    std.log.debug("out: {any}", .{out});
 
     var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
     defer deserialized.deinit();

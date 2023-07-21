@@ -55,15 +55,15 @@ pub const GossipService = struct {
     }
 
     pub fn run(self: *Self, logger: *Logger) !void {
-        logger.infof("running gossip service at {any}", .{self.gossip_socket.getLocalEndPoint()});
-
+        const id = self.cluster_info.our_contact_info.pubkey;
+        logger.infof("running gossip service at {any} with pubkey {s}", .{ self.gossip_socket.getLocalEndPoint(), id.cached_str.? });
         defer self.deinit();
 
         // spawn gossip udp receiver thread
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
         var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self, gpa, logger });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
-        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self});
+        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{ self, logger });
 
         responder_handle.join();
         receiver_handle.join();
@@ -77,22 +77,24 @@ pub const GossipService = struct {
         }
     }
 
-    fn gossip_loop(self: *Self) !void {
+    fn gossip_loop(self: *Self, logger: *Logger) !void {
         // solana-gossip spy -- local node for testing
-        const peer = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 8000).toEndpoint();
+        const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
 
         while (true) {
-            try self.send_ping(&peer);
+            try self.send_ping(&peer, logger);
             try self.push_contact_info(&peer);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }
     }
 
-    fn send_ping(self: *Self, peer: *const EndPoint) !void {
+    fn send_ping(self: *Self, peer: *const EndPoint, logger: *Logger) !void {
         var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
+
+        logger.debugf("sending a ping message to: {any}", .{peer});
         self.responder_channel.send(
             Packet.init(peer.*, out, bytes.len),
         );
@@ -160,6 +162,8 @@ pub const GossipService = struct {
     }
 
     pub fn process_packets(self: *Self, allocator: std.mem.Allocator, logger: *Logger) !void {
+        var failed_protocol_msgs: usize = 0;
+
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/socket.rs
@@ -167,8 +171,31 @@ pub const GossipService = struct {
             //     return true;
             // }
 
-            var protocol_message = try bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard);
-            logger.debugf("got a protocol message: {any}", .{protocol_message});
+            var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch {
+                failed_protocol_msgs += 1;
+                logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
+                continue;
+            };
+
+            switch (protocol_message) {
+                .PongMessage => |*pong| {
+                    if (pong.signature.verify(pong.from, &pong.hash.data)) {
+                        logger.debugf("got a pong message", .{});
+                    } else {
+                        logger.debugf("pong message verification failed...", .{});
+                    }
+                },
+                .PingMessage => |*ping| {
+                    if (ping.signature.verify(ping.from, &ping.token)) {
+                        logger.debugf("got a ping message", .{});
+                    } else {
+                        logger.debugf("ping message verification failed...", .{});
+                    }
+                },
+                else => {
+                    logger.debugf("got a protocol message: {any}", .{protocol_message});
+                },
+            }
         }
     }
 };

@@ -294,8 +294,6 @@ test "socketaddr bincode serialize matches rust" {
     var buf = [_]u8{0} ** 1024;
     var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
 
-    std.debug.print("tmp socketaddr serialized: {any}\n", .{bytes});
-
     // #[derive(Serialize, Debug, Clone, Copy)]
     // pub struct Tmp {
     //     addr: SocketAddr
@@ -337,8 +335,6 @@ test "contact info bincode serialize matches rust bincode" {
     bincode.write(buf.writer(), &ci, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
-    logger.debug("rust bytes: {any}", .{rust_contact_info_serialized_bytes});
-    logger.debug("zig bytes: {any}", .{buf.items});
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
 
     var stream = std.io.fixedBufferStream(buf.items);
