@@ -56,14 +56,14 @@ pub const GossipService = struct {
 
     pub fn run(self: *Self, logger: *Logger) !void {
         const id = self.cluster_info.our_contact_info.pubkey;
-        logger.infof("running gossip service at {any} with pubkey {s}", .{self.gossip_socket.getLocalEndPoint(), id.cached_str.?});
+        logger.infof("running gossip service at {any} with pubkey {s}", .{ self.gossip_socket.getLocalEndPoint(), id.cached_str.? });
         defer self.deinit();
 
         // spawn gossip udp receiver thread
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
         var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self, gpa, logger });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
-        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self, logger});
+        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{ self, logger });
 
         responder_handle.join();
         receiver_handle.join();
@@ -162,7 +162,7 @@ pub const GossipService = struct {
     }
 
     pub fn process_packets(self: *Self, allocator: std.mem.Allocator, logger: *Logger) !void {
-        var failed_protocol_msgs: usize = 0; 
+        var failed_protocol_msgs: usize = 0;
 
         while (self.packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
@@ -181,7 +181,7 @@ pub const GossipService = struct {
                 .PongMessage => |*pong| {
                     if (pong.signature.verify(pong.from, &pong.hash.data)) {
                         logger.debugf("got a pong message", .{});
-                    } else { 
+                    } else {
                         logger.debugf("pong message verification failed...", .{});
                     }
                 },
@@ -192,9 +192,9 @@ pub const GossipService = struct {
                         logger.debugf("ping message verification failed...", .{});
                     }
                 },
-                else => { 
+                else => {
                     logger.debugf("got a protocol message: {any}", .{protocol_message});
-                }
+                },
             }
         }
     }
