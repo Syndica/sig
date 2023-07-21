@@ -3,6 +3,7 @@ const cli = @import("zig-cli");
 const gossipCmd = @import("../gossip/cmd.zig");
 const base58 = @import("base58-zig");
 const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
+const Logger = @import("../trace/log.zig").Logger;
 const io = std.io;
 
 var allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -44,7 +45,10 @@ var app = &cli.App{
 
 // prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
-    const id = try gossipCmd.getOrInitIdentity(gpa);
+    var logger = Logger.init(gpa, .debug);
+    logger.spawn();
+
+    const id = try gossipCmd.getOrInitIdentity(gpa, logger);
     var pk: [50]u8 = undefined;
     var size = try base58Encoder.encode(&id.public_key.toBytes(), &pk);
     try std.io.getStdErr().writer().print("Identity: {s}\n", .{pk[0..size]});
@@ -52,9 +56,12 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
+    var logger = Logger.init(gpa, .debug);
+    logger.spawn();
+
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var entrypoints = std.ArrayList(LegacyContactInfo).init(gpa);
-    try gossipCmd.runGossipService(gossip_port, entrypoints);
+    try gossipCmd.runGossipService(gossip_port, entrypoints, logger);
 }
 
 pub fn run() !void {

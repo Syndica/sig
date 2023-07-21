@@ -14,14 +14,13 @@ const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
 const crds = @import("../gossip/crds.zig");
+const Logger = @import("../trace/log.zig").Logger;
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
 
 const PacketChannel = Channel(Packet);
 // const ProtocolChannel = Channel(Protocol);
-
-const logger = std.log.scoped(.gossip_service);
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
@@ -55,19 +54,16 @@ pub const GossipService = struct {
         self.responder_channel.deinit();
     }
 
-    pub fn run(self: *Self) !void {
+    pub fn run(self: *Self, logger: *Logger) !void {
         const id = self.cluster_info.our_contact_info.pubkey;
-        logger.info("running gossip service at {any} with pubkey {s}", .{ self.gossip_socket.getLocalEndPoint(), id.cached_str.? });
+        logger.infof("running gossip service at {any} with pubkey {s}", .{ self.gossip_socket.getLocalEndPoint(), id.cached_str.? });
         defer self.deinit();
 
         // spawn gossip udp receiver thread
-        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{self});
-        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{
-            self,
-            gpa,
-        });
+        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
+        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self, gpa, logger });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
-        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{self});
+        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{ self, logger });
 
         responder_handle.join();
         receiver_handle.join();
@@ -81,24 +77,24 @@ pub const GossipService = struct {
         }
     }
 
-    fn gossip_loop(self: *Self) !void {
+    fn gossip_loop(self: *Self, logger: *Logger) !void {
         // solana-gossip spy -- local node for testing
         const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
 
         while (true) {
-            try self.send_ping(&peer);
+            try self.send_ping(&peer, logger);
             try self.push_contact_info(&peer);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }
     }
 
-    fn send_ping(self: *Self, peer: *const EndPoint) !void {
+    fn send_ping(self: *Self, peer: *const EndPoint, logger: *Logger) !void {
         var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
 
-        logger.debug("sending a ping message to: {any}", .{peer});
+        logger.debugf("sending a ping message to: {any}", .{peer});
         self.responder_channel.send(
             Packet.init(peer.*, out, bytes.len),
         );
@@ -142,7 +138,7 @@ pub const GossipService = struct {
         self.responder_channel.send(packet);
     }
 
-    fn read_gossip_socket(self: *Self) !void {
+    fn read_gossip_socket(self: *Self, logger: *Logger) !void {
         // we close the chan if no more packet's can ever be produced
         defer self.packet_channel.close();
 
@@ -162,10 +158,10 @@ pub const GossipService = struct {
             @memset(&read_buf, 0);
         }
 
-        logger.debug("reading gossip exiting...", .{});
+        logger.debugf("reading gossip exiting...", .{});
     }
 
-    pub fn process_packets(self: *Self, allocator: std.mem.Allocator) !void {
+    pub fn process_packets(self: *Self, allocator: std.mem.Allocator, logger: *Logger) !void {
         var failed_protocol_msgs: usize = 0;
 
         while (self.packet_channel.receive()) |p| {
@@ -177,27 +173,27 @@ pub const GossipService = struct {
 
             var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch {
                 failed_protocol_msgs += 1;
-                logger.debug("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
+                logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
                 continue;
             };
 
             switch (protocol_message) {
                 .PongMessage => |*pong| {
                     if (pong.signature.verify(pong.from, &pong.hash.data)) {
-                        logger.debug("got a pong message from {any}", .{p.from});
+                        logger.debugf("got a pong message", .{});
                     } else {
-                        logger.debug("pong message verification failed...", .{});
+                        logger.debugf("pong message verification failed...", .{});
                     }
                 },
                 .PingMessage => |*ping| {
                     if (ping.signature.verify(ping.from, &ping.token)) {
-                        logger.debug("got a ping message", .{});
+                        logger.debugf("got a ping message", .{});
                     } else {
-                        logger.debug("ping message verification failed...", .{});
+                        logger.debugf("ping message verification failed...", .{});
                     }
                 },
                 else => {
-                    logger.debug("got a protocol message: {any}", .{protocol_message});
+                    logger.debugf("got a protocol message: {any}", .{protocol_message});
                 },
             }
         }

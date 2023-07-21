@@ -253,7 +253,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("Account info: {any}", .{resp.result().value.data});
+    std.log.debugf("Account info: {any}", .{resp.result().value.data});
 }
 ```
 
@@ -290,7 +290,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("balance info: {any}", .{resp.result().value});
+    std.log.debugf("balance info: {any}", .{resp.result().value});
 }
 ```
 
@@ -327,7 +327,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("block height: {any}", .{resp.result()});
+    std.log.debugf("block height: {any}", .{resp.result()});
 }
 ```
 
@@ -378,7 +378,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("block info: {any}", .{resp.result()});
+    std.log.debugf("block info: {any}", .{resp.result()});
 }
 ```
 
@@ -429,7 +429,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("block production info: {any}", .{resp.result()});
+    std.log.debugf("block production info: {any}", .{resp.result()});
 }
 ```
 
@@ -466,7 +466,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("block commitment info: {any}", .{resp.result()});
+    std.log.debugf("block commitment info: {any}", .{resp.result()});
 }
 ```
 
@@ -513,7 +513,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("blocks: {any}", .{resp.result()});
+    std.log.debugf("blocks: {any}", .{resp.result()});
 }
 ```
 
@@ -559,7 +559,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("blocks: {any}", .{resp.result()});
+    std.log.debugf("blocks: {any}", .{resp.result()});
 }
 ```
 
@@ -596,7 +596,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("block time: {any}", .{resp.result()});
+    std.log.debugf("block time: {any}", .{resp.result()});
 }
 ```
 
@@ -633,7 +633,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("cluster nodes: {any}", .{resp.result()});
+    std.log.debugf("cluster nodes: {any}", .{resp.result()});
 }
 ```
 
@@ -679,7 +679,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("epoch info: {any}", .{resp.result()});
+    std.log.debugf("epoch info: {any}", .{resp.result()});
 }
 ```
 
@@ -716,7 +716,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("epoch schedule: {any}", .{resp.result()});
+    std.log.debugf("epoch schedule: {any}", .{resp.result()});
 }
 ```
 
@@ -762,7 +762,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("message fee info: {any}", .{resp.result()});
+    std.log.debugf("message fee info: {any}", .{resp.result()});
 }
 ```
 
@@ -799,7 +799,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("first available block: {any}", .{resp.result()});
+    std.log.debugf("first available block: {any}", .{resp.result()});
 }
 ```
 
@@ -833,7 +833,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("genesis hash: {any}", .{resp.result()});
+    std.log.debugf("genesis hash: {any}", .{resp.result()});
 }
 ```
 
@@ -872,7 +872,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("health: {any}", .{resp.result()});
+    std.log.debugf("health: {any}", .{resp.result()});
 }
 ```
 
@@ -911,7 +911,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("snapshot info: {any}", .{resp.result()});
+    std.log.debugf("snapshot info: {any}", .{resp.result()});
 }
 ```
 
@@ -948,7 +948,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("indentity info: {any}", .{resp.result()});
+    std.log.debugf("indentity info: {any}", .{resp.result()});
 }
 ```
 
@@ -994,7 +994,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("inflation info: {any}", .{resp.result()});
+    std.log.debugf("inflation info: {any}", .{resp.result()});
 }
 ```
 
@@ -1031,7 +1031,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("inflation rate: {any}", .{resp.result()});
+    std.log.debugf("inflation rate: {any}", .{resp.result()});
 }
 ```
 
@@ -1087,7 +1087,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("inflation reward info: {any}", .{resp.result()});
+    std.log.debugf("inflation reward info: {any}", .{resp.result()});
 }
 ```
 
@@ -1134,7 +1134,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("largest accounts: {any}", .{resp.result()});
+    std.log.debugf("largest accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -1182,7 +1182,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("latest blockhash: {any}", .{resp.result()});
+    std.log.debugf("latest blockhash: {any}", .{resp.result()});
 }
 ```
 
@@ -1229,7 +1229,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("leader schedule: {any}", .{resp.result()});
+    std.log.debugf("leader schedule: {any}", .{resp.result()});
 }
 ```
 
@@ -1266,7 +1266,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("max retransmit slot: {any}", .{resp.result()});
+    std.log.debugf("max retransmit slot: {any}", .{resp.result()});
 }
 ```
 
@@ -1303,7 +1303,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("max shred insert slot: {any}", .{resp.result()});
+    std.log.debugf("max shred insert slot: {any}", .{resp.result()});
 }
 ```
 
@@ -1340,7 +1340,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("minimum balance: {any}", .{resp.result()});
+    std.log.debugf("minimum balance: {any}", .{resp.result()});
 }
 ```
 
@@ -1395,7 +1395,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("multiple accounts: {any}", .{resp.result()});
+    std.log.debugf("multiple accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -1452,7 +1452,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("program accounts: {any}", .{resp.result()});
+    std.log.debugf("program accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -1491,7 +1491,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("recent performance samples: {any}", .{resp.result()});
+    std.log.debugf("recent performance samples: {any}", .{resp.result()});
 }
 ```
 
@@ -1528,7 +1528,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("recent prioritization fees: {any}", .{resp.result()});
+    std.log.debugf("recent prioritization fees: {any}", .{resp.result()});
 }
 ```
 
@@ -1580,7 +1580,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("signatures: {any}", .{resp.result()});
+    std.log.debugf("signatures: {any}", .{resp.result()});
 }
 ````
 
@@ -1630,7 +1630,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("signature statuses: {any}", .{resp.result()});
+    std.log.debugf("signature statuses: {any}", .{resp.result()});
 }
 ```
 
@@ -1677,7 +1677,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("slot leader: {any}", .{resp.result()});
+    std.log.debugf("slot leader: {any}", .{resp.result()});
 }
 ```
 
@@ -1714,7 +1714,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("slot leaders: {any}", .{resp.result()});
+    std.log.debugf("slot leaders: {any}", .{resp.result()});
 }
 ```
 
@@ -1764,7 +1764,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("stake activation: {any}", .{resp.result()});
+    std.log.debugf("stake activation: {any}", .{resp.result()});
 }
 ```
 
@@ -1810,7 +1810,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("min stake delegation: {any}", .{resp.result()});
+    std.log.debugf("min stake delegation: {any}", .{resp.result()});
 }
 ```
 
@@ -1857,7 +1857,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("get supply: {any}", .{resp.result()});
+    std.log.debugf("get supply: {any}", .{resp.result()});
 }
 ```
 
@@ -1906,7 +1906,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("token account balance: {any}", .{resp.result()});
+    std.log.debugf("token account balance: {any}", .{resp.result()});
 }
 ```
 
@@ -1966,7 +1966,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("token accounts: {any}", .{resp.result()});
+    std.log.debugf("token accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -2026,7 +2026,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("token accounts: {any}", .{resp.result()});
+    std.log.debugf("token accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -2075,7 +2075,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("token largest accounts: {any}", .{resp.result()});
+    std.log.debugf("token largest accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -2124,7 +2124,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("token supply: {any}", .{resp.result()});
+    std.log.debugf("token supply: {any}", .{resp.result()});
 }
 ```
 
@@ -2174,7 +2174,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("transaction: {any}", .{resp.result()});
+    std.log.debugf("transaction: {any}", .{resp.result()});
 }
 ```
 
@@ -2221,7 +2221,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("transaction count: {any}", .{resp.result()});
+    std.log.debugf("transaction count: {any}", .{resp.result()});
 }
 ```
 
@@ -2258,7 +2258,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("version: {any}", .{resp.result()});
+    std.log.debugf("version: {any}", .{resp.result()});
 }
 ```
 
@@ -2310,7 +2310,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("vote accounts: {any}", .{resp.result()});
+    std.log.debugf("vote accounts: {any}", .{resp.result()});
 }
 ```
 
@@ -2357,7 +2357,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("blockhash valid: {any}", .{resp.result()});
+    std.log.debugf("blockhash valid: {any}", .{resp.result()});
 }
 ```
 
@@ -2394,7 +2394,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("minimum ledger slot: {any}", .{resp.result()});
+    std.log.debugf("minimum ledger slot: {any}", .{resp.result()});
 }
 ```
 
@@ -2443,7 +2443,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("airdrop result: {any}", .{resp.result()});
+    std.log.debugf("airdrop result: {any}", .{resp.result()});
 }
 ```
 
@@ -2498,7 +2498,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("tx signature: {any}", .{resp.result()});
+    std.log.debugf("tx signature: {any}", .{resp.result()});
 }
 ```
 
@@ -2557,7 +2557,7 @@ pub fn main() !void {
         return;
     }
 
-    std.log.debug("simulate tx info: {any}", .{resp.result()});
+    std.log.debugf("simulate tx info: {any}", .{resp.result()});
 }
 ```
 
