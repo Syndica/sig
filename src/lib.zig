@@ -42,3 +42,8 @@ pub const utils = struct {
     pub usingnamespace @import("utils/shortvec.zig");
     pub usingnamespace @import("utils/varint.zig");
 };
+
+pub const trace = struct {
+    pub usingnamespace @import("trace/log.zig");
+    pub usingnamespace @import("trace/entry.zig");
+};
