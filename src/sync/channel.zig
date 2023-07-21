@@ -67,9 +67,9 @@ const logger = std.log.scoped(.sync_channel_tests);
 fn testReceiver(chan: *BlockChannel) void {
     while (true) {
         var item = chan.receive() orelse break;
-        logger.debugf("got item: {any}", .{item});
+        logger.debug("got item: {any}", .{item});
     }
-    logger.debugf("chan closed!", .{});
+    logger.debug("chan closed!", .{});
 }
 
 fn testSender(chan: *BlockChannel) void {
@@ -78,12 +78,12 @@ fn testSender(chan: *BlockChannel) void {
         std.time.sleep(std.time.ns_per_ms * 100);
         chan.send(Block{ .num = @intCast(i) });
     }
-    logger.debugf("closing chan..", .{});
+    logger.debug("closing chan..", .{});
     chan.close();
 }
 
 test "sync: channel works" {
-    logger.debugf("testing channel..", .{});
+    logger.debug("testing channel..", .{});
     var ch = BlockChannel.init(testing.allocator, 100);
     defer ch.deinit();
 

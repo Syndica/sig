@@ -337,8 +337,8 @@ test "contact info bincode serialize matches rust bincode" {
     bincode.write(buf.writer(), &ci, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
-    logger.debugf("rust bytes: {any}", .{rust_contact_info_serialized_bytes});
-    logger.debugf("zig bytes: {any}", .{buf.items});
+    logger.debug("rust bytes: {any}", .{rust_contact_info_serialized_bytes});
+    logger.debug("zig bytes: {any}", .{buf.items});
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
 
     var stream = std.io.fixedBufferStream(buf.items);
