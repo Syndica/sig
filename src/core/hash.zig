@@ -3,8 +3,8 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 
 pub const HASH_SIZE: usize = 32;
 
-pub const CompareResult = enum { 
-    Greater, 
+pub const CompareResult = enum {
+    Greater,
     Less,
     Equal,
 };
@@ -28,7 +28,7 @@ pub const Hash = struct {
                 return CompareResult.Greater;
             } else if (a.data[i] < b.data[i]) {
                 return CompareResult.Less;
-            } 
+            }
         }
         return CompareResult.Equal;
     }

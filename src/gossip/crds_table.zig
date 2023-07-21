@@ -22,7 +22,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 // tmp upperbound on number for `get_nodes`
 const MAX_N_NODES = 100;
 
-const CrdsError = error { 
+const CrdsError = error{
     InsertionFailed,
 };
 
@@ -68,17 +68,15 @@ pub const CrdsTable = struct {
                 },
                 else => {},
             }
-
             result.value_ptr.* = versioned_value;
 
-        // should overwrite existing entry 
+            // should overwrite existing entry
         } else if (crds_overwrites(&versioned_value, result.value_ptr)) {
-
             result.value_ptr.* = versioned_value;
 
-        // do nothing 
-        } else { 
-            return CrdsError.InsertionFailed; 
+            // do nothing
+        } else {
+            return CrdsError.InsertionFailed;
         }
     }
 
@@ -97,17 +95,17 @@ pub const CrdsTable = struct {
 };
 
 pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const CrdsVersionedValue) bool {
-   // labels must match
-   std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));  
+    // labels must match
+    std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
 
     const new_ts = new_value.value.wallclock();
-    const old_ts = old_value.value.wallclock(); 
+    const old_ts = old_value.value.wallclock();
 
     if (new_ts > old_ts) {
         return true;
     } else if (new_ts < old_ts) {
         return false;
-    } else { 
+    } else {
         return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
     }
 }
@@ -146,16 +144,9 @@ test "gossip.crds_table: add contact info" {
     // test retrieval
     var nodes = try crds_table.get_nodes();
     try std.testing.expect(nodes.len == 1);
-    switch (nodes[0].value.data) {
-        .LegacyContactInfo => |info| {
-            try std.testing.expect(info.id.equals(&id));
-        },
-        else => {
-            unreachable;
-        },
-    }
+    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
-    // test re-insertion 
+    // test re-insertion
     const result = crds_table.insert(crds_value, 0);
     try std.testing.expectError(CrdsError.InsertionFailed, result);
 
