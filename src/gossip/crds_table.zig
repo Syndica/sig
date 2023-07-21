@@ -3,7 +3,10 @@ const AutoArrayHashMap = std.AutoArrayHashMap;
 
 const bincode = @import("bincode-zig");
 
-const Hash = @import("../core/hash.zig").Hash;
+const hash = @import("../core/hash.zig");
+const Hash = hash.Hash;
+const CompareResult = hash.CompareResult;
+
 const SocketAddr = @import("net.zig").SocketAddr;
 
 const crds = @import("./crds.zig");
@@ -18,6 +21,10 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 // tmp upperbound on number for `get_nodes`
 const MAX_N_NODES = 100;
+
+const CrdsError = error { 
+    InsertionFailed,
+};
 
 /// Cluster Replicated Data Store
 pub const CrdsTable = struct {
@@ -52,6 +59,8 @@ pub const CrdsTable = struct {
 
         const label = value.label();
         var result = try self.store.getOrPut(label);
+
+        // entry doesnt exist
         if (!result.found_existing) {
             switch (value.data) {
                 .LegacyContactInfo => {
@@ -61,7 +70,16 @@ pub const CrdsTable = struct {
             }
 
             result.value_ptr.* = versioned_value;
-        } else {}
+
+        // should overwrite existing entry 
+        } else if (crds_overwrites(&versioned_value, result.value_ptr)) {
+
+            result.value_ptr.* = versioned_value;
+
+        // do nothing 
+        } else { 
+            return CrdsError.InsertionFailed; 
+        }
     }
 
     pub fn get_nodes(self: *Self) ![]*CrdsVersionedValue {
@@ -77,6 +95,22 @@ pub const CrdsTable = struct {
         return entry_ptrs[0..size];
     }
 };
+
+pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const CrdsVersionedValue) bool {
+   // labels must match
+   std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));  
+
+    const new_ts = new_value.value.wallclock();
+    const old_ts = old_value.value.wallclock(); 
+
+    if (new_ts > old_ts) {
+        return true;
+    } else if (new_ts < old_ts) {
+        return false;
+    } else { 
+        return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
+    }
+}
 
 test "gossip.crds_table: add contact info" {
     var kp_bytes = [_]u8{1} ** 32;
@@ -120,4 +154,17 @@ test "gossip.crds_table: add contact info" {
             unreachable;
         },
     }
+
+    // test re-insertion 
+    const result = crds_table.insert(crds_value, 0);
+    try std.testing.expectError(CrdsError.InsertionFailed, result);
+
+    // test re-insertion with greater wallclock
+    crds_value.data.LegacyContactInfo.wallclock = 2;
+    try crds_table.insert(crds_value, 0);
+
+    // check retrieval
+    nodes = try crds_table.get_nodes();
+    try std.testing.expect(nodes.len == 1);
+    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == 2);
 }

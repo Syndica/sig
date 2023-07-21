@@ -118,6 +118,47 @@ pub const CrdsValue = struct {
         };
     }
 
+    pub fn wallclock(self: *const Self) u64 {
+        return switch (self.data) {
+            .LegacyContactInfo => |*v| {
+                return v.wallclock;
+            },
+            .Vote => |*v| {
+                return v[1].wallclock;
+            },
+            .LowestSlot => |*v| {
+                return v[1].wallclock;
+            },
+            .LegacySnapshotHashes => |*v| {
+                return v.wallclock;
+            },
+            .AccountsHashes => |*v| {
+                return v.wallclock;
+            },
+            .EpochSlots => |*v| {
+                return v[1].wallclock;
+            },
+            .LegacyVersion => |*v| {
+                return v.wallclock;
+            },
+            .Version => |*v| {
+                return v.wallclock;
+            },
+            .NodeInstance => |*v| {
+                return v.wallclock;
+            },
+            .DuplicateShred => |*v| {
+                return v[1].wallclock;
+            },
+            .SnapshotHashes => |*v| {
+                return v.wallclock;
+            },
+            .ContactInfo => |*v| {
+                return v.wallclock;
+            },
+        };
+    }
+
     pub fn label(self: *const Self) CrdsValueLabel {
         return switch (self.data) {
             .LegacyContactInfo => {
