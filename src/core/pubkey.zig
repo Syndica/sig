@@ -79,8 +79,8 @@ pub const Pubkey = struct {
             return Self{ .data = bytes[0..32].*, .cached_str = null };
         }
         var written = encoder.encode(&bytes, &dest) catch @panic("could not encode pubkey");
-        if (written != 44) {
-            std.debug.panic("written is not 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
+        if (written > 44) {
+            std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
         }
         return Self{ .data = bytes[0..32].*, .cached_str = dest[0..44].* };
     }
