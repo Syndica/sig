@@ -35,6 +35,7 @@ pub const CrdsFilter = struct {
 };
 
 pub const CrdsVersionedValue = struct {
+    ordinal: u64,
     value: CrdsValue,
     local_timestamp: u64,
     value_hash: Hash,
