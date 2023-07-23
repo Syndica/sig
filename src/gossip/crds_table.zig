@@ -28,8 +28,8 @@ const MAX_N_VOTES = 20;
 const MAX_N_EPOCH_SLOTS = 20;
 const MAX_N_DUP_SHREDS = 20;
 
-const CrdsError = error{
-    InsertionFailed,
+pub const CrdsError = error{
+    OldValue,
 };
 
 /// Cluster Replicated Data Store: stores gossip data
@@ -145,12 +145,13 @@ pub const CrdsTable = struct {
 
             // do nothing
         } else {
-            return CrdsError.InsertionFailed;
+            return CrdsError.OldValue;
         }
     }
 
     pub fn get_votes_with_cursor(self: *Self, cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.votes.keys();
+        // initialize this buffer once in struct and re-use on each call? 
         var buf: [MAX_N_VOTES]*CrdsVersionedValue = undefined; // max N votes per query (20)
         var index: usize = 0;
         for (keys) |key| {
