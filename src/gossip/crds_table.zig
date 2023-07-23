@@ -22,9 +22,11 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 // tmp upperbound on number for `get_nodes`/`get_votes`/...
+// enables stack allocations for buffers in the getter functions 
 const MAX_N_NODES = 100;
 const MAX_N_VOTES = 20;
 const MAX_N_EPOCH_SLOTS = 20;
+const MAX_N_DUP_SHREDS = 20;
 
 const CrdsError = error{
     InsertionFailed,
@@ -84,7 +86,7 @@ pub const CrdsTable = struct {
             switch (value.data) {
                 .LegacyContactInfo => |*info| {
                     try self.nodes.put(result.index, {});
-                    try self.nodes.put(info.id, info.shred_version);
+                    try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
                     try self.votes.put(self.cursor, result.index);
