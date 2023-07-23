@@ -14,6 +14,7 @@ const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
 const crds = @import("../gossip/crds.zig");
+const CrdsTable = @import("../gossip/crds_table.zig").CrdsTable;
 const Logger = @import("../trace/log.zig").Logger;
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -22,12 +23,19 @@ var gpa = gpa_allocator.allocator();
 const PacketChannel = Channel(Packet);
 // const ProtocolChannel = Channel(Protocol);
 
+const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
+
+pub fn get_wallclock() u64 {
+    return @intCast(std.time.milliTimestamp());
+}
+
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
     gossip_socket: UdpSocket,
     exit_sig: AtomicBool,
     packet_channel: PacketChannel,
     responder_channel: PacketChannel,
+    crds_table: CrdsTable,
 
     const Self = @This();
 
@@ -39,6 +47,7 @@ pub const GossipService = struct {
     ) Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
         var responder_channel = PacketChannel.init(allocator, 10000);
+        var crds_table = CrdsTable.init(allocator);
 
         return Self{
             .cluster_info = cluster_info,
@@ -46,12 +55,14 @@ pub const GossipService = struct {
             .exit_sig = exit,
             .packet_channel = packet_channel,
             .responder_channel = responder_channel,
+            .crds_table = crds_table,
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.packet_channel.deinit();
         self.responder_channel.deinit();
+        self.crds_table.deinit();
     }
 
     pub fn run(self: *Self, logger: *Logger) !void {
@@ -105,7 +116,7 @@ pub const GossipService = struct {
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
         const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
-        const wallclock = @as(u64, @intCast(std.time.milliTimestamp()));
+        const wallclock = get_wallclock();
 
         var legacy_contact_info = crds.LegacyContactInfo{
             .id = id,
@@ -192,10 +203,32 @@ pub const GossipService = struct {
                         logger.debugf("ping message verification failed...", .{});
                     }
                 },
+                .PushMessage => |*push| {
+                    logger.debugf("got a push message: {any}", .{protocol_message});
+                    const values = push[1];
+                    handle_push_message(&self.crds_table, values, logger);
+                },
                 else => {
                     logger.debugf("got a protocol message: {any}", .{protocol_message});
                 },
             }
+        }
+    }
+
+    pub fn handle_push_message(crds_table: *CrdsTable, values: []crds.CrdsValue, logger: *Logger) void {
+        var now = get_wallclock();
+
+        for (values) |value| {
+            const value_time = value.wallclock();
+            const is_too_new = value_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
+            const is_too_old = value_time < now -| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
+            if (is_too_new or is_too_old) {
+                continue;
+            }
+
+            crds_table.insert(value, now) catch {
+                logger.debugf("failed to insert into crds: {any}", .{value});
+            };
         }
     }
 };
