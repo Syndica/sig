@@ -466,15 +466,7 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
     }, kp);
 
     try std.testing.expect(crds_value.id().equals(&id));
-
-    switch (crds_value.label()) {
-        .LegacyContactInfo => |*v| {
-            try std.testing.expect(v.equals(&id));
-        },
-        else => {
-            unreachable;
-        },
-    }
+    try std.testing.expect(crds_value.label().LegacyContactInfo.equals(&id));
 }
 
 test "gossip.crds: default crds filter matches rust bytes" {
