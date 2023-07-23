@@ -22,8 +22,8 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 // tmp upperbound on number for `get_nodes`/`get_votes`/...
-// enables stack allocations for buffers in the getter functions 
-const MAX_N_NODES = 100;
+// enables stack allocations for buffers in the getter functions
+const MAX_N_CONTACT_INFOS = 100;
 const MAX_N_VOTES = 20;
 const MAX_N_EPOCH_SLOTS = 20;
 const MAX_N_DUP_SHREDS = 20;
@@ -32,10 +32,21 @@ const CrdsError = error{
     InsertionFailed,
 };
 
-/// Cluster Replicated Data Store
+/// Cluster Replicated Data Store: stores gossip data
+/// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
+/// indexing values (value = arrayhashmap[0]). This allows us to insert data
+/// into the store and track the indexs of different types for
+/// retrieval. We use the 'cursor' value to track what index is the head of the
+/// store.
+/// Other functions include getters with a cursor
+/// (`get_votes_with_cursor`) which allows you to retrieve values which are
+/// past a certain cursor index. A listener would use their own cursor to
+/// retrieve new values inserted in the store.
+/// insertion of values is all based on the CRDSLabel type -- when duplicates
+/// are found, the entry with the largest wallclock time (newest) is stored.
 pub const CrdsTable = struct {
     store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
-    nodes: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
+    contact_infos: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
     shred_versions: AutoHashMap(Pubkey, u16),
     votes: AutoArrayHashMap(usize, usize),
     epoch_slots: AutoArrayHashMap(usize, usize),
@@ -47,7 +58,7 @@ pub const CrdsTable = struct {
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
-            .nodes = AutoArrayHashMap(usize, void).init(allocator),
+            .contact_infos = AutoArrayHashMap(usize, void).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
@@ -58,7 +69,7 @@ pub const CrdsTable = struct {
 
     pub fn deinit(self: *Self) void {
         self.store.deinit();
-        self.nodes.deinit();
+        self.contact_infos.deinit();
         self.shred_versions.deinit();
         self.votes.deinit();
         self.epoch_slots.deinit();
@@ -67,7 +78,7 @@ pub const CrdsTable = struct {
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
         // TODO: check to make sure this sizing is correct or use heap
-        var buf = [_]u8{0} ** 12048;
+        var buf = [_]u8{0} ** 2048;
         var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
         const versioned_value = CrdsVersionedValue{
@@ -85,7 +96,7 @@ pub const CrdsTable = struct {
         if (!result.found_existing) {
             switch (value.data) {
                 .LegacyContactInfo => |*info| {
-                    try self.nodes.put(result.index, {});
+                    try self.contact_infos.put(result.index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
@@ -205,12 +216,12 @@ pub const CrdsTable = struct {
     }
 
     pub fn get_contact_infos(self: *const Self) ![]*CrdsVersionedValue {
-        var entry_ptrs: [MAX_N_NODES]*CrdsVersionedValue = undefined;
-        const size = @min(self.nodes.count(), MAX_N_NODES);
+        var entry_ptrs: [MAX_N_CONTACT_INFOS]*CrdsVersionedValue = undefined;
+        const size = @min(self.contact_infos.count(), MAX_N_CONTACT_INFOS);
         const store_values = self.store.iterator().values;
-        const node_indexs = self.nodes.iterator().keys;
+        const contact_indexs = self.contact_infos.iterator().keys;
         for (0..size) |i| {
-            const index = node_indexs[i];
+            const index = contact_indexs[i];
             const entry = &store_values[index];
             entry_ptrs[i] = entry;
         }
