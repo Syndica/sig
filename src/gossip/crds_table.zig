@@ -1,5 +1,6 @@
 const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
+const AutoHashMap = std.AutoHashMap;
 
 const bincode = @import("bincode-zig");
 
@@ -23,6 +24,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 // tmp upperbound on number for `get_nodes`/`get_votes`/...
 const MAX_N_NODES = 100;
 const MAX_N_VOTES = 20;
+const MAX_N_EPOCH_SLOTS = 20;
 
 const CrdsError = error{
     InsertionFailed,
@@ -32,7 +34,10 @@ const CrdsError = error{
 pub const CrdsTable = struct {
     store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
     nodes: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
+    shred_versions: AutoHashMap(Pubkey, u16),
     votes: AutoArrayHashMap(usize, usize),
+    epoch_slots: AutoArrayHashMap(usize, usize),
+    duplicate_shreds: AutoArrayHashMap(usize, usize),
     cursor: usize,
 
     const Self = @This();
@@ -41,7 +46,10 @@ pub const CrdsTable = struct {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
             .nodes = AutoArrayHashMap(usize, void).init(allocator),
+            .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
+            .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
+            .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .cursor = 0,
         };
     }
@@ -49,7 +57,10 @@ pub const CrdsTable = struct {
     pub fn deinit(self: *Self) void {
         self.store.deinit();
         self.nodes.deinit();
+        self.shred_versions.deinit();
         self.votes.deinit();
+        self.epoch_slots.deinit();
+        self.duplicate_shreds.deinit();
     }
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
@@ -71,11 +82,18 @@ pub const CrdsTable = struct {
         // entry doesnt exist
         if (!result.found_existing) {
             switch (value.data) {
-                .LegacyContactInfo => {
+                .LegacyContactInfo => |*info| {
                     try self.nodes.put(result.index, {});
+                    try self.nodes.put(info.id, info.shred_version);
                 },
                 .Vote => {
                     try self.votes.put(self.cursor, result.index);
+                },
+                .EpochSlots => {
+                    try self.epoch_slots.put(self.cursor, result.index);
+                },
+                .DuplicateShred => {
+                    try self.duplicate_shreds.put(self.cursor, result.index);
                 },
                 else => {},
             }
@@ -88,11 +106,23 @@ pub const CrdsTable = struct {
             const old_entry = result.value_ptr.*;
 
             switch (value.data) {
-                .LegacyContactInfo => {},
+                .LegacyContactInfo => |*info| {
+                    try self.shred_versions.put(info.id, info.shred_version);
+                },
                 .Vote => {
                     var did_remove = self.votes.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
                     try self.votes.put(self.cursor, result.index);
+                },
+                .EpochSlots => {
+                    var did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
+                    std.debug.assert(did_remove);
+                    try self.epoch_slots.put(self.cursor, result.index);
+                },
+                .DuplicateShred => {
+                    var did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
+                    std.debug.assert(did_remove);
+                    try self.duplicate_shreds.put(self.cursor, result.index);
                 },
                 else => {},
             }
@@ -128,7 +158,51 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_contact_infos(self: *Self) ![]*CrdsVersionedValue {
+    pub fn get_epoch_slots_with_cursor(self: *Self, cursor: *usize) ![]*CrdsVersionedValue {
+        const keys = self.epoch_slots.keys();
+        var buf: [MAX_N_EPOCH_SLOTS]*CrdsVersionedValue = undefined;
+        var index: usize = 0;
+        for (keys) |key| {
+            if (key < cursor.*) {
+                continue;
+            }
+            const entry_index = self.epoch_slots.get(key).?;
+            var entry = self.store.iterator().values[entry_index];
+            buf[index] = &entry;
+            index += 1;
+
+            if (index == MAX_N_EPOCH_SLOTS) {
+                break;
+            }
+        }
+        // move up the cursor
+        cursor.* += index;
+        return buf[0..index];
+    }
+
+    pub fn get_duplicate_shreds_with_cursor(self: *Self, cursor: *usize) ![]*CrdsVersionedValue {
+        const keys = self.duplicate_shreds.keys();
+        var buf: [MAX_N_DUP_SHREDS]*CrdsVersionedValue = undefined;
+        var index: usize = 0;
+        for (keys) |key| {
+            if (key < cursor.*) {
+                continue;
+            }
+            const entry_index = self.duplicate_shreds.get(key).?;
+            var entry = self.store.iterator().values[entry_index];
+            buf[index] = &entry;
+            index += 1;
+
+            if (index == MAX_N_DUP_SHREDS) {
+                break;
+            }
+        }
+        // move up the cursor
+        cursor.* += index;
+        return buf[0..index];
+    }
+
+    pub fn get_contact_infos(self: *const Self) ![]*CrdsVersionedValue {
         var entry_ptrs: [MAX_N_NODES]*CrdsVersionedValue = undefined;
         const size = @min(self.nodes.count(), MAX_N_NODES);
         const store_values = self.store.iterator().values;
