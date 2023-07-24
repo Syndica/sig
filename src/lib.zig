@@ -47,3 +47,7 @@ pub const trace = struct {
     pub usingnamespace @import("trace/log.zig");
     pub usingnamespace @import("trace/entry.zig");
 };
+
+pub const common = struct {
+    pub usingnamespace @import("common/lru.zig");
+};
