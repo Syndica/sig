@@ -6,6 +6,7 @@ const logfmt = @import("logfmt.zig");
 const Logger = @import("./log.zig").Logger;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const AtomicBool = std.atomic.Atomic(bool);
 
 pub const Entry = struct {
     level: Level,
@@ -136,7 +137,8 @@ const A = enum(u8) {
 };
 
 test "trace.entry: should info log correctly" {
-    var logger = Logger.init(testing.allocator, Level.info);
+    var exit_sig = AtomicBool.init(false);
+    var logger = Logger.init(testing.allocator, &exit_sig, Level.info);
     defer logger.deinit();
     var entry = Entry.init(testing.allocator, logger);
 

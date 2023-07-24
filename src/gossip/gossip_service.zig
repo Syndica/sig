@@ -75,7 +75,7 @@ pub const GossipService = struct {
 
         // spawn gossip udp receiver thread
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
-        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self, gpa, logger });
+        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ &self.packet_channel, &self.crds_table, gpa, logger, &self.exit_sig });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
         var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{ self, logger });
 
@@ -175,17 +175,27 @@ pub const GossipService = struct {
         logger.debugf("reading gossip exiting...", .{});
     }
 
-    pub fn process_packets(self: *Self, allocator: std.mem.Allocator, logger: *Logger) !void {
+    pub fn process_packets(
+        packet_channel: *PacketChannel,
+        crds_table: *CrdsTable,
+        allocator: std.mem.Allocator,
+        logger: *Logger,
+    ) !void {
         var failed_protocol_msgs: usize = 0;
-
-        while (self.packet_channel.receive()) |p| {
+        
+        while (packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/socket.rs
             // pub fn check(&self, addr: &SocketAddr) -> bool {
             //     return true;
             // }
 
-            var protocol_message = bincode.readFromSlice(allocator, Protocol, p.data[0..p.size], bincode.Params.standard) catch {
+            var protocol_message = bincode.readFromSlice(
+                allocator,
+                Protocol,
+                p.data[0..p.size],
+                bincode.Params.standard,
+            ) catch {
                 failed_protocol_msgs += 1;
                 logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
                 continue;
@@ -209,7 +219,7 @@ pub const GossipService = struct {
                 .PushMessage => |*push| {
                     logger.debugf("got a push message: {any}", .{protocol_message});
                     const values = push[1];
-                    handle_push_message(&self.crds_table, values, logger);
+                    handle_push_message(crds_table, values, logger);
                 },
                 else => {
                     logger.debugf("got a protocol message: {any}", .{protocol_message});
@@ -240,3 +250,26 @@ pub const GossipService = struct {
         }
     }
 };
+
+test "gossip.gossip_service: process packets" {
+    var exit = AtomicBool.init(false);
+
+    const allocator = std.testing.allocator;
+    var crds_table = CrdsTable.init(allocator);
+    defer crds_table.deinit();
+
+    var packet_channel = PacketChannel.init(allocator, 100);
+    defer packet_channel.deinit();
+
+    var logger = Logger.init(allocator, &exit, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
+    var packet_handle = try Thread.spawn(.{}, 
+        GossipService.process_packets, 
+        .{ &packet_channel, &crds_table, allocator, logger }
+    );
+
+    packet_channel.close();
+    packet_handle.join();
+}
