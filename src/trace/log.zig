@@ -40,20 +40,23 @@ pub const Logger = struct {
 
     fn run(self: *Self) void {
         var stdErrConsumer = BasicStdErrSink{};
-        var runs: u8 = 0;
-        while (runs < 5) : (runs += 1) {
+        while (true) {
             self.mux.lock();
-            var i: usize = 0;
 
+            stdErrConsumer.consumeEntries(self.pending_entries.items[0..]);
+
+            // deinit entries
+            var i: usize = 0;
             while (i < self.pending_entries.items.len) : (i += 1) {
                 var e = self.pending_entries.items[i];
-                stdErrConsumer.consumeEntry(e);
                 e.deinit();
             }
+
             self.pending_entries.shrinkRetainingCapacity(0);
+            std.debug.assert(self.pending_entries.items.len == 0);
             self.mux.unlock();
 
-            std.time.sleep(std.time.ns_per_ms * 50);
+            std.time.sleep(std.time.ns_per_ms * 10);
         }
     }
 
@@ -131,6 +134,7 @@ test "trace.logger: works" {
     logger.spawn();
 
     logger.field("elapsed", 4245).debugf("request with id {s} succeeded", .{"abcd1234"});
+
     logger.field("kind", .some_enum_kind).infof("operation was done", .{});
     logger.field("authorized", false).warnf("api call received at {d} not authorized", .{10004});
     logger.field("error", "IOError").errf("api call received at {d} broke the system!", .{10005});
