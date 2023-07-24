@@ -62,7 +62,7 @@ fn gossip(_: []const []const u8) !void {
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var entrypoints = std.ArrayList(LegacyContactInfo).init(gpa);
-    gossipCmd.runGossipService(gossip_port, entrypoints, logger) catch { 
+    gossipCmd.runGossipService(gossip_port, entrypoints, logger) catch {
         logger.deinit();
     };
 }
