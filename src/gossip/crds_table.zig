@@ -149,13 +149,13 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn get_votes_with_cursor(self: *Self, cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_votes_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.votes.keys();
-        // initialize this buffer once in struct and re-use on each call? 
+        // initialize this buffer once in struct and re-use on each call?
         var buf: [MAX_N_VOTES]*CrdsVersionedValue = undefined; // max N votes per query (20)
         var index: usize = 0;
         for (keys) |key| {
-            if (key < cursor.*) {
+            if (key < caller_cursor.*) {
                 continue;
             }
             const entry_index = self.votes.get(key).?;
@@ -167,17 +167,17 @@ pub const CrdsTable = struct {
                 break;
             }
         }
-        // move up the cursor
-        cursor.* += index;
+        // move up the caller_cursor
+        caller_cursor.* += index;
         return buf[0..index];
     }
 
-    pub fn get_epoch_slots_with_cursor(self: *Self, cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_epoch_slots_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.epoch_slots.keys();
         var buf: [MAX_N_EPOCH_SLOTS]*CrdsVersionedValue = undefined;
         var index: usize = 0;
         for (keys) |key| {
-            if (key < cursor.*) {
+            if (key < caller_cursor.*) {
                 continue;
             }
             const entry_index = self.epoch_slots.get(key).?;
@@ -189,17 +189,17 @@ pub const CrdsTable = struct {
                 break;
             }
         }
-        // move up the cursor
-        cursor.* += index;
+        // move up the caller_cursor
+        caller_cursor.* += index;
         return buf[0..index];
     }
 
-    pub fn get_duplicate_shreds_with_cursor(self: *Self, cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_duplicate_shreds_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.duplicate_shreds.keys();
         var buf: [MAX_N_DUP_SHREDS]*CrdsVersionedValue = undefined;
         var index: usize = 0;
         for (keys) |key| {
-            if (key < cursor.*) {
+            if (key < caller_cursor.*) {
                 continue;
             }
             const entry_index = self.duplicate_shreds.get(key).?;
@@ -211,8 +211,8 @@ pub const CrdsTable = struct {
                 break;
             }
         }
-        // move up the cursor
-        cursor.* += index;
+        // move up the caller_cursor
+        caller_cursor.* += index;
         return buf[0..index];
     }
 
@@ -318,7 +318,7 @@ test "gossip.crds_table: insert and get contact_info" {
 
     // test re-insertion
     const result = crds_table.insert(crds_value, 0);
-    try std.testing.expectError(CrdsError.InsertionFailed, result);
+    try std.testing.expectError(CrdsError.OldValue, result);
 
     // test re-insertion with greater wallclock
     crds_value.data.LegacyContactInfo.wallclock = 2;

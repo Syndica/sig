@@ -15,9 +15,9 @@ const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
 const crds = @import("../gossip/crds.zig");
 
-const _CrdsTable = @import("../gossip/crds_table.zig"); 
-const CrdsTable = _CrdsTable.CrdsTable;
-const CrdsError = _CrdsTable.CrdsError;
+const _crds_table = "../gossip/crds_table.zig";
+const CrdsTable = _crds_table.CrdsTable;
+const CrdsError = _crds_table.CrdsError;
 const Logger = @import("../trace/log.zig").Logger;
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -229,13 +229,13 @@ pub const GossipService = struct {
                 continue;
             }
 
-            crds_table.insert(value, now) catch switch (err) {
-                _CrdsTable.CrdsError.OldValue => { 
+            crds_table.insert(value, now) catch |err| switch (err) {
+                CrdsError.OldValue => {
                     logger.debugf("failed to insert into crds: {any}", .{value});
-                }, 
-                else => { 
+                },
+                else => {
                     logger.debugf("failed to insert into crds with unkown error: {any}", .{err});
-                }
+                },
             };
         }
     }
