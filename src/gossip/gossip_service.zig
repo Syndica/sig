@@ -15,7 +15,7 @@ const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
 const crds = @import("../gossip/crds.zig");
 
-const _crds_table = "../gossip/crds_table.zig";
+const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
 const CrdsError = _crds_table.CrdsError;
 const Logger = @import("../trace/log.zig").Logger;
