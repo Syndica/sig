@@ -242,14 +242,13 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
             return data;
         },
         .Pointer => |info| {
-            std.debug.print("read => {any}\n", .{info});
             switch (info.size) {
-                // .One => {
-                //     const data = try gpa.create(info.child);
-                //     errdefer gpa.destroy(data);
-                //     data.* = try bincode.read(gpa, info.child, reader, params);
-                //     return data;
-                // },
+                .One => { 
+                    const data = try gpa.create(info.child);
+                    errdefer gpa.destroy(data);
+                    data.* = try bincode.read(gpa, info.child, reader, params);
+                    return data;
+                },
                 .Slice => {
                     const entries = try gpa.alloc(info.child, try bincode.read(gpa, usize, reader, params));
                     errdefer gpa.free(entries);
@@ -410,6 +409,13 @@ pub fn readFree(gpa: std.mem.Allocator, value: anytype) void {
         },
         .Pointer => |info| {
             switch (info.size) {
+                .One => { 
+                    if (info.child != anyopaque) { 
+                        gpa.destroy(value);
+                    } else { 
+                        unreachable;
+                    }
+                }, 
                 .Slice => {
                     for (value) |item| {
                         bincode.readFree(gpa, item);
@@ -501,6 +507,9 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         },
         .Pointer => |info| {
             switch (info.size) {
+                .One => { 
+                    return bincode.write(writer, data.*, params);
+                },
                 .Many => return bincode.write(writer, std.mem.span(data), params),
                 .Slice => {
                     try bincode.write(writer, std.math.cast(u64, data.len) orelse return error.DataTooLarge, params);
