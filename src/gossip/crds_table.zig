@@ -2,7 +2,7 @@ const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
 
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 
 const hash = @import("../core/hash.zig");
 const Hash = hash.Hash;

@@ -12,7 +12,7 @@ const Tuple = std.meta.Tuple;
 const SocketAddr = @import("net.zig").SocketAddr;
 const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -168,7 +168,7 @@ pub const GossipService = struct {
         logger: *Logger,
     ) !void {
         var failed_protocol_msgs: usize = 0;
-        
+
         while (packet_channel.receive()) |p| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/socket.rs
@@ -250,12 +250,9 @@ test "gossip.gossip_service: process packets" {
     defer logger.deinit();
     logger.spawn();
 
-    var packet_handle = try Thread.spawn(.{}, 
-        GossipService.process_packets, 
-        .{ &packet_channel, &crds_table, allocator, logger }
-    );
+    var packet_handle = try Thread.spawn(.{}, GossipService.process_packets, .{ &packet_channel, &crds_table, allocator, logger });
 
-    // send a push message 
+    // send a push message
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;

@@ -3,7 +3,7 @@ const ArrayList = std.ArrayList;
 const DynamicBitSet = std.bit_set.DynamicBitSet;
 const BitVec = @import("bitvec.zig").BitVec;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
 

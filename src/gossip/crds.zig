@@ -7,14 +7,14 @@ const Transaction = @import("../core/transaction.zig").Transaction;
 const Slot = @import("../core/slot.zig").Slot;
 const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 
-pub fn get_wallclock() u64 { 
+pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
 }
 
