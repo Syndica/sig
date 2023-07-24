@@ -1,3 +1,4 @@
+// forked from https://github.com/lithdew/bincode-zig
 const std = @import("std");
 const testing = std.testing;
 const bincode = @This();
