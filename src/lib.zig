@@ -18,6 +18,7 @@ pub const gossip = struct {
     pub usingnamespace @import("gossip/cluster_info.zig");
     pub usingnamespace @import("gossip/cmd.zig");
     pub usingnamespace @import("gossip/crds.zig");
+    pub usingnamespace @import("gossip/crds_table.zig");
     pub usingnamespace @import("gossip/gossip_service.zig");
     pub usingnamespace @import("gossip/net.zig");
     pub usingnamespace @import("gossip/node.zig");

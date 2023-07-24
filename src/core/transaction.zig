@@ -9,6 +9,14 @@ pub const Transaction = struct {
     message: Message,
 
     pub const @"!bincode-config:signatures" = shortvec_config;
+
+    // used in tests
+    pub fn default() Transaction {
+        return Transaction{
+            .signatures = &[_]Signature{},
+            .message = Message.default(),
+        };
+    }
 };
 
 pub const Message = struct {
@@ -19,6 +27,19 @@ pub const Message = struct {
 
     pub const @"!bincode-config:account_keys" = shortvec_config;
     pub const @"!bincode-config:instructions" = shortvec_config;
+
+    pub fn default() Message {
+        return Message{
+            .header = MessageHeader{
+                .num_required_signatures = 0,
+                .num_readonly_signed_accounts = 0,
+                .num_readonly_unsigned_accounts = 0,
+            },
+            .account_keys = &[_]Pubkey{},
+            .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+            .instructions = &[_]CompiledInstruction{},
+        };
+    }
 };
 
 pub const MessageHeader = struct {
@@ -48,3 +69,8 @@ pub const CompiledInstruction = struct {
     pub const @"!bincode-config:accounts" = shortvec_config;
     pub const @"!bincode-config:data" = shortvec_config;
 };
+
+test "core.transaction: tmp" {
+    const msg = Message.default();
+    try std.testing.expect(msg.account_keys.len == 0);
+}
