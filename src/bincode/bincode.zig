@@ -1,5 +1,3 @@
-// based off of https://github.com/lithdew/bincode-zig
-
 const std = @import("std");
 const testing = std.testing;
 const bincode = @This();
@@ -164,13 +162,13 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
         },
         .Enum => |info| {
             const tag = switch (params.int_encoding) {
-                .variable => blk: {
+                .variable => blk: { 
                     break :blk try bincode.read(gpa, if (@typeInfo(info.tag_type).Int.bits < 8) u8 else info.tag_type, reader, params);
-                },
-                .fixed => blk: {
+                }, 
+                .fixed => blk: { 
                     // Enum discriminants are encoded as u32
                     break :blk try bincode.read(gpa, u32, reader, params);
-                },
+                }
             };
             return std.meta.intToEnum(U, tag);
         },
@@ -245,6 +243,12 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
         },
         .Pointer => |info| {
             switch (info.size) {
+                // .One => {
+                //     const data = try gpa.create(info.child);
+                //     errdefer gpa.destroy(data);
+                //     data.* = try bincode.read(gpa, info.child, reader, params);
+                //     return data;
+                // },
                 .Slice => {
                     const entries = try gpa.alloc(info.child, try bincode.read(gpa, usize, reader, params));
                     errdefer gpa.free(entries);
@@ -402,6 +406,7 @@ pub fn readFree(gpa: std.mem.Allocator, value: anytype) void {
         },
         .Pointer => |info| {
             switch (info.size) {
+                // .One => gpa.destroy(value),
                 .Slice => {
                     for (value) |item| {
                         bincode.readFree(gpa, item);
@@ -425,27 +430,27 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
     switch (@typeInfo(T)) {
         .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
         .Bool => return writer.writeByte(@intFromBool(data)),
-        .Enum => |info| {
+        .Enum => |info| { 
             // return bincode.write(writer, if (@typeInfo(info.tag_type).Int.bits < 8) @as(u8, @enumToInt(data)) else @enumToInt(data), params);
             switch (params.int_encoding) {
-                .variable => {
+                .variable => { 
                     return bincode.write(writer, if (@typeInfo(info.tag_type).Int.bits < 8) @as(u8, @intFromEnum(data)) else @intFromEnum(data), params);
-                },
-                .fixed => {
+                }, 
+                .fixed => { 
                     // Enum discriminants are encoded as u32
                     return bincode.write(writer, @as(u32, @intFromEnum(data)), params);
-                },
+                }
             }
         },
         .Union => |info| {
             // try bincode.write(writer, @intFromEnum(data), params);
             switch (params.int_encoding) {
-                .variable => {
+                .variable => { 
                     try bincode.write(writer, @intFromEnum(data), params);
-                },
-                .fixed => {
+                }, 
+                .fixed => { 
                     try bincode.write(writer, @as(u32, @intFromEnum(data)), params);
-                },
+                }
             }
 
             inline for (info.fields) |field| {
@@ -495,7 +500,7 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         },
         .Pointer => |info| {
             switch (info.size) {
-                .One => return bincode.write(writer, data.*, params),
+                // .One => return bincode.write(writer, data.*, params),
                 .Many => return bincode.write(writer, std.mem.span(data), params),
                 .Slice => {
                     try bincode.write(writer, std.math.cast(u64, data.len) orelse return error.DataTooLarge, params);
@@ -584,19 +589,24 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
     @compileError("Serializing '" ++ @typeName(T) ++ "' is unsupported.");
 }
 
-test "bincode: fixed length enums" {
-    const Foo = union(enum(u8)) { A: u32, B: u32 };
+test "bincode: fixed length enums" { 
+    const Foo = union(enum(u8)) {
+        A: u32, 
+        B: u32
+    };
 
-    const expected = [_]u8{ 1, 0, 0, 0, 1, 1, 1, 1 };
-    const value = Foo{ .B = 16843009 };
+    const expected = [_]u8 { 1, 0, 0, 0, 1, 1, 1, 1};
+    const value = Foo {
+        .B = 16843009
+    };
 
-    var buffer = [_]u8{0} ** 10;
+    var buffer = [_]u8{ 0 } ** 10;
     const buf = try bincode.writeToSlice(&buffer, value, bincode.Params.standard);
     try testing.expectEqualSlices(u8, &expected, buf[0..buf.len]);
 
-    // read it back
+    // read it back 
     const value2 = try bincode.readFromSlice(testing.allocator, Foo, &buffer, bincode.Params.standard);
-    std.debug.print("{any} {any}\n", .{ value, value2 });
+    std.debug.print("{any} {any}\n", .{value, value2});
     try testing.expectEqual(value, value2);
 }
 

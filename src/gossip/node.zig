@@ -332,7 +332,7 @@ test "contact info bincode serialize matches rust bincode" {
     defer ci.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
-    bincode.write(buf.writer(), &ci, bincode.Params.standard) catch unreachable;
+    bincode.write(buf.writer(), ci, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
