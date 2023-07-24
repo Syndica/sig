@@ -12,19 +12,19 @@ pub const Logger = struct {
     pending_entries: std.ArrayList(*Entry),
     default_level: Level,
     mux: Mutex,
-    exit_sig: *AtomicBool,
+    exit_sig: AtomicBool,
     handle: ?std.Thread,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, exit_sig: *AtomicBool, default_level: Level) *Self {
+    pub fn init(allocator: std.mem.Allocator, default_level: Level) *Self {
         var self = allocator.create(Self) catch @panic("could not allocator.create Logger");
         self.* = .{
             .allocator = allocator,
             .pending_entries = std.ArrayList(*Entry).initCapacity(allocator, 1024) catch @panic("could not init ArrayList(FinalizedEntry)"),
             .default_level = default_level,
             .mux = Mutex{},
-            .exit_sig = exit_sig,
+            .exit_sig = AtomicBool.init(false),
             .handle = null,
         };
         return self;
@@ -138,8 +138,7 @@ const BasicStdErrSink = struct {
 };
 
 test "trace.logger: works" {
-    var exit_sig = AtomicBool.init(false);
-    var logger = Logger.init(testing.allocator, &exit_sig, .info);
+    var logger = Logger.init(testing.allocator, .info);
     defer logger.deinit();
 
     logger.spawn();

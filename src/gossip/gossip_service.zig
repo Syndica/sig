@@ -14,6 +14,9 @@ const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
 const bincode = @import("bincode-zig");
 const crds = @import("../gossip/crds.zig");
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -27,10 +30,6 @@ const PacketChannel = Channel(Packet);
 // const ProtocolChannel = Channel(Protocol);
 
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
-
-pub fn get_wallclock() u64 {
-    return @intCast(std.time.milliTimestamp());
-}
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
@@ -75,7 +74,7 @@ pub const GossipService = struct {
 
         // spawn gossip udp receiver thread
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
-        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ &self.packet_channel, &self.crds_table, gpa, logger, &self.exit_sig });
+        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ &self.packet_channel, &self.crds_table, gpa, logger });
         var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
         var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{ self, logger });
 
@@ -118,24 +117,11 @@ pub const GossipService = struct {
         const id = self.cluster_info.our_contact_info.pubkey;
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
-        const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
-        const wallclock = get_wallclock();
 
-        var legacy_contact_info = crds.LegacyContactInfo{
-            .id = id,
-            .gossip = gossip_addr,
-            .tvu = unspecified_addr,
-            .tvu_forwards = unspecified_addr,
-            .repair = unspecified_addr,
-            .tpu = unspecified_addr,
-            .tpu_forwards = unspecified_addr,
-            .tpu_vote = unspecified_addr,
-            .rpc = unspecified_addr,
-            .rpc_pubsub = unspecified_addr,
-            .serve_repair = unspecified_addr,
-            .wallclock = wallclock,
-            .shred_version = 0,
-        };
+        var legacy_contact_info = crds.LegacyContactInfo.default();
+        legacy_contact_info.gossip = gossip_addr;
+        legacy_contact_info.id = id;
+
         var crds_data = crds.CrdsData{
             .LegacyContactInfo = legacy_contact_info,
         };
@@ -200,6 +186,7 @@ pub const GossipService = struct {
                 logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
                 continue;
             };
+            defer bincode.readFree(allocator, protocol_message);
 
             switch (protocol_message) {
                 .PongMessage => |*pong| {
@@ -252,8 +239,6 @@ pub const GossipService = struct {
 };
 
 test "gossip.gossip_service: process packets" {
-    var exit = AtomicBool.init(false);
-
     const allocator = std.testing.allocator;
     var crds_table = CrdsTable.init(allocator);
     defer crds_table.deinit();
@@ -261,7 +246,7 @@ test "gossip.gossip_service: process packets" {
     var packet_channel = PacketChannel.init(allocator, 100);
     defer packet_channel.deinit();
 
-    var logger = Logger.init(allocator, &exit, .debug);
+    var logger = Logger.init(allocator, .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -269,6 +254,29 @@ test "gossip.gossip_service: process packets" {
         GossipService.process_packets, 
         .{ &packet_channel, &crds_table, allocator, logger }
     );
+
+    // send a push message 
+    var kp_bytes = [_]u8{1} ** 32;
+    const kp = try KeyPair.create(kp_bytes);
+    const pk = kp.public_key;
+    var id = Pubkey.fromPublicKey(&pk, true);
+
+    var legacy_contact_info = crds.LegacyContactInfo.default();
+    var crds_data = crds.CrdsData{
+        .LegacyContactInfo = legacy_contact_info,
+    };
+    var crds_value = try crds.CrdsValue.initSigned(crds_data, kp);
+    var values = [_]crds.CrdsValue{crds_value};
+    const msg = Protocol{
+        .PushMessage = .{ id, &values },
+    };
+
+    const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
+    var buf = [_]u8{0} ** PACKET_DATA_SIZE;
+    var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
+    const packet = Packet.init(peer, buf, bytes.len);
+
+    packet_channel.send(packet);
 
     packet_channel.close();
     packet_handle.join();

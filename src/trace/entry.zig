@@ -137,8 +137,7 @@ const A = enum(u8) {
 };
 
 test "trace.entry: should info log correctly" {
-    var exit_sig = AtomicBool.init(false);
-    var logger = Logger.init(testing.allocator, &exit_sig, Level.info);
+    var logger = Logger.init(testing.allocator, Level.info);
     defer logger.deinit();
     var entry = Entry.init(testing.allocator, logger);
 
