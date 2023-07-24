@@ -242,6 +242,7 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
             return data;
         },
         .Pointer => |info| {
+            std.debug.print("read => {any}\n", .{info});
             switch (info.size) {
                 // .One => {
                 //     const data = try gpa.create(info.child);
@@ -257,7 +258,9 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
                     }
                     return entries;
                 },
-                else => {},
+                else => { 
+                    // unreachable;
+                },
             }
         },
         .ComptimeFloat => return bincode.read(gpa, f64, reader, params),
@@ -379,6 +382,7 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
 
 pub fn readFree(gpa: std.mem.Allocator, value: anytype) void {
     const T = @TypeOf(value);
+
     switch (@typeInfo(T)) {
         .Array, .Vector => {
             for (value) |element| {
@@ -406,14 +410,13 @@ pub fn readFree(gpa: std.mem.Allocator, value: anytype) void {
         },
         .Pointer => |info| {
             switch (info.size) {
-                // .One => gpa.destroy(value),
                 .Slice => {
                     for (value) |item| {
                         bincode.readFree(gpa, item);
                     }
                     gpa.free(value);
                 },
-                else => {},
+                else => {}
             }
         },
         else => {},
@@ -431,7 +434,6 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
         .Bool => return writer.writeByte(@intFromBool(data)),
         .Enum => |info| {
-            // return bincode.write(writer, if (@typeInfo(info.tag_type).Int.bits < 8) @as(u8, @enumToInt(data)) else @enumToInt(data), params);
             switch (params.int_encoding) {
                 .variable => {
                     return bincode.write(writer, if (@typeInfo(info.tag_type).Int.bits < 8) @as(u8, @intFromEnum(data)) else @intFromEnum(data), params);
@@ -443,7 +445,6 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
             }
         },
         .Union => |info| {
-            // try bincode.write(writer, @intFromEnum(data), params);
             switch (params.int_encoding) {
                 .variable => {
                     try bincode.write(writer, @intFromEnum(data), params);
@@ -500,7 +501,6 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         },
         .Pointer => |info| {
             switch (info.size) {
-                // .One => return bincode.write(writer, data.*, params),
                 .Many => return bincode.write(writer, std.mem.span(data), params),
                 .Slice => {
                     try bincode.write(writer, std.math.cast(u64, data.len) orelse return error.DataTooLarge, params);
@@ -509,7 +509,7 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
                     }
                     return;
                 },
-                else => {},
+                else => { },
             }
         },
         .ComptimeFloat => return bincode.write(writer, @as(f64, data), params),
@@ -702,20 +702,20 @@ test "bincode: serialize and deserialize" {
         }
     }
 
-    // inline for (.{ .{}, bincode.Params.legacy, bincode.Params.standard }) |params| {
-    //     inline for (.{
-    //         "hello world",
-    //         @as([]const u8, "hello world"),
-    //     }) |expected| {
-    //         try bincode.write(buffer.writer(), expected, params);
+    inline for (.{ .{}, bincode.Params.legacy, bincode.Params.standard }) |params| {
+        inline for (.{
+            "hello world",
+            @as([]const u8, "hello world"),
+        }) |expected| {
+            try bincode.write(buffer.writer(), expected, params);
 
-    //         const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
-    //         defer bincode.readFree(testing.allocator, actual);
+            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+            defer bincode.readFree(testing.allocator, actual);
 
-    //         try testing.expectEqualSlices(std.meta.Elem(@TypeOf(expected)), expected, actual);
-    //         buffer.clearRetainingCapacity();
-    //     }
-    // }
+            try testing.expectEqualSlices(std.meta.Elem(@TypeOf(expected)), expected, actual);
+            buffer.clearRetainingCapacity();
+        }
+    }
 }
 
 test "bincode: (legacy) serialize an array" {

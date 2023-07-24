@@ -247,7 +247,7 @@ test "gossip.gossip_service: process packets" {
     defer packet_channel.deinit();
 
     var logger = Logger.init(allocator, .debug);
-    defer logger.deinit();
+    defer logger.deinit(); 
     logger.spawn();
 
     var packet_handle = try Thread.spawn(.{}, GossipService.process_packets, .{ &packet_channel, &crds_table, allocator, logger });
