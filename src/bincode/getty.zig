@@ -61,24 +61,25 @@ pub fn Serializer(
     };
 }
 
-test "getty: simple buffer writter" {
-    var buf: [1]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
+pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
+    var stream = std.io.fixedBufferStream(slice);
     var writer = stream.writer();
 
-    var s = serializer(writer, Params.standard);
+    var s = serializer(writer, params);
     const ss = s.serializer();
+    try getty.serialize(null, data, ss);
 
-    try getty.serialize(null, true, ss);
+    return stream.getWritten();
+}
 
-    var out = stream.getWritten();
+test "getty: simple buffer writter" {
+    var buf: [1]u8 = undefined;
+
+    var out = try writeToSlice(&buf, true, Params.standard);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0] == 1);
 
-    try stream.seekTo(0); // reset buffer
-    try getty.serialize(null, false, ss);
-    out = stream.getWritten();
-
+    out = try writeToSlice(&buf, false, Params.standard);
     try std.testing.expect(out.len == 1);
     try std.testing.expect(out[0] == 0);
 }
