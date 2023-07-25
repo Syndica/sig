@@ -238,7 +238,7 @@ pub const GossipService = struct {
     }
 };
 
-test "gossip.gossip_service: process packets" {
+test "gossip.gossip_service: process contact_info push packet" {
     const allocator = std.testing.allocator;
     var crds_table = CrdsTable.init(allocator);
     defer crds_table.deinit();
@@ -247,7 +247,7 @@ test "gossip.gossip_service: process packets" {
     defer packet_channel.deinit();
 
     var logger = Logger.init(allocator, .debug);
-    defer logger.deinit(); 
+    defer logger.deinit();
     logger.spawn();
 
     var packet_handle = try Thread.spawn(.{}, GossipService.process_packets, .{ &packet_channel, &crds_table, allocator, logger });
@@ -258,6 +258,7 @@ test "gossip.gossip_service: process packets" {
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk, true);
 
+    // new contact info
     var legacy_contact_info = crds.LegacyContactInfo.default();
     var crds_data = crds.CrdsData{
         .LegacyContactInfo = legacy_contact_info,
@@ -268,12 +269,18 @@ test "gossip.gossip_service: process packets" {
         .PushMessage = .{ id, &values },
     };
 
+    // packet
     const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
     const packet = Packet.init(peer, buf, bytes.len);
 
     packet_channel.send(packet);
+
+    // correct insertion into table
+    std.time.sleep(std.time.ns_per_s);
+    var res = try crds_table.get_contact_infos();
+    try std.testing.expect(res.len == 1);
 
     packet_channel.close();
     packet_handle.join();
