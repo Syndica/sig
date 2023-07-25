@@ -18,5 +18,9 @@
             .url = "https://github.com/sam701/zig-cli/archive/ea92821a797bdefb5df41ce602f8c7f387bcfb93.tar.gz",
             .hash = "122044525df0d1896556da08c5ed50b456a672a52ab86a65834bb1e27d3ae7a847f2",
         },
+        .getty = .{
+            .url = "https://github.com/0xNineteen/getty/archive/04e1d75c3b4f122232f0b8efeaf296742cb5c262.tar.gz",
+            .hash = "122034c0905da94ef750e5c225b1b58810ee2d6370c776f81fdea383ec5217c275a2",
+        },
     },
 }
