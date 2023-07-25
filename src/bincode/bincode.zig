@@ -244,7 +244,7 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
         },
         .Pointer => |info| {
             switch (info.size) {
-                .One => { 
+                .One => {
                     const data = try gpa.create(info.child);
                     errdefer gpa.destroy(data);
                     data.* = try bincode.read(gpa, info.child, reader, params);
@@ -258,7 +258,7 @@ pub fn read(gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: b
                     }
                     return entries;
                 },
-                else => { 
+                else => {
                     // unreachable;
                 },
             }
@@ -410,20 +410,20 @@ pub fn readFree(gpa: std.mem.Allocator, value: anytype) void {
         },
         .Pointer => |info| {
             switch (info.size) {
-                .One => { 
-                    if (info.child != anyopaque) { 
+                .One => {
+                    if (info.child != anyopaque) {
                         gpa.destroy(value);
-                    } else { 
+                    } else {
                         unreachable;
                     }
-                }, 
+                },
                 .Slice => {
                     for (value) |item| {
                         bincode.readFree(gpa, item);
                     }
                     gpa.free(value);
                 },
-                else => {}
+                else => {},
             }
         },
         else => {},
@@ -508,7 +508,7 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         },
         .Pointer => |info| {
             switch (info.size) {
-                .One => { 
+                .One => {
                     return bincode.write(writer, data.*, params);
                 },
                 .Many => return bincode.write(writer, std.mem.span(data), params),
@@ -519,7 +519,7 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
                     }
                     return;
                 },
-                else => { },
+                else => {},
             }
         },
         .ComptimeFloat => return bincode.write(writer, @as(f64, data), params),
