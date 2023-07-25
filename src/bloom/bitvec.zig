@@ -1,6 +1,6 @@
 const std = @import("std");
 const DynamicBitSet = std.bit_set.DynamicBitSet;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const testing = std.testing;
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};

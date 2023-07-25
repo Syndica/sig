@@ -5,12 +5,15 @@ const logfmt = @import("logfmt.zig");
 const Entry = entry.Entry;
 const testing = std.testing;
 const Mutex = std.Thread.Mutex;
+const AtomicBool = std.atomic.Atomic(bool);
 
 pub const Logger = struct {
     allocator: std.mem.Allocator,
     pending_entries: std.ArrayList(*Entry),
     default_level: Level,
     mux: Mutex,
+    exit_sig: AtomicBool,
+    handle: ?std.Thread,
 
     const Self = @This();
 
@@ -21,11 +24,18 @@ pub const Logger = struct {
             .pending_entries = std.ArrayList(*Entry).initCapacity(allocator, 1024) catch @panic("could not init ArrayList(FinalizedEntry)"),
             .default_level = default_level,
             .mux = Mutex{},
+            .exit_sig = AtomicBool.init(false),
+            .handle = null,
         };
         return self;
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.handle) |handle| {
+            self.exit_sig.store(true, std.atomic.Ordering.SeqCst);
+            handle.join();
+        }
+
         for (self.pending_entries.items) |p| {
             p.deinit();
         }
@@ -35,12 +45,12 @@ pub const Logger = struct {
 
     pub fn spawn(self: *Self) void {
         var handle = std.Thread.spawn(.{}, Logger.run, .{self}) catch @panic("could not spawn Logger");
-        handle.detach();
+        self.handle = handle;
     }
 
     fn run(self: *Self) void {
         var stdErrConsumer = BasicStdErrSink{};
-        while (true) {
+        while (!self.exit_sig.load(std.atomic.Ordering.SeqCst)) {
             self.mux.lock();
 
             stdErrConsumer.consumeEntries(self.pending_entries.items[0..]);

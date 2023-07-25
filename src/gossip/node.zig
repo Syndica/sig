@@ -2,7 +2,7 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const network = @import("zig-network");
 const Version = @import("../version/version.zig").Version;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const varint_config = @import("../utils/varint.zig").varint_config;
 const serialize_varint = @import("../utils/varint.zig").serilaize_varint;
 const deserialize_varint = @import("../utils/varint.zig").deserialize_varint;
@@ -332,7 +332,7 @@ test "contact info bincode serialize matches rust bincode" {
     defer ci.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
-    bincode.write(buf.writer(), &ci, bincode.Params.standard) catch unreachable;
+    bincode.write(buf.writer(), ci, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));

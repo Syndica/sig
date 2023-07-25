@@ -1,5 +1,5 @@
 const std = @import("std");
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 
 pub const varint_config = bincode.FieldConfig{
     .serializer = serilaize_varint,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const network = @import("zig-network");
 const serialize_short_u16 = @import("varint.zig").serialize_short_u16;
 const deserialize_short_u16 = @import("varint.zig").deserialize_short_u16;

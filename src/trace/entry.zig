@@ -6,6 +6,7 @@ const logfmt = @import("logfmt.zig");
 const Logger = @import("./log.zig").Logger;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const AtomicBool = std.atomic.Atomic(bool);
 
 pub const Entry = struct {
     level: Level,

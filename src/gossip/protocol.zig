@@ -2,7 +2,7 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const Channel = @import("../sync/channel");
 const SocketAddr = @import("net.zig").SocketAddr;
 
