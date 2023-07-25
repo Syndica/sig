@@ -1,6 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 
 pub const Slot = struct {
     value: u64,

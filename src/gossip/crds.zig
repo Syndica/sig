@@ -7,12 +7,16 @@ const Transaction = @import("../core/transaction.zig").Transaction;
 const Slot = @import("../core/slot.zig").Slot;
 const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
-const bincode = @import("bincode-zig");
+const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
+
+pub fn get_wallclock() u64 {
+    return @intCast(std.time.milliTimestamp());
+}
 
 pub const CrdsFilter = struct {
     filter: Bloom,
@@ -228,6 +232,27 @@ pub const LegacyContactInfo = struct {
     wallclock: u64,
     /// node shred version
     shred_version: u16,
+
+    pub fn default() LegacyContactInfo {
+        const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
+        const wallclock = get_wallclock();
+
+        return LegacyContactInfo{
+            .id = Pubkey.random(.{ .skip_encoding = true }),
+            .gossip = unspecified_addr,
+            .tvu = unspecified_addr,
+            .tvu_forwards = unspecified_addr,
+            .repair = unspecified_addr,
+            .tpu = unspecified_addr,
+            .tpu_forwards = unspecified_addr,
+            .tpu_vote = unspecified_addr,
+            .rpc = unspecified_addr,
+            .rpc_pubsub = unspecified_addr,
+            .serve_repair = unspecified_addr,
+            .wallclock = wallclock,
+            .shred_version = 0,
+        };
+    }
 };
 
 pub const CrdsValueLabel = union(enum) {

@@ -46,6 +46,7 @@ var app = &cli.App{
 // prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
     var logger = Logger.init(gpa, .debug);
+    defer logger.deinit();
     logger.spawn();
 
     const id = try gossipCmd.getOrInitIdentity(gpa, logger);
@@ -61,7 +62,9 @@ fn gossip(_: []const []const u8) !void {
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var entrypoints = std.ArrayList(LegacyContactInfo).init(gpa);
-    try gossipCmd.runGossipService(gossip_port, entrypoints, logger);
+    gossipCmd.runGossipService(gossip_port, entrypoints, logger) catch {
+        logger.deinit();
+    };
 }
 
 pub fn run() !void {

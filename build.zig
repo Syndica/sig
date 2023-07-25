@@ -21,7 +21,6 @@ pub fn build(b: *std.Build) void {
     const opts = .{ .target = target, .optimize = optimize };
     const base58_module = b.dependency("base58-zig", opts).module("base58-zig");
     const zig_network_module = b.dependency("zig-network", opts).module("network");
-    const bincode_module = b.dependency("bincode-zig", opts).module("bincode");
     const zig_cli_module = b.dependency("zig-cli", opts).module("zig-cli");
     const getty_mod = b.dependency("getty", opts).module("getty");
 
@@ -47,10 +46,6 @@ pub fn build(b: *std.Build) void {
                 .module = base58_module,
             },
             .{
-                .name = "bincode-zig",
-                .module = bincode_module,
-            },
-            .{
                 .name = "zig-cli",
                 .module = zig_cli_module,
             },
@@ -63,7 +58,6 @@ pub fn build(b: *std.Build) void {
 
     lib.addModule("base58-zig", base58_module);
     lib.addModule("zig-network", zig_network_module);
-    lib.addModule("bincode-zig", bincode_module);
     lib.addModule("zig-cli", zig_cli_module);
     lib.addModule("getty", getty_mod);
 
@@ -91,7 +85,6 @@ pub fn build(b: *std.Build) void {
 
     tests.addModule("zig-network", zig_network_module);
     tests.addModule("base58-zig", base58_module);
-    tests.addModule("bincode-zig", bincode_module);
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
 
@@ -115,7 +108,6 @@ pub fn build(b: *std.Build) void {
 
     exe.addModule("base58-zig", base58_module);
     exe.addModule("zig-network", zig_network_module);
-    exe.addModule("bincode-zig", bincode_module);
     exe.addModule("zig-cli", zig_cli_module);
     exe.addModule("getty", getty_mod);
 
