@@ -19,6 +19,61 @@ pub const Params = struct {
     include_fixed_array_length: bool = false,
 };
 
+pub fn deserializer(r: anytype, params: Params) blk: {
+    break :blk Deserializer(@TypeOf(r));
+} {
+    return Deserializer(@TypeOf(r)).init(r, params);
+}
+
+pub fn Deserializer(comptime Reader: type) type {
+    return struct {
+        reader: Reader,
+        params: Params,
+
+        const Self = @This();
+        const Error = getty.de.Error || error{
+            IO,
+        };
+
+        const De = Self.@"getty.Deserializer";
+
+        pub fn init(reader: Reader, params: Params) Self {
+            return Self{ .reader = reader, .params = params };
+        }
+
+        pub usingnamespace getty.Deserializer(*Self, Error, null, null, .{
+            .deserializeBool = deserializeBool,
+            .deserializeInt = deserializeInt,
+        });
+
+        pub fn deserializeInt(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const T = @TypeOf(visitor).Value;
+
+            const value = switch (self.params.endian) {
+                .Little => self.reader.readIntLittle(T),
+                .Big => self.reader.readIntBig(T),
+            } catch {
+                return Error.IO;
+            };
+
+            return try visitor.visitInt(ally, De, value);
+        }
+
+        pub fn deserializeBool(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const byte = self.reader.readByte() catch {
+                return Error.IO;
+            };
+            const value = switch (byte) {
+                0 => false,
+                1 => true,
+                else => return getty.de.Error.InvalidValue,
+            };
+
+            return try visitor.visitBool(ally, De, value);
+        }
+    };
+}
+
 // for ref: https://github.com/getty-zig/json/blob/a5c4d9f996dc3f472267f6210c30f96c39da576b/src/ser/serializer.zig
 pub fn serializer(w: anytype, params: Params) blk: {
     break :blk Serializer(@TypeOf(w));
@@ -135,10 +190,7 @@ pub fn Serializer(
                     .Union => true,
                     .Struct => true,
                     .Pointer => |*info| {
-                        return switch (info.size) {
-                            .Slice => true,
-                            else => false,
-                        };
+                        return info.size == .Slice;
                     },
                     else => false,
                 };
@@ -270,16 +322,36 @@ pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     return stream.getWritten();
 }
 
-test "getty: simple buffer writter" {
+pub fn readFromSlice(ally: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
+    var stream = std.io.fixedBufferStream(slice);
+    var reader = stream.reader();
+
+    var d = deserializer(reader, params);
+    const dd = d.deserializer();
+
+    const v = try getty.deserialize(ally, T, dd);
+    return v;
+}
+
+test "getty: test serialization" {
     var buf: [1]u8 = undefined;
 
-    var out = try writeToSlice(&buf, true, Params.standard);
-    try std.testing.expect(out.len == 1);
-    try std.testing.expect(out[0] == 1);
+    {
+        var out = try writeToSlice(&buf, true, Params.standard);
+        try std.testing.expect(out.len == 1);
+        try std.testing.expect(out[0] == 1);
+    }
 
-    out = try writeToSlice(&buf, false, Params.standard);
-    try std.testing.expect(out.len == 1);
-    try std.testing.expect(out[0] == 0);
+    {
+        var out = try readFromSlice(null, bool, &buf, Params{});
+        try std.testing.expect(out == true);
+    }
+
+    {
+        var out = try writeToSlice(&buf, false, Params.standard);
+        try std.testing.expect(out.len == 1);
+        try std.testing.expect(out[0] == 0);
+    }
 
     var buf2: [8]u8 = undefined; // u64 default
     _ = try writeToSlice(&buf2, 300, Params.standard);
@@ -288,14 +360,14 @@ test "getty: simple buffer writter" {
     var v: u32 = 200;
     _ = try writeToSlice(&buf3, v, Params.standard);
 
+    {
+        var out = try readFromSlice(null, u32, &buf3, Params{});
+        try std.testing.expect(out == 200);
+    }
+
     const Foo = enum { A, B };
-    out = try writeToSlice(&buf3, Foo.B, Params.standard);
-    var e = [_]u8{
-        1,
-        0,
-        0,
-        0,
-    };
+    var out = try writeToSlice(&buf3, Foo.B, Params.standard);
+    var e = [_]u8{ 1, 0, 0, 0 };
     try std.testing.expectEqualSlices(u8, &e, out);
 
     const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
