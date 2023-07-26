@@ -46,16 +46,15 @@ pub fn Serializer(
             *Self,
             Ok,
             Error,
-            custom_union,
+            custom_ser,
             null,
             null,
             Aggregate,
-            Aggregate,
+            null,
             .{
                 .serializeBool = serializeBool,
                 .serializeInt = serializeInt,
                 .serializeEnum = serializeEnum,
-                .serializeStruct = serializeStruct,
                 .serializeSome = serializeSome,
                 .serializeNull = serializeNull,
                 .serializeSeq = serializeSeq,
@@ -77,11 +76,6 @@ pub fn Serializer(
             try (self.writer.writeByte(1) catch Error.IO);
             const ss = self.serializer();
             return try getty.serialize(null, value, ss);
-        }
-
-        fn serializeStruct(self: *Self, comptime name: []const u8, len: usize) Error!Aggregate {
-            _ = name;
-            return try self.serializeMap(len);
         }
 
         fn serializeMap(self: *Self, len: ?usize) Error!Aggregate {
@@ -135,23 +129,50 @@ pub fn Serializer(
             }
         }
 
-        const custom_union = struct {
+        const custom_ser = struct {
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,
+                    .Struct => true,
                     else => false,
                 };
             }
 
             pub fn serialize(alloc: ?std.mem.Allocator, value: anytype, ss: anytype) Error!Ok {
-                try getty.serialize(alloc, @as(u32, @intFromEnum(value)), ss);
-
                 const T = @TypeOf(value);
-                const info = @typeInfo(T).Union;
-                inline for (info.fields) |field| {
-                    if (value == @field(T, field.name)) {
-                        return try getty.serialize(alloc, @field(value, field.name), ss);
-                    }
+                switch (@typeInfo(T)) {
+                    .Union => |*info| {
+                        try getty.serialize(alloc, @as(u32, @intFromEnum(value)), ss);
+                        inline for (info.fields) |field| {
+                            if (value == @field(T, field.name)) {
+                                return try getty.serialize(alloc, @field(value, field.name), ss);
+                            }
+                        }
+                    },
+                    .Struct => |*info| {
+                        var params = ss.context.params;
+                        var writer = ss.context.writer;
+
+                        if (getStructSerializer(T)) |ser_fcn| {
+                            return ser_fcn(writer, value, params);
+                        }
+
+                        var maybe_err: anyerror!void = {};
+                        inline for (info.fields) |field| {
+                            if (!field.is_comptime) {
+                                if (@as(?anyerror!void, maybe_err catch null) != null) {
+                                    if (!shouldSkipSerializingField(T, field)) {
+                                        if (getFieldSerializer(T, field)) |ser_fcn| {
+                                            maybe_err = ser_fcn(writer, @field(value, field.name), params);
+                                        } else {
+                                            maybe_err = getty.serialize(alloc, @field(value, field.name), ss);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    else => unreachable,
                 }
             }
         };
@@ -160,16 +181,6 @@ pub fn Serializer(
             ser: *Self,
 
             const A = @This();
-
-            pub usingnamespace getty.ser.Structure(
-                *A,
-                Ok,
-                Error,
-                .{
-                    .serializeField = serializeField,
-                    .end = end,
-                },
-            );
 
             pub usingnamespace getty.ser.Seq(
                 *A,
@@ -182,17 +193,8 @@ pub fn Serializer(
             );
 
             fn serializeElement(self: *A, value: anytype) Error!Ok {
-                return try self.serializeValue(value);
-            }
-
-            fn serializeValue(self: *A, value: anytype) Error!Ok {
                 const ss = self.ser.serializer();
                 try getty.serialize(null, value, ss);
-            }
-
-            fn serializeField(self: *A, comptime key: []const u8, value: anytype) Error!Ok {
-                _ = key;
-                try self.serializeValue(value);
             }
 
             fn end(self: *A) Error!Ok {
@@ -200,6 +202,50 @@ pub fn Serializer(
             }
         };
     };
+}
+
+pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
+pub const DeserializeFunction = fn (gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: Params) anyerror!void;
+
+pub const FieldConfig = struct {
+    serializer: ?SerializeFunction = null,
+    deserializer: ?DeserializeFunction = null,
+    skip: bool = false,
+};
+
+pub const StructConfig = struct {
+    serializer: ?SerializeFunction = null,
+    deserializer: ?DeserializeFunction = null,
+};
+
+pub fn getStructSerializer(comptime parent_type: type) ?SerializeFunction {
+    if (@hasDecl(parent_type, "!bincode-config")) {
+        const config = @field(parent_type, "!bincode-config");
+        return config.serializer;
+    }
+    return null;
+}
+
+pub fn getFieldSerializer(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) ?SerializeFunction {
+    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
+        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
+        return config.serializer;
+    }
+    return null;
+}
+
+pub inline fn shouldSkipSerializingField(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) bool {
+    const parent_type_name = @typeName(parent_type);
+
+    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
+        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
+        if (config.skip and struct_field.default_value == null) {
+            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ parent_type_name ++ "." ++ struct_field.name ++ "' serialization if no default value set\n\n");
+        }
+        return config.skip;
+    }
+
+    return false;
 }
 
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
