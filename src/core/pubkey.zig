@@ -95,6 +95,12 @@ pub const Pubkey = struct {
     }
 
     pub const @"!bincode-config:cached_str" = bincode.FieldConfig{ .skip = true };
+
+    pub const @"getty.sb" = struct {
+        pub const attributes = .{
+            .cached_str = .{ .skip = true },
+        };
+    };
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
