@@ -48,15 +48,21 @@ pub fn Serializer(
             Error,
             null,
             null,
-            null,
+            Map,
             null,
             null,
             .{
                 .serializeBool = serializeBool,
                 .serializeInt = serializeInt,
                 .serializeEnum = serializeEnum,
+                .serializeMap = serializeMap,
             },
         );
+
+        fn serializeMap(self: *Self, len: ?usize) Error!Map {
+            _ = len;
+            return Map{ .ser = self };
+        }
 
         fn serializeBool(self: *Self, value: bool) Error!Ok {
             try (self.writer.writeByte(@intFromBool(value)) catch Error.IO);
@@ -69,7 +75,6 @@ pub fn Serializer(
                     if (value < 0) {
                         @compileError("Signed comptime integers can not be serialized.");
                     }
-                    // default = assume u64
                     try self.serializeInt(@as(u64, value));
                 },
                 .Int => |info| {
@@ -106,8 +111,41 @@ pub fn Serializer(
                 },
             }
         }
+
+        const Map = struct { 
+            ser: *Self,    
+
+            const A = @This();
+
+            pub usingnamespace getty.ser.Map(
+                *A,
+                Ok, 
+                Error, 
+                .{
+                    .serializeKey = serializeKey,
+                    .serializeValue = serializeValue,
+                    .end = end,
+                }
+            );
+
+            fn serializeKey(self: *A, key: anytype) Error!Ok {
+                // first key of union(enum)
+                const index = (key[0] & 0b0111111) - 1;
+                try getty.serialize(null, @as(u32, index), self.ser.serializer());
+            }
+
+            fn serializeValue(self: *A, value: anytype) Error!Ok {
+                const ss = self.ser.serializer();
+                try getty.serialize(null, value, ss);
+            }
+
+            fn end(self: *A) Error!Ok {
+                _ = self; 
+            }
+        };
     };
 }
+
 
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
@@ -139,12 +177,25 @@ test "getty: simple buffer writter" {
     _ = try writeToSlice(&buf3, v, Params.standard);
 
     const Foo = enum { A, B };
-    _ = try writeToSlice(&buf3, Foo.B, Params.standard);
-    std.debug.print("{any}\n", .{buf3});
+    out = try writeToSlice(&buf3, Foo.B, Params.standard);
+    var e = [_]u8{ 1, 0, 0, 0, };
+    try std.testing.expectEqualSlices(u8, &e, out);
 
-    // const Foo2 = union(enum(u8)) { A: u32, B: u32 };
-    // const expected = [_]u8{ 1, 0, 0, 0, 1, 1, 1, 1 };
-    // const value = Foo2{ .B = 16843009 };
-    // var out2 = try writeToSlice(&buf2, value, Params.standard);
-    // try std.testing.expectEqualSlices(u8, &expected, out2);
+    const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
+    const expected = [_]u8{ 1, 0, 0, 0, 1, 1, 1, 1 };
+    const value = Foo2{ .B = 16843009 };
+    // .A = 65 = 1000001 (7 bits)
+    // .B = 66 = 1000010
+    // .B = 67 = 1000011
+    var out2 = try writeToSlice(&buf2, value, Params.standard);
+    try std.testing.expectEqualSlices(u8, &expected, out2);
+
+    var buf4: [1024]u8 = undefined;
+    var map = std.StringHashMap(i32).init(std.heap.page_allocator);
+    defer map.deinit();
+    try map.put("x", 1);
+    try map.put("y", 2);
+    var out3 = try writeToSlice(&buf4, map, Params.standard);
+    // print out3
+    std.debug.print("{any}\n", .{out3});
 }
