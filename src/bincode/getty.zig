@@ -175,7 +175,9 @@ pub fn Serializer(
                             }
                         }
                     },
-                    .Pointer => {
+                    .Pointer => |*info| {
+                        std.debug.assert(info.size == .Slice);
+
                         try getty.serialize(alloc, @as(u64, value.len), ss);
                         for (value) |element| {
                             try getty.serialize(alloc, element, ss);
