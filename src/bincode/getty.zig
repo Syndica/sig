@@ -134,6 +134,12 @@ pub fn Serializer(
                 return switch (@typeInfo(T)) {
                     .Union => true,
                     .Struct => true,
+                    .Pointer => |*info| {
+                        return switch (info.size) {
+                            .Slice => true,
+                            else => false,
+                        };
+                    },
                     else => false,
                 };
             }
@@ -157,19 +163,22 @@ pub fn Serializer(
                             return ser_fcn(writer, value, params);
                         }
 
-                        var maybe_err: anyerror!void = {};
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
-                                if (@as(?anyerror!void, maybe_err catch null) != null) {
-                                    if (!shouldSkipSerializingField(T, field)) {
-                                        if (getFieldSerializer(T, field)) |ser_fcn| {
-                                            maybe_err = ser_fcn(writer, @field(value, field.name), params);
-                                        } else {
-                                            maybe_err = getty.serialize(alloc, @field(value, field.name), ss);
-                                        }
+                                if (!shouldSkipSerializingField(T, field)) {
+                                    if (getFieldSerializer(T, field)) |ser_fcn| {
+                                        try ser_fcn(writer, @field(value, field.name), params);
+                                    } else {
+                                        try getty.serialize(alloc, @field(value, field.name), ss);
                                     }
                                 }
                             }
+                        }
+                    },
+                    .Pointer => {
+                        try getty.serialize(alloc, @as(u64, value.len), ss);
+                        for (value) |element| {
+                            try getty.serialize(alloc, element, ss);
                         }
                     },
                     else => unreachable,

@@ -2,6 +2,7 @@ const std = @import("std");
 const DynamicBitSet = std.bit_set.DynamicBitSet;
 const bincode = @import("../bincode/bincode.zig");
 const testing = std.testing;
+const getty_bincode = @import("../bincode/getty.zig");
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
@@ -46,7 +47,7 @@ pub const BitVec = struct {
     }
 };
 
-test "bitvec serializes/deserializes and matches Rust's BitVec" {
+test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec" {
     var rust_bit_vec_serialized = [_]u8{
         1,   2,   0,   0,   0,   0,   0, 0, 0, 255, 255, 239, 191, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 255, 128, 0, 0, 0, 0,   0,   0,   0,
@@ -68,7 +69,7 @@ test "bitvec serializes/deserializes and matches Rust's BitVec" {
     var buf: [10000]u8 = undefined;
 
     const original = BitVec.initFromBitSet(bitset);
-    var out = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
+    var out = try getty_bincode.writeToSlice(buf[0..], original, getty_bincode.Params.standard);
 
     var deserialied = try bincode.readFromSlice(testing.allocator, BitVec, out, bincode.Params.standard);
     defer bincode.readFree(testing.allocator, deserialied);
