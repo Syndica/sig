@@ -49,8 +49,8 @@ pub fn Serializer(
             custom_union,
             null,
             null,
-            Map,
-            Map,
+            Aggregate,
+            Aggregate,
             .{
                 .serializeBool = serializeBool,
                 .serializeInt = serializeInt,
@@ -62,7 +62,7 @@ pub fn Serializer(
             },
         );
 
-        fn serializeSeq(self: *Self, len: ?usize) Error!Map {
+        fn serializeSeq(self: *Self, len: ?usize) Error!Aggregate {
             if (self.params.include_fixed_array_length) {
                 try self.serializeInt(@as(u64, len.?));
             }
@@ -79,14 +79,14 @@ pub fn Serializer(
             return try getty.serialize(null, value, ss);
         }
 
-        fn serializeStruct(self: *Self, comptime name: []const u8, len: usize) Error!Map {
+        fn serializeStruct(self: *Self, comptime name: []const u8, len: usize) Error!Aggregate {
             _ = name;
             return try self.serializeMap(len);
         }
 
-        fn serializeMap(self: *Self, len: ?usize) Error!Map {
+        fn serializeMap(self: *Self, len: ?usize) Error!Aggregate {
             _ = len;
-            return Map{ .ser = self };
+            return Aggregate{ .ser = self };
         }
 
         fn serializeBool(self: *Self, value: bool) Error!Ok {
@@ -156,7 +156,7 @@ pub fn Serializer(
             }
         };
 
-        const Map = struct {
+        const Aggregate = struct {
             ser: *Self,
 
             const A = @This();
