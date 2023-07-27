@@ -1,5 +1,6 @@
 const std = @import("std");
 pub const getty = @import("getty");
+pub const free = getty.de.free;
 
 pub const Params = struct {
     pub const legacy: Params = .{
@@ -483,28 +484,23 @@ pub inline fn shouldSkipSerializingField(comptime parent_type: type, comptime st
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
     var writer = stream.writer();
-
     var s = serializer(writer, params);
     const ss = s.serializer();
     try getty.serialize(null, data, ss);
-
     return stream.getWritten();
 }
 
-pub fn readFromSlice(ally: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
+// can call if dont require an allocator
+pub fn readFromSlice(alloc: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
     var stream = std.io.fixedBufferStream(slice);
     var reader = stream.reader();
-
     var d = deserializer(reader, params);
     const dd = d.deserializer();
+    const v = try getty.deserialize(alloc, T, dd);
+    errdefer getty.de.free(alloc, @TypeOf(dd), v); // !
 
-    const v = try getty.deserialize(ally, T, dd);
     return v;
 }
-
-// pub fn free(ally: ?std.mem.Allocator, value: anytype) void {
-//     getty.de.free(a, @TypeOf(dd), v);
-// }
 
 test "getty: test serialization" {
     var buf: [1]u8 = undefined;
