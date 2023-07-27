@@ -1,5 +1,5 @@
 const std = @import("std");
-const getty = @import("getty");
+pub const getty = @import("getty");
 
 pub const Params = struct {
     pub const legacy: Params = .{
@@ -38,13 +38,44 @@ pub fn Deserializer(comptime Reader: type) type {
         const De = Self.@"getty.Deserializer";
 
         pub fn init(reader: Reader, params: Params) Self {
+            std.debug.assert(params.int_encoding == .fixed);
             return Self{ .reader = reader, .params = params };
         }
 
-        pub usingnamespace getty.Deserializer(*Self, Error, null, null, .{
-            .deserializeBool = deserializeBool,
-            .deserializeInt = deserializeInt,
-        });
+        pub usingnamespace getty.Deserializer(
+            *Self,
+            Error,
+            custom_dser,
+            null,
+            .{
+                .deserializeBool = deserializeBool,
+                .deserializeInt = deserializeInt,
+                .deserializeEnum = deserializeEnum,
+                .deserializeOptional = deserializeOptional,
+            },
+        );
+
+        pub fn deserializeOptional(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const byte = self.reader.readByte() catch {
+                return Error.IO;
+            };
+            return switch (byte) {
+                0 => try visitor.visitNull(ally, De),
+                1 => try visitor.visitSome(ally, self.deserializer()),
+                else => getty.de.Error.InvalidValue,
+            };
+        }
+
+        pub fn deserializeEnum(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const T = u32; // enum size
+            const tag = switch (self.params.endian) {
+                .Little => self.reader.readIntLittle(T),
+                .Big => self.reader.readIntBig(T),
+            } catch {
+                return Error.IO;
+            };
+            return try visitor.visitInt(ally, De, tag);
+        }
 
         pub fn deserializeInt(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             const T = @TypeOf(visitor).Value;
@@ -71,6 +102,122 @@ pub fn Deserializer(comptime Reader: type) type {
 
             return try visitor.visitBool(ally, De, value);
         }
+
+        const custom_dser = struct {
+            pub fn is(comptime T: type) bool {
+                return switch (@typeInfo(T)) {
+                    .Union => true,
+                    .Struct => true,
+                    .Pointer => |*info| {
+                        return info.size == .Slice;
+                    },
+                    else => false,
+                };
+            }
+
+            pub fn Visitor(comptime Value: type) type {
+                return struct {
+                    pub usingnamespace getty.de.Visitor(
+                        @This(),
+                        Value,
+                        .{},
+                    );
+                };
+            }
+
+            pub fn free(
+                allocator: std.mem.Allocator,
+                comptime d: type,
+                value: anytype,
+            ) void {
+                const T = @TypeOf(value);
+                switch (@typeInfo(T)) {
+                    .Union => |*info| {
+                        inline for (info.fields) |field| {
+                            if (value == @field(T, field.name)) {
+                                return getty.de.free(allocator, d, @field(value, field.name));
+                            }
+                        }
+                    },
+                    .Struct => |*info| {
+                        inline for (info.fields) |field| {
+                            if (!field.is_comptime) {
+                                getty.de.free(allocator, d, @field(value, field.name));
+                            }
+                        }
+                    },
+                    .Pointer => |*info| {
+                        std.debug.assert(info.size == .Slice);
+                        for (value) |item| {
+                            getty.de.free(allocator, d, item);
+                        }
+                        allocator.free(value);
+                    },
+                    else => {},
+                }
+            }
+
+            pub fn deserialize(
+                alloc: ?std.mem.Allocator,
+                comptime T: type,
+                dd: anytype,
+                visitor: anytype,
+            ) Error!@TypeOf(visitor).Value {
+                switch (@typeInfo(T)) {
+                    .Union => |*info| {
+                        const tag_type = info.tag_type orelse @compileError("unions must have a tag type");
+                        const raw_tag = try getty.deserialize(alloc, tag_type, dd);
+
+                        inline for (info.fields) |field| {
+                            if (raw_tag == @field(tag_type, field.name)) {
+                                const payload = try getty.deserialize(alloc, field.type, dd);
+                                return @unionInit(T, field.name, payload);
+                            }
+                        }
+                        return getty.de.Error.InvalidValue;
+                    },
+                    .Struct => |*info| {
+                        const reader = dd.context.reader;
+                        const params = dd.context.params;
+                        var data: T = undefined;
+
+                        if (getStructSerializer(T)) |deser_fcn| {
+                            data = try deser_fcn(alloc, T, reader, params);
+                            return data;
+                        }
+
+                        inline for (info.fields) |field| {
+                            if (!field.is_comptime) {
+                                if (shouldUseDefaultValue(T, field)) |val| {
+                                    @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(val))).*;
+                                } else if (getFieldDeserializer(T, field)) |deser_fcn| {
+                                    @field(data, field.name) = try deser_fcn(alloc, field.type, reader, params);
+                                } else {
+                                    @field(data, field.name) = try getty.deserialize(alloc, field.type, dd);
+                                }
+                            }
+                        }
+                        return data;
+                    },
+                    .Pointer => |*info| {
+                        std.debug.assert(info.size == .Slice);
+
+                        const len = try getty.deserialize(alloc, u64, dd);
+                        const ally = alloc.?;
+
+                        const entries = try ally.alloc(info.child, len);
+                        errdefer ally.free(entries);
+
+                        for (entries) |*entry| {
+                            entry.* = try getty.deserialize(alloc, info.child, dd);
+                        }
+
+                        return entries;
+                    },
+                    else => unreachable,
+                }
+            }
+        };
     };
 }
 
@@ -267,6 +414,28 @@ pub fn Serializer(
     };
 }
 
+pub inline fn shouldUseDefaultValue(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) ?*const anyopaque {
+    const parent_type_name = @typeName(parent_type);
+
+    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
+        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
+        if (config.skip and struct_field.default_value == null) {
+            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ parent_type_name ++ "." ++ struct_field.name ++ "' deserialization if no default value set\n\n");
+        }
+        return struct_field.default_value;
+    }
+
+    return null;
+}
+
+pub fn getFieldDeserializer(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) ?DeserializeFunction {
+    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
+        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
+        return config.deserializer;
+    }
+    return null;
+}
+
 pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
 pub const DeserializeFunction = fn (gpa: std.mem.Allocator, comptime T: type, reader: anytype, params: Params) anyerror!void;
 
@@ -333,6 +502,10 @@ pub fn readFromSlice(ally: ?std.mem.Allocator, comptime T: type, slice: []const 
     return v;
 }
 
+// pub fn free(ally: ?std.mem.Allocator, value: anytype) void {
+//     getty.de.free(a, @TypeOf(dd), v);
+// }
+
 test "getty: test serialization" {
     var buf: [1]u8 = undefined;
 
@@ -370,6 +543,9 @@ test "getty: test serialization" {
     var e = [_]u8{ 1, 0, 0, 0 };
     try std.testing.expectEqualSlices(u8, &e, out);
 
+    var read_out = try readFromSlice(null, Foo, &buf3, Params{});
+    try std.testing.expectEqual(read_out, Foo.B);
+
     const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
     const expected = [_]u8{ 1, 0, 0, 0, 1, 1, 1, 1 };
     const value = Foo2{ .B = 16843009 };
@@ -380,10 +556,28 @@ test "getty: test serialization" {
     var out2 = try writeToSlice(&buf2, value, Params.standard);
     try std.testing.expectEqualSlices(u8, &expected, out2);
 
+    var read_out2 = try readFromSlice(null, Foo2, &buf2, Params{});
+    try std.testing.expectEqual(read_out2, value);
+
     const Bar = struct { a: u32, b: u32, c: Foo2 };
     const b = Bar{ .a = 65, .b = 66, .c = Foo2{ .B = 16843009 } };
     var buf4: [100]u8 = undefined;
     var out3 = try writeToSlice(&buf4, b, Params.standard);
     var expected2 = [_]u8{ 65, 0, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1 };
     try std.testing.expectEqualSlices(u8, &expected2, out3);
+
+    const s = struct {
+        a: u32,
+        b: ?u16,
+        c: Bar,
+    };
+    const _s = s{
+        .a = 65,
+        .b = null,
+        .c = Bar{ .a = 66, .b = 67, .c = Foo2{ .B = 16843009 } },
+    };
+    var buf6: [100]u8 = undefined;
+    var out4 = try writeToSlice(&buf6, _s, Params.standard);
+    var result = try readFromSlice(null, s, out4, Params{});
+    try std.testing.expectEqual(result, _s);
 }
