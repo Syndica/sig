@@ -1,6 +1,5 @@
 const std = @import("std");
 pub const getty = @import("getty");
-pub const free = getty.de.free;
 
 pub const Params = struct {
     pub const legacy: Params = .{
@@ -19,6 +18,16 @@ pub const Params = struct {
     int_encoding: enum { variable, fixed } = .fixed,
     include_fixed_array_length: bool = false,
 };
+
+pub fn free(
+    ally: std.mem.Allocator,
+    v: anytype,
+) void {
+    const D = Deserializer(
+        std.io.FixedBufferStream([]u8).Reader, // TODO: wonk
+    );
+    return getty.de.free(ally, D.@"getty.Deserializer", v);
+}
 
 pub fn deserializer(r: anytype, params: Params) blk: {
     break :blk Deserializer(@TypeOf(r));

@@ -72,8 +72,7 @@ test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec" {
     var out = try getty_bincode.writeToSlice(buf[0..], original, getty_bincode.Params.standard);
 
     var deserialied = try getty_bincode.readFromSlice(testing.allocator, BitVec, out, getty_bincode.Params.standard);
-
-    defer bincode.readFree(testing.allocator, deserialied);
+    defer getty_bincode.free(testing.allocator, deserialied);
 
     try testing.expect(std.mem.eql(u64, original.bits.?[0..], deserialied.bits.?[0..]));
     try testing.expectEqualSlices(u8, rust_bit_vec_serialized[0..], out[0..]);
