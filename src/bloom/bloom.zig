@@ -3,7 +3,9 @@ const ArrayList = std.ArrayList;
 const DynamicBitSet = std.bit_set.DynamicBitSet;
 const BitVec = @import("bitvec.zig").BitVec;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
+
 const bincode = @import("../bincode/bincode.zig");
+
 const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
 
@@ -66,15 +68,16 @@ pub const Bloom = struct {
 fn bincode_serialize_bit_vec(writer: anytype, data: anytype, params: bincode.Params) !void {
     var bitset: DynamicBitSet = data;
     var bitvec = BitVec.initFromBitSet(bitset);
-    try bincode.write(writer, bitvec, params);
+    try bincode.write(null, writer, bitvec, params);
     return;
 }
 
-fn bincode_deserialize_bit_vec(allocator: std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
-    var bitvec = try bincode.read(allocator, BitVec, reader, params);
-    defer bincode.readFree(allocator, bitvec);
+fn bincode_deserialize_bit_vec(allocator: ?std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
+    var ally = allocator.?;
+    var bitvec = try bincode.read(ally, BitVec, reader, params);
+    defer bincode.free(ally, bitvec);
 
-    var dynamic_bitset = try bitvec.toBitSet(allocator);
+    var dynamic_bitset = try bitvec.toBitSet(ally);
     return dynamic_bitset;
 }
 

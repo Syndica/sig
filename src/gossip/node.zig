@@ -332,7 +332,7 @@ test "contact info bincode serialize matches rust bincode" {
     defer ci.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
-    bincode.write(buf.writer(), ci, bincode.Params.standard) catch unreachable;
+    bincode.write(null, buf.writer(), ci, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
 
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
@@ -354,11 +354,10 @@ test "SocketEntry serializer works" {
 
     var buf = std.ArrayList(u8).init(testing.allocator);
     defer buf.deinit();
-    try bincode.write(buf.writer(), se, bincode.Params.standard);
+    try bincode.write(null, buf.writer(), se, bincode.Params.standard);
 
     var stream = std.io.fixedBufferStream(buf.items);
     var other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
-    defer bincode.readFree(testing.allocator, other_se);
 
     try testing.expect(other_se.index == se.index);
     try testing.expect(other_se.key == se.key);

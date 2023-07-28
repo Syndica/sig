@@ -24,8 +24,8 @@ const logger = std.log.scoped(.slot_tests);
 test "slot bincode serializes properly" {
     var rust_serialized = [_]u8{ 239, 16, 0, 0, 0, 0, 0, 0 };
     var slot = Slot{ .value = 4335 };
-    var ser = try bincode.writeAlloc(testing.allocator, slot, bincode.Params.standard);
-    defer testing.allocator.free(ser);
+    var buf = [_]u8{0} ** 1024;
+    var ser = try bincode.writeToSlice(buf[0..], slot, bincode.Params.standard);
 
     try testing.expect(std.mem.eql(u8, ser, rust_serialized[0..]));
 }

@@ -186,7 +186,7 @@ pub const GossipService = struct {
                 logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
                 continue;
             };
-            defer bincode.readFree(allocator, protocol_message);
+            defer bincode.free(allocator, protocol_message);
 
             switch (protocol_message) {
                 .PongMessage => |*pong| {

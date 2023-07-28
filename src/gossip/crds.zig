@@ -504,6 +504,21 @@ test "gossip.crds: default crds filter matches rust bytes" {
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
 }
 
+test "gossip.crds: pubkey matches rust" {
+    var kp_bytes = [_]u8{1} ** 32;
+    const kp = try KeyPair.create(kp_bytes);
+    const pk = kp.public_key;
+    const id = Pubkey.fromPublicKey(&pk, true);
+
+    const rust_bytes = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92 };
+    var buf = [_]u8{0} ** 1024;
+    var bytes = try bincode.writeToSlice(buf[0..], id, bincode.Params.standard);
+    try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes[0..bytes.len]);
+
+    var out = try bincode.readFromSlice(std.testing.allocator, Pubkey, buf[0..], bincode.Params.standard);
+    try std.testing.expectEqual(id, out);
+}
+
 test "gossip.crds: contact info serialization matches rust" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
@@ -532,8 +547,10 @@ test "gossip.crds: contact info serialization matches rust" {
     };
 
     var contact_info_rust = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
+
     var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
-    try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], contact_info_rust[0..bytes.len]);
+    try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], &contact_info_rust);
 }
 
 test "gossip.crds: crds data serialization matches rust" {

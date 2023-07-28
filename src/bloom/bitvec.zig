@@ -3,9 +3,6 @@ const DynamicBitSet = std.bit_set.DynamicBitSet;
 const bincode = @import("../bincode/bincode.zig");
 const testing = std.testing;
 
-var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa = gpa_allocator.allocator();
-
 /// ***BitVec*** uses a u64 as it's Block
 ///
 /// TODO: make into generic to allow for any block size
@@ -46,7 +43,7 @@ pub const BitVec = struct {
     }
 };
 
-test "bitvec serializes/deserializes and matches Rust's BitVec" {
+test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec" {
     var rust_bit_vec_serialized = [_]u8{
         1,   2,   0,   0,   0,   0,   0, 0, 0, 255, 255, 239, 191, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 255, 128, 0, 0, 0, 0,   0,   0,   0,
@@ -71,7 +68,7 @@ test "bitvec serializes/deserializes and matches Rust's BitVec" {
     var out = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
     var deserialied = try bincode.readFromSlice(testing.allocator, BitVec, out, bincode.Params.standard);
-    defer bincode.readFree(testing.allocator, deserialied);
+    defer bincode.free(testing.allocator, deserialied);
 
     try testing.expect(std.mem.eql(u64, original.bits.?[0..], deserialied.bits.?[0..]));
     try testing.expectEqualSlices(u8, rust_bit_vec_serialized[0..], out[0..]);

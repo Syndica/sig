@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     const base58_module = b.dependency("base58-zig", opts).module("base58-zig");
     const zig_network_module = b.dependency("zig-network", opts).module("network");
     const zig_cli_module = b.dependency("zig-cli", opts).module("zig-cli");
+    const getty_mod = b.dependency("getty", opts).module("getty");
 
     const lib = b.addStaticLibrary(.{
         .name = "sig",
@@ -35,21 +36,30 @@ pub fn build(b: *std.Build) void {
     // expose Sig as a module
     _ = b.addModule(package_name, .{
         .source_file = .{ .path = package_path },
-        .dependencies = &.{ .{
-            .name = "zig-network",
-            .module = zig_network_module,
-        }, .{
-            .name = "base58-zig",
-            .module = base58_module,
-        }, .{
-            .name = "zig-cli",
-            .module = zig_cli_module,
-        } },
+        .dependencies = &.{
+            .{
+                .name = "zig-network",
+                .module = zig_network_module,
+            },
+            .{
+                .name = "base58-zig",
+                .module = base58_module,
+            },
+            .{
+                .name = "zig-cli",
+                .module = zig_cli_module,
+            },
+            .{
+                .name = "getty",
+                .module = getty_mod,
+            },
+        },
     });
 
     lib.addModule("base58-zig", base58_module);
     lib.addModule("zig-network", zig_network_module);
     lib.addModule("zig-cli", zig_cli_module);
+    lib.addModule("getty", getty_mod);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -76,6 +86,7 @@ pub fn build(b: *std.Build) void {
     tests.addModule("zig-network", zig_network_module);
     tests.addModule("base58-zig", base58_module);
     tests.addModule("zig-cli", zig_cli_module);
+    tests.addModule("getty", getty_mod);
 
     const run_tests = b.addRunArtifact(tests);
 
@@ -98,6 +109,7 @@ pub fn build(b: *std.Build) void {
     exe.addModule("base58-zig", base58_module);
     exe.addModule("zig-network", zig_network_module);
     exe.addModule("zig-cli", zig_cli_module);
+    exe.addModule("getty", getty_mod);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

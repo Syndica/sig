@@ -15,11 +15,13 @@ pub fn ShortVecConfig(comptime childSerialize: bincode.SerializeFunction, compti
             return;
         }
 
-        pub fn deerialize(allocator: std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !void {
-            var len = try deserialize_short_u16(allocator, u16, reader, params);
-            var elems = try allocator.alloc(T.child, len);
+        pub fn deserialize(allocator: ?std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !void {
+            var ally = allocator.?;
+
+            var len = try deserialize_short_u16(ally, u16, reader, params);
+            var elems = try ally.alloc(T.child, len);
             for (0..len) |i| {
-                elems[i] = childDeserialize(allocator, T.child, reader, params);
+                elems[i] = childDeserialize(ally, T.child, reader, params);
             }
             return elems;
         }
@@ -27,7 +29,7 @@ pub fn ShortVecConfig(comptime childSerialize: bincode.SerializeFunction, compti
 
     return bincode.FieldConfig{
         .serializer = S.serialize,
-        .deserializer = S.deerialize,
+        .deserializer = S.deserialize,
     };
 }
 
@@ -40,17 +42,19 @@ pub fn serilaize_shortvec(writer: anytype, data: anytype, params: bincode.Params
     var len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
     try serialize_short_u16(writer, len, params);
     for (data) |item| {
-        try bincode.write(writer, item, params);
+        try bincode.write(null, writer, item, params);
     }
     return;
 }
 
-pub fn deserialize_shortvec(allocator: std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
+pub fn deserialize_shortvec(allocator: ?std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
+    var ally = allocator.?;
+
     const Child = @typeInfo(T).Pointer.child;
-    var len = try deserialize_short_u16(allocator, u16, reader, params);
-    var elems = try allocator.alloc(Child, len);
+    var len = try deserialize_short_u16(ally, u16, reader, params);
+    var elems = try ally.alloc(Child, len);
     for (0..len) |i| {
-        elems[i] = try bincode.read(allocator, Child, reader, params);
+        elems[i] = try bincode.read(ally, Child, reader, params);
     }
     return elems;
 }
