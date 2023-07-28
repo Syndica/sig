@@ -129,6 +129,7 @@ pub fn Deserializer(comptime Reader: type) type {
                     .Union => true,
                     .Struct => true,
                     .Pointer => |*info| {
+                        // should never be called but compiler complains
                         if (info.size == .Many) {
                             return true;
                         }
@@ -171,7 +172,7 @@ pub fn Deserializer(comptime Reader: type) type {
                     },
                     .Pointer => |*info| {
                         if (info.size == .Many) {
-                            return;
+                            unreachable;
                         }
 
                         std.debug.assert(info.size == .Slice);
@@ -227,9 +228,6 @@ pub fn Deserializer(comptime Reader: type) type {
                         return data;
                     },
                     .Pointer => |*info| {
-                        if (info.size == .Many) {
-                            std.debug.print("{any}\n", .{info});
-                        }
                         std.debug.assert(info.size == .Slice);
 
                         const len = try getty.deserialize(alloc, u64, dd);
@@ -264,7 +262,7 @@ pub fn Deserializer(comptime Reader: type) type {
                 );
 
                 fn nextElementSeed(self: *Seq, ally: ?std.mem.Allocator, seed: anytype) Error!?@TypeOf(seed).Value {
-                    if (self.idx == self.len) {
+                    if (self.idx == self.len) { 
                         return null;
                     }
                     const element = try seed.deserialize(ally, self.d.deserializer());
