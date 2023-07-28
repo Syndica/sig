@@ -17,7 +17,7 @@ pub fn serilaize_varint(writer: anytype, data: anytype, _: bincode.Params) !void
     return;
 }
 
-pub fn deserialize_varint(_: std.mem.Allocator, comptime T: type, reader: anytype, _: bincode.Params) !T {
+pub fn deserialize_varint(_: ?std.mem.Allocator, comptime T: type, reader: anytype, _: bincode.Params) !T {
     var out: T = 0;
 
     var t_bits: u8 = switch (T) {
@@ -69,7 +69,7 @@ pub fn serialize_short_u16(writer: anytype, data: anytype, _: bincode.Params) !v
     }
 }
 
-pub fn deserialize_short_u16(_: std.mem.Allocator, comptime T: type, reader: anytype, _: bincode.Params) !T {
+pub fn deserialize_short_u16(_: ?std.mem.Allocator, comptime T: type, reader: anytype, _: bincode.Params) !T {
     var val: u16 = 0;
     for (0..MAX_ENCODING_LENGTH) |n| {
         var elem: u8 = try reader.readByte();

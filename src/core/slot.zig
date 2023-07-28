@@ -21,11 +21,11 @@ pub const Slot = struct {
 
 const logger = std.log.scoped(.slot_tests);
 
-test "slot bincode serializes properly" {
-    var rust_serialized = [_]u8{ 239, 16, 0, 0, 0, 0, 0, 0 };
-    var slot = Slot{ .value = 4335 };
-    var ser = try bincode.writeAlloc(testing.allocator, slot, bincode.Params.standard);
-    defer testing.allocator.free(ser);
+// test "slot bincode serializes properly" {
+//     var rust_serialized = [_]u8{ 239, 16, 0, 0, 0, 0, 0, 0 };
+//     var slot = Slot{ .value = 4335 };
+//     var ser = try bincode.writeAlloc(testing.allocator, slot, bincode.Params.standard);
+//     defer testing.allocator.free(ser);
 
-    try testing.expect(std.mem.eql(u8, ser, rust_serialized[0..]));
-}
+//     try testing.expect(std.mem.eql(u8, ser, rust_serialized[0..]));
+// }

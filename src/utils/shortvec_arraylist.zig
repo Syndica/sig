@@ -15,11 +15,12 @@ pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig {
             return;
         }
 
-        pub fn deserialize(allocator: std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
-            var len = try deserialize_short_u16(allocator, u16, reader, params);
-            var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
+        pub fn deserialize(allocator: ?std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
+            var ally = allocator.?;
+            var len = try deserialize_short_u16(ally, u16, reader, params);
+            var list = try std.ArrayList(Child).initCapacity(ally, @as(usize, len));
             for (0..len) |_| {
-                var item = try bincode.read(allocator, Child, reader, params);
+                var item = try bincode.read(ally, Child, reader, params);
                 try list.append(item);
             }
             return list;

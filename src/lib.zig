@@ -55,5 +55,4 @@ pub const common = struct {
 
 pub const bincode = struct {
     pub usingnamespace @import("bincode/bincode.zig");
-    pub usingnamespace @import("bincode/getty.zig");
 };

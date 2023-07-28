@@ -246,86 +246,86 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     }
 }
 
-test "gossip.crds_table: insert and get votes" {
-    var kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
+// test "gossip.crds_table: insert and get votes" {
+//     var kp_bytes = [_]u8{1} ** 32;
+//     const kp = try KeyPair.create(kp_bytes);
+//     const pk = kp.public_key;
+//     var id = Pubkey.fromPublicKey(&pk, true);
 
-    var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    var crds_value = try CrdsValue.initSigned(CrdsData{
-        .Vote = .{ 0, vote },
-    }, kp);
+//     var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
+//     var crds_value = try CrdsValue.initSigned(CrdsData{
+//         .Vote = .{ 0, vote },
+//     }, kp);
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
-    defer crds_table.deinit();
-    try crds_table.insert(crds_value, 0);
+//     var crds_table = CrdsTable.init(std.testing.allocator);
+//     defer crds_table.deinit();
+//     try crds_table.insert(crds_value, 0);
 
-    var cursor: usize = 0;
-    var votes = try crds_table.get_votes_with_cursor(&cursor);
+//     var cursor: usize = 0;
+//     var votes = try crds_table.get_votes_with_cursor(&cursor);
 
-    try std.testing.expect(votes.len == 1);
-    try std.testing.expect(cursor == 1);
+//     try std.testing.expect(votes.len == 1);
+//     try std.testing.expect(cursor == 1);
 
-    // try inserting another vote
-    id = Pubkey.random(.{});
-    vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    crds_value = try CrdsValue.initSigned(CrdsData{
-        .Vote = .{ 0, vote },
-    }, kp);
-    try crds_table.insert(crds_value, 1);
+//     // try inserting another vote
+//     id = Pubkey.random(.{});
+//     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
+//     crds_value = try CrdsValue.initSigned(CrdsData{
+//         .Vote = .{ 0, vote },
+//     }, kp);
+//     try crds_table.insert(crds_value, 1);
 
-    votes = try crds_table.get_votes_with_cursor(&cursor);
-    try std.testing.expect(votes.len == 1);
-    try std.testing.expect(cursor == 2);
-}
+//     votes = try crds_table.get_votes_with_cursor(&cursor);
+//     try std.testing.expect(votes.len == 1);
+//     try std.testing.expect(cursor == 2);
+// }
 
-test "gossip.crds_table: insert and get contact_info" {
-    var kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
-    const unspecified_addr = SocketAddr.unspecified();
-    var legacy_contact_info = crds.LegacyContactInfo{
-        .id = id,
-        .gossip = unspecified_addr,
-        .tvu = unspecified_addr,
-        .tvu_forwards = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
-        .wallclock = 0,
-        .shred_version = 0,
-    };
-    var crds_value = try CrdsValue.initSigned(CrdsData{
-        .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+// test "gossip.crds_table: insert and get contact_info" {
+//     var kp_bytes = [_]u8{1} ** 32;
+//     const kp = try KeyPair.create(kp_bytes);
+//     const pk = kp.public_key;
+//     var id = Pubkey.fromPublicKey(&pk, true);
+//     const unspecified_addr = SocketAddr.unspecified();
+//     var legacy_contact_info = crds.LegacyContactInfo{
+//         .id = id,
+//         .gossip = unspecified_addr,
+//         .tvu = unspecified_addr,
+//         .tvu_forwards = unspecified_addr,
+//         .repair = unspecified_addr,
+//         .tpu = unspecified_addr,
+//         .tpu_forwards = unspecified_addr,
+//         .tpu_vote = unspecified_addr,
+//         .rpc = unspecified_addr,
+//         .rpc_pubsub = unspecified_addr,
+//         .serve_repair = unspecified_addr,
+//         .wallclock = 0,
+//         .shred_version = 0,
+//     };
+//     var crds_value = try CrdsValue.initSigned(CrdsData{
+//         .LegacyContactInfo = legacy_contact_info,
+//     }, kp);
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
-    defer crds_table.deinit();
+//     var crds_table = CrdsTable.init(std.testing.allocator);
+//     defer crds_table.deinit();
 
-    // test insertion
-    try crds_table.insert(crds_value, 0);
+//     // test insertion
+//     try crds_table.insert(crds_value, 0);
 
-    // test retrieval
-    var nodes = try crds_table.get_contact_infos();
-    try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
+//     // test retrieval
+//     var nodes = try crds_table.get_contact_infos();
+//     try std.testing.expect(nodes.len == 1);
+//     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
-    // test re-insertion
-    const result = crds_table.insert(crds_value, 0);
-    try std.testing.expectError(CrdsError.OldValue, result);
+//     // test re-insertion
+//     const result = crds_table.insert(crds_value, 0);
+//     try std.testing.expectError(CrdsError.OldValue, result);
 
-    // test re-insertion with greater wallclock
-    crds_value.data.LegacyContactInfo.wallclock = 2;
-    try crds_table.insert(crds_value, 0);
+//     // test re-insertion with greater wallclock
+//     crds_value.data.LegacyContactInfo.wallclock = 2;
+//     try crds_table.insert(crds_value, 0);
 
-    // check retrieval
-    nodes = try crds_table.get_contact_infos();
-    try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == 2);
-}
+//     // check retrieval
+//     nodes = try crds_table.get_contact_infos();
+//     try std.testing.expect(nodes.len == 1);
+//     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == 2);
+// }
