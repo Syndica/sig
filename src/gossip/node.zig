@@ -286,36 +286,36 @@ test "new contact info" {
     defer ci.deinit();
 }
 
-// test "socketaddr bincode serialize matches rust" {
-//     const Tmp = struct {
-//         addr: SocketAddr,
-//     };
-//     const tmp = Tmp{ .addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234) };
-//     var buf = [_]u8{0} ** 1024;
-//     var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
+test "socketaddr bincode serialize matches rust" {
+    const Tmp = struct {
+        addr: SocketAddr,
+    };
+    const tmp = Tmp{ .addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234) };
+    var buf = [_]u8{0} ** 1024;
+    var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
 
-//     // #[derive(Serialize, Debug, Clone, Copy)]
-//     // pub struct Tmp {
-//     //     addr: SocketAddr
-//     // }
-//     // let tmp = Tmp { addr: socketaddr!(Ipv4Addr::LOCALHOST, 1234) };
-//     // println!("{:?}", bincode::serialize(&tmp).unwrap());
+    // #[derive(Serialize, Debug, Clone, Copy)]
+    // pub struct Tmp {
+    //     addr: SocketAddr
+    // }
+    // let tmp = Tmp { addr: socketaddr!(Ipv4Addr::LOCALHOST, 1234) };
+    // println!("{:?}", bincode::serialize(&tmp).unwrap());
 
-//     // Enum discriminants are encoded as u32 (4 leading zeros)
-//     const rust_bytes = [_]u8{ 0, 0, 0, 0, 127, 0, 0, 1, 210, 4 };
-//     try testing.expectEqualSlices(u8, rust_bytes[0..rust_bytes.len], bytes);
-// }
+    // Enum discriminants are encoded as u32 (4 leading zeros)
+    const rust_bytes = [_]u8{ 0, 0, 0, 0, 127, 0, 0, 1, 210, 4 };
+    try testing.expectEqualSlices(u8, rust_bytes[0..rust_bytes.len], bytes);
+}
 
-// test "set & get socket on contact info" {
-//     var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
-//     defer ci.deinit();
-//     try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899));
+test "set & get socket on contact info" {
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    defer ci.deinit();
+    try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899));
 
-//     var set_socket = ci.getSocket(SOCKET_TAG_RPC);
-//     try testing.expect(set_socket.?.eql(&SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899)));
-//     try testing.expect(ci.addrs.items[0].eql(&IpAddr.new_v4(127, 0, 0, 1)));
-//     try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(SOCKET_TAG_RPC, 0, 8899)));
-// }
+    var set_socket = ci.getSocket(SOCKET_TAG_RPC);
+    try testing.expect(set_socket.?.eql(&SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899)));
+    try testing.expect(ci.addrs.items[0].eql(&IpAddr.new_v4(127, 0, 0, 1)));
+    try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(SOCKET_TAG_RPC, 0, 8899)));
+}
 
 // test "contact info bincode serialize matches rust bincode" {
 //     var rust_contact_info_serialized_bytes = [_]u8{
@@ -332,7 +332,7 @@ test "new contact info" {
 //     defer ci.deinit();
 
 //     var buf = std.ArrayList(u8).init(testing.allocator);
-//     bincode.write(buf.writer(), ci, bincode.Params.standard) catch unreachable;
+//     bincode.write(null, buf.writer(), ci, bincode.Params.standard) catch unreachable;
 //     defer buf.deinit();
 
 //     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
@@ -354,11 +354,10 @@ test "new contact info" {
 
 //     var buf = std.ArrayList(u8).init(testing.allocator);
 //     defer buf.deinit();
-//     try bincode.write(buf.writer(), se, bincode.Params.standard);
+//     try bincode.write(null, buf.writer(), se, bincode.Params.standard);
 
 //     var stream = std.io.fixedBufferStream(buf.items);
 //     var other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
-//     defer bincode.readFree(testing.allocator, other_se);
 
 //     try testing.expect(other_se.index == se.index);
 //     try testing.expect(other_se.key == se.key);

@@ -60,13 +60,12 @@ pub fn Deserializer(comptime Reader: type) type {
         fn deserializeSeq(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             // var len = if (self.params.include_fixed_array_length) try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64)) else null;
 
-            var s = SeqAccess(Self){ .d = self };
+            const tmp: @TypeOf(visitor).Value = undefined; // TODO: fix without stack alloc?
+            const len = tmp.len;
+
+            var s = SeqAccess(Self){ .d = self, .len = len };
             const result = try visitor.visitSeq(allocator.?, De, s.seqAccess());
             errdefer getty.de.free(allocator.?, De, result);
-
-            // if (len) |n| {
-            //     std.debug.assert(result.len == n);
-            // }
 
             return result;
         }
@@ -253,6 +252,8 @@ pub fn Deserializer(comptime Reader: type) type {
         fn SeqAccess(comptime D: type) type {
             return struct {
                 d: *D,
+                len: usize,
+                idx: usize = 0,
 
                 const Seq = @This();
 
@@ -263,7 +264,13 @@ pub fn Deserializer(comptime Reader: type) type {
                 );
 
                 fn nextElementSeed(self: *Seq, ally: ?std.mem.Allocator, seed: anytype) Error!?@TypeOf(seed).Value {
-                    return try seed.deserialize(ally, self.d.deserializer());
+                    if (self.idx == self.len) {
+                        return null;
+                    }
+                    const element = try seed.deserialize(ally, self.d.deserializer());
+                    self.idx += 1;
+
+                    return element;
                 }
             };
         }
@@ -553,10 +560,10 @@ pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     return stream.getWritten();
 }
 
-pub fn write(writer: anytype, data: anytype, params: Params) !void {
+pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: Params) !void {
     var s = serializer(writer, params);
     const ss = s.serializer();
-    try getty.serialize(null, data, ss);
+    try getty.serialize(alloc, data, ss);
 }
 
 // can call if dont require an allocator

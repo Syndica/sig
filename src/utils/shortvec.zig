@@ -42,7 +42,7 @@ pub fn serilaize_shortvec(writer: anytype, data: anytype, params: bincode.Params
     var len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
     try serialize_short_u16(writer, len, params);
     for (data) |item| {
-        try bincode.write(writer, item, params);
+        try bincode.write(null, writer, item, params);
     }
     return;
 }

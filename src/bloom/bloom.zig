@@ -69,7 +69,7 @@ pub const Bloom = struct {
 fn bincode_serialize_bit_vec(writer: anytype, data: anytype, params: bincode.Params) !void {
     var bitset: DynamicBitSet = data;
     var bitvec = BitVec.initFromBitSet(bitset);
-    try bincode.write(writer, bitvec, params);
+    try bincode.write(null, writer, bitvec, params);
     return;
 }
 

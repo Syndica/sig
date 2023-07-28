@@ -5,9 +5,9 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             var list: std.ArrayList(Child) = data;
-            try bincode.write(writer, @as(u64, list.items.len), params);
+            try bincode.write(null, writer, @as(u64, list.items.len), params);
             for (list.items) |item| {
-                try bincode.write(writer, item, params);
+                try bincode.write(null, writer, item, params);
             }
             return;
         }

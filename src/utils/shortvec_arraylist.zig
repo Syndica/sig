@@ -10,7 +10,7 @@ pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig {
             var len = std.math.cast(u16, list.items.len) orelse return error.DataTooLarge;
             try serialize_short_u16(writer, len, params);
             for (list.items) |item| {
-                try bincode.write(writer, item, params);
+                try bincode.write(null, writer, item, params);
             }
             return;
         }
