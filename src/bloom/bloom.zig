@@ -5,7 +5,6 @@ const BitVec = @import("bitvec.zig").BitVec;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 
 const bincode = @import("../bincode/bincode.zig");
-// const bincode = @import("../bincode/getty.zig");
 
 const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
