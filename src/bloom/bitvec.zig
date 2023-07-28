@@ -3,9 +3,6 @@ const DynamicBitSet = std.bit_set.DynamicBitSet;
 const bincode = @import("../bincode/bincode.zig");
 const testing = std.testing;
 
-var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa = gpa_allocator.allocator();
-
 /// ***BitVec*** uses a u64 as it's Block
 ///
 /// TODO: make into generic to allow for any block size
@@ -46,33 +43,33 @@ pub const BitVec = struct {
     }
 };
 
-// test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec" {
-//     var rust_bit_vec_serialized = [_]u8{
-//         1,   2,   0,   0,   0,   0,   0, 0, 0, 255, 255, 239, 191, 255, 255, 255, 255, 255, 255, 255,
-//         255, 255, 255, 255, 255, 128, 0, 0, 0, 0,   0,   0,   0,
-//     };
-//     var bitset = try DynamicBitSet.initFull(testing.allocator, 128);
+test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec" {
+    var rust_bit_vec_serialized = [_]u8{
+        1,   2,   0,   0,   0,   0,   0, 0, 0, 255, 255, 239, 191, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 128, 0, 0, 0, 0,   0,   0,   0,
+    };
+    var bitset = try DynamicBitSet.initFull(testing.allocator, 128);
 
-//     bitset.setValue(20, false);
-//     bitset.setValue(30, false);
-//     defer bitset.deinit();
+    bitset.setValue(20, false);
+    bitset.setValue(30, false);
+    defer bitset.deinit();
 
-//     // buf needs to be at least :
-//     //   4 (32 bits enum for option)
-//     //   n (size * 8 (64 bits for u64 block sizes))
-//     //   8 + (len of slice above)
-//     // + 8 (u64 for len field)
-//     // -------------------------
-//     //   z <- size of buf
+    // buf needs to be at least :
+    //   4 (32 bits enum for option)
+    //   n (size * 8 (64 bits for u64 block sizes))
+    //   8 + (len of slice above)
+    // + 8 (u64 for len field)
+    // -------------------------
+    //   z <- size of buf
 
-//     var buf: [10000]u8 = undefined;
+    var buf: [10000]u8 = undefined;
 
-//     const original = BitVec.initFromBitSet(bitset);
-//     var out = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
+    const original = BitVec.initFromBitSet(bitset);
+    var out = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
-//     var deserialied = try bincode.readFromSlice(testing.allocator, BitVec, out, bincode.Params.standard);
-//     defer bincode.free(testing.allocator, deserialied);
+    var deserialied = try bincode.readFromSlice(testing.allocator, BitVec, out, bincode.Params.standard);
+    defer bincode.free(testing.allocator, deserialied);
 
-//     try testing.expect(std.mem.eql(u64, original.bits.?[0..], deserialied.bits.?[0..]));
-//     try testing.expectEqualSlices(u8, rust_bit_vec_serialized[0..], out[0..]);
-// }
+    try testing.expect(std.mem.eql(u64, original.bits.?[0..], deserialied.bits.?[0..]));
+    try testing.expectEqualSlices(u8, rust_bit_vec_serialized[0..], out[0..]);
+}

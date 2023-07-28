@@ -92,62 +92,62 @@ test "bloom: serializes/deserializes correctly" {
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
-// test "bloom: serializes/deserializes correctly with set bits" {
-//     var bloom = Bloom.init(testing.allocator, 128);
-//     try bloom.add_key(10);
-//     // required for memory leaks
-//     defer bloom.deinit();
+test "bloom: serializes/deserializes correctly with set bits" {
+    var bloom = Bloom.init(testing.allocator, 128);
+    try bloom.add_key(10);
+    // required for memory leaks
+    defer bloom.deinit();
 
-//     var buf: [10000]u8 = undefined;
-//     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    var buf: [10000]u8 = undefined;
+    var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-//     var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
-//     defer deserialized.deinit();
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    defer deserialized.deinit();
 
-//     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
-// }
+    try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
+}
 
-// test "bloom: rust: serialized bytes equal rust (no keys)" {
-//     // note: need to init with len 2^i
-//     var bloom = Bloom.init(testing.allocator, 128);
-//     defer bloom.deinit();
-//     try bloom.add_key(1);
+test "bloom: rust: serialized bytes equal rust (no keys)" {
+    // note: need to init with len 2^i
+    var bloom = Bloom.init(testing.allocator, 128);
+    defer bloom.deinit();
+    try bloom.add_key(1);
 
-//     const v: [1]u8 = .{1};
-//     bloom.add(&v);
+    const v: [1]u8 = .{1};
+    bloom.add(&v);
 
-//     var buf: [10000]u8 = undefined;
-//     var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    var buf: [10000]u8 = undefined;
+    var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-//     const rust_bytes = .{ 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+    const rust_bytes = .{ 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
 
-//     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
-// }
+    try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+}
 
-// test "bloom: rust: serialized bytes equal rust (multiple keys)" {
-//     var bloom = Bloom.init(testing.allocator, 128);
-//     defer bloom.deinit();
+test "bloom: rust: serialized bytes equal rust (multiple keys)" {
+    var bloom = Bloom.init(testing.allocator, 128);
+    defer bloom.deinit();
 
-//     try bloom.add_key(1);
-//     try bloom.add_key(2);
-//     try bloom.add_key(3);
+    try bloom.add_key(1);
+    try bloom.add_key(2);
+    try bloom.add_key(3);
 
-//     var buf: [10000]u8 = undefined;
+    var buf: [10000]u8 = undefined;
 
-//     const v: [2]u8 = .{ 1, 2 };
-//     bloom.add(&v);
+    const v: [2]u8 = .{ 1, 2 };
+    bloom.add(&v);
 
-//     const x: [2]u8 = .{ 3, 4 };
-//     bloom.add(&x);
+    const x: [2]u8 = .{ 3, 4 };
+    bloom.add(&x);
 
-//     var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    var bytes = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-//     // let mut bloom = Bloom::new(128, vec![1, 2, 3]);
-//     // bloom.add(&[1, 2]);
-//     // bloom.add(&[3, 4]);
-//     // println!("{:?}", bincode::serialize(&bloom).unwrap());
+    // let mut bloom = Bloom::new(128, vec![1, 2, 3]);
+    // bloom.add(&[1, 2]);
+    // bloom.add(&[3, 4]);
+    // println!("{:?}", bincode::serialize(&bloom).unwrap());
 
-//     const rust_bytes = .{ 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66, 16, 32, 0, 128, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0 };
+    const rust_bytes = .{ 3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 66, 16, 32, 0, 128, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0 };
 
-//     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
-// }
+    try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+}
