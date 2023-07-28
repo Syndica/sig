@@ -1,5 +1,7 @@
 const std = @import("std");
 pub const getty = @import("getty");
+const bincode = @This();
+const testing = std.testing;
 
 pub const Params = struct {
     pub const legacy: Params = .{
@@ -262,7 +264,7 @@ pub fn Deserializer(comptime Reader: type) type {
                 );
 
                 fn nextElementSeed(self: *Seq, ally: ?std.mem.Allocator, seed: anytype) Error!?@TypeOf(seed).Value {
-                    if (self.idx == self.len) { 
+                    if (self.idx == self.len) {
                         return null;
                     }
                     const element = try seed.deserialize(ally, self.d.deserializer());
@@ -585,7 +587,7 @@ pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params
     return v;
 }
 
-test "getty: test serialization" {
+test "bincode: test serialization" {
     var buf: [1]u8 = undefined;
 
     {
@@ -659,4 +661,80 @@ test "getty: test serialization" {
     var out4 = try writeToSlice(&buf6, _s, Params.standard);
     var result = try readFromSlice(null, s, out4, Params{});
     try std.testing.expectEqual(result, _s);
+}
+
+test "bincode: (legacy) serialize an array" {
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const Foo = struct {
+        first: u8,
+        second: u8,
+    };
+
+    try bincode.write(null, buffer.writer(), [_]Foo{
+        .{ .first = 10, .second = 20 },
+        .{ .first = 30, .second = 40 },
+    }, bincode.Params.legacy);
+
+    try testing.expectEqualSlices(u8, &[_]u8{
+        2, 0, 0, 0, 0, 0, 0, 0, // Length of the array
+        10, 20, // First Foo
+        30, 40, // Second Foo
+    }, buffer.items);
+}
+
+test "bincode: serialize and deserialize" {
+    var buffer = std.ArrayList(u8).init(testing.allocator);
+    defer buffer.deinit();
+
+    inline for (.{bincode.Params.standard}) |params| {
+        inline for (.{
+            @as(i8, std.math.minInt(i8)),
+            @as(i16, std.math.minInt(i16)),
+            @as(i32, std.math.minInt(i32)),
+            @as(i64, std.math.minInt(i64)),
+            @as(usize, std.math.minInt(usize)),
+            @as(isize, std.math.minInt(isize)),
+            @as(i8, std.math.maxInt(i8)),
+            @as(i16, std.math.maxInt(i16)),
+            @as(i32, std.math.maxInt(i32)),
+            @as(i64, std.math.maxInt(i64)),
+            @as(u8, std.math.maxInt(u8)),
+            @as(u16, std.math.maxInt(u16)),
+            @as(u32, std.math.maxInt(u32)),
+            @as(u64, std.math.maxInt(u64)),
+            @as(usize, std.math.maxInt(usize)),
+            @as(isize, std.math.maxInt(isize)),
+
+            // @as(f32, std.math.floatMin(f32)),
+            // @as(f64, std.math.floatMin(f64)),
+            // @as(f32, std.math.floatMax(f32)),
+            // @as(f64, std.math.floatMax(f64)),
+
+            [_]u8{ 0, 1, 2, 3 },
+        }) |expected| {
+            try bincode.write(null, buffer.writer(), expected, params);
+
+            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+            defer bincode.free(testing.allocator, actual);
+
+            try testing.expectEqual(expected, actual);
+            buffer.clearRetainingCapacity();
+        }
+    }
+
+    inline for (.{bincode.Params.standard}) |params| {
+        inline for (.{
+            @as([]const u8, "hello world"),
+        }) |expected| {
+            try bincode.write(null, buffer.writer(), expected, params);
+
+            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+            defer bincode.free(testing.allocator, actual);
+
+            try testing.expectEqualSlices(std.meta.Elem(@TypeOf(expected)), expected, actual);
+            buffer.clearRetainingCapacity();
+        }
+    }
 }
