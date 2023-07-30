@@ -206,7 +206,12 @@ pub const GossipService = struct {
                 .PushMessage => |*push| {
                     logger.debugf("got a push message: {any}", .{protocol_message});
                     const values = push[1];
-                    handle_push_message(crds_table, values, logger);
+                    insert_crds_values(crds_table, values, logger);
+                },
+                .PullResponse => |*pull| {
+                    logger.debugf("got a pull message: {any}", .{protocol_message});
+                    const values = pull[1];
+                    insert_crds_values(crds_table, values, logger);
                 },
                 else => {
                     logger.debugf("got a protocol message: {any}", .{protocol_message});
@@ -215,7 +220,7 @@ pub const GossipService = struct {
         }
     }
 
-    pub fn handle_push_message(crds_table: *CrdsTable, values: []crds.CrdsValue, logger: *Logger) void {
+    pub fn insert_crds_values(crds_table: *CrdsTable, values: []crds.CrdsValue, logger: *Logger) void {
         var now = get_wallclock();
 
         for (values) |value| {
@@ -274,7 +279,6 @@ test "gossip.gossip_service: process contact_info push packet" {
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
     const packet = Packet.init(peer, buf, bytes.len);
-
     packet_channel.send(packet);
 
     // correct insertion into table
