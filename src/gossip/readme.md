@@ -9,3 +9,8 @@ This function is called and `spawn`ed and is a long running process. It's where 
 ### `ClusterInfo::run_listen` - Listens for Packet's to process
 
 This function `spawn`ed and is a long running process. It listens to the packet receiver channel and then processes packets as they're pushed.
+
+## File outline 
+
+- `crds_table.zig`: where gossip data is stored 
+- `crds.zig`: various gossip data structure definitions 

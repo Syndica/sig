@@ -18,26 +18,6 @@ pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
 }
 
-pub const CrdsFilter = struct {
-    filter: Bloom,
-    mask: u64,
-    mask_bits: u32,
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .filter = Bloom.init(allocator, 0),
-            .mask = 18_446_744_073_709_551_615,
-            .mask_bits = 0,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.filter.deinit();
-    }
-};
-
 pub const CrdsVersionedValue = struct {
     ordinal: u64,
     value: CrdsValue,
@@ -492,16 +472,6 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
 
     try std.testing.expect(crds_value.id().equals(&id));
     try std.testing.expect(crds_value.label().LegacyContactInfo.equals(&id));
-}
-
-test "gossip.crds: default crds filter matches rust bytes" {
-    const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-    var filter = CrdsFilter.init(std.testing.allocator);
-    defer filter.deinit();
-
-    var buf = [_]u8{0} ** 1024;
-    var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
-    try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
 }
 
 test "gossip.crds: pubkey matches rust" {

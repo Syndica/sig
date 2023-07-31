@@ -9,6 +9,8 @@ const bincode = @import("../bincode/bincode.zig");
 const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
 
+const RndGen = std.rand.DefaultPrng;
+
 /// A bloom filter whose bitset is made up of u64 blocks
 pub const Bloom = struct {
     keys: ArrayList(u64),
@@ -23,14 +25,40 @@ pub const Bloom = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, num_bits: u64) Self {
+    pub fn init(allocator: std.mem.Allocator, n_bits: u64) Self {
         // need to be power of 2 for serialization to match rust
-        if (num_bits != 0) {
-            std.debug.assert((num_bits & (num_bits - 1) == 0));
+        var bits = n_bits;
+        if (n_bits != 0) {
+            if (n_bits & (n_bits - 1) != 0) {
+                // nearest power of two
+                const _n_bits = std.math.pow(u64, 2, std.math.log2(n_bits));
+                std.debug.print("rounding n_bits of bloom from {any} to {any}\n", .{ n_bits, _n_bits });
+                bits = _n_bits;
+            }
         }
+
         return Self{
             .keys = ArrayList(u64).init(allocator),
-            .bits = DynamicBitSet.initEmpty(allocator, num_bits) catch unreachable,
+            .bits = DynamicBitSet.initEmpty(allocator, bits) catch unreachable,
+            .num_bits_set = 0,
+        };
+    }
+
+    pub fn new(alloc: std.mem.Allocator, keys: ArrayList(u64), n_bits: u64) Self {
+        // need to be power of 2 for serialization to match rust
+        var bits = n_bits;
+        if (n_bits != 0) {
+            if (n_bits & (n_bits - 1) != 0) {
+                // nearest power of two
+                const _n_bits = std.math.pow(u64, 2, std.math.log2(n_bits) + 1);
+                std.debug.print("rounding n_bits of bloom from {any} to {any}\n", .{ n_bits, _n_bits });
+                bits = _n_bits;
+            }
+        }
+
+        return Self{
+            .keys = keys,
+            .bits = DynamicBitSet.initEmpty(alloc, n_bits) catch unreachable,
             .num_bits_set = 0,
         };
     }
@@ -63,6 +91,43 @@ pub const Bloom = struct {
         hasher.update(bytes);
         return hasher.final();
     }
+
+    pub fn random(alloc: std.mem.Allocator, num_items: usize, false_rate: f64, max_bits: usize) !Self {
+        const n_items_f: f64 = @floatFromInt(num_items);
+        const m = Bloom.num_bits(n_items_f, false_rate);
+        const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
+        const n_keys = Bloom.num_keys(@floatFromInt(n_bits), n_items_f);
+
+        var rnd = RndGen.init(0);
+        var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
+        for (0..n_keys) |_| {
+            const v = rnd.random().int(u64);
+            try keys.append(v);
+        }
+
+        return Bloom.new(alloc, keys, n_bits);
+    }
+
+    fn num_bits(num_items: f64, false_rate: f64) f64 {
+        const n = num_items;
+        const p = false_rate;
+        const two: f64 = 2;
+
+        // const d: f64 = -4.804530139182015e-01
+        const d: f64 = std.math.ln(@as(f64, 1) / (std.math.pow(f64, two, std.math.ln(two))));
+        return std.math.ceil((n * std.math.ln(p)) / d);
+    }
+
+    fn num_keys(n_bits: f64, num_items: f64) usize {
+        const n = num_items;
+        const m = n_bits;
+
+        if (n == 0) {
+            return 0;
+        } else {
+            return @intFromFloat(@max(@as(f64, 1), std.math.round((m / n) * std.math.ln(@as(f64, 2)))));
+        }
+    }
 };
 
 fn bincode_serialize_bit_vec(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -79,6 +144,17 @@ fn bincode_deserialize_bit_vec(allocator: ?std.mem.Allocator, comptime T: type, 
 
     var dynamic_bitset = try bitvec.toBitSet(ally);
     return dynamic_bitset;
+}
+
+test "bloom: helper fcns match rust" {
+    const n_bits = Bloom.num_bits(100.2, 1e-5);
+    try testing.expectEqual(@as(f64, 2402), n_bits);
+
+    const n_keys = Bloom.num_keys(100.2, 10);
+    try testing.expectEqual(@as(usize, 7), n_keys);
+
+    var bloom = try Bloom.random(std.testing.allocator, 100, 0.1, 10000);
+    defer bloom.deinit();
 }
 
 test "bloom: serializes/deserializes correctly" {

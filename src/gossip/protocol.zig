@@ -9,10 +9,12 @@ const SocketAddr = @import("net.zig").SocketAddr;
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
 const CrdsData = crds.CrdsData;
-const CrdsFilter = crds.CrdsFilter;
 const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
 const LegacyContactInfo = crds.LegacyContactInfo;
+
+const pull_import = @import("pull.zig");
+const CrdsFilter = pull_import.CrdsFilter;
 
 const Option = @import("../option.zig").Option;
 const DefaultPrng = std.rand.DefaultPrng;
