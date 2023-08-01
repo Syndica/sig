@@ -20,6 +20,7 @@ const LegacyContactInfo = crds.LegacyContactInfo;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const RwLock = std.Thread.RwLock;
 
 // tmp upperbound on number for `get_nodes`/`get_votes`/...
 // enables stack allocations for buffers in the getter functions
@@ -55,7 +56,10 @@ pub const CrdsTable = struct {
     shred_versions: AutoHashMap(Pubkey, u16),
 
     // head of the store
-    cursor: usize,
+    cursor: usize = 0,
+
+    // thread safe
+    lock: RwLock = .{},
 
     const Self = @This();
 
@@ -67,7 +71,6 @@ pub const CrdsTable = struct {
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
-            .cursor = 0,
         };
     }
 
@@ -78,6 +81,26 @@ pub const CrdsTable = struct {
         self.votes.deinit();
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
+    }
+
+    pub fn write(self: *Self) void {
+        self.lock.lock();
+    }
+
+    pub fn release_write(self: *Self) void {
+        self.lock.unlock();
+    }
+
+    pub fn read(self: *Self) void {
+        self.lock.lockShared();
+    }
+
+    pub fn release_read(self: *Self) void {
+        self.lock.unlockShared();
+    }
+
+    pub fn len(self: *Self) usize {
+        return self.store.count();
     }
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {

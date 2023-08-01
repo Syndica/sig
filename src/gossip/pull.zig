@@ -16,11 +16,41 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const ln = std.math.ln;
 const exp = std.math.exp;
 
+const CrdsTable = @import("crds_table.zig").CrdsTable;
+
+pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
 pub const FALSE_RATE: f64 = 0.1;
 pub const KEYS: f64 = 8;
 
+pub fn build_crds_filters(
+    alloc: std.mem.Allocator,
+    crds_table: *CrdsTable,
+    bloom_size: usize,
+) []CrdsFilter {
+    crds_table.read();
+    defer crds_table.release_read();
+
+    const num_items = crds_table.len();
+    // TODO: purged + failed inserts
+
+    var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
+    for (crds_table.store.iterator().values) |*versioned_value| {
+        const hash = versioned_value.value_hash;
+        filter_set.add(&hash);
+    }
+
+    // todo: better number than MAX_NUM_PULL_REQUESTS ?
+    var buf: [MAX_NUM_PULL_REQUESTS]CrdsFilter = undefined;
+    var filters = filter_set.getCrdsFilters(&buf);
+
+    return filters;
+}
+
 pub const CrdsFilterSet = struct {
     filters: ArrayList(Bloom),
+
+    // mask bits represents the number of bits required to represent the number of
+    // filters.
     mask_bits: u32, // todo: make this a u6
 
     const Self = @This();
@@ -66,7 +96,7 @@ pub const CrdsFilterSet = struct {
         return self.mask_bits << 1;
     }
 
-    pub fn toCrdsFilters(self: Self, buf: []CrdsFilter) []CrdsFilter {
+    pub fn getCrdsFilters(self: Self, buf: []CrdsFilter) []CrdsFilter {
         const size = @min(buf.len, self.filters.capacity);
         for (0..size) |i| {
             var f = &buf[i];
@@ -86,6 +116,7 @@ pub const CrdsFilter = struct {
 
     const Self = @This();
 
+    // only used in tests
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .filter = Bloom.init(allocator, 0, null),
@@ -134,10 +165,7 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
     var filter_set = try CrdsFilterSet.init(std.testing.allocator, 10000, 200);
     defer filter_set.deinit();
 
-    std.debug.print("mask bits: {any}", .{filter_set.mask_bits});
-
     const hash = Hash{ .data = .{ 1, 2, 3, 4 } ++ .{0} ** 28 };
-
     filter_set.add(hash);
 
     const shift_bits: u6 = @intCast(64 - filter_set.mask_bits);
@@ -147,8 +175,10 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
     try std.testing.expect(v);
 
     var filters: [10]CrdsFilter = undefined;
-    const f = filter_set.toCrdsFilters(&filters);
+
+    const f = filter_set.getCrdsFilters(&filters);
     try std.testing.expect(f.len == filter_set.len());
+
     const x = f[index];
     try std.testing.expect(x.filter.contains(&hash.data));
 }

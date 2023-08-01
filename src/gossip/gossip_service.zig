@@ -223,6 +223,9 @@ pub const GossipService = struct {
     pub fn insert_crds_values(crds_table: *CrdsTable, values: []crds.CrdsValue, logger: *Logger) void {
         var now = get_wallclock();
 
+        crds_table.write();
+        defer crds_table.release_write();
+
         for (values) |value| {
             const value_time = value.wallclock();
             const is_too_new = value_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
