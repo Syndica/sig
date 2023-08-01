@@ -63,7 +63,18 @@ pub const Bloom = struct {
         }
     }
 
-    pub fn pos(self: *Self, bytes: []const u8, hash_index: u64) u64 {
+    pub fn contains(self: *const Self, key: []const u8) bool {
+        for (self.keys.items) |hash_index| {
+            var i = self.pos(key, hash_index);
+            if (self.bits.isSet(i)) {
+                continue;
+            }
+            return false;
+        }
+        return true;
+    }
+
+    pub fn pos(self: *const Self, bytes: []const u8, hash_index: u64) u64 {
         return hash_at_index(bytes, hash_index) % @as(u64, self.bits.capacity());
     }
 

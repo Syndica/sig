@@ -82,7 +82,7 @@ pub const CrdsTable = struct {
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
         // TODO: check to make sure this sizing is correct or use heap
-        var buf = [_]u8{0} ** 2048;
+        var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
         var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
         const versioned_value = CrdsVersionedValue{
