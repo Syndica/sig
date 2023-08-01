@@ -282,8 +282,9 @@ test "gossip.gossip_service: process contact_info push packet" {
     packet_channel.send(packet);
 
     // correct insertion into table
+    var buf2: [100]*crds.CrdsVersionedValue = undefined;
     std.time.sleep(std.time.ns_per_s);
-    var res = try crds_table.get_contact_infos();
+    var res = try crds_table.get_contact_infos(&buf2);
     try std.testing.expect(res.len == 1);
 
     packet_channel.close();

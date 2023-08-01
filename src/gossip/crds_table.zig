@@ -46,11 +46,15 @@ pub const CrdsError = error{
 /// are found, the entry with the largest wallclock time (newest) is stored.
 pub const CrdsTable = struct {
     store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
+
+    // special types tracked with their index
     contact_infos: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
-    shred_versions: AutoHashMap(Pubkey, u16),
     votes: AutoArrayHashMap(usize, usize),
     epoch_slots: AutoArrayHashMap(usize, usize),
     duplicate_shreds: AutoArrayHashMap(usize, usize),
+    shred_versions: AutoHashMap(Pubkey, u16),
+
+    // head of the store
     cursor: usize,
 
     const Self = @This();
@@ -149,10 +153,8 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn get_votes_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_votes_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.votes.keys();
-        // initialize this buffer once in struct and re-use on each call?
-        var buf: [MAX_N_VOTES]*CrdsVersionedValue = undefined; // max N votes per query (20)
         var index: usize = 0;
         for (keys) |key| {
             if (key < caller_cursor.*) {
@@ -163,7 +165,7 @@ pub const CrdsTable = struct {
             buf[index] = &entry;
             index += 1;
 
-            if (index == MAX_N_VOTES) {
+            if (index == buf.len) {
                 break;
             }
         }
@@ -172,9 +174,8 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_epoch_slots_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_epoch_slots_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.epoch_slots.keys();
-        var buf: [MAX_N_EPOCH_SLOTS]*CrdsVersionedValue = undefined;
         var index: usize = 0;
         for (keys) |key| {
             if (key < caller_cursor.*) {
@@ -185,7 +186,7 @@ pub const CrdsTable = struct {
             buf[index] = &entry;
             index += 1;
 
-            if (index == MAX_N_EPOCH_SLOTS) {
+            if (index == buf.len) {
                 break;
             }
         }
@@ -194,9 +195,8 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_duplicate_shreds_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_duplicate_shreds_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.duplicate_shreds.keys();
-        var buf: [MAX_N_DUP_SHREDS]*CrdsVersionedValue = undefined;
         var index: usize = 0;
         for (keys) |key| {
             if (key < caller_cursor.*) {
@@ -207,7 +207,7 @@ pub const CrdsTable = struct {
             buf[index] = &entry;
             index += 1;
 
-            if (index == MAX_N_DUP_SHREDS) {
+            if (index == buf.len) {
                 break;
             }
         }
@@ -216,17 +216,18 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_contact_infos(self: *const Self) ![]*CrdsVersionedValue {
-        var entry_ptrs: [MAX_N_CONTACT_INFOS]*CrdsVersionedValue = undefined;
-        const size = @min(self.contact_infos.count(), MAX_N_CONTACT_INFOS);
+    pub fn get_contact_infos(self: *const Self, buf: []*CrdsVersionedValue) ![]*CrdsVersionedValue {
         const store_values = self.store.iterator().values;
         const contact_indexs = self.contact_infos.iterator().keys;
+
+        const size = @min(self.contact_infos.count(), buf.len);
+
         for (0..size) |i| {
             const index = contact_indexs[i];
-            const entry = &store_values[index];
-            entry_ptrs[i] = entry;
+            const entry = &store_values[index]; // does this dangle?
+            buf[i] = entry;
         }
-        return entry_ptrs[0..size];
+        return buf[0..size];
     }
 };
 
@@ -262,7 +263,8 @@ test "gossip.crds_table: insert and get votes" {
     try crds_table.insert(crds_value, 0);
 
     var cursor: usize = 0;
-    var votes = try crds_table.get_votes_with_cursor(&cursor);
+    var buf: [100]*CrdsVersionedValue = undefined;
+    var votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
 
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 1);
@@ -275,7 +277,7 @@ test "gossip.crds_table: insert and get votes" {
     }, kp);
     try crds_table.insert(crds_value, 1);
 
-    votes = try crds_table.get_votes_with_cursor(&cursor);
+    votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 2);
 }
@@ -312,7 +314,8 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0);
 
     // test retrieval
-    var nodes = try crds_table.get_contact_infos();
+    var buf: [100]*CrdsVersionedValue = undefined;
+    var nodes = try crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
@@ -325,7 +328,7 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0);
 
     // check retrieval
-    nodes = try crds_table.get_contact_infos();
+    nodes = try crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == 2);
 }
