@@ -90,7 +90,9 @@ pub const Bloom = struct {
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
         const n_keys = Bloom.num_keys(@floatFromInt(n_bits), n_items_f);
 
-        var rnd = RndGen.init(0);
+        var seed = @as(u64, @intCast(std.time.milliTimestamp()));
+        var rnd = RndGen.init(seed);
+
         var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
         for (0..n_keys) |_| {
             const v = rnd.random().int(u64);

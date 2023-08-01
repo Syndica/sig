@@ -306,26 +306,11 @@ test "gossip.crds_table: insert and get votes" {
 }
 
 test "gossip.crds_table: insert and get contact_info" {
-    var kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
-    const unspecified_addr = SocketAddr.unspecified();
-    var legacy_contact_info = crds.LegacyContactInfo{
-        .id = id,
-        .gossip = unspecified_addr,
-        .tvu = unspecified_addr,
-        .tvu_forwards = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
-        .wallclock = 0,
-        .shred_version = 0,
-    };
+    const kp = try KeyPair.create([_]u8{1} ** 32);
+    var id = Pubkey.fromPublicKey(&kp.public_key, true);
+
+    var legacy_contact_info = crds.LegacyContactInfo.default();
+    legacy_contact_info.id = id;
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     }, kp);

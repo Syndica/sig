@@ -22,11 +22,18 @@ pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
 pub const FALSE_RATE: f64 = 0.1;
 pub const KEYS: f64 = 8;
 
+pub fn deinit_crds_filters(filters: *ArrayList(CrdsFilter)) void {
+    for (filters.items) |*filter| {
+        filter.deinit();
+    }
+    filters.deinit();
+}
+
 pub fn build_crds_filters(
     alloc: std.mem.Allocator,
     crds_table: *CrdsTable,
     bloom_size: usize,
-) []CrdsFilter {
+) !ArrayList(CrdsFilter) {
     crds_table.read();
     defer crds_table.release_read();
 
@@ -34,15 +41,15 @@ pub fn build_crds_filters(
     // TODO: purged + failed inserts
 
     var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
-    for (crds_table.store.iterator().values) |*versioned_value| {
-        const hash = versioned_value.value_hash;
+
+    const crds_values = crds_table.store.iterator().values;
+    for (0..num_items) |i| {
+        const hash = crds_values[i].value_hash;
         filter_set.add(&hash);
     }
 
-    // todo: better number than MAX_NUM_PULL_REQUESTS ?
-    var buf: [MAX_NUM_PULL_REQUESTS]CrdsFilter = undefined;
-    var filters = filter_set.getCrdsFilters(&buf);
-
+    // note: filter set is deinit() in this fcn
+    const filters = try filter_set.consumeForCrdsFilters(alloc, MAX_NUM_PULL_REQUESTS);
     return filters;
 }
 
@@ -62,7 +69,9 @@ pub const CrdsFilterSet = struct {
         var mask_bits = CrdsFilter.compute_mask_bits(@floatFromInt(num_items), max_bits);
         std.debug.assert(mask_bits > 0);
 
-        const n_filters = mask_bits << 1;
+        const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
+        std.debug.assert(n_filters > 0);
+
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
             var filter = try Bloom.random(alloc, @intFromFloat(max_items), FALSE_RATE, @intFromFloat(max_bits));
@@ -75,37 +84,74 @@ pub const CrdsFilterSet = struct {
         };
     }
 
+    /// note: does not free filter values bc we take ownership of them in
+    /// getCrdsFilters
     pub fn deinit(self: *Self) void {
-        for (self.filters.items) |*f| {
-            f.deinit();
-        }
         self.filters.deinit();
     }
 
-    pub fn add(self: *Self, hash: Hash) void {
+    pub fn hash_index(mask_bits: u32, hash: *const Hash) usize {
         // 64 = u64 bits
-        const shift_bits: u6 = @intCast(64 - self.mask_bits);
+        const shift_bits: u6 = @intCast(64 - mask_bits);
         // only look at the first `mask_bits` bits
         // which represents `n_filters` number of indexs
-        const index = @as(usize, CrdsFilter.hash_to_u64(&hash) >> shift_bits);
+        const index = @as(usize, CrdsFilter.hash_to_u64(hash) >> shift_bits);
+        return index;
+    }
+
+    pub fn add(self: *Self, hash: *const Hash) void {
+        const index = CrdsFilterSet.hash_index(self.mask_bits, hash);
         self.filters.items[index].add(&hash.data);
     }
 
     pub fn len(self: Self) usize {
-        // return self.filters.items.len;
-        return self.mask_bits << 1;
+        return self.filters.items.len;
     }
 
-    pub fn getCrdsFilters(self: Self, buf: []CrdsFilter) []CrdsFilter {
-        const size = @min(buf.len, self.filters.capacity);
-        for (0..size) |i| {
-            var f = &buf[i];
-            f.filter = self.filters.items[i];
-            f.mask = CrdsFilter.compute_mask(i, self.mask_bits);
-            f.mask_bits = self.mask_bits;
+    /// note: this function deinit() self
+    pub fn consumeForCrdsFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) !ArrayList(CrdsFilter) {
+        defer self.deinit();
+
+        const set_size = self.len();
+        var indexs = try ArrayList(usize).initCapacity(alloc, set_size);
+        defer indexs.deinit();
+
+        for (0..set_size) |i| {
+            indexs.appendAssumeCapacity(i);
         }
 
-        return buf[0..size];
+        const output_size = @min(set_size, max_size);
+        const can_consume_all = max_size >= set_size;
+
+        if (!can_consume_all) {
+            // shuffle the indexs
+            var seed = @as(u64, @intCast(std.time.milliTimestamp()));
+            var rand = std.rand.DefaultPrng.init(seed);
+            for (0..output_size) |i| {
+                const j = @min(set_size, @max(0, rand.random().int(usize)));
+                std.mem.swap(usize, &indexs.items[i], &indexs.items[j]);
+            }
+
+            // release others
+            for (output_size..set_size) |i| {
+                const index = indexs.items[i];
+                self.filters.items[index].deinit();
+            }
+        }
+
+        var output = try ArrayList(CrdsFilter).initCapacity(alloc, output_size);
+        for (0..output_size) |i| {
+            const index = indexs.items[i];
+
+            var output_item = CrdsFilter{
+                .filter = self.filters.items[index], // take ownership of filter
+                .mask = CrdsFilter.compute_mask(index, self.mask_bits),
+                .mask_bits = self.mask_bits,
+            };
+            output.appendAssumeCapacity(output_item);
+        }
+
+        return output;
     }
 };
 
@@ -161,25 +207,65 @@ pub const CrdsFilter = struct {
     }
 };
 
+test "gossip.pull: test build_crds_filters" {
+    const crds = @import("./crds.zig");
+
+    var crds_table = CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    // insert a some value
+    const kp = try KeyPair.create([_]u8{1} ** 32);
+
+    for (0..64) |i| {
+        var id = Pubkey.random(.{ .seed = i });
+        var legacy_contact_info = crds.LegacyContactInfo.default();
+        legacy_contact_info.id = id;
+        var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+            .LegacyContactInfo = legacy_contact_info,
+        }, kp);
+
+        try crds_table.insert(crds_value, 0);
+    }
+
+    const max_bytes = 2;
+    const num_items = crds_table.len();
+
+    // build filters
+    var filters = try build_crds_filters(std.testing.allocator, &crds_table, max_bytes);
+    defer deinit_crds_filters(&filters);
+
+    const mask_bits = filters.items[0].mask_bits;
+
+    // assert value is in the filter
+    const crds_values = crds_table.store.iterator().values;
+    for (0..num_items) |i| {
+        const versioned_value = crds_values[i];
+        const hash = versioned_value.value_hash;
+
+        const index = CrdsFilterSet.hash_index(mask_bits, &hash);
+        const filter = filters.items[index].filter;
+        try std.testing.expect(filter.contains(&hash.data));
+    }
+}
+
 test "gossip.pull: CrdsFilterSet deinits correct" {
     var filter_set = try CrdsFilterSet.init(std.testing.allocator, 10000, 200);
-    defer filter_set.deinit();
 
     const hash = Hash{ .data = .{ 1, 2, 3, 4 } ++ .{0} ** 28 };
-    filter_set.add(hash);
+    filter_set.add(&hash);
 
-    const shift_bits: u6 = @intCast(64 - filter_set.mask_bits);
-    const index = @as(usize, CrdsFilter.hash_to_u64(&hash) >> shift_bits);
+    const index = CrdsFilterSet.hash_index(filter_set.mask_bits, &hash);
     var bloom = filter_set.filters.items[index];
+
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var filters: [10]CrdsFilter = undefined;
+    var f = try filter_set.consumeForCrdsFilters(std.testing.allocator, 10);
+    defer deinit_crds_filters(&f);
 
-    const f = filter_set.getCrdsFilters(&filters);
-    try std.testing.expect(f.len == filter_set.len());
+    try std.testing.expect(f.capacity == filter_set.len());
 
-    const x = f[index];
+    const x = f.items[index];
     try std.testing.expect(x.filter.contains(&hash.data));
 }
 
