@@ -25,6 +25,7 @@ pub const gossip = struct {
     pub usingnamespace @import("gossip/packet.zig");
     pub usingnamespace @import("gossip/protocol.zig");
     pub usingnamespace @import("gossip/pull.zig");
+    pub usingnamespace @import("gossip/crds_shards.zig");
 };
 
 pub const bloom = struct {

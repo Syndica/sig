@@ -29,6 +29,8 @@ pub fn deinit_crds_filters(filters: *ArrayList(CrdsFilter)) void {
     filters.deinit();
 }
 
+/// parses all the values in the crds table and returns a list of
+/// corresponding filters. Note: make sure to call deinit_crds_filters.
 pub fn build_crds_filters(
     alloc: std.mem.Allocator,
     crds_table: *CrdsTable,
@@ -72,6 +74,7 @@ pub const CrdsFilterSet = struct {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
         std.debug.assert(n_filters > 0);
 
+        // TODO; add errdefer handling here
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
             var filter = try Bloom.random(alloc, @intFromFloat(max_items), FALSE_RATE, @intFromFloat(max_bits));
@@ -95,7 +98,7 @@ pub const CrdsFilterSet = struct {
         const shift_bits: u6 = @intCast(64 - mask_bits);
         // only look at the first `mask_bits` bits
         // which represents `n_filters` number of indexs
-        const index = @as(usize, CrdsFilter.hash_to_u64(hash) >> shift_bits);
+        const index = @as(usize, hash_to_u64(hash) >> shift_bits);
         return index;
     }
 
@@ -108,9 +111,9 @@ pub const CrdsFilterSet = struct {
         return self.filters.items.len;
     }
 
-    /// note: this function deinit() self
+    /// returns a list of CrdsFilters and consumes Self by calling deinit.
     pub fn consumeForCrdsFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) !ArrayList(CrdsFilter) {
-        defer self.deinit();
+        defer self.deinit(); // !
 
         const set_size = self.len();
         var indexs = try ArrayList(usize).initCapacity(alloc, set_size);
@@ -197,15 +200,15 @@ pub const CrdsFilter = struct {
         return std.math.ceil(m / (-k / ln(@as(f64, 1) - exp(ln(p) / k))));
     }
 
-    pub fn hash_to_u64(hash: *const Hash) u64 {
-        const buf = hash.data[0..8];
-        return std.mem.readIntLittle(u64, buf);
-    }
-
     pub fn deinit(self: *Self) void {
         self.filter.deinit();
     }
 };
+
+pub fn hash_to_u64(hash: *const Hash) u64 {
+    const buf = hash.data[0..8];
+    return std.mem.readIntLittle(u64, buf);
+}
 
 test "gossip.pull: test build_crds_filters" {
     const crds = @import("./crds.zig");
@@ -251,7 +254,7 @@ test "gossip.pull: test build_crds_filters" {
 test "gossip.pull: CrdsFilterSet deinits correct" {
     var filter_set = try CrdsFilterSet.init(std.testing.allocator, 10000, 200);
 
-    const hash = Hash{ .data = .{ 1, 2, 3, 4 } ++ .{0} ** 28 };
+    const hash = Hash.random();
     filter_set.add(&hash);
 
     const index = CrdsFilterSet.hash_index(filter_set.mask_bits, &hash);
@@ -282,7 +285,7 @@ test "gossip.pull: helper functions are correct" {
 
     {
         const v = Hash{ .data = .{1} ++ .{0} ** 31 };
-        try std.testing.expectEqual(@as(u64, 1), CrdsFilter.hash_to_u64(&v));
+        try std.testing.expectEqual(@as(u64, 1), hash_to_u64(&v));
     }
 
     {

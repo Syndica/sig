@@ -14,6 +14,20 @@ pub const Hash = struct {
 
     const Self = @This();
 
+    // used in tests
+    pub fn random() Self {
+        var seed = @as(u64, @intCast(std.time.milliTimestamp()));
+        var rand = std.rand.DefaultPrng.init(seed);
+        var data: [HASH_SIZE]u8 = undefined;
+
+        for (0..HASH_SIZE) |i| {
+            data[i] = rand.random().int(u8);
+        }
+        return Self{
+            .data = data,
+        };
+    }
+
     pub fn generateSha256Hash(bytes: []const u8) Self {
         var hash = Hash{
             .data = undefined,
