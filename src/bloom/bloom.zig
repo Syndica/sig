@@ -25,26 +25,7 @@ pub const Bloom = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, n_bits: u64) Self {
-        // need to be power of 2 for serialization to match rust
-        var bits = n_bits;
-        if (n_bits != 0) {
-            if (n_bits & (n_bits - 1) != 0) {
-                // nearest power of two
-                const _n_bits = std.math.pow(u64, 2, std.math.log2(n_bits));
-                std.debug.print("rounding n_bits of bloom from {any} to {any}\n", .{ n_bits, _n_bits });
-                bits = _n_bits;
-            }
-        }
-
-        return Self{
-            .keys = ArrayList(u64).init(allocator),
-            .bits = DynamicBitSet.initEmpty(allocator, bits) catch unreachable,
-            .num_bits_set = 0,
-        };
-    }
-
-    pub fn new(alloc: std.mem.Allocator, keys: ArrayList(u64), n_bits: u64) Self {
+    pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) Self {
         // need to be power of 2 for serialization to match rust
         var bits = n_bits;
         if (n_bits != 0) {
@@ -57,7 +38,7 @@ pub const Bloom = struct {
         }
 
         return Self{
-            .keys = keys,
+            .keys = keys orelse ArrayList(u64).init(alloc),
             .bits = DynamicBitSet.initEmpty(alloc, n_bits) catch unreachable,
             .num_bits_set = 0,
         };
@@ -102,10 +83,10 @@ pub const Bloom = struct {
         var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
         for (0..n_keys) |_| {
             const v = rnd.random().int(u64);
-            try keys.append(v);
+            keys.appendAssumeCapacity(v);
         }
 
-        return Bloom.new(alloc, keys, n_bits);
+        return Bloom.init(alloc, n_bits, keys);
     }
 
     fn num_bits(num_items: f64, false_rate: f64) f64 {
@@ -158,7 +139,7 @@ test "bloom: helper fcns match rust" {
 }
 
 test "bloom: serializes/deserializes correctly" {
-    var bloom = Bloom.init(testing.allocator, 0);
+    var bloom = Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
@@ -168,7 +149,7 @@ test "bloom: serializes/deserializes correctly" {
 }
 
 test "bloom: serializes/deserializes correctly with set bits" {
-    var bloom = Bloom.init(testing.allocator, 128);
+    var bloom = Bloom.init(testing.allocator, 128, null);
     try bloom.add_key(10);
     // required for memory leaks
     defer bloom.deinit();
@@ -184,7 +165,7 @@ test "bloom: serializes/deserializes correctly with set bits" {
 
 test "bloom: rust: serialized bytes equal rust (no keys)" {
     // note: need to init with len 2^i
-    var bloom = Bloom.init(testing.allocator, 128);
+    var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
     try bloom.add_key(1);
 
@@ -200,7 +181,7 @@ test "bloom: rust: serialized bytes equal rust (no keys)" {
 }
 
 test "bloom: rust: serialized bytes equal rust (multiple keys)" {
-    var bloom = Bloom.init(testing.allocator, 128);
+    var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
 
     try bloom.add_key(1);
