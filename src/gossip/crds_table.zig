@@ -22,13 +22,6 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 
-// tmp upperbound on number for `get_nodes`/`get_votes`/...
-// enables stack allocations for buffers in the getter functions
-const MAX_N_CONTACT_INFOS = 100;
-const MAX_N_VOTES = 20;
-const MAX_N_EPOCH_SLOTS = 20;
-const MAX_N_DUP_SHREDS = 20;
-
 pub const CrdsError = error{
     OldValue,
 };
@@ -332,11 +325,12 @@ test "gossip.crds_table: insert and get contact_info" {
     try std.testing.expectError(CrdsError.OldValue, result);
 
     // test re-insertion with greater wallclock
-    crds_value.data.LegacyContactInfo.wallclock = 2;
+    crds_value.data.LegacyContactInfo.wallclock += 2;
+    const v = crds_value.data.LegacyContactInfo.wallclock;
     try crds_table.insert(crds_value, 0);
 
     // check retrieval
     nodes = try crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == 2);
+    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == v);
 }
