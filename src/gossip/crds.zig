@@ -49,7 +49,7 @@ pub const CrdsValue = struct {
         return self;
     }
 
-    pub fn random(rng: std.rand.Random, keypair: Keypair) !Self { 
+    pub fn random(rng: std.rand.Random, keypair: KeyPair) !Self {
         return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
@@ -292,34 +292,25 @@ pub const CrdsData = union(enum(u32)) {
 
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 3);
-        return switch (v) { 
-            0 => blk: { 
-                const x = LegacyContactInfo.random(rng); 
-                break :blk CrdsData { 
-                    .LegacyContactInfo = x
-                };
-            }, 
-            1 => blk: { 
-                const x = EpochSlots.random(rng); 
-                break :blk CrdsData { 
-                    .EpochSlots = .{ rng.int(u8), x }
-                };
-            }, 
-            2 => blk: { 
-                const x = Vote.random(rng); 
-                break :blk CrdsData { 
-                    .Vote = .{ rng.int(u8), x }
-                };
-            }, 
-            else => blk: { 
-                const x = DuplicateShred.random(rng); 
-                break :blk CrdsData { 
-                    .DuplicateShred = .{ rng.int(u16), x }
-                };
-            }, 
+        return switch (v) {
+            0 => blk: {
+                const x = LegacyContactInfo.random(rng);
+                break :blk CrdsData{ .LegacyContactInfo = x };
+            },
+            1 => blk: {
+                const x = EpochSlots.random(rng);
+                break :blk CrdsData{ .EpochSlots = .{ rng.int(u8), x } };
+            },
+            2 => blk: {
+                const x = Vote.random(rng);
+                break :blk CrdsData{ .Vote = .{ rng.int(u8), x } };
+            },
+            else => blk: {
+                const x = DuplicateShred.random(rng);
+                break :blk CrdsData{ .DuplicateShred = .{ rng.int(u16), x } };
+            },
         };
     }
-
 };
 
 pub const Vote = struct {
@@ -375,9 +366,10 @@ pub const EpochSlots = struct {
     wallclock: u64,
 
     pub fn random(rng: std.rand.Random) EpochSlots {
+        var slice: [0]CompressedSlots = .{};
         return EpochSlots{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .slots = undefined,
+            .slots = &slice,
             .wallclock = rng.int(u64),
         };
     }
@@ -511,6 +503,7 @@ pub const DuplicateShred = struct {
     chunk: []u8,
 
     pub fn random(rng: std.rand.Random) DuplicateShred {
+        var slice = [_]u8{0} ** 32;
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .wallclock = rng.int(u64),
@@ -519,7 +512,7 @@ pub const DuplicateShred = struct {
             .shred_type = ShredType.Data,
             .num_chunks = rng.int(u8),
             .chunk_index = rng.int(u8),
-            .chunk = undefined,
+            .chunk = &slice,
         };
     }
 };
@@ -579,7 +572,6 @@ test "gossip.crds: contact info serialization matches rust" {
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = 0;
 
-
     var contact_info_rust = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     // var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
 
@@ -610,29 +602,36 @@ test "gossip.crds: crds data serialization matches rust" {
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
 }
 
-test "gossip.crds: random crds data" { 
+test "gossip.crds: random crds data" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    { 
+    var buf: [1000]u8 = undefined;
+
+    {
         const data = LegacyContactInfo.random(rng);
-        _ = data; 
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
     }
-    { 
+    {
         const data = EpochSlots.random(rng);
-        _ = data; 
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
     }
-    { 
+    {
         const data = Vote.random(rng);
-        _ = data; 
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
     }
-    { 
+    {
         const data = DuplicateShred.random(rng);
-        _ = data; 
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
     }
-    { 
+    {
         const data = CrdsData.random(rng);
-        _ = data;
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
     }
 }

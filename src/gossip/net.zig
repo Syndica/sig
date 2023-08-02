@@ -16,18 +16,18 @@ pub const SocketAddr = union(enum(u8)) {
         },
     };
 
-    pub fn random(rng: std.rand.Random) Self { 
+    pub fn random(rng: std.rand.Random) Self {
         const pport = rng.int(u16);
 
         var version = rng.int(u8);
-        if (version % 2 == 0) { 
+        if (version % 2 == 0) {
             var octets: [4]u8 = undefined;
             rng.bytes(&octets);
 
             return Self{
                 .V4 = .{ .ip = Ipv4Addr.init(octets[0], octets[1], octets[2], octets[3]), .port = pport },
             };
-        } else { 
+        } else {
             var octets: [16]u8 = undefined;
             rng.bytes(&octets);
 
@@ -199,7 +199,7 @@ pub const IpAddr = union(enum(u32)) {
     }
 };
 
-test "gossip.net: test random" { 
+test "gossip.net: test random" {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
     var addr = SocketAddr.random(rng.random());
     _ = addr;

@@ -112,6 +112,8 @@ pub const CrdsShards = struct {
     }
 };
 
+const CrdsTable = @import("crds_table.zig").CrdsTable;
+
 test "gossip.crds_shards: tests CrdsShards" {
     var shards = try CrdsShards.init(std.testing.allocator, 10);
     defer shards.deinit();
@@ -122,4 +124,21 @@ test "gossip.crds_shards: tests CrdsShards" {
 
     const result = try shards.find(std.testing.allocator, 20, 10);
     defer result.deinit();
+}
+
+test "gossip.crds_shards: mask matches" {
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+    var value = try CrdsValue.random(rng, keypair);
+    const label = value.label();
+
+    try crds_table.insert(value, 0);
+    const x = crds_table.get(label).?;
+    _ = x;
 }

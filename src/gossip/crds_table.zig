@@ -188,6 +188,10 @@ pub const CrdsTable = struct {
         }
     }
 
+    pub fn get(self: *Self, label: CrdsValueLabel) ?CrdsVersionedValue {
+        return self.store.get(label);
+    }
+
     pub fn get_votes_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.votes.keys();
         var index: usize = 0;
@@ -296,6 +300,25 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     } else {
         return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
     }
+}
+
+test "gossip.crds_table: insert and get" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var value = try CrdsValue.random(rng, keypair);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    try crds_table.insert(value, 0);
+
+    const label = value.label();
+    const x = crds_table.get(label).?;
+    _ = x;
 }
 
 test "gossip.crds_table: insert and get votes" {
