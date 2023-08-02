@@ -219,8 +219,12 @@ test "gossip.pull: test build_crds_filters" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    for (0..64) |i| {
-        var id = Pubkey.random(.{ .seed = i });
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    for (0..64) |_| {
+        var id = Pubkey.random(rng, .{});
         var legacy_contact_info = crds.LegacyContactInfo.default();
         legacy_contact_info.id = id;
         var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{

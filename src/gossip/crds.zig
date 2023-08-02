@@ -217,8 +217,12 @@ pub const LegacyContactInfo = struct {
         const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
         const wallclock = get_wallclock();
 
+        var seed: u64 = @intCast(std.time.milliTimestamp());
+        var rand = std.rand.DefaultPrng.init(seed);
+        const rng = rand.random();
+
         return LegacyContactInfo{
-            .id = Pubkey.random(.{ .skip_encoding = true }),
+            .id = Pubkey.random(rng, .{ .skip_encoding = true }),
             .gossip = unspecified_addr,
             .tvu = unspecified_addr,
             .tvu_forwards = unspecified_addr,
@@ -233,6 +237,9 @@ pub const LegacyContactInfo = struct {
             .shred_version = 0,
         };
     }
+
+    // pub fn random() LegacyContactInfo {
+    // }
 };
 
 pub const CrdsValueLabel = union(enum) {

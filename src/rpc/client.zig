@@ -1328,8 +1328,12 @@ test "pubkey equality works" {
 }
 
 test "pubkey randome works" {
-    var pubkey = Pubkey.random(.{ .seed = 20 });
-    var pubkey_2 = Pubkey.random(.{ .seed = 19 });
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var pubkey = Pubkey.random(rng, .{});
+    var pubkey_2 = Pubkey.random(rng, .{});
     try testing.expect(!pubkey_2.equals(&pubkey));
 }
 

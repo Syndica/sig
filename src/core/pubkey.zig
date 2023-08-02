@@ -66,11 +66,10 @@ pub const Pubkey = struct {
     }
 
     /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
-    pub fn random(options: struct { skip_encoding: bool = false, seed: ?u64 = null }) Self {
+    pub fn random(rng: std.rand.Random, options: struct { skip_encoding: bool = false }) Self {
         var bytes: [32]u8 = undefined;
-        var seed = options.seed orelse @as(u64, @intCast(std.time.milliTimestamp()));
-        var rand = std.rand.DefaultPrng.init(seed);
-        rand.fill(&bytes);
+        rng.bytes(&bytes);
+
         var dest: [44]u8 = .{
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

@@ -282,7 +282,11 @@ fn socket_addrs_unspecified() [13]SocketAddr {
 const logger = std.log.scoped(.node_tests);
 
 test "new contact info" {
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
 }
 
@@ -307,7 +311,11 @@ test "socketaddr bincode serialize matches rust" {
 }
 
 test "set & get socket on contact info" {
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(.{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
     try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899));
 
