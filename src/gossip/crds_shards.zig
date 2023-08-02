@@ -23,6 +23,9 @@ const RwLock = std.Thread.RwLock;
 const CrdsPull = @import("./pull.zig");
 
 pub const CrdsShards = struct {
+    // shards[k] includes crds values which the first shard_bits of their hash
+    // value is equal to k. Each shard is a mapping from crds values indices to
+    // their hash value.
     shards: std.ArrayList(AutoArrayHashMap(usize, u64)),
     shard_bits: u32,
 
@@ -72,17 +75,25 @@ pub const CrdsShards = struct {
         return @intCast(hash >> shift_bits);
     }
 
+    /// see filter_crds_values for more readable (but inefficient) version  of what this fcn is doing
     pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) !std.ArrayList(usize) {
         const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
         const match_mask = mask | ones;
 
         if (self.shard_bits < mask_bits) {
+            // shard_bits is smaller, all matches with mask will be in the same shard index
+            // eg, shard_bits = 3, shardvalues == XX
+            // mask_bits = 5, mask == ABCD
+            // all shard inserts will match mask AB
+            // still need to scan bc of the last two bits of the shards
+
             const shard = self.get_shard(match_mask);
-            var result = std.ArrayList(usize).init(alloc);
             var shard_iter = shard.iterator();
+            var result = std.ArrayList(usize).init(alloc);
             while (shard_iter.next()) |entry| {
                 const hash = entry.value_ptr.*;
 
+                // see check_mask
                 if (hash | ones == match_mask) {
                     const index = entry.key_ptr.*;
                     try result.append(index);
@@ -90,12 +101,24 @@ pub const CrdsShards = struct {
             }
             return result;
         } else if (self.shard_bits == mask_bits) {
+            // when bits are equal we know the lookup will be exact
+            // eg,
+            // shard_bits == mask_bits == 3
+            // mask = ABCD, shard = XYZ
+            // get_shard(ABC) == get_shard(XYZ)
+
             const shard = self.get_shard(match_mask);
             var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
             try result.insertSlice(0, shard.keys());
             return result;
         } else {
             // shardbits > maskbits
+            // eg, shard_bits = 5, shardvalues == XYZ
+            // mask_bits = 3, mask == AB
+            // mask will match the mask + 2^(of the other bits)
+            // and since its ordered we can just take the values before it
+            // since AB will match XY and 2^1 (Z)
+
             const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
             const count: usize = @intCast(@as(u64, 1) << shift_bits);
             const end = CrdsShards.compute_shard_index(self.shard_bits, match_mask) + 1;
@@ -126,11 +149,11 @@ test "gossip.crds_shards: tests CrdsShards" {
     defer result.deinit();
 }
 
+// test helper fcns
 fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersionedValue {
     const keypair = try KeyPair.create(null);
     var value = try CrdsValue.random(rng, keypair);
     const label = value.label();
-
     try crds_table.insert(value, 0);
     const x = crds_table.get(label).?;
     return x;
@@ -142,6 +165,7 @@ fn check_mask(value: *const CrdsVersionedValue, mask: u64, mask_bits: u32) bool 
     return (uhash | ones) == (mask | ones);
 }
 
+// does the same thing as find() but a lot more inefficient
 fn filter_crds_values(
     alloc: std.mem.Allocator,
     values: []CrdsVersionedValue,
@@ -157,7 +181,7 @@ fn filter_crds_values(
     return result;
 }
 
-test "gossip.crds_shards: mask matches" {
+test "gossip.crds_shards: test shard find" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
@@ -177,6 +201,7 @@ test "gossip.crds_shards: mask matches" {
         try crds_shards.insert(value.ordinal, &value.value_hash);
     }
 
+    // test find with different mask bit sizes  (< > == shard bits)
     for (0..10) |_| {
         var mask = rng.int(u64);
         for (0..12) |mask_bits| {
