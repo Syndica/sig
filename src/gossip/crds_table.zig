@@ -274,15 +274,9 @@ pub const CrdsTable = struct {
         alloc: std.mem.Allocator,
         mask: u64,
         mask_bits: u64,
-    ) !std.ArrayList(CrdsVersionedValue) {
+    ) !std.ArrayList(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
-        var result = try std.ArrayList(CrdsVersionedValue).initCapacity(alloc, indexs.items.len);
-
-        for (indexs.items) |index| {
-            var entry = self.store.iterator().values[index];
-            result.append(entry) catch unreachable;
-        }
-        return result;
+        return indexs;
     }
 };
 

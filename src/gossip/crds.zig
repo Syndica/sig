@@ -255,7 +255,7 @@ pub const LegacyContactInfo = struct {
             .rpc = SocketAddr.random(rng),
             .rpc_pubsub = SocketAddr.random(rng),
             .serve_repair = SocketAddr.random(rng),
-            .wallclock = rng.int(u64),
+            .wallclock = get_wallclock(),
             .shred_version = rng.int(u16),
         };
     }
@@ -325,7 +325,7 @@ pub const Vote = struct {
         return Vote{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .transaction = Transaction.default(),
-            .wallclock = rng.int(u64),
+            .wallclock = get_wallclock(),
             .slot = Slot.init(rng.int(u64)),
         };
     }
@@ -370,7 +370,7 @@ pub const EpochSlots = struct {
         return EpochSlots{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .slots = &slice,
-            .wallclock = rng.int(u64),
+            .wallclock = get_wallclock(),
         };
     }
 };
@@ -430,7 +430,7 @@ pub const Version = struct {
     pub fn default(from: Pubkey) Self {
         return Self{
             .from = from,
-            .wallclock = @intCast(std.time.milliTimestamp()),
+            .wallclock = get_wallclock(),
             .version = LegacyVersion2.CURRENT,
         };
     }
@@ -506,7 +506,7 @@ pub const DuplicateShred = struct {
         var slice = [_]u8{0} ** 32;
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = rng.int(u64),
+            .wallclock = get_wallclock(),
             .slot = Slot.init(rng.int(u64)),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
