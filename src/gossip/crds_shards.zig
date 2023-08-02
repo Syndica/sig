@@ -103,7 +103,7 @@ pub const CrdsShards = struct {
             var result = std.ArrayList(usize).init(alloc);
             var insert_index: usize = 0;
             for ((end - count)..end) |shard_index| {
-                const shard = self.get_shard(shard_index);
+                const shard = self.shards.items[shard_index];
                 try result.insertSlice(insert_index, shard.keys());
                 insert_index += shard.count();
             }
@@ -126,6 +126,37 @@ test "gossip.crds_shards: tests CrdsShards" {
     defer result.deinit();
 }
 
+fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersionedValue {
+    const keypair = try KeyPair.create(null);
+    var value = try CrdsValue.random(rng, keypair);
+    const label = value.label();
+
+    try crds_table.insert(value, 0);
+    const x = crds_table.get(label).?;
+    return x;
+}
+
+fn check_mask(value: *const CrdsVersionedValue, mask: u64, mask_bits: u32) bool {
+    const uhash = CrdsPull.hash_to_u64(&value.value_hash);
+    const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
+    return (uhash | ones) == (mask | ones);
+}
+
+fn filter_crds_values(
+    alloc: std.mem.Allocator,
+    values: []CrdsVersionedValue,
+    mask: u64,
+    mask_bits: u32,
+) !std.AutoHashMap(usize, void) {
+    var result = std.AutoHashMap(usize, void).init(alloc);
+    for (values, 0..) |value, i| {
+        if (check_mask(&value, mask, mask_bits)) {
+            try result.put(i, {});
+        }
+    }
+    return result;
+}
+
 test "gossip.crds_shards: mask matches" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
@@ -134,11 +165,33 @@ test "gossip.crds_shards: mask matches" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    const keypair = try KeyPair.create([_]u8{1} ** 32);
-    var value = try CrdsValue.random(rng, keypair);
-    const label = value.label();
+    var crds_shards = try CrdsShards.init(std.testing.allocator, 5);
+    defer crds_shards.deinit();
 
-    try crds_table.insert(value, 0);
-    const x = crds_table.get(label).?;
-    _ = x;
+    // gen ranndom values
+    var values = try std.ArrayList(CrdsVersionedValue).initCapacity(std.testing.allocator, 1000);
+    defer values.deinit();
+    while (values.items.len < 1000) {
+        const value = try new_test_crds_value(rng, &crds_table);
+        try values.append(value);
+        try crds_shards.insert(value.ordinal, &value.value_hash);
+    }
+
+    for (0..10) |_| {
+        var mask = rng.int(u64);
+        for (0..12) |mask_bits| {
+            var set = try filter_crds_values(std.testing.allocator, values.items, mask, @intCast(mask_bits));
+            defer set.deinit();
+
+            var indexs = try crds_shards.find(std.testing.allocator, mask, @intCast(mask_bits));
+            defer indexs.deinit();
+
+            try std.testing.expectEqual(set.count(), @as(u32, @intCast(indexs.items.len)));
+
+            for (indexs.items) |index| {
+                _ = set.remove(index);
+            }
+            try std.testing.expectEqual(set.count(), 0);
+        }
+    }
 }
