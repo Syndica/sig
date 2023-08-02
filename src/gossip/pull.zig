@@ -213,7 +213,7 @@ pub fn hash_to_u64(hash: *const Hash) u64 {
 test "gossip.pull: test build_crds_filters" {
     const crds = @import("./crds.zig");
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
+    var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
     // insert a some value

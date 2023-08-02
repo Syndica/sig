@@ -60,7 +60,7 @@ pub fn runGossipService(gossip_port: u16, entrypoints: ArrayList(LegacyContactIn
 
     var spy = try ClusterInfo.initSpy(gpa_allocator, gossip_socket_addr, entrypoints, logger);
 
-    var gossip_service = GossipService.init(gpa_allocator, &spy.cluster_info, spy.gossip_socket, exit);
+    var gossip_service = try GossipService.init(gpa_allocator, &spy.cluster_info, spy.gossip_socket, exit);
 
     var handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service, logger });
 

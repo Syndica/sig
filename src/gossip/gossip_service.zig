@@ -46,10 +46,10 @@ pub const GossipService = struct {
         cluster_info: *ClusterInfo,
         gossip_socket: UdpSocket,
         exit: AtomicBool,
-    ) Self {
+    ) !Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
         var responder_channel = PacketChannel.init(allocator, 10000);
-        var crds_table = CrdsTable.init(allocator);
+        var crds_table = try CrdsTable.init(allocator);
 
         return Self{
             .cluster_info = cluster_info,
@@ -248,7 +248,7 @@ pub const GossipService = struct {
 
 test "gossip.gossip_service: process contact_info push packet" {
     const allocator = std.testing.allocator;
-    var crds_table = CrdsTable.init(allocator);
+    var crds_table = try CrdsTable.init(allocator);
     defer crds_table.deinit();
 
     var packet_channel = PacketChannel.init(allocator, 100);

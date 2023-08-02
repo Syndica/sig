@@ -10,6 +10,8 @@ const CompareResult = hash.CompareResult;
 
 const SocketAddr = @import("net.zig").SocketAddr;
 
+const CrdsShards = @import("./crds_shards.zig").CrdsShards;
+
 const crds = @import("./crds.zig");
 const CrdsValue = crds.CrdsValue;
 const CrdsData = crds.CrdsData;
@@ -25,6 +27,8 @@ const RwLock = std.Thread.RwLock;
 pub const CrdsError = error{
     OldValue,
 };
+
+const CRDS_SHARDS_BITS: u32 = 12;
 
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
@@ -48,6 +52,9 @@ pub const CrdsTable = struct {
     duplicate_shreds: AutoArrayHashMap(usize, usize),
     shred_versions: AutoHashMap(Pubkey, u16),
 
+    // used to build pull responses efficiently
+    shards: CrdsShards,
+
     // head of the store
     cursor: usize = 0,
 
@@ -56,7 +63,7 @@ pub const CrdsTable = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
             .contact_infos = AutoArrayHashMap(usize, void).init(allocator),
@@ -64,6 +71,7 @@ pub const CrdsTable = struct {
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
+            .shards = try CrdsShards.init(allocator, CRDS_SHARDS_BITS),
         };
     }
 
@@ -74,6 +82,7 @@ pub const CrdsTable = struct {
         self.votes.deinit();
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
+        self.shards.deinit();
     }
 
     pub fn write(self: *Self) void {
@@ -111,28 +120,32 @@ pub const CrdsTable = struct {
 
         const label = value.label();
         var result = try self.store.getOrPut(label);
+        const entry_index = result.index;
 
         // entry doesnt exist
         if (!result.found_existing) {
             switch (value.data) {
                 .LegacyContactInfo => |*info| {
-                    try self.contact_infos.put(result.index, {});
+                    try self.contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
-                    try self.votes.put(self.cursor, result.index);
+                    try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
-                    try self.epoch_slots.put(self.cursor, result.index);
+                    try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
-                    try self.duplicate_shreds.put(self.cursor, result.index);
+                    try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
                 else => {},
             }
 
-            self.cursor += 1;
+            try self.shards.insert(entry_index, &versioned_value.value_hash);
+
             result.value_ptr.* = versioned_value;
+
+            self.cursor += 1;
 
             // should overwrite existing entry
         } else if (crds_overwrites(&versioned_value, result.value_ptr)) {
@@ -145,23 +158,29 @@ pub const CrdsTable = struct {
                 .Vote => {
                     var did_remove = self.votes.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
-                    try self.votes.put(self.cursor, result.index);
+                    try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
                     var did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
-                    try self.epoch_slots.put(self.cursor, result.index);
+                    try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
                     var did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
-                    try self.duplicate_shreds.put(self.cursor, result.index);
+                    try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
                 else => {},
             }
 
-            self.cursor += 1;
+            // remove and insert to make sure the shard ordering is oldest-to-newest
+            // NOTE: do we need the ordering to be oldest-to-newest?
+            try self.shards.remove(entry_index, &old_entry.value_hash);
+            try self.shards.insert(entry_index, &versioned_value.value_hash);
+
             result.value_ptr.* = versioned_value;
+
+            self.cursor += 1;
 
             // do nothing
         } else {
@@ -245,6 +264,22 @@ pub const CrdsTable = struct {
         }
         return buf[0..size];
     }
+
+    pub fn get_bitmask_matches(
+        self: *const Self,
+        alloc: std.mem.Allocator,
+        mask: u64,
+        mask_bits: u64,
+    ) !std.ArrayList(CrdsVersionedValue) {
+        const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
+        var result = try std.ArrayList(CrdsVersionedValue).initCapacity(alloc, indexs.items.len);
+
+        for (indexs.items) |index| {
+            var entry = self.store.iterator().values[index];
+            result.append(entry) catch unreachable;
+        }
+        return result;
+    }
 };
 
 pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const CrdsVersionedValue) bool {
@@ -274,7 +309,7 @@ test "gossip.crds_table: insert and get votes" {
         .Vote = .{ 0, vote },
     }, kp);
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
+    var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
     try crds_table.insert(crds_value, 0);
 
@@ -296,6 +331,9 @@ test "gossip.crds_table: insert and get votes" {
     votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 2);
+
+    const v = try crds_table.get_bitmask_matches(std.testing.allocator, 10, 1);
+    defer v.deinit();
 }
 
 test "gossip.crds_table: insert and get contact_info" {
@@ -308,7 +346,7 @@ test "gossip.crds_table: insert and get contact_info" {
         .LegacyContactInfo = legacy_contact_info,
     }, kp);
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
+    var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
     // test insertion

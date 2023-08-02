@@ -42,6 +42,13 @@ pub const CrdsShards = struct {
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        for (0..self.shards.capacity) |i| {
+            self.shards.items[i].deinit();
+        }
+        self.shards.deinit();
+    }
+
     pub fn insert(self: *Self, crds_index: usize, hash: *const Hash) !void {
         const uhash = CrdsPull.hash_to_u64(hash);
         var shard = self.get_shard(uhash);
@@ -54,7 +61,7 @@ pub const CrdsShards = struct {
         _ = shard.swapRemove(crds_index);
     }
 
-    pub fn get_shard(self: *Self, uhash: u64) *AutoArrayHashMap(usize, u64) {
+    pub fn get_shard(self: *const Self, uhash: u64) *AutoArrayHashMap(usize, u64) {
         const shard_index = CrdsShards.compute_shard_index(self.shard_bits, uhash);
         var shard = &self.shards.items[shard_index];
         return shard;
@@ -65,11 +72,43 @@ pub const CrdsShards = struct {
         return @intCast(hash >> shift_bits);
     }
 
-    pub fn deinit(self: *Self) void {
-        for (0..self.shards.capacity) |i| {
-            self.shards.items[i].deinit();
+    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) !std.ArrayList(usize) {
+        const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
+        const match_mask = mask | ones;
+
+        if (self.shard_bits < mask_bits) {
+            const shard = self.get_shard(match_mask);
+            var result = std.ArrayList(usize).init(alloc);
+            var shard_iter = shard.iterator();
+            while (shard_iter.next()) |entry| {
+                const hash = entry.value_ptr.*;
+
+                if (hash | ones == match_mask) {
+                    const index = entry.key_ptr.*;
+                    try result.append(index);
+                }
+            }
+            return result;
+        } else if (self.shard_bits == mask_bits) {
+            const shard = self.get_shard(match_mask);
+            var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
+            try result.insertSlice(0, shard.keys());
+            return result;
+        } else {
+            // shardbits > maskbits
+            const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
+            const count: usize = @intCast(@as(u64, 1) << shift_bits);
+            const end = CrdsShards.compute_shard_index(self.shard_bits, match_mask) + 1;
+
+            var result = std.ArrayList(usize).init(alloc);
+            var insert_index: usize = 0;
+            for ((end - count)..end) |shard_index| {
+                const shard = self.get_shard(shard_index);
+                try result.insertSlice(insert_index, shard.keys());
+                insert_index += shard.count();
+            }
+            return result;
         }
-        self.shards.deinit();
     }
 };
 
@@ -80,4 +119,7 @@ test "gossip.crds_shards: tests CrdsShards" {
     const v = Hash.random();
     try shards.insert(10, &v);
     try shards.remove(10, &v);
+
+    const result = try shards.find(std.testing.allocator, 20, 10);
+    defer result.deinit();
 }
