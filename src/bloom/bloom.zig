@@ -49,6 +49,7 @@ pub const Bloom = struct {
         self.keys.deinit();
     }
 
+    // used in tests
     pub fn add_key(self: *Self, key: u64) !void {
         try self.keys.append(key);
     }

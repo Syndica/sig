@@ -234,7 +234,7 @@ pub const CrdsFilter = struct {
 
     const Self = @This();
 
-    // only used in tests
+    /// only used in tests
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .filter = Bloom.init(allocator, 0, null),

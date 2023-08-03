@@ -103,7 +103,7 @@ pub const GossipService = struct {
             try self.push_contact_info(&peer);
 
             // generate pull requests
-            const filters = crds_pull.build_crds_filters(self.allocator, &self.crds_table, crds_pull.MAX_BLOOM_SIZE) catch {
+            var filters = crds_pull.build_crds_filters(self.allocator, &self.crds_table, crds_pull.MAX_BLOOM_SIZE) catch {
                 // TODO: handle this -- crds store not enough data?
                 std.time.sleep(std.time.ns_per_s * 1);
                 continue;

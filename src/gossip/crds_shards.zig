@@ -104,7 +104,7 @@ pub const CrdsShards = struct {
             // when bits are equal we know the lookup will be exact
             // eg,
             // shard_bits == mask_bits == 3
-            // mask = ABCD, shard = XYZ
+            // mask = ABC, shard = XYZ
             // get_shard(ABC) == get_shard(XYZ)
 
             const shard = self.get_shard(match_mask);
