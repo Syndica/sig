@@ -16,3 +16,4 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 - `crds.zig`: various gossip data structure definitions 
 - `pull_request.zig`: logic for sending pull *requests* 
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
+- `crds_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `crds_table` and constructing pull responses

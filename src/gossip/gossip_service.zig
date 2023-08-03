@@ -110,6 +110,7 @@ pub const GossipService = struct {
                 continue;
             };
             defer crds_pull_request.deinit_crds_filters(&filters);
+            // TODO: send em out
 
             std.time.sleep(std.time.ns_per_s * 1);
         }

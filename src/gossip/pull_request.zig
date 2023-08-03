@@ -42,6 +42,7 @@ pub fn build_crds_filters(
 
     var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
 
+    // add all crds values
     const crds_values = crds_table.store.iterator().values;
     for (0..num_items) |i| {
         const hash = crds_values[i].value_hash;
