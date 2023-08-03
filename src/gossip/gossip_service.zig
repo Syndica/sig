@@ -23,7 +23,8 @@ const CrdsTable = _crds_table.CrdsTable;
 const CrdsError = _crds_table.CrdsError;
 const Logger = @import("../trace/log.zig").Logger;
 
-const crds_pull = @import("../gossip/pull.zig");
+const crds_pull_request = @import("../gossip/pull_request.zig");
+const crds_pull_response = @import("../gossip/pull_response.zig");
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
@@ -103,12 +104,12 @@ pub const GossipService = struct {
             try self.push_contact_info(&peer);
 
             // generate pull requests
-            var filters = crds_pull.build_crds_filters(self.allocator, &self.crds_table, crds_pull.MAX_BLOOM_SIZE) catch {
+            var filters = crds_pull_request.build_crds_filters(self.allocator, &self.crds_table, crds_pull_request.MAX_BLOOM_SIZE) catch {
                 // TODO: handle this -- crds store not enough data?
                 std.time.sleep(std.time.ns_per_s * 1);
                 continue;
             };
-            defer crds_pull.deinit_crds_filters(&filters);
+            defer crds_pull_request.deinit_crds_filters(&filters);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }
@@ -230,7 +231,7 @@ pub const GossipService = struct {
                     var value = pull[1];
                     const now = get_wallclock();
 
-                    const crds_values = try crds_pull.filter_crds_values(
+                    const crds_values = try crds_pull_response.filter_crds_values(
                         allocator,
                         crds_table,
                         &value,

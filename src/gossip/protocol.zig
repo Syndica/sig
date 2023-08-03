@@ -13,7 +13,7 @@ const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
-const pull_import = @import("pull.zig");
+const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
 
 const Option = @import("../option.zig").Option;

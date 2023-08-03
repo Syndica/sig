@@ -23,80 +23,9 @@ const CrdsValue = crds.CrdsValue;
 pub const MAX_CRDS_OBJECT_SIZE: usize = 928;
 pub const MAX_BLOOM_SIZE: usize = MAX_CRDS_OBJECT_SIZE;
 
-pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
-
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
 pub const FALSE_RATE: f64 = 0.1;
 pub const KEYS: f64 = 8;
-
-// TODO: make it batch
-pub fn filter_crds_values(
-    alloc: std.mem.Allocator,
-    crds_table: *CrdsTable,
-    value: *CrdsValue,
-    filter: *CrdsFilter,
-    output_size_limit: usize,
-    now: u64,
-) !ArrayList(CrdsValue) {
-    crds_table.read();
-    defer crds_table.release_read();
-
-    if (output_size_limit == 0) {
-        return ArrayList(CrdsValue).init(alloc);
-    }
-
-    var caller_wallclock = value.wallclock();
-    const is_too_old = caller_wallclock < now -| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
-    const is_too_new = caller_wallclock > now +| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
-    if (is_too_old or is_too_new) {
-        return ArrayList(CrdsValue).init(alloc);
-    }
-
-    var seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-
-    const jitter = rng.intRangeAtMost(u64, 0, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 4);
-    caller_wallclock = caller_wallclock + jitter;
-
-    var output = ArrayList(CrdsValue).init(alloc);
-    var bloom = filter.filter;
-
-    var match_indexs = try crds_table.get_bitmask_matches(alloc, filter.mask, filter.mask_bits);
-    defer match_indexs.deinit();
-
-    for (match_indexs.items) |entry_index| {
-        var entry = crds_table.store.iterator().values[entry_index];
-
-        // entry is too new
-        if (entry.value.wallclock() > caller_wallclock) {
-            continue;
-        }
-        // entry is already contained in the bloom
-        if (bloom.contains(&entry.value_hash.data)) {
-            continue;
-        }
-        // exclude contact info (? not sure why - labs does it)
-        if (entry.value.data == crds.CrdsData.ContactInfo) {
-            continue;
-        }
-
-        // good
-        try output.append(entry.value);
-        if (output.items.len == output_size_limit) {
-            break;
-        }
-    }
-
-    return output;
-}
-
-pub fn deinit_crds_filters(filters: *ArrayList(CrdsFilter)) void {
-    for (filters.items) |*filter| {
-        filter.deinit();
-    }
-    filters.deinit();
-}
 
 /// parses all the values in the crds table and returns a list of
 /// corresponding filters. Note: make sure to call deinit_crds_filters.
@@ -122,6 +51,13 @@ pub fn build_crds_filters(
     // note: filter set is deinit() in this fcn
     const filters = try filter_set.consumeForCrdsFilters(alloc, MAX_NUM_PULL_REQUESTS);
     return filters;
+}
+
+pub fn deinit_crds_filters(filters: *ArrayList(CrdsFilter)) void {
+    for (filters.items) |*filter| {
+        filter.deinit();
+    }
+    filters.deinit();
 }
 
 pub const CrdsFilterSet = struct {
@@ -277,66 +213,6 @@ pub const CrdsFilter = struct {
 pub fn hash_to_u64(hash: *const Hash) u64 {
     const buf = hash.data[0..8];
     return std.mem.readIntLittle(u64, buf);
-}
-
-test "gossip.pull: test filter_crds_values" {
-    var crds_table = try CrdsTable.init(std.testing.allocator);
-    defer crds_table.deinit();
-
-    // insert a some value
-    const kp = try KeyPair.create([_]u8{1} ** 32);
-
-    var seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-
-    for (0..100) |_| {
-        // var id = Pubkey.random(rng, .{});
-        // var legacy_contact_info = crds.LegacyContactInfo.default();
-        // legacy_contact_info.wallclock = 40;
-        // legacy_contact_info.id = id;
-        // var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
-        //     .LegacyContactInfo = legacy_contact_info,
-        // }, kp);
-
-        var crds_value = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(crds_value, 0);
-    }
-
-    const max_bytes = 10;
-
-    // recver
-    var filters = try build_crds_filters(std.testing.allocator, &crds_table, max_bytes);
-    defer deinit_crds_filters(&filters);
-    var filter = filters.items[0];
-
-    // corresponding value
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
-    var legacy_contact_info = crds.LegacyContactInfo.default();
-    legacy_contact_info.id = id;
-    legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    var crds_value = try CrdsValue.initSigned(crds.CrdsData{
-        .LegacyContactInfo = legacy_contact_info,
-    }, kp);
-
-    // insert more values which the filters should be missing
-    for (0..64) |_| {
-        var v2 = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(v2, 0);
-    }
-
-    var values = try filter_crds_values(
-        std.testing.allocator,
-        &crds_table,
-        &crds_value,
-        &filter,
-        100,
-        @intCast(std.time.milliTimestamp()),
-    );
-    defer values.deinit();
-
-    try std.testing.expect(values.items.len > 0);
 }
 
 test "gossip.pull: test build_crds_filters" {

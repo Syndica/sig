@@ -20,7 +20,7 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 
-const CrdsPull = @import("./pull.zig");
+const CrdsPull = @import("./pull_request.zig");
 
 pub const CrdsShards = struct {
     // shards[k] includes crds values which the first shard_bits of their hash
