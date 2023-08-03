@@ -14,3 +14,5 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 
 - `crds_table.zig`: where gossip data is stored 
 - `crds.zig`: various gossip data structure definitions 
+- `pull_request.zig`: logic for sending pull *requests* 
+- `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
