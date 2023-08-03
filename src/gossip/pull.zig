@@ -20,6 +20,9 @@ const CrdsTable = @import("crds_table.zig").CrdsTable;
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
 
+pub const MAX_CRDS_OBJECT_SIZE: usize = 928;
+pub const MAX_BLOOM_SIZE: usize = MAX_CRDS_OBJECT_SIZE;
+
 pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
@@ -34,19 +37,19 @@ pub fn filter_crds_values(
     filter: *CrdsFilter,
     output_size_limit: usize,
     now: u64,
-) !?ArrayList(CrdsValue) {
+) !ArrayList(CrdsValue) {
     crds_table.read();
     defer crds_table.release_read();
 
     if (output_size_limit == 0) {
-        return null;
+        return ArrayList(CrdsValue).init(alloc);
     }
 
     var caller_wallclock = value.wallclock();
     const is_too_old = caller_wallclock < now -| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
     const is_too_new = caller_wallclock > now +| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
     if (is_too_old or is_too_new) {
-        return null;
+        return ArrayList(CrdsValue).init(alloc);
     }
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
@@ -323,14 +326,14 @@ test "gossip.pull: test filter_crds_values" {
         try crds_table.insert(v2, 0);
     }
 
-    var values = (try filter_crds_values(
+    var values = try filter_crds_values(
         std.testing.allocator,
         &crds_table,
         &crds_value,
         &filter,
         100,
         @intCast(std.time.milliTimestamp()),
-    )).?;
+    );
     defer values.deinit();
 
     try std.testing.expect(values.items.len > 0);
