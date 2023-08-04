@@ -292,24 +292,20 @@ pub const CrdsData = union(enum(u32)) {
 
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 3);
-        return switch (v) {
-            0 => blk: {
-                const x = LegacyContactInfo.random(rng);
-                break :blk CrdsData{ .LegacyContactInfo = x };
+        switch (v) {
+            0 => {
+                return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
-            1 => blk: {
-                const x = EpochSlots.random(rng);
-                break :blk CrdsData{ .EpochSlots = .{ rng.int(u8), x } };
+            1 => {
+                return CrdsData{ .EpochSlots = .{ rng.int(u8), EpochSlots.random(rng) } };
             },
-            2 => blk: {
-                const x = Vote.random(rng);
-                break :blk CrdsData{ .Vote = .{ rng.int(u8), x } };
+            2 => {
+                return CrdsData{ .Vote = .{ rng.int(u8), Vote.random(rng) } };
             },
-            else => blk: {
-                const x = DuplicateShred.random(rng);
-                break :blk CrdsData{ .DuplicateShred = .{ rng.int(u16), x } };
+            else => {
+                return CrdsData{ .DuplicateShred = .{ rng.int(u16), DuplicateShred.random(rng) } };
             },
-        };
+        }
     }
 };
 

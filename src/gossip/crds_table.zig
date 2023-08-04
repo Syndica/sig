@@ -26,7 +26,20 @@ const RwLock = std.Thread.RwLock;
 
 pub const CrdsError = error{
     OldValue,
+    DuplicateValue,
 };
+
+pub const GossipRoute = enum {
+    LocalMessage,
+    PullRequest,
+    PullResponse,
+    PushMessage,
+};
+
+pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
+// TODO: benchmark other structs?
+const PurgedQ = std.TailQueue(HashAndTime);
+const FailedInsertsQ = std.TailQueue(HashAndTime);
 
 const CRDS_SHARDS_BITS: u32 = 12;
 
@@ -55,6 +68,10 @@ pub const CrdsTable = struct {
     // used to build pull responses efficiently
     shards: CrdsShards,
 
+    // used when sending pull requests
+    purged: PurgedQ,
+    failed_inserts: FailedInsertsQ,
+
     // head of the store
     cursor: usize = 0,
 
@@ -72,6 +89,8 @@ pub const CrdsTable = struct {
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .shards = try CrdsShards.init(allocator, CRDS_SHARDS_BITS),
+            .purged = PurgedQ{},
+            .failed_inserts = FailedInsertsQ{},
         };
     }
 
@@ -105,7 +124,7 @@ pub const CrdsTable = struct {
         return self.store.count();
     }
 
-    pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
+    pub fn insert(self: *Self, value: CrdsValue, now: u64, maybe_route: ?GossipRoute) !void {
         // TODO: check to make sure this sizing is correct or use heap
         var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
         var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
@@ -178,16 +197,46 @@ pub const CrdsTable = struct {
             try self.shards.remove(entry_index, &old_entry.value_hash);
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
+            var node = PurgedQ.Node{ .data = HashAndTime{
+                .hash = old_entry.value_hash,
+                .timestamp = now,
+            } };
+            self.purged.append(&node);
+
             result.value_ptr.* = versioned_value;
 
             self.cursor += 1;
 
             // do nothing
         } else {
-            return CrdsError.OldValue;
+            const old_entry = result.value_ptr.*;
+
+            var node_data = HashAndTime{
+                .hash = old_entry.value_hash,
+                .timestamp = now,
+            };
+
+            if (maybe_route) |route| {
+                if (route == GossipRoute.PullResponse) {
+                    var failed_insert_node = FailedInsertsQ.Node{ .data = node_data };
+                    self.failed_inserts.append(&failed_insert_node);
+                }
+            }
+
+            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != CompareResult.Equal) {
+                // if hash isnt the same and override() is false then msg is old
+                var purged_node = PurgedQ.Node{ .data = node_data };
+                self.purged.append(&purged_node);
+
+                return CrdsError.OldValue;
+            } else {
+                // hash is the same then its a duplicate
+                return CrdsError.DuplicateValue;
+            }
         }
     }
 
+    // ** getter functions **
     pub fn get(self: *Self, label: CrdsValueLabel) ?CrdsVersionedValue {
         return self.store.get(label);
     }
@@ -269,6 +318,7 @@ pub const CrdsTable = struct {
         return buf[0..size];
     }
 
+    // ** shard getter fcns **
     pub fn get_bitmask_matches(
         self: *const Self,
         alloc: std.mem.Allocator,
@@ -277,6 +327,63 @@ pub const CrdsTable = struct {
     ) !std.ArrayList(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
+    }
+
+    // ** purged values fcns **
+    pub fn purged_len(self: *Self) usize {
+        return self.purged.len;
+    }
+
+    pub fn get_purged_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+        var values = try std.ArrayList(Hash).initCapacity(alloc, self.purged.len);
+
+        // collect all the hash values
+        var curr_ptr = self.purged.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            values.appendAssumeCapacity(curr.data.hash);
+        }
+
+        return values;
+    }
+
+    pub fn trim_purged_values(self: *Self, oldest_timestamp: u64) !void {
+        var curr_ptr = self.purged.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            const data_timestamp = curr.data.timestamp;
+            if (data_timestamp < oldest_timestamp) {
+                try self.purged.remove(curr_ptr);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // ** failed insert values fcns **
+    pub fn failed_inserts_len(self: *Self) usize {
+        return self.failed_inserts.len;
+    }
+
+    pub fn get_failed_inserts_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+        var values = try std.ArrayList(Hash).initCapacity(alloc, self.failed_inserts.len);
+
+        // collect all the hash values
+        var curr_ptr = self.failed_inserts.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            values.appendAssumeCapacity(curr.data.hash);
+        }
+        return values;
+    }
+
+    pub fn trim_failed_inserts_values(self: *Self, oldest_timestamp: u64) !void {
+        var curr_ptr = self.failed_inserts.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            const data_timestamp = curr.data.timestamp;
+            if (data_timestamp < oldest_timestamp) {
+                try self.failed_inserts.remove(curr_ptr);
+            } else {
+                break;
+            }
+        }
     }
 };
 
@@ -308,7 +415,7 @@ test "gossip.crds_table: insert and get" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    try crds_table.insert(value, 0);
+    try crds_table.insert(value, 0, null);
 
     const label = value.label();
     const x = crds_table.get(label).?;
@@ -328,7 +435,7 @@ test "gossip.crds_table: insert and get votes" {
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
-    try crds_table.insert(crds_value, 0);
+    try crds_table.insert(crds_value, 0, null);
 
     var cursor: usize = 0;
     var buf: [100]*CrdsVersionedValue = undefined;
@@ -346,7 +453,7 @@ test "gossip.crds_table: insert and get votes" {
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
     }, kp);
-    try crds_table.insert(crds_value, 1);
+    try crds_table.insert(crds_value, 1, null);
 
     votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
@@ -370,7 +477,7 @@ test "gossip.crds_table: insert and get contact_info" {
     defer crds_table.deinit();
 
     // test insertion
-    try crds_table.insert(crds_value, 0);
+    try crds_table.insert(crds_value, 0, null);
 
     // test retrieval
     var buf: [100]*CrdsVersionedValue = undefined;
@@ -379,13 +486,13 @@ test "gossip.crds_table: insert and get contact_info" {
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
     // test re-insertion
-    const result = crds_table.insert(crds_value, 0);
-    try std.testing.expectError(CrdsError.OldValue, result);
+    const result = crds_table.insert(crds_value, 0, null);
+    try std.testing.expectError(CrdsError.DuplicateValue, result);
 
     // test re-insertion with greater wallclock
     crds_value.data.LegacyContactInfo.wallclock += 2;
     const v = crds_value.data.LegacyContactInfo.wallclock;
-    try crds_table.insert(crds_value, 0);
+    try crds_table.insert(crds_value, 0, null);
 
     // check retrieval
     nodes = try crds_table.get_contact_infos(&buf);

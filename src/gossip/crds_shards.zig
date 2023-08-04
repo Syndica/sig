@@ -80,10 +80,15 @@ pub const CrdsShards = struct {
         const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
         const match_mask = mask | ones;
 
+        // mask = hash request bits
+        // shard_bits = current organization of this datastructure
+
         if (self.shard_bits < mask_bits) {
             // shard_bits is smaller, all matches with mask will be in the same shard index
-            // eg, shard_bits = 3, shardvalues == XX
-            // mask_bits = 5, mask == ABCD
+            // eg,
+            // shard_bits = 2, shardvalues == XX__
+            // mask_bits = 4,  mask ==        ABCD
+            // shards[AB]
             // all shard inserts will match mask AB
             // still need to scan bc of the last two bits of the shards
 
@@ -113,8 +118,8 @@ pub const CrdsShards = struct {
             return result;
         } else {
             // shardbits > maskbits
-            // eg, shard_bits = 5, shardvalues == XYZ
-            // mask_bits = 3, mask == AB
+            // eg, shard_bits = 3, shardvalues == XYZ
+            // mask_bits = 2,             mask == AB? 2
             // mask will match the mask + 2^(of the other bits)
             // and since its ordered we can just take the values before it
             // since AB will match XY and 2^1 (Z)
@@ -154,7 +159,7 @@ fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersio
     const keypair = try KeyPair.create(null);
     var value = try CrdsValue.random(rng, keypair);
     const label = value.label();
-    try crds_table.insert(value, 0);
+    try crds_table.insert(value, 0, null);
     const x = crds_table.get(label).?;
     return x;
 }
