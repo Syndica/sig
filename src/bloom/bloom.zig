@@ -109,8 +109,8 @@ pub const Bloom = struct {
         const two: f64 = 2;
 
         // const d: f64 = -4.804530139182015e-01
-        const d: f64 = std.math.ln(@as(f64, 1) / (std.math.pow(f64, two, std.math.ln(two))));
-        return std.math.ceil((n * std.math.ln(p)) / d);
+        const d: f64 = @log(@as(f64, 1) / (std.math.pow(f64, two, @log(two))));
+        return std.math.ceil((n * @log(p)) / d);
     }
 
     fn num_keys(n_bits: f64, num_items: f64) usize {
@@ -120,7 +120,7 @@ pub const Bloom = struct {
         if (n == 0) {
             return 0;
         } else {
-            return @intFromFloat(@max(@as(f64, 1), std.math.round((m / n) * std.math.ln(@as(f64, 2)))));
+            return @intFromFloat(@max(@as(f64, 1), std.math.round((m / n) * @log(@as(f64, 2)))));
         }
     }
 };

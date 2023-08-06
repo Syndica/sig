@@ -85,12 +85,6 @@ pub const CrdsShards = struct {
 
         if (self.shard_bits < mask_bits) {
             // shard_bits is smaller, all matches with mask will be in the same shard index
-            // eg,
-            // shard_bits = 2, shardvalues == XX__
-            // mask_bits = 4,  mask ==        ABCD
-            // shards[AB]
-            // all shard inserts will match mask AB
-            // still need to scan bc of the last two bits of the shards
 
             const shard = self.get_shard(match_mask);
             var shard_iter = shard.iterator();
@@ -118,12 +112,6 @@ pub const CrdsShards = struct {
             return result;
         } else {
             // shardbits > maskbits
-            // eg, shard_bits = 3, shardvalues == XYZ
-            // mask_bits = 2,             mask == AB? 2
-            // mask will match the mask + 2^(of the other bits)
-            // and since its ordered we can just take the values before it
-            // since AB will match XY and 2^1 (Z)
-
             const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
             const count: usize = @intCast(@as(u64, 1) << shift_bits);
             const end = CrdsShards.compute_shard_index(self.shard_bits, match_mask) + 1;

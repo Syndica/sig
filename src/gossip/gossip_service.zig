@@ -122,10 +122,10 @@ pub const GossipService = struct {
             const now = get_wallclock();
             // recently purged values
             const purged_cutoff_timestamp = now -| (5 * self.pull_timeout);
-            self.crds_table.trim_purged_values(purged_cutoff_timestamp);
+            try self.crds_table.trim_purged_values(purged_cutoff_timestamp);
             // failed insertions
             const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
-            self.crds_table.trim_failed_inserts_values(failed_insert_cutoff_timestamp);
+            try self.crds_table.trim_failed_inserts_values(failed_insert_cutoff_timestamp);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }

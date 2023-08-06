@@ -13,7 +13,6 @@ const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const ln = std.math.ln;
 const exp = std.math.exp;
 
 const CrdsTable = @import("crds_table.zig").CrdsTable;
@@ -213,7 +212,7 @@ pub const CrdsFilter = struct {
         const m = max_bits;
         const p = false_rate;
         const k = num_keys;
-        return std.math.ceil(m / (-k / ln(@as(f64, 1) - exp(ln(p) / k))));
+        return std.math.ceil(m / (-k / @log(@as(f64, 1) - exp(@log(p) / k))));
     }
 
     pub fn deinit(self: *Self) void {

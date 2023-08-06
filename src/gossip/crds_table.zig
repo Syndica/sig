@@ -351,7 +351,7 @@ pub const CrdsTable = struct {
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {
             const data_timestamp = curr.data.timestamp;
             if (data_timestamp < oldest_timestamp) {
-                try self.purged.remove(curr_ptr);
+                self.purged.remove(curr);
             } else {
                 break;
             }
@@ -379,7 +379,7 @@ pub const CrdsTable = struct {
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {
             const data_timestamp = curr.data.timestamp;
             if (data_timestamp < oldest_timestamp) {
-                try self.failed_inserts.remove(curr_ptr);
+                self.failed_inserts.remove(curr);
             } else {
                 break;
             }

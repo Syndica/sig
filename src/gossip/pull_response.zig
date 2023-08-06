@@ -13,7 +13,6 @@ const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const ln = std.math.ln;
 const exp = std.math.exp;
 
 const CrdsTable = @import("crds_table.zig").CrdsTable;
