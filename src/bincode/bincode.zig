@@ -587,6 +587,63 @@ pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params
     return v;
 }
 
+// pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
+//     _ = params;
+//     _ = data;
+//     _ = slice;
+//     return error.TooBad;
+
+//     // var stream = std.io.fixedBufferStream(slice);
+//     // var writer = stream.writer();
+//     // var s = serializer(writer, params);
+//     // var ss = s.serializer();
+//     // try getty.serialize(null, data, ss);
+//     // return stream.getWritten();
+// }
+
+// pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: Params) !void {
+//     _ = params;
+//     _ = data;
+//     _ = writer;
+//     _ = alloc;
+//     return error.TooBad;
+
+//     // var s = serializer(writer, params);
+//     // var ss = s.serializer();
+//     // try getty.serialize(alloc, data, ss);
+// }
+
+// // can call if dont require an allocator
+// pub fn readFromSlice(alloc: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
+//     _ = params;
+//     _ = slice;
+//     _ = alloc;
+//     return error.TooBad;
+
+//     // var stream = std.io.fixedBufferStream(slice);
+//     // var reader = stream.reader();
+//     // var d = deserializer(reader, params);
+//     // var dd = d.deserializer();
+//     // var v = try getty.deserialize(alloc, T, dd);
+//     // errdefer getty.de.free(alloc, @TypeOf(dd), v); // !
+//     // return v;
+// }
+
+// pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params: Params) !T {
+//     _ = params;
+//     _ = reader;
+//     _ = alloc;
+//     return error.TooBad;
+
+//     // var d = deserializer(reader, params);
+//     // const dd = d.deserializer();
+//     // const v = try getty.deserialize(alloc, T, dd);
+//     // errdefer getty.de.free(alloc, @TypeOf(dd), v);
+
+//     // return v;
+
+// }
+
 test "bincode: test serialization" {
     var buf: [1]u8 = undefined;
 
@@ -661,6 +718,8 @@ test "bincode: test serialization" {
     var out4 = try writeToSlice(&buf6, _s, Params.standard);
     var result = try readFromSlice(null, s, out4, Params{});
     try std.testing.expectEqual(result, _s);
+
+    
 }
 
 test "bincode: (legacy) serialize an array" {

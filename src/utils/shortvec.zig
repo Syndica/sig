@@ -35,7 +35,7 @@ pub fn ShortVecConfig(comptime childSerialize: bincode.SerializeFunction, compti
 
 pub const shortvec_config = bincode.FieldConfig{
     .serializer = serilaize_shortvec,
-    .deserializer = deserialize_shortvec,
+    .deserializer = null, // deserialize_shortvec,
 };
 
 pub fn serilaize_shortvec(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -44,17 +44,27 @@ pub fn serilaize_shortvec(writer: anytype, data: anytype, params: bincode.Params
     for (data) |item| {
         try bincode.write(null, writer, item, params);
     }
-    return;
 }
 
 pub fn deserialize_shortvec(allocator: ?std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
-    var ally = allocator.?;
+    _ = allocator;
+    _ = reader;
+    _ = params;
+    return error.TooBad;
 
-    const Child = @typeInfo(T).Pointer.child;
-    var len = try deserialize_short_u16(ally, u16, reader, params);
-    var elems = try ally.alloc(Child, len);
-    for (0..len) |i| {
-        elems[i] = try bincode.read(ally, Child, reader, params);
-    }
-    return elems;
+    // var ally = allocator.?;
+    // _ = ally; 
+
+    // const Child = @typeInfo(T).Pointer.child;
+    // _ = Child;
+
+    // return error.TooBad;
+
+    // var len = try deserialize_short_u16(ally, u16, reader, params);
+    // var len = bincode.read(ally, u16, reader, params);
+    // var elems = try ally.alloc(Child, len);
+    // for (0..len) |i| {
+    //     elems[i] = try bincode.read(ally, Child, reader, params);
+    // }
+    // return elems;
 }

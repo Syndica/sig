@@ -25,8 +25,8 @@ pub const Message = struct {
     recent_blockhash: Hash,
     instructions: []CompiledInstruction,
 
-    pub const @"!bincode-config:account_keys" = shortvec_config;
-    pub const @"!bincode-config:instructions" = shortvec_config;
+    // pub const @"!bincode-config:account_keys" = shortvec_config;
+    // pub const @"!bincode-config:instructions" = shortvec_config;
 
     pub fn default() Message {
         return Message{
@@ -66,8 +66,8 @@ pub const CompiledInstruction = struct {
     /// The program input data.
     data: []u8,
 
-    pub const @"!bincode-config:accounts" = shortvec_config;
-    pub const @"!bincode-config:data" = shortvec_config;
+    // pub const @"!bincode-config:accounts" = shortvec_config;
+    // pub const @"!bincode-config:data" = shortvec_config;
 };
 
 test "core.transaction: tmp" {

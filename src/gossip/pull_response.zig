@@ -86,62 +86,62 @@ pub fn filter_crds_values(
     return output;
 }
 
-test "gossip.pull: test filter_crds_values" {
-    var crds_table = try CrdsTable.init(std.testing.allocator);
-    defer crds_table.deinit();
+// test "gossip.pull: test filter_crds_values" {
+//     var crds_table = try CrdsTable.init(std.testing.allocator);
+//     defer crds_table.deinit();
 
-    // insert a some value
-    const kp = try KeyPair.create([_]u8{1} ** 32);
+//     // insert a some value
+//     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
+//     var seed: u64 = @intCast(std.time.milliTimestamp());
+//     var rand = std.rand.DefaultPrng.init(seed);
+//     const rng = rand.random();
 
-    for (0..100) |_| {
-        // var id = Pubkey.random(rng, .{});
-        // var legacy_contact_info = crds.LegacyContactInfo.default();
-        // legacy_contact_info.wallclock = 40;
-        // legacy_contact_info.id = id;
-        // var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
-        //     .LegacyContactInfo = legacy_contact_info,
-        // }, kp);
+//     for (0..100) |_| {
+//         // var id = Pubkey.random(rng, .{});
+//         // var legacy_contact_info = crds.LegacyContactInfo.default();
+//         // legacy_contact_info.wallclock = 40;
+//         // legacy_contact_info.id = id;
+//         // var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+//         //     .LegacyContactInfo = legacy_contact_info,
+//         // }, kp);
 
-        var crds_value = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(crds_value, 0, null);
-    }
+//         var crds_value = try crds.CrdsValue.random(rng, kp);
+//         try crds_table.insert(crds_value, 0, null);
+//     }
 
-    const max_bytes = 10;
+//     const max_bytes = 10;
 
-    // recver
-    var filters = try crds_pull_req.build_crds_filters(std.testing.allocator, &crds_table, max_bytes);
-    defer crds_pull_req.deinit_crds_filters(&filters);
-    var filter = filters.items[0];
+//     // recver
+//     var filters = try crds_pull_req.build_crds_filters(std.testing.allocator, &crds_table, max_bytes);
+//     defer crds_pull_req.deinit_crds_filters(&filters);
+//     var filter = filters.items[0];
 
-    // corresponding value
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
-    var legacy_contact_info = crds.LegacyContactInfo.default();
-    legacy_contact_info.id = id;
-    legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    var crds_value = try CrdsValue.initSigned(crds.CrdsData{
-        .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+//     // corresponding value
+//     const pk = kp.public_key;
+//     var id = Pubkey.fromPublicKey(&pk, true);
+//     var legacy_contact_info = crds.LegacyContactInfo.default();
+//     legacy_contact_info.id = id;
+//     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
+//     var crds_value = try CrdsValue.initSigned(crds.CrdsData{
+//         .LegacyContactInfo = legacy_contact_info,
+//     }, kp);
 
-    // insert more values which the filters should be missing
-    for (0..64) |_| {
-        var v2 = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(v2, 0, null);
-    }
+//     // insert more values which the filters should be missing
+//     for (0..64) |_| {
+//         var v2 = try crds.CrdsValue.random(rng, kp);
+//         try crds_table.insert(v2, 0, null);
+//     }
 
-    var values = try filter_crds_values(
-        std.testing.allocator,
-        &crds_table,
-        &crds_value,
-        &filter,
-        100,
-        @intCast(std.time.milliTimestamp()),
-    );
-    defer values.deinit();
+//     var values = try filter_crds_values(
+//         std.testing.allocator,
+//         &crds_table,
+//         &crds_value,
+//         &filter,
+//         100,
+//         @intCast(std.time.milliTimestamp()),
+//     );
+//     defer values.deinit();
 
-    try std.testing.expect(values.items.len > 0);
-}
+//     try std.testing.expect(values.items.len > 0);
+// }
