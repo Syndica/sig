@@ -74,38 +74,41 @@ pub const CrdsValueLabel = union(enum) {
 - for example, when broadcasting data to the rest of the network, it would be nice to have all the `ContactInfo` values which are stored in the CRDS table 
 - this is why we use an **indexable** hash map implementation 
 
-  - for example, when inserting values into the store we recieve its corresponding index from the insertion (`index = crds_table.insert(&versioned_value)`)
-  - we can then store these indexs in another array (`contact_infos.append(index)`)
-  - to retrieve these values, we can iterate over the array, index into the table, and retrieve the correspoinding data values
+  - for example, when inserting values into the store, we recieve its corresponding index from the insertion (`crds_index = crds_table.insert(&versioned_value)`)
+  - we can then store these indexs in an array (`contact_infos.append(crds_index)`)
+  - to retrieve these values, we can iterate over the array, index into the table, and retrieve the correspoinding data values (`versioned_value = crds_table[crds_index]`)
   - we follow this approach for all of the data types such as: `ContactInfos`, `Votes`, `EpochSlots`, `DuplicateShreds`, and `ShredVersions`
 
 ### Retrieving Data Specific Data Types
 
-- to efficiently retrieve new data from the store, we also track a `cursor` variable which is the head of the store and is monotonically incremented on each insert/update
+- to efficiently retrieve *new* data from the store, we also track a `cursor` variable which is the head of the store and is monotonically incremented on each insert/update
 - we can then use getter functions such as, `get_votes_with_cursor`, which allows you to retrieve votes which are past a certain cursor index
 - a listener would track their own cursor and periodically call the getter functions to retrieve new values
 
-## Protocol: Pull Messages
+## Protocol Messages: Pull
 
 ### Building Pull *Requests*
 
 - pull request are used to retrieve gossip data which the node is missing 
 - they are sent to random peers periodically and say, "i have these values in my crds table, can you send me anything im missing"
 - to say this, we construct a bloom filter over the hashes of values stored in the crds table
+- the majority of code can be found in `pull_requests.zig` and `src/bloom/bloom.zig`
 
-- since there are a lot of values in the crds store, instead of constructing one large bloom filter to send to all validators, we partition the crds data across multiple filters based on the hash value's first N bits  
-- for example, if we are paritioning on the first 3 bits of hash values we would use, 2^3 = 8 bloom filters: 
+- since there are a lot of values in the crds store, instead of constructing one large bloom filter to send to all validators, we partition the crds data across multiple filters based on the hash value's first `N` bits 
+  - we do this with the `CrdsFilterSet` struct which is a list of `CrdsFilters`
+- for example, if we are paritioning on the first 3 bits of hash values we would use, 2^3 = 8 `Bloom` filters: 
     - the first bloom containing hash values whos bits start with 000
     - the second bloom containing hash values whos bits start with 001
     - ... 
     - and lastly, the eight bloom containing hash values whos bits start with 111
-- for example, if a hash had bits 00101110101, we would only consider its first 3 bits, 001, and would be added to the first bloom filter (`@cast(usize, 001) = 1`)
-- you can think of this as a custom hash function for a hash map, where the keys are hashes, the values are bloom filters, and the function is to consider the first N bits of the hash
-- the number of bits (called `mask_bits` in the code) we require depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the crds store, and more 
-- after we construct this filter set (ie, compute the mask_bits and init the bloom filters), we then need to add all the crds values to it (psuedocode below)
+- for example, if we were tracking a `Hash` with bits 00101110101, we would only consider its first 3 bits, 001, and so we would add the hash to the first bloom filter (`@cast(usize, 001) = 1`)
+- you can think of this as a custom hash function for a hash map, where the keys are `Hash` values, the values are `Bloom` filters, and the function is to consider the first `N` bits of the hash
+- the first `N` bits is called the `mask_bits` in the code which depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the crds store, and more 
+- after we construct this filter set (ie, compute the `mask_bits` and init `2^mask_bits` bloom filters), we then need to track all of the `CrdsValues` to it
+- some psuedocode is below
 
 ```python 
-## main function for building pull requests! 
+## main function for building pull requests
 def build_crds_filters(
     crds_store: *CrdsStore
 ) Vec<CrdsFilters>: 
@@ -116,15 +119,15 @@ def build_crds_filters(
     for value in values: 
         filter_set.add(value)
 
-    # TODO: CrdsFilterSet => Vec<CrdsFilters>
-    # return filter_set.consumeForCrdsFilters()
+    # CrdsFilterSet => Vec<CrdsFilters>
+    return filter_set.consumeForCrdsFilters()
 
 class CrdsFilterSet(): 
     mask_bits: u64
     filters: Vec<Bloom>
     
     def init(self, num_items):
-        self.mask_bits = ... 
+        self.mask_bits = ... # compute the mask_bits
         n_filters = 1 << mask_bits # 2^mask_bits 
         
         self.filters = []
@@ -132,7 +135,7 @@ class CrdsFilterSet():
             self.filters.append(Bloom.random())
             
     def add(hash: Hash):
-        # compute the hash index 
+        # compute the hash index (ie, the first mask_bits bits of the Hash)
         # eg:
         # hash: 001010101010101..1
         # mask_bits = 3 
@@ -144,8 +147,9 @@ class CrdsFilterSet():
         self.filters[index].add(hash)
 ```
 
-- we then need to consume the filter set into a vector of filters 
+- we then need to consume the filter set into a vector of `CrdsFilter` which we'll send to the network
 - each filter also requires a mask which identifies what filter it is (\what the first N bits of the hash values it contains)
+  - eg, the mask of the first filter would be `000`, the mask of the second filter would be `001`, the third filter would be `010`, ...
 
 ```python
     def consumeForCrdsFilters(self: CrdsFilterSet) Vec<CrdsFilters>:
@@ -161,7 +165,7 @@ class CrdsFilterSet():
 
 ```python 
 fn compute_mask(index: u64, mask_bits: u64) u64: 
-    # shift the index to the first `mask_bits` of the u64 
+    # shift the index to the first `mask_bits` of the u64
     # eg, 
     # index = 1 
     # mask_bits = 3 
