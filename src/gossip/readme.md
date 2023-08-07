@@ -89,10 +89,9 @@ pub const CrdsValueLabel = union(enum) {
 
 ### Building Pull *Requests*
 
-- pull request are used to retrieve gossip data which the node is missing 
-- they are sent to random peers periodically and say, "i have these values in my crds table, can you send me anything im missing"
+- pull request are used to retrieve gossip data which the node is missing - they are sent to random peers periodically and say, "i have these values in my crds table, can you send me anything im missing"
 - to say this, we construct a bloom filter over the hashes of values stored in the crds table
-- the majority of code can be found in `pull_requests.zig` and `src/bloom/bloom.zig`
+  - the majority of code can be found in `pull_requests.zig` and `src/bloom/bloom.zig`
 
 - since there are a lot of values in the crds store, instead of constructing one large bloom filter to send to all validators, we partition the crds data across multiple filters based on the hash value's first `N` bits 
   - we do this with the `CrdsFilterSet` struct which is a list of `CrdsFilters`
@@ -147,8 +146,8 @@ class CrdsFilterSet():
         self.filters[index].add(hash)
 ```
 
-- we then need to consume the filter set into a vector of `CrdsFilter` which we'll send to the network
-- each filter also requires a mask which identifies what filter it is (\what the first N bits of the hash values it contains)
+- after adding all values to the `CrdsFilterSet`, we then need to consume the set into a vector of `CrdsFilters` which we'll send to different peers
+- to idenitfy which hash bits each filter contains, we use a mask
   - eg, the mask of the first filter would be `000`, the mask of the second filter would be `001`, the third filter would be `010`, ...
 
 ```python
@@ -161,7 +160,7 @@ class CrdsFilterSet():
         )
 ```
 
-- the logic follows similar to the bit operations above, its computed in `CrdsFilter.compute_mask(index, self.mask_bits)`
+- the logic follows similar to the bit operations above and is computed in `CrdsFilter.compute_mask(index, self.mask_bits)`
 
 ```python 
 fn compute_mask(index: u64, mask_bits: u64) u64: 
