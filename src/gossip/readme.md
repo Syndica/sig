@@ -180,22 +180,22 @@ fn compute_mask(index: u64, mask_bits: u64) u64:
 - notice how the result will be ones everywhere except for the first `mask_bits` bits, which represent the index
 - after getting the vector of filters, we send each filter out to a random peer weighted by stake weight
 
-### Sending Pull *Responses*
+### Building Pull *Responses*
 
-- sending a pull *response* requires you to parse the crds table values, and filter the values which match the filter's `mask`, and are also not included in the request's bloom filter 
-- the main function which we use is `filter_crds_values` which takes a `CrdsFilter` as input (which contains a `bloom_filter: Bloom`, a `mask: u64` which contains the hash index, and `mask_bits: u64` which is how many filters exist)
+- sending a pull *response* requires you to iterate over values stored in the Crds table, filter the values to match the `CrdsFilter`'s `mask`, and find values which are not included in the request's `Bloom` filter 
+- the main function which we use is `filter_crds_values` which takes a `CrdsFilter` as input and returns a vector of `CrdsValues`
     - first it calls `crds_table.get_bitmask_matches` which returns the entries in the crds table which match the filters `mask`
     - to do this efficiently, we introduce a new data structure called `CrdsShards` which is located in `crds_shards.zig`
 
 #### `CrdsShards`
 
-- `CrdsShards` stores hash values efficiently based on the first `shard_bits` of a hash value 
-- the main structure is `shards = ArrayList(AutoArrayHashMap(usize, u64)),` where `shards[k]` includes crds values which the first `shard_bits` of their hash value is equal to k
+- `CrdsShards` stores hash values efficiently based on the first `shard_bits` of a hash value (similar to the `CrdsFilterSet` structure)
+- the main structure is `shards = ArrayList(AutoArrayHashMap(usize, u64)),` where `shards[k]` includes crds values which the first `shard_bits` of their hash value is equal to `k`
 - the insertion logic is straightforward 
-    - take the first 8 bytes of a hash and cast it to a `u64`
+    - take the first 8 bytes of a hash and cast it to a `u64` (`hash_u64 = @as(u64, hash[0..8])`)
     - compute the first `shard_bits` bits of the `u64` by computing `shard_index = hash_u64 >> (64 - shard_bits)`
     - get the shard: `self.shards[shard_index]`
-    - insert the crds store index along with the u64 hash
+    - insert the crds table index along with the `u64_hash`
 
 ```python 
 def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
@@ -204,14 +204,16 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
     shard.put(crds_index, uhash);
 ```
 
-- the logic follows very closely with what we did with `CrdsFilterSet`
-- now we need to retrieve hash values which match a `mask` (ie, their first `mask_bit` bits are equal to `mask`)
-- when `shard_bits == mask_bits` its very straightforward, we just lookup the shard corresponding to `mask` and return its values
+- we insert values into the `CrdsShard` structure whenever we insert a new value in the `CrdsTable`
+- now to build the pull response, we need to retrieve hash values which match a `mask` (ie, their first `mask_bit` bits are equal to `mask`)
+- when `shard_bits == mask_bits` its very straightforward, we just lookup the shard corresponding to the first `shard_bits` of `mask` and return its values
+
+![](imgs/2023-08-07-15-49-02.png)
 
 ```python 
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
     if (self.shard_bits == mask_bits) {
-        shard = self.shard[mask]
+        shard = self.shard[(mask >> (64 - self.shard_bits)]
         crds_indexs = shard.keys()
         return crds_indexs
     } else { 
@@ -219,9 +221,11 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     }
 ```
 
-- when `shard_bits < mask_bits`, the mask is tracking more bits than the shard are, so we know if we truncate the mask up to `shard_bits`, we can grab the shard and iterate over those values and to find exact matches
+- when `shard_bits < mask_bits`, the mask is tracking more bits than the shards are, so we know if we truncate the mask up to `shard_bits`, we can grab the shard and iterate over those values and to find exact matches
     - truncating and looking up the shard gives us hashes which have a matching first `shard_bits`
     - we then need to check to make sure the last `shard_bits - mask_bits` match the mask which we do through iteration 
+
+![](2023-08-07-15-49-57.png)
 
 ```python
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
@@ -255,6 +259,8 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - so, we know we'll have to look up `2^(shard_bits - mask_bits)` number of shards which can be computed using `1 << (shard_bits - mask_bits)`
     - the final shard would be the mask followed by all ones (ie, 0111 in the example above) at the end which can be computed as `(mask | mask_ones) >> shard_bits`
     - since we know the final shard and the number of shards were looking for, we can iterate over them from `index = (end-count)..end`
+
+![](2023-08-07-15-50-23.png)
 
 ```python
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
