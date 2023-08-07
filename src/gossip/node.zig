@@ -328,49 +328,49 @@ test "set & get socket on contact info" {
     try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(SOCKET_TAG_RPC, 0, 8899)));
 }
 
-// test "contact info bincode serialize matches rust bincode" {
-//     var rust_contact_info_serialized_bytes = [_]u8{
-//         57,  54, 18,  6,  106, 202, 13, 245, 224, 235, 33,  252, 254, 251, 161, 17, 248, 108, 25,  214, 169,
-//         154, 91, 101, 17, 121, 235, 82, 175, 197, 144, 145, 100, 200, 0,   0,   0,  0,   0,   0,   0,   44,
-//         1,   1,  2,   3,  4,   0,   0,  0,   5,   0,   0,   0,   6,   4,   0,   0,  0,   0,   127, 0,   0,
-//         1,   0,  0,   0,  0,   127, 0,  0,   1,   0,   0,   0,   0,   127, 0,   0,  1,   0,   0,   0,   0,
-//         127, 0,  0,   1,  6,   10,  20, 30,  10,  20,  30,  10,  20,  30,  10,  20, 30,  10,  20,  30,  10,
-//         20,  30,
-//     };
+test "contact info bincode serialize matches rust bincode" {
+    var rust_contact_info_serialized_bytes = [_]u8{
+        57,  54, 18,  6,  106, 202, 13, 245, 224, 235, 33,  252, 254, 251, 161, 17, 248, 108, 25,  214, 169,
+        154, 91, 101, 17, 121, 235, 82, 175, 197, 144, 145, 100, 200, 0,   0,   0,  0,   0,   0,   0,   44,
+        1,   1,  2,   3,  4,   0,   0,  0,   5,   0,   0,   0,   6,   4,   0,   0,  0,   0,   127, 0,   0,
+        1,   0,  0,   0,  0,   127, 0,  0,   1,   0,   0,   0,   0,   127, 0,   0,  1,   0,   0,   0,   0,
+        127, 0,  0,   1,  6,   10,  20, 30,  10,  20,  30,  10,  20,  30,  10,  20, 30,  10,  20,  30,  10,
+        20,  30,
+    };
 
-//     var pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
-//     var ci = ContactInfo.initDummyForTest(testing.allocator, pubkey, 100, 200, 300);
-//     defer ci.deinit();
+    var pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
+    var ci = ContactInfo.initDummyForTest(testing.allocator, pubkey, 100, 200, 300);
+    defer ci.deinit();
 
-//     var buf = std.ArrayList(u8).init(testing.allocator);
-//     bincode.write(null, buf.writer(), ci, bincode.Params.standard) catch unreachable;
-//     defer buf.deinit();
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    bincode.write(null, buf.writer(), ci, bincode.Params.standard) catch unreachable;
+    defer buf.deinit();
 
-//     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
+    try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
 
-//     var stream = std.io.fixedBufferStream(buf.items);
-//     var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-//     defer ci2.deinit();
+    var stream = std.io.fixedBufferStream(buf.items);
+    var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
+    defer ci2.deinit();
 
-//     try testing.expect(ci2.addrs.items.len == 4);
-//     try testing.expect(ci2.sockets.items.len == 6);
-//     try testing.expect(ci2.pubkey.equals(&ci.pubkey));
-//     try testing.expect(ci2.outset == ci.outset);
-// }
+    try testing.expect(ci2.addrs.items.len == 4);
+    try testing.expect(ci2.sockets.items.len == 6);
+    try testing.expect(ci2.pubkey.equals(&ci.pubkey));
+    try testing.expect(ci2.outset == ci.outset);
+}
 
-// test "SocketEntry serializer works" {
-//     testing.log_level = .debug;
+test "SocketEntry serializer works" {
+    testing.log_level = .debug;
 
-//     var se = SocketEntry.init(3, 3, 30304);
+    var se = SocketEntry.init(3, 3, 30304);
 
-//     var buf = std.ArrayList(u8).init(testing.allocator);
-//     defer buf.deinit();
-//     try bincode.write(null, buf.writer(), se, bincode.Params.standard);
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    defer buf.deinit();
+    try bincode.write(null, buf.writer(), se, bincode.Params.standard);
 
-//     var stream = std.io.fixedBufferStream(buf.items);
-//     var other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
+    var stream = std.io.fixedBufferStream(buf.items);
+    var other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
 
-//     try testing.expect(other_se.index == se.index);
-//     try testing.expect(other_se.key == se.key);
-//     try testing.expect(other_se.offset == se.offset);
-// }
+    try testing.expect(other_se.index == se.index);
+    try testing.expect(other_se.key == se.key);
+    try testing.expect(other_se.offset == se.offset);
+}

@@ -312,12 +312,12 @@ test "gossip.pull: helper functions are correct" {
     }
 }
 
-// test "gossip.pull: crds filter matches rust bytes" {
-//     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-//     var filter = CrdsFilter.init(std.testing.allocator);
-//     defer filter.deinit();
+test "gossip.pull: crds filter matches rust bytes" {
+    const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
+    var filter = CrdsFilter.init(std.testing.allocator);
+    defer filter.deinit();
 
-//     var buf = [_]u8{0} ** 1024;
-//     var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
-//     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
-// }
+    var buf = [_]u8{0} ** 1024;
+    var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
+    try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
+}

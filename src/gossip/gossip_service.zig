@@ -291,50 +291,50 @@ pub const GossipService = struct {
     }
 };
 
-// test "gossip.gossip_service: process contact_info push packet" {
-//     const allocator = std.testing.allocator;
-//     var crds_table = try CrdsTable.init(allocator);
-//     defer crds_table.deinit();
+test "gossip.gossip_service: process contact_info push packet" {
+    const allocator = std.testing.allocator;
+    var crds_table = try CrdsTable.init(allocator);
+    defer crds_table.deinit();
 
-//     var packet_channel = PacketChannel.init(allocator, 100);
-//     defer packet_channel.deinit();
+    var packet_channel = PacketChannel.init(allocator, 100);
+    defer packet_channel.deinit();
 
-//     var logger = Logger.init(allocator, .debug);
-//     defer logger.deinit();
-//     logger.spawn();
+    var logger = Logger.init(allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
 
-//     var packet_handle = try Thread.spawn(.{}, GossipService.process_packets, .{ &packet_channel, &crds_table, allocator, logger });
+    var packet_handle = try Thread.spawn(.{}, GossipService.process_packets, .{ &packet_channel, &crds_table, allocator, logger });
 
-//     // send a push message
-//     var kp_bytes = [_]u8{1} ** 32;
-//     const kp = try KeyPair.create(kp_bytes);
-//     const pk = kp.public_key;
-//     var id = Pubkey.fromPublicKey(&pk, true);
+    // send a push message
+    var kp_bytes = [_]u8{1} ** 32;
+    const kp = try KeyPair.create(kp_bytes);
+    const pk = kp.public_key;
+    var id = Pubkey.fromPublicKey(&pk, true);
 
-//     // new contact info
-//     var legacy_contact_info = crds.LegacyContactInfo.default();
-//     var crds_data = crds.CrdsData{
-//         .LegacyContactInfo = legacy_contact_info,
-//     };
-//     var crds_value = try crds.CrdsValue.initSigned(crds_data, kp);
-//     var values = [_]crds.CrdsValue{crds_value};
-//     const msg = Protocol{
-//         .PushMessage = .{ id, &values },
-//     };
+    // new contact info
+    var legacy_contact_info = crds.LegacyContactInfo.default();
+    var crds_data = crds.CrdsData{
+        .LegacyContactInfo = legacy_contact_info,
+    };
+    var crds_value = try crds.CrdsValue.initSigned(crds_data, kp);
+    var values = [_]crds.CrdsValue{crds_value};
+    const msg = Protocol{
+        .PushMessage = .{ id, &values },
+    };
 
-//     // packet
-//     const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
-//     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
-//     var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
-//     const packet = Packet.init(peer, buf, bytes.len);
-//     packet_channel.send(packet);
+    // packet
+    const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
+    var buf = [_]u8{0} ** PACKET_DATA_SIZE;
+    var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
+    const packet = Packet.init(peer, buf, bytes.len);
+    packet_channel.send(packet);
 
-//     // correct insertion into table
-//     var buf2: [100]*crds.CrdsVersionedValue = undefined;
-//     std.time.sleep(std.time.ns_per_s);
-//     var res = try crds_table.get_contact_infos(&buf2);
-//     try std.testing.expect(res.len == 1);
+    // correct insertion into table
+    var buf2: [100]*crds.CrdsVersionedValue = undefined;
+    std.time.sleep(std.time.ns_per_s);
+    var res = try crds_table.get_contact_infos(&buf2);
+    try std.testing.expect(res.len == 1);
 
-//     packet_channel.close();
-//     packet_handle.join();
-// }
+    packet_channel.close();
+    packet_handle.join();
+}
