@@ -21,9 +21,7 @@ pub const Params = struct {
     include_fixed_array_length: bool = false,
 };
 
-pub fn deserializer(r: anytype, params: Params) blk: {
-    break :blk Deserializer(@TypeOf(r));
-} {
+pub fn deserializer(r: anytype, params: Params) Deserializer(@TypeOf(r)) {
     return Deserializer(@TypeOf(r)).init(r, params);
 }
 
@@ -211,20 +209,28 @@ pub fn Deserializer(comptime Reader: type) type {
                         const params = dd.context.params;
                         var data: T = undefined;
 
-                        if (getStructSerializer(T)) |deser_fcn| {
-                            data = try deser_fcn(alloc, T, reader, params);
-                            return data;
+                        if (get_struct_config(T)) |config| {
+                            if (config.deserializer) |deser_fcn| {
+                                data = try deser_fcn(alloc, T, reader, params);
+                                return data;
+                            }
                         }
 
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
-                                if (shouldUseDefaultValue(T, field)) |val| {
-                                    @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(val))).*;
-                                } else if (getFieldDeserializer(T, field)) |deser_fcn| {
-                                    @field(data, field.name) = try (deser_fcn(alloc, field.type, reader, params) catch getty.de.Error.InvalidValue);
-                                } else {
-                                    @field(data, field.name) = try getty.deserialize(alloc, field.type, dd);
+                                if (get_field_config(T, field)) |config| {
+                                    if (shouldUseDefaultValue(field, config)) |default_val| {
+                                        @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_val))).*;
+                                        continue;
+                                    }
+
+                                    if (config.deserializer) |deser_fcn| {
+                                        @field(data, field.name) = try (deser_fcn(alloc, reader, params) catch getty.de.Error.InvalidValue);
+                                        continue;
+                                    }
                                 }
+
+                                @field(data, field.name) = try getty.deserialize(alloc, field.type, dd);
                             }
                         }
                         return data;
@@ -288,9 +294,7 @@ pub fn free(
 }
 
 // for ref: https://github.com/getty-zig/json/blob/a5c4d9f996dc3f472267f6210c30f96c39da576b/src/ser/serializer.zig
-pub fn serializer(w: anytype, params: Params) blk: {
-    break :blk Serializer(@TypeOf(w));
-} {
+pub fn serializer(w: anytype, params: Params) Serializer(@TypeOf(w)) {
     return Serializer(@TypeOf(w)).init(w, params);
 }
 
@@ -429,19 +433,25 @@ pub fn Serializer(
                         var params = ss.context.params;
                         var writer = ss.context.writer;
 
-                        if (getStructSerializer(T)) |ser_fcn| {
-                            return ser_fcn(writer, value, params);
+                        if (get_struct_config(T)) |config| {
+                            if (config.serializer) |ser_fcn| {
+                                return ser_fcn(writer, value, params);
+                            }
                         }
 
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
-                                if (!shouldSkipSerializingField(T, field)) {
-                                    if (getFieldSerializer(T, field)) |ser_fcn| {
+                                if (get_field_config(T, field)) |config| {
+                                    if (config.skip) {
+                                        continue;
+                                    }
+                                    if (config.serializer) |ser_fcn| {
                                         try (ser_fcn(writer, @field(value, field.name), params) catch Error.IO);
-                                    } else {
-                                        try getty.serialize(alloc, @field(value, field.name), ss);
+                                        continue;
                                     }
                                 }
+
+                                try getty.serialize(alloc, @field(value, field.name), ss);
                             }
                         }
                     },
@@ -485,72 +495,60 @@ pub fn Serializer(
     };
 }
 
-pub inline fn shouldUseDefaultValue(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) ?*const anyopaque {
-    const parent_type_name = @typeName(parent_type);
-
-    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
-        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
-        if (config.skip and struct_field.default_value == null) {
-            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ parent_type_name ++ "." ++ struct_field.name ++ "' deserialization if no default value set\n\n");
-        }
-        return struct_field.default_value;
-    }
-
-    return null;
+// need this fn to define the return type T
+pub fn DeserializeFunction(comptime T: type) type {
+    return fn (alloc: ?std.mem.Allocator, reader: anytype, params: Params) anyerror!T;
 }
-
-pub fn getFieldDeserializer(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) ?DeserializeFunction {
-    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
-        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
-        return config.deserializer;
-    }
-    return null;
-}
-
 pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
-pub const DeserializeFunction = fn (alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params: Params) anyerror!void;
 
-pub const FieldConfig = struct {
-    serializer: ?SerializeFunction = null,
-    deserializer: ?DeserializeFunction = null,
-    skip: bool = false,
-};
+// ** Struct Functions ** //
+pub fn StructConfig(comptime T: type) type {
+    return struct {
+        deserializer: ?DeserializeFunction(T) = null,
+        serializer: ?SerializeFunction = null,
+    };
+}
 
-pub const StructConfig = struct {
-    serializer: ?SerializeFunction = null,
-    deserializer: ?DeserializeFunction = null,
-};
-
-pub fn getStructSerializer(comptime parent_type: type) ?SerializeFunction {
-    if (@hasDecl(parent_type, "!bincode-config")) {
-        const config = @field(parent_type, "!bincode-config");
-        return config.serializer;
+pub fn get_struct_config(comptime struct_type: type) ?StructConfig(struct_type) {
+    const bincode_field = "!bincode-config";
+    if (@hasDecl(struct_type, bincode_field)) {
+        const config = @field(struct_type, bincode_field);
+        return config;
     }
     return null;
 }
 
-pub fn getFieldSerializer(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) ?SerializeFunction {
-    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
-        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
-        return config.serializer;
+// ** Field Functions ** //
+pub fn FieldConfig(comptime T: type) type {
+    return struct {
+        deserializer: ?DeserializeFunction(T) = null,
+        serializer: ?SerializeFunction = null,
+        skip: bool = false,
+    };
+}
+
+pub fn get_field_config(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
+    const bincode_field = "!bincode-config:" ++ field.name;
+    if (@hasDecl(struct_type, bincode_field)) {
+        const config = @field(struct_type, bincode_field);
+        return config;
     }
     return null;
 }
 
-pub inline fn shouldSkipSerializingField(comptime parent_type: type, comptime struct_field: std.builtin.Type.StructField) bool {
-    const parent_type_name = @typeName(parent_type);
-
-    if (@hasDecl(parent_type, "!bincode-config:" ++ struct_field.name)) {
-        const config = @field(parent_type, "!bincode-config:" ++ struct_field.name);
-        if (config.skip and struct_field.default_value == null) {
-            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ parent_type_name ++ "." ++ struct_field.name ++ "' serialization if no default value set\n\n");
+pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime config: FieldConfig(field.type)) ?*const anyopaque {
+    if (config.skip) {
+        if (field.default_value == null) {
+            const field_type_name = @typeName(field.type);
+            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ field_type_name ++ "." ++ field.name ++ "' deserialization if no default value set\n\n");
         }
-        return config.skip;
+        return field.default_value;
+    } else {
+        return null;
     }
-
-    return false;
 }
 
+// ** Writer/Reader functions ** //
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
     var writer = stream.writer();
@@ -587,62 +585,65 @@ pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params
     return v;
 }
 
-// pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
-//     _ = params;
-//     _ = data;
-//     _ = slice;
-//     return error.TooBad;
+// ** Tests **//
+fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
+    const S = struct {
+        fn deserialize_test_slice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
+            var ally = allocator.?;
+            var len = try bincode.read(ally, u16, reader, params);
+            var elems = try ally.alloc(Child, len);
+            for (0..len) |i| {
+                elems[i] = try bincode.read(ally, Child, reader, params);
+            }
+            return elems;
+        }
 
-//     // var stream = std.io.fixedBufferStream(slice);
-//     // var writer = stream.writer();
-//     // var s = serializer(writer, params);
-//     // var ss = s.serializer();
-//     // try getty.serialize(null, data, ss);
-//     // return stream.getWritten();
-// }
+        pub fn serilaize_test_slice(writer: anytype, data: anytype, params: bincode.Params) !void {
+            var len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
+            try bincode.write(null, writer, len, params);
+            for (data) |item| {
+                try bincode.write(null, writer, item, params);
+            }
+            return;
+        }
+    };
 
-// pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: Params) !void {
-//     _ = params;
-//     _ = data;
-//     _ = writer;
-//     _ = alloc;
-//     return error.TooBad;
+    return FieldConfig([]Child){
+        .serializer = S.serilaize_test_slice,
+        .deserializer = S.deserialize_test_slice,
+    };
+}
 
-//     // var s = serializer(writer, params);
-//     // var ss = s.serializer();
-//     // try getty.serialize(alloc, data, ss);
-// }
+test "bincode: custom field serialization" {
+    const Foo = struct {
+        accounts: []u8,
+        txs: []u32,
+        skip_me: u8 = 20,
 
-// // can call if dont require an allocator
-// pub fn readFromSlice(alloc: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
-//     _ = params;
-//     _ = slice;
-//     _ = alloc;
-//     return error.TooBad;
+        pub const @"!bincode-config:accounts" = TestSliceConfig(u8);
+        pub const @"!bincode-config:txs" = TestSliceConfig(u32);
+        pub const @"!bincode-config:skip_me" = FieldConfig(u8){
+            .skip = true,
+        };
+    };
 
-//     // var stream = std.io.fixedBufferStream(slice);
-//     // var reader = stream.reader();
-//     // var d = deserializer(reader, params);
-//     // var dd = d.deserializer();
-//     // var v = try getty.deserialize(alloc, T, dd);
-//     // errdefer getty.de.free(alloc, @TypeOf(dd), v); // !
-//     // return v;
-// }
+    var accounts = [_]u8{ 1, 2, 3 };
+    var txs = [_]u32{ 1, 2, 3 };
+    var foo = Foo{ .accounts = &accounts, .txs = &txs };
 
-// pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params: Params) !T {
-//     _ = params;
-//     _ = reader;
-//     _ = alloc;
-//     return error.TooBad;
+    var buf: [1000]u8 = undefined;
+    var out = try writeToSlice(&buf, foo, Params{});
+    std.debug.print("{any}", .{out});
+    try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
-//     // var d = deserializer(reader, params);
-//     // const dd = d.deserializer();
-//     // const v = try getty.deserialize(alloc, T, dd);
-//     // errdefer getty.de.free(alloc, @TypeOf(dd), v);
+    var r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
+    defer free(std.testing.allocator, r);
+    std.debug.print("{any}", .{r});
 
-//     // return v;
-
-// }
+    try std.testing.expect(r.accounts.len == foo.accounts.len);
+    try std.testing.expect(r.txs.len == foo.txs.len);
+    try std.testing.expect(r.skip_me == 20);
+}
 
 test "bincode: test serialization" {
     var buf: [1]u8 = undefined;
@@ -718,8 +719,6 @@ test "bincode: test serialization" {
     var out4 = try writeToSlice(&buf6, _s, Params.standard);
     var result = try readFromSlice(null, s, out4, Params{});
     try std.testing.expectEqual(result, _s);
-
-    
 }
 
 test "bincode: (legacy) serialize an array" {
