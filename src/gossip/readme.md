@@ -225,7 +225,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - truncating and looking up the shard gives us hashes which have a matching first `shard_bits`
     - we then need to check to make sure the last `shard_bits - mask_bits` match the mask which we do through iteration 
 
-![](2023-08-07-15-49-57.png)
+![](imgs/2023-08-07-15-49-57.png)
 
 ```python
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
@@ -260,7 +260,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - the final shard would be the mask followed by all ones (ie, 0111 in the example above) at the end which can be computed as `(mask | mask_ones) >> shard_bits`
     - since we know the final shard and the number of shards were looking for, we can iterate over them from `index = (end-count)..end`
 
-![](2023-08-07-15-50-23.png)
+![](imgs/2023-08-07-15-50-23.png)
 
 ```python
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
