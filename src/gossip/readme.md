@@ -66,7 +66,7 @@ pub const CrdsValueLabel = union(enum) {
 ```
 
 - assuming each validator corresponds to one pubkey, this means we'll only store one `ContactInfo` per validator. 
-- when inserting a `CrdsData` whos label already exist in the store, we keep the one with the largest wallclock time (ie, the newest) and discard the other.
+- when inserting a `CrdsData` whos label already exist in the table, we keep the one with the largest wallclock time (ie, the newest) and discard the other.
 
 ### Storing Specific Data Types
 
@@ -74,14 +74,14 @@ pub const CrdsValueLabel = union(enum) {
 - for example, when broadcasting data to the rest of the network, it would be nice to have all the `ContactInfo` values which are stored in the CRDS table 
 - this is why we use an **indexable** hash map implementation 
 
-  - for example, when inserting values into the store, we recieve its corresponding index from the insertion (`crds_index = crds_table.insert(&versioned_value)`)
+  - for example, when inserting values into the table, we recieve its corresponding index from the insertion (`crds_index = crds_table.insert(&versioned_value)`)
   - we can then store these indexs in an array (`contact_infos.append(crds_index)`)
   - to retrieve these values, we can iterate over the array, index into the table, and retrieve the correspoinding data values (`versioned_value = crds_table[crds_index]`)
   - we follow this approach for all of the data types such as: `ContactInfos`, `Votes`, `EpochSlots`, `DuplicateShreds`, and `ShredVersions`
 
 ### Retrieving Data Specific Data Types
 
-- to efficiently retrieve *new* data from the store, we also track a `cursor` variable which is the head of the store and is monotonically incremented on each insert/update
+- to efficiently retrieve *new* data from the table, we also track a `cursor` variable which is the head of the table and is monotonically incremented on each insert/update
 - we can then use getter functions such as, `get_votes_with_cursor`, which allows you to retrieve votes which are past a certain cursor index
 - a listener would track their own cursor and periodically call the getter functions to retrieve new values
 
@@ -93,7 +93,7 @@ pub const CrdsValueLabel = union(enum) {
 - to say this, we construct a bloom filter over the hashes of values stored in the crds table
   - the majority of code can be found in `pull_requests.zig` and `src/bloom/bloom.zig`
 
-- since there are a lot of values in the crds store, instead of constructing one large bloom filter to send to all validators, we partition the crds data across multiple filters based on the hash value's first `N` bits 
+- since there are a lot of values in the crds table, instead of constructing one large bloom filter to send to all validators, we partition the crds data across multiple filters based on the hash value's first `N` bits 
   - we do this with the `CrdsFilterSet` struct which is a list of `CrdsFilters`
 - for example, if we are paritioning on the first 3 bits of hash values we would use, 2^3 = 8 `Bloom` filters: 
     - the first bloom containing hash values whos bits start with 000
@@ -102,17 +102,17 @@ pub const CrdsValueLabel = union(enum) {
     - and lastly, the eight bloom containing hash values whos bits start with 111
 - for example, if we were tracking a `Hash` with bits 00101110101, we would only consider its first 3 bits, 001, and so we would add the hash to the first bloom filter (`@cast(usize, 001) = 1`)
 - you can think of this as a custom hash function for a hash map, where the keys are `Hash` values, the values are `Bloom` filters, and the function is to consider the first `N` bits of the hash
-- the first `N` bits is called the `mask_bits` in the code which depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the crds store, and more 
+- the first `N` bits is called the `mask_bits` in the code which depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the crds table, and more 
 - after we construct this filter set (ie, compute the `mask_bits` and init `2^mask_bits` bloom filters), we then need to track all of the `CrdsValues` to it
 - some psuedocode is below
 
 ```python 
 ## main function for building pull requests
 def build_crds_filters(
-    crds_store: *CrdsStore
+    crds_table: *CrdsTable
 ) Vec<CrdsFilters>: 
     
-    values = crds_store.values() 
+    values = crds_table.values() 
     filter_set = CrdsFilterSet.init(len(value))
 
     for value in values: 
@@ -260,8 +260,8 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - if shard_bits = 4 and mask_bits = 2 and our mask is 01
     - the possible shards well need to lookup are: 0100, 0101, 0110, 0111
     - ie, there will be 4 shards that match the mask represented by the difference in bits
-    - so, we know we'll have to look up `2^(shard_bits - mask_bits)` number of shards which can be computed using `1 << (shard_bits - mask_bits)`
-    - the final shard would be the mask followed by all ones (ie, 0111 in the example above) at the end which can be computed as `(mask | mask_ones) >> shard_bits`
+    - so, we know we'll have to look up `2^(shard_bits - mask_bits)` number of shards which can be computed using `count = 1 << (shard_bits - mask_bits)`
+    - the final shard would be the mask followed by all ones (ie, 0111 in the example above) at the end which can be computed as `end = (mask | mask_ones) >> shard_bits`
     - since we know the final shard and the number of shards were looking for, we can iterate over them from `index = (end-count)..end`
 
 <div align="center">
@@ -299,14 +299,14 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
 ```python 
 
 def filter_crds_values(
-    crds_store: *CrdsStore
+    crds_table: *CrdsTable
     filter: *CrdsFilter
 ) Vec<CrdsValues>:
-    var match_indexs = crds_store.get_bitmask_matches(filter.mask, filter.mask_bits);
+    var match_indexs = crds_table.get_bitmask_matches(filter.mask, filter.mask_bits);
     
     values = []
     for index in match_indexs: 
-        entry = crds_store[index]        
+        entry = crds_table[index]        
         if (!filter.bloom.contains(entry.hash)):
             values.append(entry)
 
