@@ -208,7 +208,9 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
 - now to build the pull response, we need to retrieve hash values which match a `mask` (ie, their first `mask_bit` bits are equal to `mask`)
 - when `shard_bits == mask_bits` its very straightforward, we just lookup the shard corresponding to the first `shard_bits` of `mask` and return its values
 
-![](imgs/2023-08-07-15-49-02.png)
+<div align="center">
+<img src="imgs/2023-08-07-15-49-02.png" width="250" height="120">
+</div>
 
 ```python 
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
@@ -225,7 +227,9 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - truncating and looking up the shard gives us hashes which have a matching first `shard_bits`
     - we then need to check to make sure the last `shard_bits - mask_bits` match the mask which we do through iteration 
 
-![](imgs/2023-08-07-15-49-57.png)
+<div align="center">
+<img src="imgs/2023-08-07-15-49-57.png" width="250" height="120">
+</div>
 
 ```python
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
@@ -260,7 +264,9 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - the final shard would be the mask followed by all ones (ie, 0111 in the example above) at the end which can be computed as `(mask | mask_ones) >> shard_bits`
     - since we know the final shard and the number of shards were looking for, we can iterate over them from `index = (end-count)..end`
 
-![](imgs/2023-08-07-15-50-23.png)
+<div align="center">
+<img src="imgs/2023-08-07-15-50-23.png" width="250" height="120">
+</div>
 
 ```python
 def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>: 
