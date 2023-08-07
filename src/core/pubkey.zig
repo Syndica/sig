@@ -93,7 +93,7 @@ pub const Pubkey = struct {
         return Self.fromBytes(public_key.bytes[0..], .{ .skip_encoding = skip_bs58_encoding }) catch unreachable;
     }
 
-    pub const @"!bincode-config:cached_str" = bincode.FieldConfig{ .skip = true };
+    pub const @"!bincode-config:cached_str" = bincode.FieldConfig(?[44]u8){ .skip = true };
 
     pub const @"getty.sb" = struct {
         pub const attributes = .{

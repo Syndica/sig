@@ -45,8 +45,7 @@ pub const CrdsValue = struct {
             .signature = Signature{},
             .data = data,
         };
-        _ = keypair;
-        // try self.sign(keypair);
+        try self.sign(keypair);
         return self;
     }
 
@@ -72,41 +71,39 @@ pub const CrdsValue = struct {
             .LegacyContactInfo => |*v| {
                 return v.id;
             },
-            // .Vote => |*v| {
-            //     _ =v;
-            //     unreachable;
-            //     // return v[1].from;
-            // },
-            // .LowestSlot => |*v| {
-            //     return v[1].from;
-            // },
-            // .LegacySnapshotHashes => |*v| {
-            //     return v.from;
-            // },
-            // .AccountsHashes => |*v| {
-            //     return v.from;
-            // },
-            // .EpochSlots => |*v| {
-            //     return v[1].from;
-            // },
-            // .LegacyVersion => |*v| {
-            //     return v.from;
-            // },
-            // .Version => |*v| {
-            //     return v.from;
-            // },
-            // .NodeInstance => |*v| {
-            //     return v.from;
-            // },
-            // .DuplicateShred => |*v| {
-            //     return v[1].from;
-            // },
-            // .SnapshotHashes => |*v| {
-            //     return v.from;
-            // },
-            // .ContactInfo => |*v| {
-            //     return v.pubkey;
-            // },
+            .Vote => |*v| {
+                return v[1].from;
+            },
+            .LowestSlot => |*v| {
+                return v[1].from;
+            },
+            .LegacySnapshotHashes => |*v| {
+                return v.from;
+            },
+            .AccountsHashes => |*v| {
+                return v.from;
+            },
+            .EpochSlots => |*v| {
+                return v[1].from;
+            },
+            .LegacyVersion => |*v| {
+                return v.from;
+            },
+            .Version => |*v| {
+                return v.from;
+            },
+            .NodeInstance => |*v| {
+                return v.from;
+            },
+            .DuplicateShred => |*v| {
+                return v[1].from;
+            },
+            .SnapshotHashes => |*v| {
+                return v.from;
+            },
+            .ContactInfo => |*v| {
+                return v.pubkey;
+            },
         };
     }
 
@@ -115,41 +112,39 @@ pub const CrdsValue = struct {
             .LegacyContactInfo => |*v| {
                 return v.wallclock;
             },
-            // .Vote => |*v| {
-            //     _ = v;
-            //     unreachable;
-            //     // return v[1].wallclock;
-            // },
-            // .LowestSlot => |*v| {
-            //     return v[1].wallclock;
-            // },
-            // .LegacySnapshotHashes => |*v| {
-            //     return v.wallclock;
-            // },
-            // .AccountsHashes => |*v| {
-            //     return v.wallclock;
-            // },
-            // .EpochSlots => |*v| {
-            //     return v[1].wallclock;
-            // },
-            // .LegacyVersion => |*v| {
-            //     return v.wallclock;
-            // },
-            // .Version => |*v| {
-            //     return v.wallclock;
-            // },
-            // .NodeInstance => |*v| {
-            //     return v.wallclock;
-            // },
-            // .DuplicateShred => |*v| {
-            //     return v[1].wallclock;
-            // },
-            // .SnapshotHashes => |*v| {
-            //     return v.wallclock;
-            // },
-            // .ContactInfo => |*v| {
-            //     return v.wallclock;
-            // },
+            .Vote => |*v| {
+                return v[1].wallclock;
+            },
+            .LowestSlot => |*v| {
+                return v[1].wallclock;
+            },
+            .LegacySnapshotHashes => |*v| {
+                return v.wallclock;
+            },
+            .AccountsHashes => |*v| {
+                return v.wallclock;
+            },
+            .EpochSlots => |*v| {
+                return v[1].wallclock;
+            },
+            .LegacyVersion => |*v| {
+                return v.wallclock;
+            },
+            .Version => |*v| {
+                return v.wallclock;
+            },
+            .NodeInstance => |*v| {
+                return v.wallclock;
+            },
+            .DuplicateShred => |*v| {
+                return v[1].wallclock;
+            },
+            .SnapshotHashes => |*v| {
+                return v.wallclock;
+            },
+            .ContactInfo => |*v| {
+                return v.wallclock;
+            },
         };
     }
 
@@ -158,39 +153,39 @@ pub const CrdsValue = struct {
             .LegacyContactInfo => {
                 return CrdsValueLabel{ .LegacyContactInfo = self.id() };
             },
-            // .Vote => |*v| {
-            //     return CrdsValueLabel{ .Vote = .{ v[0], self.id() } };
-            // },
-            // .LowestSlot => {
-            //     return CrdsValueLabel{ .LowestSlot = self.id() };
-            // },
-            // .LegacySnapshotHashes => {
-            //     return CrdsValueLabel{ .LegacySnapshotHashes = self.id() };
-            // },
-            // .AccountsHashes => {
-            //     return CrdsValueLabel{ .AccountsHashes = self.id() };
-            // },
-            // .EpochSlots => |*v| {
-            //     return CrdsValueLabel{ .EpochSlots = .{ v[0], self.id() } };
-            // },
-            // .LegacyVersion => {
-            //     return CrdsValueLabel{ .LegacyVersion = self.id() };
-            // },
-            // .Version => {
-            //     return CrdsValueLabel{ .Version = self.id() };
-            // },
-            // .NodeInstance => {
-            //     return CrdsValueLabel{ .NodeInstance = self.id() };
-            // },
-            // .DuplicateShred => |*v| {
-            //     return CrdsValueLabel{ .DuplicateShred = .{ v[0], self.id() } };
-            // },
-            // .SnapshotHashes => {
-            //     return CrdsValueLabel{ .SnapshotHashes = self.id() };
-            // },
-            // .ContactInfo => {
-            //     return CrdsValueLabel{ .ContactInfo = self.id() };
-            // },
+            .Vote => |*v| {
+                return CrdsValueLabel{ .Vote = .{ v[0], self.id() } };
+            },
+            .LowestSlot => {
+                return CrdsValueLabel{ .LowestSlot = self.id() };
+            },
+            .LegacySnapshotHashes => {
+                return CrdsValueLabel{ .LegacySnapshotHashes = self.id() };
+            },
+            .AccountsHashes => {
+                return CrdsValueLabel{ .AccountsHashes = self.id() };
+            },
+            .EpochSlots => |*v| {
+                return CrdsValueLabel{ .EpochSlots = .{ v[0], self.id() } };
+            },
+            .LegacyVersion => {
+                return CrdsValueLabel{ .LegacyVersion = self.id() };
+            },
+            .Version => {
+                return CrdsValueLabel{ .Version = self.id() };
+            },
+            .NodeInstance => {
+                return CrdsValueLabel{ .NodeInstance = self.id() };
+            },
+            .DuplicateShred => |*v| {
+                return CrdsValueLabel{ .DuplicateShred = .{ v[0], self.id() } };
+            },
+            .SnapshotHashes => {
+                return CrdsValueLabel{ .SnapshotHashes = self.id() };
+            },
+            .ContactInfo => {
+                return CrdsValueLabel{ .ContactInfo = self.id() };
+            },
         };
     }
 };
@@ -283,17 +278,17 @@ pub const CrdsValueLabel = union(enum) {
 
 pub const CrdsData = union(enum(u32)) {
     LegacyContactInfo: LegacyContactInfo,
-    // Vote: struct { u8, Vote },
-    // LowestSlot: struct { u8, LowestSlot },
-    // LegacySnapshotHashes: LegacySnapshotHashes,
-    // AccountsHashes: AccountsHashes,
-    // EpochSlots: struct { u8, EpochSlots },
-    // LegacyVersion: LegacyVersion,
-    // Version: Version,
-    // NodeInstance: NodeInstance,
-    // DuplicateShred: struct { u16, DuplicateShred },
-    // SnapshotHashes: SnapshotHashes,
-    // ContactInfo: ContactInfo,
+    Vote: struct { u8, Vote },
+    LowestSlot: struct { u8, LowestSlot },
+    LegacySnapshotHashes: LegacySnapshotHashes,
+    AccountsHashes: AccountsHashes,
+    EpochSlots: struct { u8, EpochSlots },
+    LegacyVersion: LegacyVersion,
+    Version: Version,
+    NodeInstance: NodeInstance,
+    DuplicateShred: struct { u16, DuplicateShred },
+    SnapshotHashes: SnapshotHashes,
+    ContactInfo: ContactInfo,
 
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 3);
@@ -301,18 +296,15 @@ pub const CrdsData = union(enum(u32)) {
             0 => {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
+            1 => {
+                return CrdsData{ .EpochSlots = .{ rng.int(u8), EpochSlots.random(rng) } };
+            },
+            2 => {
+                return CrdsData{ .Vote = .{ rng.int(u8), Vote.random(rng) } };
+            },
             else => {
-                return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
-            }
-            // 1 => {
-            //     return CrdsData{ .EpochSlots = .{ rng.int(u8), EpochSlots.random(rng) } };
-            // },
-            // 2 => {
-            //     return CrdsData{ .Vote = .{ rng.int(u8), Vote.random(rng) } };
-            // },
-            // else => {
-            //     return CrdsData{ .DuplicateShred = .{ rng.int(u16), DuplicateShred.random(rng) } };
-            // },
+                return CrdsData{ .DuplicateShred = .{ rng.int(u16), DuplicateShred.random(rng) } };
+            },
         }
     }
 };
@@ -323,7 +315,7 @@ pub const Vote = struct {
     wallclock: u64,
     slot: Slot = Slot.default(),
 
-    pub const @"!bincode-config:slot" = bincode.FieldConfig{ .skip = true };
+    pub const @"!bincode-config:slot" = bincode.FieldConfig(Slot){ .skip = true };
 
     pub fn random(rng: std.rand.Random) Vote {
         return Vote{
@@ -581,28 +573,28 @@ test "gossip.crds: contact info serialization matches rust" {
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], &contact_info_rust);
 }
 
-// test "gossip.crds: crds data serialization matches rust" {
-//     var kp_bytes = [_]u8{1} ** 32;
-//     const kp = try KeyPair.create(kp_bytes);
-//     const pk = kp.public_key;
-//     const id = Pubkey.fromPublicKey(&pk, true);
+test "gossip.crds: crds data serialization matches rust" {
+    var kp_bytes = [_]u8{1} ** 32;
+    const kp = try KeyPair.create(kp_bytes);
+    const pk = kp.public_key;
+    const id = Pubkey.fromPublicKey(&pk, true);
 
-//     const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
+    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
 
-//     var legacy_contact_info = LegacyContactInfo.default();
-//     legacy_contact_info.gossip = gossip_addr;
-//     legacy_contact_info.id = id;
-//     legacy_contact_info.wallclock = 0;
+    var legacy_contact_info = LegacyContactInfo.default();
+    legacy_contact_info.gossip = gossip_addr;
+    legacy_contact_info.id = id;
+    legacy_contact_info.wallclock = 0;
 
-//     var crds_data = CrdsData{
-//         .LegacyContactInfo = legacy_contact_info,
-//     };
+    var crds_data = CrdsData{
+        .LegacyContactInfo = legacy_contact_info,
+    };
 
-//     var buf = [_]u8{0} ** 1024;
-//     var rust_crds_data = [_]u8{ 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-//     var bytes = try bincode.writeToSlice(buf[0..], crds_data, bincode.Params.standard);
-//     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
-// }
+    var buf = [_]u8{0} ** 1024;
+    var rust_crds_data = [_]u8{ 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var bytes = try bincode.writeToSlice(buf[0..], crds_data, bincode.Params.standard);
+    try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
+}
 
 test "gossip.crds: random crds data" {
     var seed: u64 = @intCast(std.time.milliTimestamp());

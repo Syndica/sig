@@ -3,11 +3,14 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const network = @import("zig-network");
 const Version = @import("../version/version.zig").Version;
 const bincode = @import("../bincode/bincode.zig");
-const varint_config = @import("../utils/varint.zig").varint_config;
+
+const var_int = @import("../utils/varint.zig");
+const var_int_config_u16 = var_int.var_int_config_u16;
+const var_int_config_u64 = var_int.var_int_config_u64;
+
 const serialize_varint = @import("../utils/varint.zig").serilaize_varint;
 const deserialize_varint = @import("../utils/varint.zig").deserialize_varint;
-const shortvec_config = @import("../utils/shortvec.zig").shortvec_config;
-const ShortVecArrayListConfig = @import("../utils/shortvec_arraylist.zig").ShortVecArrayListConfig;
+const ShortVecArrayListConfig = @import("../utils/shortvec.zig").ShortVecArrayListConfig;
 const SocketAddr = @import("net.zig").SocketAddr;
 const IpAddr = @import("net.zig").IpAddr;
 const gossip = @import("sig").gossip;
@@ -52,10 +55,10 @@ pub const ContactInfo = struct {
     sockets: ArrayList(SocketEntry),
     cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
 
-    pub const @"!bincode-config:cache" = bincode.FieldConfig{ .skip = true };
+    pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
     pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
     pub const @"!bincode-config:sockets" = ShortVecArrayListConfig(SocketEntry);
-    pub const @"!bincode-config:wallclock" = varint_config;
+    pub const @"!bincode-config:wallclock" = var_int_config_u64;
 
     const Self = @This();
 
@@ -242,7 +245,7 @@ pub const SocketEntry = struct {
     index: u8, // IpAddr index in the accompanying addrs vector.
     offset: u16, // Port offset with respect to the previous entry.
 
-    pub const @"!bincode-config:offset" = varint_config;
+    pub const @"!bincode-config:offset" = var_int_config_u16;
 
     const Self = @This();
 
@@ -290,25 +293,25 @@ test "new contact info" {
     defer ci.deinit();
 }
 
-// test "socketaddr bincode serialize matches rust" {
-//     const Tmp = struct {
-//         addr: SocketAddr,
-//     };
-//     const tmp = Tmp{ .addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234) };
-//     var buf = [_]u8{0} ** 1024;
-//     var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
+test "socketaddr bincode serialize matches rust" {
+    const Tmp = struct {
+        addr: SocketAddr,
+    };
+    const tmp = Tmp{ .addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234) };
+    var buf = [_]u8{0} ** 1024;
+    var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
 
-//     // #[derive(Serialize, Debug, Clone, Copy)]
-//     // pub struct Tmp {
-//     //     addr: SocketAddr
-//     // }
-//     // let tmp = Tmp { addr: socketaddr!(Ipv4Addr::LOCALHOST, 1234) };
-//     // println!("{:?}", bincode::serialize(&tmp).unwrap());
+    // #[derive(Serialize, Debug, Clone, Copy)]
+    // pub struct Tmp {
+    //     addr: SocketAddr
+    // }
+    // let tmp = Tmp { addr: socketaddr!(Ipv4Addr::LOCALHOST, 1234) };
+    // println!("{:?}", bincode::serialize(&tmp).unwrap());
 
-//     // Enum discriminants are encoded as u32 (4 leading zeros)
-//     const rust_bytes = [_]u8{ 0, 0, 0, 0, 127, 0, 0, 1, 210, 4 };
-//     try testing.expectEqualSlices(u8, rust_bytes[0..rust_bytes.len], bytes);
-// }
+    // Enum discriminants are encoded as u32 (4 leading zeros)
+    const rust_bytes = [_]u8{ 0, 0, 0, 0, 127, 0, 0, 1, 210, 4 };
+    try testing.expectEqualSlices(u8, rust_bytes[0..rust_bytes.len], bytes);
+}
 
 test "set & get socket on contact info" {
     var seed: u64 = @intCast(std.time.milliTimestamp());

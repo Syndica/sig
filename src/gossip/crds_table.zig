@@ -151,16 +151,16 @@ pub const CrdsTable = struct {
                     try self.contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
-                // .Vote => {
-                //     try self.votes.put(self.cursor, entry_index);
-                // },
-                // .EpochSlots => {
-                //     try self.epoch_slots.put(self.cursor, entry_index);
-                // },
-                // .DuplicateShred => {
-                //     try self.duplicate_shreds.put(self.cursor, entry_index);
-                // },
-                // else => {},
+                .Vote => {
+                    try self.votes.put(self.cursor, entry_index);
+                },
+                .EpochSlots => {
+                    try self.epoch_slots.put(self.cursor, entry_index);
+                },
+                .DuplicateShred => {
+                    try self.duplicate_shreds.put(self.cursor, entry_index);
+                },
+                else => {},
             }
 
             try self.shards.insert(entry_index, &versioned_value.value_hash);
@@ -177,22 +177,22 @@ pub const CrdsTable = struct {
                 .LegacyContactInfo => |*info| {
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
-                // .Vote => {
-                //     var did_remove = self.votes.swapRemove(old_entry.ordinal);
-                //     std.debug.assert(did_remove);
-                //     try self.votes.put(self.cursor, entry_index);
-                // },
-                // .EpochSlots => {
-                //     var did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
-                //     std.debug.assert(did_remove);
-                //     try self.epoch_slots.put(self.cursor, entry_index);
-                // },
-                // .DuplicateShred => {
-                //     var did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
-                //     std.debug.assert(did_remove);
-                //     try self.duplicate_shreds.put(self.cursor, entry_index);
-                // },
-                // else => {},
+                .Vote => {
+                    var did_remove = self.votes.swapRemove(old_entry.ordinal);
+                    std.debug.assert(did_remove);
+                    try self.votes.put(self.cursor, entry_index);
+                },
+                .EpochSlots => {
+                    var did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
+                    std.debug.assert(did_remove);
+                    try self.epoch_slots.put(self.cursor, entry_index);
+                },
+                .DuplicateShred => {
+                    var did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
+                    std.debug.assert(did_remove);
+                    try self.duplicate_shreds.put(self.cursor, entry_index);
+                },
+                else => {},
             }
 
             // remove and insert to make sure the shard ordering is oldest-to-newest
