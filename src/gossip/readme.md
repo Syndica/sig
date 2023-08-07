@@ -209,7 +209,7 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
 - when `shard_bits == mask_bits` its very straightforward, we just lookup the shard corresponding to the first `shard_bits` of `mask` and return its values
 
 <div align="center">
-<img src="imgs/2023-08-07-15-49-02.png" width="250" height="120">
+<img src="imgs/2023-08-07-15-49-02.png" width="420" height="200">
 </div>
 
 ```python 
@@ -228,7 +228,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - we then need to check to make sure the last `shard_bits - mask_bits` match the mask which we do through iteration 
 
 <div align="center">
-<img src="imgs/2023-08-07-15-49-57.png" width="250" height="120">
+<img src="imgs/2023-08-07-15-49-57.png" width="350" height="160">
 </div>
 
 ```python
@@ -265,7 +265,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - since we know the final shard and the number of shards were looking for, we can iterate over them from `index = (end-count)..end`
 
 <div align="center">
-<img src="imgs/2023-08-07-15-50-23.png" width="250" height="120">
+<img src="imgs/2023-08-07-15-50-23.png" width="380" height="180">
 </div>
 
 ```python
