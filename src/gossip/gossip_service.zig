@@ -234,15 +234,18 @@ pub const GossipService = struct {
                 },
                 .PushMessage => |*push| {
                     logger.debugf("got a push message: {any}", .{protocol_message});
+                    // TODO: verify value matches pubkey
                     const values = push[1];
                     insert_crds_values(crds_table, values, logger, GossipRoute.PushMessage);
                 },
                 .PullResponse => |*pull| {
                     logger.debugf("got a pull message: {any}", .{protocol_message});
+                    // TODO: verify value matches pubkey
                     const values = pull[1];
                     insert_crds_values(crds_table, values, logger, GossipRoute.PullResponse);
                 },
                 .PullRequest => |*pull| {
+                    // TODO: verify value matches pubkey
                     var filter = pull[0];
                     var value = pull[1]; // contact info
                     const now = get_wallclock();

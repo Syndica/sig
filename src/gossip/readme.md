@@ -18,27 +18,13 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
 - `crds_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `crds_table` and constructing pull responses
 
-## Technical Explainer
+## Datatypes and Datastructures
 
-- there are a few main components in solana's gossip protocol 
-    - this includes communication protocols for sharing data
-    - and data structures for storing and retrieving data 
-- this post will explain key implementation details of solana's gossip protocol
-- well use the Sig code as our main reference but also reference the solana-labs rust client sometimes too
-- we use many of the same variable and structure naming as the labs client
-- this post builds off of the technical portion of the [Sig anouncement post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/#sigs-first-component-gossip-protocol)
-
-### Gossip Data Structures: CrdsTable 
-
-- gossip data is stored in a Conflict-free Replicated Data Store (CRDS)
-
-### Gossip Data Types 
-
-- data that is propogated throughout gossip is refered to as a `CrdsData` and a `CrdsValue`
+- data types which we track are defined in `crds.zig` which include `CrdsData` and `CrdsValue`
     - a `CrdsData` is an enum over the possible gossip data types 
-    - a `CrdsValue` contains a `CrdsData` struct and a signature of the `CrdsData`
+    - a `CrdsValue` contains a `CrdsData` struct and a signature of the `CrdsData` - these are propogated on the network and their signature is verified before processing their data.
 
-- there are many `CrdsData` types used throughout the codebase but the few were interested in right now include:
+- there are many `CrdsData` types used throughout the codebase, but ones of particular importance include:
     - `ContactInfo`/`LegacyContactInfo`: which includes node specific information such as the nodes public key and socket addresses for specific validator tasks (including gossip, tvu, tpu, repair, ...). This structure is critical for discovering the rest of the network. 
     - `Vote`: which includes a validators signature that a specific block is valid. Note, this data is slowly being phased out of the gossip protocol because its not required and takes up a lot of network bandwidth.
     - `EpochSlots`: ?? 
@@ -46,10 +32,11 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 
 ### Storing Gossip Data 
 
-- to store gossip data we use an indexable HashMap
-    - the HashMap uses a `CrdsValueLabel` as its keys and a `CrdsVersionedValue` as its values
+- gossip data is stored in a Conflict-free Replicated Data Store (CRDS) located in `crds_table.zig`.
+- to store this data we use an indexable HashMap which uses a `CrdsValueLabel` as 
+its keys and a `CrdsVersionedValue` as its values
 
-#### CRDS ValueLabels 
+### ValueLabels and VersionedValues 
 
 - each `CrdsData` type has a corresponding `CrdsValueLabel` which defines how the data is stored/replaced 
 - for example a `LegacyContactInfo` struct includes many socket address fields, however, its corresponding label is only its pubkey
@@ -79,36 +66,32 @@ pub const CrdsValueLabel = union(enum) {
 ```
 
 - assuming each validator corresponds to one pubkey, this means we'll only store one `ContactInfo` per validator. 
-- when inserting a Crds datatype whos label already exist in the store, we keep the one with the largest wallclock time (ie, the newest) and discard the other.
+- when inserting a `CrdsData` whos label already exist in the store, we keep the one with the largest wallclock time (ie, the newest) and discard the other.
 
-#### Storing Specific Data Types
+### Storing Specific Data Types
 
 - were also interested in storing specific datatypes in the table efficiently
-- for example, when broadcasting data throughout the network, it would be nice to have all the `ContactInfo` values which are stored in the CRDS table 
-
+- for example, when broadcasting data to the rest of the network, it would be nice to have all the `ContactInfo` values which are stored in the CRDS table 
 - this is why we use an **indexable** hash map implementation 
 
-- for example, when inserting new values into the store (or updating existing values) we recieve its corresponding index from the insertion
-- then, for specific data types were interseted in, we can then store these indexs in another array
-- to retrieve these values, we can iterate over the indexs, index into the table, and retrieve the correspoinding types
-- we follow this approach for all of the data types were interested in including: `ContactInfos`, `Votes`, `EpochSlots`, `DuplicateShreds`, and `ShredVersions`
+  - for example, when inserting values into the store we recieve its corresponding index from the insertion (`index = crds_table.insert(&versioned_value)`)
+  - we can then store these indexs in another array (`contact_infos.append(index)`)
+  - to retrieve these values, we can iterate over the array, index into the table, and retrieve the correspoinding data values
+  - we follow this approach for all of the data types such as: `ContactInfos`, `Votes`, `EpochSlots`, `DuplicateShreds`, and `ShredVersions`
 
-#### Retrieving Data with Getters 
+### Retrieving Data Specific Data Types
 
-- we also track a `cursor` variable which is the head of the store and is monotonically incremented on each insert/update
-- to efficiently retrieve data from the store we use getter functions such as (eg, `get_votes_with_cursor`) which allows you to retrieve values which are past a certain cursor index
+- to efficiently retrieve new data from the store, we also track a `cursor` variable which is the head of the store and is monotonically incremented on each insert/update
+- we can then use getter functions such as, `get_votes_with_cursor`, which allows you to retrieve votes which are past a certain cursor index
 - a listener would track their own cursor and periodically call the getter functions to retrieve new values
 
-## Gossip Protocol: Pull Messages
+## Protocol: Pull Messages
 
-### Sending Pull *Requests* 
+### Building Pull *Requests*
 
-- pull request are sent to random peers periodically and say, "i have these values in my crds table, can you send me anything im missing"
-
-#### Building Requests
-
-- the idea is to construct bloom filter over the hashes of stored Crds values
-- the main struct to do this is called `CrdsFilters` 
+- pull request are used to retrieve gossip data which the node is missing 
+- they are sent to random peers periodically and say, "i have these values in my crds table, can you send me anything im missing"
+- to say this, we construct a bloom filter over the hashes of values stored in the crds table
 
 - since there are a lot of values in the crds store, instead of constructing one large bloom filter to send to all validators, we partition the crds data across multiple filters based on the hash value's first N bits  
 - for example, if we are paritioning on the first 3 bits of hash values we would use, 2^3 = 8 bloom filters: 
