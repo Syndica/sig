@@ -209,13 +209,6 @@ pub fn Deserializer(comptime Reader: type) type {
                         const params = dd.context.params;
                         var data: T = undefined;
 
-                        if (get_struct_config(T)) |config| {
-                            if (config.deserializer) |deser_fcn| {
-                                data = try deser_fcn(alloc, T, reader, params);
-                                return data;
-                            }
-                        }
-
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
                                 if (get_field_config(T, field)) |config| {
@@ -433,12 +426,6 @@ pub fn Serializer(
                         var params = ss.context.params;
                         var writer = ss.context.writer;
 
-                        if (get_struct_config(T)) |config| {
-                            if (config.serializer) |ser_fcn| {
-                                return ser_fcn(writer, value, params);
-                            }
-                        }
-
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
                                 if (get_field_config(T, field)) |config| {
@@ -500,23 +487,6 @@ pub fn DeserializeFunction(comptime T: type) type {
     return fn (alloc: ?std.mem.Allocator, reader: anytype, params: Params) anyerror!T;
 }
 pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
-
-// ** Struct Functions ** //
-pub fn StructConfig(comptime T: type) type {
-    return struct {
-        deserializer: ?DeserializeFunction(T) = null,
-        serializer: ?SerializeFunction = null,
-    };
-}
-
-pub fn get_struct_config(comptime struct_type: type) ?StructConfig(struct_type) {
-    const bincode_field = "!bincode-config";
-    if (@hasDecl(struct_type, bincode_field)) {
-        const config = @field(struct_type, bincode_field);
-        return config;
-    }
-    return null;
-}
 
 // ** Field Functions ** //
 pub fn FieldConfig(comptime T: type) type {
