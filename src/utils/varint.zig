@@ -15,7 +15,7 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
         }
 
         pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !VarInt {
-            _ = params; 
+            _ = params;
             _ = allocator;
 
             var out: VarInt = 0;
