@@ -107,7 +107,7 @@ pub const CrdsValueLabel = union(enum) {
 - some psuedocode is below
 
 <div align="center">
-<img src="imgs/2023-08-08-09-25-00.png" width="420" height="340">
+<img src="imgs/2023-08-08-09-25-00.png" width="900" height="400">
 </div>
 
 ```python 
@@ -214,7 +214,7 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
 ```
 
 <div align="center">
-<img src="imgs/2023-08-08-09-12-54.png" width="420" height="340">
+<img src="imgs/2023-08-08-09-12-54.png" width="520" height="400">
 </div>
 
 - now to build the pull response, we need to retrieve hash values which match a `mask` (ie, their first `mask_bit` bits are equal to `mask`)
