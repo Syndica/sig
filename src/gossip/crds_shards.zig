@@ -54,13 +54,15 @@ pub const CrdsShards = struct {
     pub fn insert(self: *Self, crds_index: usize, hash: *const Hash) !void {
         const uhash = CrdsPull.hash_to_u64(hash);
         const shard_index = CrdsShards.compute_shard_index(self.shard_bits, uhash);
-        try self.shards[shard_index].put(crds_index, uhash);
+        const shard = &self.shards[shard_index];
+        try shard.put(crds_index, uhash);
     }
 
     pub fn remove(self: *Self, crds_index: usize, hash: *const Hash) !void {
         const uhash = CrdsPull.hash_to_u64(hash);
         const shard_index = CrdsShards.compute_shard_index(self.shard_bits, uhash);
-        _ = self.shards[shard_index].swapRemove(crds_index);
+        const shard = &self.shards[shard_index];
+        _ = shard.swapRemove(crds_index);
     }
 
     pub fn compute_shard_index(shard_bits: u32, hash: u64) usize {
