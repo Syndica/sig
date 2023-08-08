@@ -106,6 +106,10 @@ pub const CrdsValueLabel = union(enum) {
 - after we construct this filter set (ie, compute the `mask_bits` and init `2^mask_bits` bloom filters), we then need to track all of the `CrdsValues` to it
 - some psuedocode is below
 
+<div align="center">
+<img src="imgs/2023-08-08-09-25-00.png" width="420" height="340">
+</div>
+
 ```python 
 ## main function for building pull requests
 def build_crds_filters(
@@ -185,12 +189,17 @@ fn compute_mask(index: u64, mask_bits: u64) u64:
 - sending a pull *response* requires you to iterate over values stored in the Crds table, filter the values to match the `CrdsFilter`'s `mask`, and find values which are not included in the request's `Bloom` filter 
 - the main function which we use is `filter_crds_values` which takes a `CrdsFilter` as input and returns a vector of `CrdsValues`
     - first it calls `crds_table.get_bitmask_matches` which returns the entries in the crds table which match the filters `mask`
-    - to do this efficiently, we introduce a new data structure called `CrdsShards` which is located in `crds_shards.zig`
+    - to do this efficiently, we introduce a new data structure called `CrdsShards` which is located in `crds_shards.zig` 
 
 #### `CrdsShards`
 
 - `CrdsShards` stores hash values efficiently based on the first `shard_bits` of a hash value (similar to the `CrdsFilterSet` structure)
-- the main structure is `shards = ArrayList(AutoArrayHashMap(usize, u64)),` where `shards[k]` includes crds values which the first `shard_bits` of their hash value is equal to `k`
+- the main structure is `shards = [4096]AutoArrayHashMap(usize, u64),` where `shards[k]` includes crds values which the first `shard_bits` of their hash value is equal to `k`
+  - `usize` is the index of the value in the crds table 
+  - and `u64` is the hash value represented as a `u64`
+  - also note that `shard_bits` is hardcoded in the program as `12`, so we will have 2^12 = 4096 shard indexs
+
+- whenever we insert a new value in the `CrdsTable`, we insert its hash value into the `CrdsShard` structure and so the struct is stored on the `CrdsTable`
 - the insertion logic is straightforward 
     - take the first 8 bytes of a hash and cast it to a `u64` (`hash_u64 = @as(u64, hash[0..8])`)
     - compute the first `shard_bits` bits of the `u64` by computing `shard_index = hash_u64 >> (64 - shard_bits)`
@@ -204,7 +213,10 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
     shard.put(crds_index, uhash);
 ```
 
-- we insert values into the `CrdsShard` structure whenever we insert a new value in the `CrdsTable`
+<div align="center">
+<img src="imgs/2023-08-08-09-12-54.png" width="420" height="340">
+</div>
+
 - now to build the pull response, we need to retrieve hash values which match a `mask` (ie, their first `mask_bit` bits are equal to `mask`)
 - when `shard_bits == mask_bits` its very straightforward, we just lookup the shard corresponding to the first `shard_bits` of `mask` and return its values
 
