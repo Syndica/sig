@@ -27,8 +27,8 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 - there are many `CrdsData` types used throughout the codebase, but ones of particular importance include:
     - `ContactInfo`/`LegacyContactInfo`: which includes node specific information such as the nodes public key and socket addresses for specific validator tasks (including gossip, tvu, tpu, repair, ...). This structure is critical for discovering the rest of the network. 
     - `Vote`: which includes a validators signature that a specific block is valid. Note, this data is slowly being phased out of the gossip protocol because its not required and takes up a lot of network bandwidth.
-    - `EpochSlots`: ?? 
-    - `DuplicateShred`: ?? 
+    - `EpochSlots`: // TODO
+    - `DuplicateShred`: // TODO
 
 ### Storing Gossip Data 
 
