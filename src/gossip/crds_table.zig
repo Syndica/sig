@@ -63,6 +63,9 @@ pub const CrdsTable = struct {
     duplicate_shreds: AutoArrayHashMap(usize, usize),
     shred_versions: AutoHashMap(Pubkey, u16),
 
+    // tracking for cursor to index
+    entries: AutoArrayHashMap(u64, usize),
+
     // used to build pull responses efficiently
     shards: CrdsShards,
 
@@ -86,6 +89,7 @@ pub const CrdsTable = struct {
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
+            .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .shards = try CrdsShards.init(allocator),
             .purged = PurgedQ{},
             .failed_inserts = FailedInsertsQ{},
@@ -100,6 +104,7 @@ pub const CrdsTable = struct {
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
         self.shards.deinit();
+        self.entries.deinit();
     }
 
     pub fn write(self: *Self) void {
@@ -161,6 +166,8 @@ pub const CrdsTable = struct {
 
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
+            try self.entries.put(self.cursor, entry_index);
+
             result.value_ptr.* = versioned_value;
 
             self.cursor += 1;
@@ -174,17 +181,17 @@ pub const CrdsTable = struct {
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
-                    var did_remove = self.votes.swapRemove(old_entry.ordinal);
+                    const did_remove = self.votes.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
                     try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
-                    var did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
+                    const did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
                     try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
-                    var did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
+                    const did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
                     try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
@@ -195,6 +202,10 @@ pub const CrdsTable = struct {
             // NOTE: do we need the ordering to be oldest-to-newest?
             try self.shards.remove(entry_index, &old_entry.value_hash);
             try self.shards.insert(entry_index, &versioned_value.value_hash);
+
+            const did_remove = self.entries.swapRemove(old_entry.ordinal);
+            std.debug.assert(did_remove);
+            try self.entries.put(self.cursor, entry_index);
 
             var node = PurgedQ.Node{ .data = HashAndTime{
                 .hash = old_entry.value_hash,
@@ -240,7 +251,28 @@ pub const CrdsTable = struct {
         return self.store.get(label);
     }
 
-    pub fn get_votes_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_entries_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
+        const cursor_indexs = self.entries.keys();
+        var index: usize = 0;
+        for (cursor_indexs) |cursor_index| {
+            if (cursor_index < caller_cursor.*) {
+                continue;
+            }
+            const entry_index = self.entries.get(cursor_index).?;
+            var entry = self.store.iterator().values[entry_index];
+            buf[index] = entry;
+            index += 1;
+
+            if (index == buf.len) {
+                break;
+            }
+        }
+        // move up the caller_cursor
+        caller_cursor.* += index;
+        return buf[0..index];
+    }
+
+    pub fn get_votes_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
         const keys = self.votes.keys();
         var index: usize = 0;
         for (keys) |key| {
@@ -249,7 +281,7 @@ pub const CrdsTable = struct {
             }
             const entry_index = self.votes.get(key).?;
             var entry = self.store.iterator().values[entry_index];
-            buf[index] = &entry;
+            buf[index] = entry;
             index += 1;
 
             if (index == buf.len) {
@@ -261,7 +293,7 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_epoch_slots_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_epoch_slots_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
         const keys = self.epoch_slots.keys();
         var index: usize = 0;
         for (keys) |key| {
@@ -270,7 +302,7 @@ pub const CrdsTable = struct {
             }
             const entry_index = self.epoch_slots.get(key).?;
             var entry = self.store.iterator().values[entry_index];
-            buf[index] = &entry;
+            buf[index] = entry;
             index += 1;
 
             if (index == buf.len) {
@@ -282,7 +314,7 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_duplicate_shreds_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_duplicate_shreds_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
         const keys = self.duplicate_shreds.keys();
         var index: usize = 0;
         for (keys) |key| {
@@ -291,7 +323,7 @@ pub const CrdsTable = struct {
             }
             const entry_index = self.duplicate_shreds.get(key).?;
             var entry = self.store.iterator().values[entry_index];
-            buf[index] = &entry;
+            buf[index] = entry;
             index += 1;
 
             if (index == buf.len) {
@@ -303,7 +335,7 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_contact_infos(self: *const Self, buf: []*CrdsVersionedValue) ![]*CrdsVersionedValue {
+    pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) ![]CrdsVersionedValue {
         const store_values = self.store.iterator().values;
         const contact_indexs = self.contact_infos.iterator().keys;
 
@@ -437,7 +469,7 @@ test "gossip.crds_table: insert and get votes" {
     try crds_table.insert(crds_value, 0, null);
 
     var cursor: usize = 0;
-    var buf: [100]*CrdsVersionedValue = undefined;
+    var buf: [100]CrdsVersionedValue = undefined;
     var votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
 
     try std.testing.expect(votes.len == 1);
@@ -479,7 +511,7 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0, null);
 
     // test retrieval
-    var buf: [100]*CrdsVersionedValue = undefined;
+    var buf: [100]CrdsVersionedValue = undefined;
     var nodes = try crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));

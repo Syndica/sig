@@ -14,6 +14,8 @@ const Protocol = @import("protocol.zig").Protocol;
 const Ping = @import("protocol.zig").Ping;
 const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
+const CrdsValue = crds.CrdsValue;
+
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
@@ -36,6 +38,7 @@ const PacketChannel = Channel(Packet);
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
 const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
+const MAX_VALUES_PER_PUSH: u64 = PACKET_DATA_SIZE * 64;
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
@@ -45,9 +48,13 @@ pub const GossipService = struct {
     responder_channel: PacketChannel,
     crds_table: CrdsTable,
     allocator: std.mem.Allocator,
+    push_msg_queue: std.ArrayList(CrdsValue),
 
     pull_timeout: u64 = CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
     push_msg_timeout: u64 = CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
+
+    push_msg_queue_lock: std.Thread.Mutex = .{},
+    push_cursor: u64 = 0,
 
     const Self = @This();
 
@@ -69,6 +76,7 @@ pub const GossipService = struct {
             .responder_channel = responder_channel,
             .crds_table = crds_table,
             .allocator = allocator,
+            .push_msg_queue = std.ArrayList(CrdsValue).init(allocator),
         };
     }
 
@@ -76,6 +84,7 @@ pub const GossipService = struct {
         self.packet_channel.deinit();
         self.responder_channel.deinit();
         self.crds_table.deinit();
+        self.push_msg_queue.deinit();
     }
 
     pub fn run(self: *Self, logger: *Logger) !void {
@@ -107,7 +116,7 @@ pub const GossipService = struct {
 
         while (true) {
             try self.send_ping(&peer, logger);
-            try self.push_contact_info(&peer);
+            try self.push_contact_info();
 
             // generate pull requests
             var filters = crds_pull_request.build_crds_filters(self.allocator, &self.crds_table, crds_pull_request.MAX_BLOOM_SIZE) catch {
@@ -117,6 +126,9 @@ pub const GossipService = struct {
             };
             defer crds_pull_request.deinit_crds_filters(&filters);
             // TODO: send em out
+
+            // generate push msgs
+            try self.new_push_messages();
 
             // trim CRDS values
             const now = get_wallclock();
@@ -142,7 +154,7 @@ pub const GossipService = struct {
         );
     }
 
-    fn push_contact_info(self: *Self, peer: *const EndPoint) !void {
+    fn push_contact_info(self: *Self) !void {
         const id = self.cluster_info.our_contact_info.pubkey;
         const gossip_endpoint = try self.gossip_socket.getLocalEndPoint();
         const gossip_addr = SocketAddr.init_ipv4(gossip_endpoint.address.ipv4.value, gossip_endpoint.port);
@@ -155,16 +167,36 @@ pub const GossipService = struct {
             .LegacyContactInfo = legacy_contact_info,
         };
         var crds_value = try crds.CrdsValue.initSigned(crds_data, self.cluster_info.our_keypair);
-        var values = [_]crds.CrdsValue{crds_value};
 
-        const msg = Protocol{
-            .PushMessage = .{ id, &values },
-        };
+        self.push_msg_queue_lock.lock();
+        defer self.push_msg_queue_lock.unlock();
 
-        var buf = [_]u8{0} ** PACKET_DATA_SIZE;
-        var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
-        const packet = Packet.init(peer.*, buf, bytes.len);
-        self.responder_channel.send(packet);
+        try self.push_msg_queue.append(crds_value);
+    }
+
+    fn drain_push_queue_to_crds_table(self: *Self) !void {
+        const wallclock = get_wallclock();
+
+        self.push_msg_queue_lock.lock();
+        defer self.push_msg_queue_lock.unlock();
+
+        self.crds_table.write();
+        defer self.crds_table.release_write();
+
+        while (self.push_msg_queue.popOrNull()) |crds_value| {
+            try self.crds_table.insert(crds_value, wallclock, GossipRoute.LocalMessage);
+        }
+    }
+
+    fn new_push_messages(self: *Self) !void {
+        try self.drain_push_queue_to_crds_table();
+
+        self.crds_table.read();
+        defer self.crds_table.release_read();
+
+        var buf: [MAX_VALUES_PER_PUSH]crds.CrdsVersionedValue = undefined;
+        var entries = try self.crds_table.get_entries_with_cursor(&buf, &self.push_cursor);
+        _ = entries;
     }
 
     fn read_gossip_socket(self: *Self, logger: *Logger) !void {
