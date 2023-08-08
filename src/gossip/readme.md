@@ -30,11 +30,17 @@ This function `spawn`ed and is a long running process. It listens to the packet 
     - `EpochSlots`: // TODO
     - `DuplicateShred`: // TODO
 
-### Storing Gossip Data 
+### CrdsTable: Storing Gossip Data 
 
 - gossip data is stored in a Conflict-free Replicated Data Store (CRDS) located in `crds_table.zig`.
 - to store this data we use an indexable HashMap which uses a `CrdsValueLabel` as 
 its keys and a `CrdsVersionedValue` as its values
+
+<div align="center">
+<img src="imgs/2023-08-08-12-35-30.png" width="420" height="200">
+</div>
+
+- new crds data comes from push messages and pull responses
 
 ### ValueLabels and VersionedValues 
 
@@ -107,7 +113,7 @@ pub const CrdsValueLabel = union(enum) {
 - some psuedocode is below
 
 <div align="center">
-<img src="imgs/2023-08-08-09-25-00.png" width="900" height="400">
+<img src="imgs/2023-08-08-12-15-44.png" width="900" height="400">
 </div>
 
 ```python 
@@ -192,6 +198,10 @@ fn compute_mask(index: u64, mask_bits: u64) u64:
     - first it calls `crds_table.get_bitmask_matches` which returns the entries in the crds table which match the filters `mask`
     - to do this efficiently, we introduce a new data structure called `CrdsShards` which is located in `crds_shards.zig` 
 
+<div align="center">
+<img src="imgs/2023-08-08-13-37-04.png" width="520" height="400">
+</div>
+
 #### `CrdsShards`
 
 - `CrdsShards` stores hash values efficiently based on the first `shard_bits` of a hash value (similar to the `CrdsFilterSet` structure)
@@ -216,8 +226,10 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
 ```
 
 <div align="center">
-<img src="imgs/2023-08-08-09-12-54.png" width="520" height="400">
+<img src="imgs/2023-08-08-13-42-47.png" width="520" height="400">
 </div>
+
+#### `CrdsShards`: Finding hash matches
 
 - now to build the pull response, we need to retrieve hash values which match a `mask` (ie, their first `mask_bit` bits are equal to `mask`)
 - when `shard_bits == mask_bits` its very straightforward, we just lookup the shard corresponding to the first `shard_bits` of `mask` and return its values
@@ -330,3 +342,5 @@ def filter_crds_values(
 ## Push Requests
 
 ## Ping/Pong
+
+## Prune Messages
