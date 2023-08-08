@@ -37,7 +37,6 @@ pub fn build_crds_filters(
     defer crds_table.release_read();
 
     const num_items = crds_table.len() + crds_table.purged_len() + crds_table.failed_inserts_len();
-    // TODO: failed inserts
 
     var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
 

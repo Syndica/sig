@@ -265,7 +265,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     - since we know the final shard and the number of shards were looking for, we can iterate over them from `index = (end-count)..end`
 
 <div align="center">
-<img src="imgs/2023-08-07-15-50-23.png" width="380" height="180">
+<img src="imgs/2023-08-07-17-15-29.png" width="380" height="180">
 </div>
 
 ```python

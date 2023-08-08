@@ -41,8 +41,6 @@ pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 const PurgedQ = std.TailQueue(HashAndTime);
 const FailedInsertsQ = std.TailQueue(HashAndTime);
 
-const CRDS_SHARDS_BITS: u32 = 12;
-
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
 /// indexing values (value = arrayhashmap[0]). This allows us to insert data
@@ -88,7 +86,7 @@ pub const CrdsTable = struct {
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
-            .shards = try CrdsShards.init(allocator, CRDS_SHARDS_BITS),
+            .shards = try CrdsShards.init(allocator),
             .purged = PurgedQ{},
             .failed_inserts = FailedInsertsQ{},
         };
