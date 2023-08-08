@@ -218,7 +218,7 @@ pub fn Deserializer(comptime Reader: type) type {
                                     }
 
                                     if (config.deserializer) |deser_fcn| {
-                                        @field(data, field.name) = try (deser_fcn(alloc, reader, params) catch getty.de.Error.InvalidValue);
+                                        @field(data, field.name) = deser_fcn(alloc, reader, params) catch return getty.de.Error.InvalidValue;
                                         continue;
                                     }
                                 }
@@ -433,7 +433,7 @@ pub fn Serializer(
                                         continue;
                                     }
                                     if (config.serializer) |ser_fcn| {
-                                        try (ser_fcn(writer, @field(value, field.name), params) catch Error.IO);
+                                        ser_fcn(writer, @field(value, field.name), params) catch return Error.IO;
                                         continue;
                                     }
                                 }
