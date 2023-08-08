@@ -153,6 +153,7 @@ class CrdsFilterSet():
 - after adding all values to the `CrdsFilterSet`, we then need to consume the set into a vector of `CrdsFilters` which we'll send to different peers
 - to idenitfy which hash bits each filter contains, we use a mask
   - eg, the mask of the first filter would be `000`, the mask of the second filter would be `001`, the third filter would be `010`, ...
+  - when a node recieves a pull request, the mask will be used to efficiently find all the values whos hash matches the mask (ie, if you recieved the `010` mask, you would look up all hash values whose first 3 bits are `010`) and then find values which are not included in the bloom filter
 
 ```python
     def consumeForCrdsFilters(self: CrdsFilterSet) Vec<CrdsFilters>:
@@ -198,6 +199,7 @@ fn compute_mask(index: u64, mask_bits: u64) u64:
   - `usize` is the index of the value in the crds table 
   - and `u64` is the hash value represented as a `u64`
   - also note that `shard_bits` is hardcoded in the program as `12`, so we will have 2^12 = 4096 shard indexs
+  - this allows us to quickly look up all the crds values whos hash matches a pull requests `mask` (compared to iterating over all the crds values)
 
 - whenever we insert a new value in the `CrdsTable`, we insert its hash value into the `CrdsShard` structure and so the struct is stored on the `CrdsTable`
 - the insertion logic is straightforward 
