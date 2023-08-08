@@ -113,7 +113,7 @@ pub const CrdsValueLabel = union(enum) {
 - some psuedocode is below
 
 <div align="center">
-<img src="imgs/2023-08-08-12-15-44.png" width="900" height="400">
+<img src="imgs/2023-08-08-12-15-44.png" width="900" height="450">
 </div>
 
 ```python 
@@ -199,7 +199,7 @@ fn compute_mask(index: u64, mask_bits: u64) u64:
     - to do this efficiently, we introduce a new data structure called `CrdsShards` which is located in `crds_shards.zig` 
 
 <div align="center">
-<img src="imgs/2023-08-08-13-37-04.png" width="520" height="400">
+<img src="imgs/2023-08-08-13-37-04.png" width="525" height="500">
 </div>
 
 #### `CrdsShards`
@@ -226,7 +226,7 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
 ```
 
 <div align="center">
-<img src="imgs/2023-08-08-13-42-47.png" width="520" height="400">
+<img src="imgs/2023-08-08-13-42-47.png" width="520" height="350">
 </div>
 
 #### `CrdsShards`: Finding hash matches
