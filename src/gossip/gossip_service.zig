@@ -22,6 +22,10 @@ const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
 const CrdsError = _crds_table.CrdsError;
 const Logger = @import("../trace/log.zig").Logger;
+const GossipRoute = _crds_table.GossipRoute;
+
+const crds_pull_request = @import("../gossip/pull_request.zig");
+const crds_pull_response = @import("../gossip/pull_response.zig");
 
 var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
@@ -29,7 +33,9 @@ var gpa = gpa_allocator.allocator();
 const PacketChannel = Channel(Packet);
 // const ProtocolChannel = Channel(Protocol);
 
+const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
+const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
@@ -38,6 +44,10 @@ pub const GossipService = struct {
     packet_channel: PacketChannel,
     responder_channel: PacketChannel,
     crds_table: CrdsTable,
+    allocator: std.mem.Allocator,
+
+    pull_timeout: u64 = CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
+    push_msg_timeout: u64 = CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
 
     const Self = @This();
 
@@ -46,10 +56,10 @@ pub const GossipService = struct {
         cluster_info: *ClusterInfo,
         gossip_socket: UdpSocket,
         exit: AtomicBool,
-    ) Self {
+    ) !Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
         var responder_channel = PacketChannel.init(allocator, 10000);
-        var crds_table = CrdsTable.init(allocator);
+        var crds_table = try CrdsTable.init(allocator);
 
         return Self{
             .cluster_info = cluster_info,
@@ -58,6 +68,7 @@ pub const GossipService = struct {
             .packet_channel = packet_channel,
             .responder_channel = responder_channel,
             .crds_table = crds_table,
+            .allocator = allocator,
         };
     }
 
@@ -97,6 +108,24 @@ pub const GossipService = struct {
         while (true) {
             try self.send_ping(&peer, logger);
             try self.push_contact_info(&peer);
+
+            // generate pull requests
+            var filters = crds_pull_request.build_crds_filters(self.allocator, &self.crds_table, crds_pull_request.MAX_BLOOM_SIZE) catch {
+                // TODO: handle this -- crds store not enough data?
+                std.time.sleep(std.time.ns_per_s * 1);
+                continue;
+            };
+            defer crds_pull_request.deinit_crds_filters(&filters);
+            // TODO: send em out
+
+            // trim CRDS values
+            const now = get_wallclock();
+            // recently purged values
+            const purged_cutoff_timestamp = now -| (5 * self.pull_timeout);
+            try self.crds_table.trim_purged_values(purged_cutoff_timestamp);
+            // failed insertions
+            const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
+            try self.crds_table.trim_failed_inserts_values(failed_insert_cutoff_timestamp);
 
             std.time.sleep(std.time.ns_per_s * 1);
         }
@@ -205,8 +234,32 @@ pub const GossipService = struct {
                 },
                 .PushMessage => |*push| {
                     logger.debugf("got a push message: {any}", .{protocol_message});
+                    // TODO: verify value matches pubkey
                     const values = push[1];
-                    handle_push_message(crds_table, values, logger);
+                    insert_crds_values(crds_table, values, logger, GossipRoute.PushMessage);
+                },
+                .PullResponse => |*pull| {
+                    logger.debugf("got a pull message: {any}", .{protocol_message});
+                    // TODO: verify value matches pubkey
+                    const values = pull[1];
+                    insert_crds_values(crds_table, values, logger, GossipRoute.PullResponse);
+                },
+                .PullRequest => |*pull| {
+                    // TODO: verify value matches pubkey
+                    var filter = pull[0];
+                    var value = pull[1]; // contact info
+                    const now = get_wallclock();
+
+                    const crds_values = try crds_pull_response.filter_crds_values(
+                        allocator,
+                        crds_table,
+                        &value,
+                        &filter,
+                        100,
+                        now,
+                    );
+                    // TODO: send them out as a pull response
+                    _ = crds_values;
                 },
                 else => {
                     logger.debugf("got a protocol message: {any}", .{protocol_message});
@@ -215,8 +268,11 @@ pub const GossipService = struct {
         }
     }
 
-    pub fn handle_push_message(crds_table: *CrdsTable, values: []crds.CrdsValue, logger: *Logger) void {
+    pub fn insert_crds_values(crds_table: *CrdsTable, values: []crds.CrdsValue, logger: *Logger, route: GossipRoute) void {
         var now = get_wallclock();
+
+        crds_table.write();
+        defer crds_table.release_write();
 
         for (values) |value| {
             const value_time = value.wallclock();
@@ -226,7 +282,7 @@ pub const GossipService = struct {
                 continue;
             }
 
-            crds_table.insert(value, now) catch |err| switch (err) {
+            crds_table.insert(value, now, route) catch |err| switch (err) {
                 CrdsError.OldValue => {
                     logger.debugf("failed to insert into crds: {any}", .{value});
                 },
@@ -240,7 +296,7 @@ pub const GossipService = struct {
 
 test "gossip.gossip_service: process contact_info push packet" {
     const allocator = std.testing.allocator;
-    var crds_table = CrdsTable.init(allocator);
+    var crds_table = try CrdsTable.init(allocator);
     defer crds_table.deinit();
 
     var packet_channel = PacketChannel.init(allocator, 100);
@@ -274,12 +330,12 @@ test "gossip.gossip_service: process contact_info push packet" {
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
     const packet = Packet.init(peer, buf, bytes.len);
-
     packet_channel.send(packet);
 
     // correct insertion into table
+    var buf2: [100]*crds.CrdsVersionedValue = undefined;
     std.time.sleep(std.time.ns_per_s);
-    var res = try crds_table.get_contact_infos();
+    var res = try crds_table.get_contact_infos(&buf2);
     try std.testing.expect(res.len == 1);
 
     packet_channel.close();

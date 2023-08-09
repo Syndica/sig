@@ -18,26 +18,6 @@ pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
 }
 
-pub const CrdsFilter = struct {
-    filter: Bloom,
-    mask: u64,
-    mask_bits: u32,
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .filter = Bloom.init(allocator, 0),
-            .mask = 18_446_744_073_709_551_615,
-            .mask_bits = 0,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.filter.deinit();
-    }
-};
-
 pub const CrdsVersionedValue = struct {
     ordinal: u64,
     value: CrdsValue,
@@ -67,6 +47,10 @@ pub const CrdsValue = struct {
         };
         try self.sign(keypair);
         return self;
+    }
+
+    pub fn random(rng: std.rand.Random, keypair: KeyPair) !Self {
+        return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
     pub fn sign(self: *Self, keypair: KeyPair) !void {
@@ -237,8 +221,12 @@ pub const LegacyContactInfo = struct {
         const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
         const wallclock = get_wallclock();
 
+        var seed: u64 = @intCast(std.time.milliTimestamp());
+        var rand = std.rand.DefaultPrng.init(seed);
+        const rng = rand.random();
+
         return LegacyContactInfo{
-            .id = Pubkey.random(.{ .skip_encoding = true }),
+            .id = Pubkey.random(rng, .{ .skip_encoding = true }),
             .gossip = unspecified_addr,
             .tvu = unspecified_addr,
             .tvu_forwards = unspecified_addr,
@@ -251,6 +239,24 @@ pub const LegacyContactInfo = struct {
             .serve_repair = unspecified_addr,
             .wallclock = wallclock,
             .shred_version = 0,
+        };
+    }
+
+    pub fn random(rng: std.rand.Random) LegacyContactInfo {
+        return LegacyContactInfo{
+            .id = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .gossip = SocketAddr.random(rng),
+            .tvu = SocketAddr.random(rng),
+            .tvu_forwards = SocketAddr.random(rng),
+            .repair = SocketAddr.random(rng),
+            .tpu = SocketAddr.random(rng),
+            .tpu_forwards = SocketAddr.random(rng),
+            .tpu_vote = SocketAddr.random(rng),
+            .rpc = SocketAddr.random(rng),
+            .rpc_pubsub = SocketAddr.random(rng),
+            .serve_repair = SocketAddr.random(rng),
+            .wallclock = get_wallclock(),
+            .shred_version = rng.int(u16),
         };
     }
 };
@@ -283,6 +289,24 @@ pub const CrdsData = union(enum(u32)) {
     DuplicateShred: struct { u16, DuplicateShred },
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
+
+    pub fn random(rng: std.rand.Random) CrdsData {
+        const v = rng.intRangeAtMost(u16, 0, 3);
+        switch (v) {
+            0 => {
+                return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
+            },
+            1 => {
+                return CrdsData{ .EpochSlots = .{ rng.int(u8), EpochSlots.random(rng) } };
+            },
+            2 => {
+                return CrdsData{ .Vote = .{ rng.int(u8), Vote.random(rng) } };
+            },
+            else => {
+                return CrdsData{ .DuplicateShred = .{ rng.int(u16), DuplicateShred.random(rng) } };
+            },
+        }
+    }
 };
 
 pub const Vote = struct {
@@ -291,7 +315,16 @@ pub const Vote = struct {
     wallclock: u64,
     slot: Slot = Slot.default(),
 
-    pub const @"!bincode-config:slot" = bincode.FieldConfig{ .skip = true };
+    pub const @"!bincode-config:slot" = bincode.FieldConfig(Slot){ .skip = true };
+
+    pub fn random(rng: std.rand.Random) Vote {
+        return Vote{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .transaction = Transaction.default(),
+            .wallclock = get_wallclock(),
+            .slot = Slot.init(rng.int(u64)),
+        };
+    }
 };
 
 pub const LowestSlot = struct {
@@ -327,6 +360,15 @@ pub const EpochSlots = struct {
     from: Pubkey,
     slots: []CompressedSlots,
     wallclock: u64,
+
+    pub fn random(rng: std.rand.Random) EpochSlots {
+        var slice: [0]CompressedSlots = .{};
+        return EpochSlots{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .slots = &slice,
+            .wallclock = get_wallclock(),
+        };
+    }
 };
 
 pub const CompressedSlots = union(enum(u32)) {
@@ -384,7 +426,7 @@ pub const Version = struct {
     pub fn default(from: Pubkey) Self {
         return Self{
             .from = from,
-            .wallclock = @intCast(std.time.milliTimestamp()),
+            .wallclock = get_wallclock(),
             .version = LegacyVersion2.CURRENT,
         };
     }
@@ -455,6 +497,20 @@ pub const DuplicateShred = struct {
     num_chunks: u8,
     chunk_index: u8,
     chunk: []u8,
+
+    pub fn random(rng: std.rand.Random) DuplicateShred {
+        var slice = [_]u8{0} ** 32;
+        return DuplicateShred{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .wallclock = get_wallclock(),
+            .slot = Slot.init(rng.int(u64)),
+            .shred_index = rng.int(u32),
+            .shred_type = ShredType.Data,
+            .num_chunks = rng.int(u8),
+            .chunk_index = rng.int(u8),
+            .chunk = &slice,
+        };
+    }
 };
 
 pub const SnapshotHashes = struct {
@@ -469,22 +525,10 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk, true);
-    const unspecified_addr = SocketAddr.unspecified();
-    var legacy_contact_info = LegacyContactInfo{
-        .id = id,
-        .gossip = unspecified_addr,
-        .tvu = unspecified_addr,
-        .tvu_forwards = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
-        .wallclock = 0,
-        .shred_version = 0,
-    };
+
+    var legacy_contact_info = LegacyContactInfo.default();
+    legacy_contact_info.id = id;
+    legacy_contact_info.wallclock = 0;
 
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
@@ -492,16 +536,6 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
 
     try std.testing.expect(crds_value.id().equals(&id));
     try std.testing.expect(crds_value.label().LegacyContactInfo.equals(&id));
-}
-
-test "gossip.crds: default crds filter matches rust bytes" {
-    const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-    var filter = CrdsFilter.init(std.testing.allocator);
-    defer filter.deinit();
-
-    var buf = [_]u8{0} ** 1024;
-    var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
-    try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
 }
 
 test "gossip.crds: pubkey matches rust" {
@@ -526,29 +560,15 @@ test "gossip.crds: contact info serialization matches rust" {
     const id = Pubkey.fromPublicKey(&pk, true);
 
     const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
-    const unspecified_addr = SocketAddr.unspecified();
 
     var buf = [_]u8{0} ** 1024;
 
-    var legacy_contact_info = LegacyContactInfo{
-        .id = id,
-        .gossip = gossip_addr,
-        .tvu = unspecified_addr,
-        .tvu_forwards = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
-        .wallclock = 0,
-        .shred_version = 0,
-    };
+    var legacy_contact_info = LegacyContactInfo.default();
+    legacy_contact_info.gossip = gossip_addr;
+    legacy_contact_info.id = id;
+    legacy_contact_info.wallclock = 0;
 
     var contact_info_rust = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    // var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
-
     var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], &contact_info_rust);
 }
@@ -560,31 +580,52 @@ test "gossip.crds: crds data serialization matches rust" {
     const id = Pubkey.fromPublicKey(&pk, true);
 
     const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
-    const unspecified_addr = SocketAddr.unspecified();
 
-    var buf = [_]u8{0} ** 1024;
-
-    var legacy_contact_info = LegacyContactInfo{
-        .id = id,
-        .gossip = gossip_addr,
-        .tvu = unspecified_addr,
-        .tvu_forwards = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
-        .wallclock = 0,
-        .shred_version = 0,
-    };
+    var legacy_contact_info = LegacyContactInfo.default();
+    legacy_contact_info.gossip = gossip_addr;
+    legacy_contact_info.id = id;
+    legacy_contact_info.wallclock = 0;
 
     var crds_data = CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
+    var buf = [_]u8{0} ** 1024;
     var rust_crds_data = [_]u8{ 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var bytes = try bincode.writeToSlice(buf[0..], crds_data, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_crds_data[0..bytes.len]);
+}
+
+test "gossip.crds: random crds data" {
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var buf: [1000]u8 = undefined;
+
+    {
+        const data = LegacyContactInfo.random(rng);
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
+    }
+    {
+        const data = EpochSlots.random(rng);
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
+    }
+    {
+        const data = Vote.random(rng);
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
+    }
+    {
+        const data = DuplicateShred.random(rng);
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
+    }
+    {
+        const data = CrdsData.random(rng);
+        const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
+        _ = result;
+    }
 }

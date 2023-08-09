@@ -1,4 +1,4 @@
-const varint_config = @import("../utils/varint.zig").varint_config;
+const var_int_config_u16 = @import("../utils/varint.zig").var_int_config_u16;
 
 pub const CURRENT_VERSION: Version = Version.new(0, 1, 0, 0, 0, 4);
 
@@ -34,8 +34,8 @@ pub const Version = struct {
         };
     }
 
-    pub const @"!bincode-config:major" = varint_config;
-    pub const @"!bincode-config:minor" = varint_config;
-    pub const @"!bincode-config:patch" = varint_config;
-    pub const @"!bincode-config:client" = varint_config;
+    pub const @"!bincode-config:major" = var_int_config_u16;
+    pub const @"!bincode-config:minor" = var_int_config_u16;
+    pub const @"!bincode-config:patch" = var_int_config_u16;
+    pub const @"!bincode-config:client" = var_int_config_u16;
 };

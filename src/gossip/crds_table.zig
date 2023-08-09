@@ -10,6 +10,8 @@ const CompareResult = hash.CompareResult;
 
 const SocketAddr = @import("net.zig").SocketAddr;
 
+const CrdsShards = @import("./crds_shards.zig").CrdsShards;
+
 const crds = @import("./crds.zig");
 const CrdsValue = crds.CrdsValue;
 const CrdsData = crds.CrdsData;
@@ -20,17 +22,24 @@ const LegacyContactInfo = crds.LegacyContactInfo;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
-// tmp upperbound on number for `get_nodes`/`get_votes`/...
-// enables stack allocations for buffers in the getter functions
-const MAX_N_CONTACT_INFOS = 100;
-const MAX_N_VOTES = 20;
-const MAX_N_EPOCH_SLOTS = 20;
-const MAX_N_DUP_SHREDS = 20;
+const RwLock = std.Thread.RwLock;
 
 pub const CrdsError = error{
     OldValue,
+    DuplicateValue,
 };
+
+pub const GossipRoute = enum {
+    LocalMessage,
+    PullRequest,
+    PullResponse,
+    PushMessage,
+};
+
+pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
+// TODO: benchmark other structs?
+const PurgedQ = std.TailQueue(HashAndTime);
+const FailedInsertsQ = std.TailQueue(HashAndTime);
 
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
@@ -46,16 +55,30 @@ pub const CrdsError = error{
 /// are found, the entry with the largest wallclock time (newest) is stored.
 pub const CrdsTable = struct {
     store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
+
+    // special types tracked with their index
     contact_infos: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
-    shred_versions: AutoHashMap(Pubkey, u16),
     votes: AutoArrayHashMap(usize, usize),
     epoch_slots: AutoArrayHashMap(usize, usize),
     duplicate_shreds: AutoArrayHashMap(usize, usize),
-    cursor: usize,
+    shred_versions: AutoHashMap(Pubkey, u16),
+
+    // used to build pull responses efficiently
+    shards: CrdsShards,
+
+    // used when sending pull requests
+    purged: PurgedQ,
+    failed_inserts: FailedInsertsQ,
+
+    // head of the store
+    cursor: usize = 0,
+
+    // thread safe
+    lock: RwLock = .{},
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
             .contact_infos = AutoArrayHashMap(usize, void).init(allocator),
@@ -63,7 +86,9 @@ pub const CrdsTable = struct {
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
-            .cursor = 0,
+            .shards = try CrdsShards.init(allocator),
+            .purged = PurgedQ{},
+            .failed_inserts = FailedInsertsQ{},
         };
     }
 
@@ -74,11 +99,33 @@ pub const CrdsTable = struct {
         self.votes.deinit();
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
+        self.shards.deinit();
     }
 
-    pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
+    pub fn write(self: *Self) void {
+        self.lock.lock();
+    }
+
+    pub fn release_write(self: *Self) void {
+        self.lock.unlock();
+    }
+
+    pub fn read(self: *Self) void {
+        self.lock.lockShared();
+    }
+
+    pub fn release_read(self: *Self) void {
+        self.lock.unlockShared();
+    }
+
+    pub fn len(self: *Self) usize {
+        return self.store.count();
+    }
+
+    pub fn insert(self: *Self, value: CrdsValue, now: u64, maybe_route: ?GossipRoute) !void {
         // TODO: check to make sure this sizing is correct or use heap
-        var buf = [_]u8{0} ** 2048;
+
+        var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
         var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
         const versioned_value = CrdsVersionedValue{
@@ -91,28 +138,32 @@ pub const CrdsTable = struct {
 
         const label = value.label();
         var result = try self.store.getOrPut(label);
+        const entry_index = result.index;
 
         // entry doesnt exist
         if (!result.found_existing) {
             switch (value.data) {
                 .LegacyContactInfo => |*info| {
-                    try self.contact_infos.put(result.index, {});
+                    try self.contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
-                    try self.votes.put(self.cursor, result.index);
+                    try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
-                    try self.epoch_slots.put(self.cursor, result.index);
+                    try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
-                    try self.duplicate_shreds.put(self.cursor, result.index);
+                    try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
                 else => {},
             }
 
-            self.cursor += 1;
+            try self.shards.insert(entry_index, &versioned_value.value_hash);
+
             result.value_ptr.* = versioned_value;
+
+            self.cursor += 1;
 
             // should overwrite existing entry
         } else if (crds_overwrites(&versioned_value, result.value_ptr)) {
@@ -125,34 +176,72 @@ pub const CrdsTable = struct {
                 .Vote => {
                     var did_remove = self.votes.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
-                    try self.votes.put(self.cursor, result.index);
+                    try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
                     var did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
-                    try self.epoch_slots.put(self.cursor, result.index);
+                    try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
                     var did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
                     std.debug.assert(did_remove);
-                    try self.duplicate_shreds.put(self.cursor, result.index);
+                    try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
                 else => {},
             }
 
-            self.cursor += 1;
+            // remove and insert to make sure the shard ordering is oldest-to-newest
+            // NOTE: do we need the ordering to be oldest-to-newest?
+            try self.shards.remove(entry_index, &old_entry.value_hash);
+            try self.shards.insert(entry_index, &versioned_value.value_hash);
+
+            var node = PurgedQ.Node{ .data = HashAndTime{
+                .hash = old_entry.value_hash,
+                .timestamp = now,
+            } };
+            self.purged.append(&node);
+
             result.value_ptr.* = versioned_value;
+
+            self.cursor += 1;
 
             // do nothing
         } else {
-            return CrdsError.OldValue;
+            const old_entry = result.value_ptr.*;
+
+            var node_data = HashAndTime{
+                .hash = old_entry.value_hash,
+                .timestamp = now,
+            };
+
+            if (maybe_route) |route| {
+                if (route == GossipRoute.PullResponse) {
+                    var failed_insert_node = FailedInsertsQ.Node{ .data = node_data };
+                    self.failed_inserts.append(&failed_insert_node);
+                }
+            }
+
+            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != CompareResult.Equal) {
+                // if hash isnt the same and override() is false then msg is old
+                var purged_node = PurgedQ.Node{ .data = node_data };
+                self.purged.append(&purged_node);
+
+                return CrdsError.OldValue;
+            } else {
+                // hash is the same then its a duplicate
+                return CrdsError.DuplicateValue;
+            }
         }
     }
 
-    pub fn get_votes_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    // ** getter functions **
+    pub fn get(self: *Self, label: CrdsValueLabel) ?CrdsVersionedValue {
+        return self.store.get(label);
+    }
+
+    pub fn get_votes_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.votes.keys();
-        // initialize this buffer once in struct and re-use on each call?
-        var buf: [MAX_N_VOTES]*CrdsVersionedValue = undefined; // max N votes per query (20)
         var index: usize = 0;
         for (keys) |key| {
             if (key < caller_cursor.*) {
@@ -163,7 +252,7 @@ pub const CrdsTable = struct {
             buf[index] = &entry;
             index += 1;
 
-            if (index == MAX_N_VOTES) {
+            if (index == buf.len) {
                 break;
             }
         }
@@ -172,9 +261,8 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_epoch_slots_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_epoch_slots_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.epoch_slots.keys();
-        var buf: [MAX_N_EPOCH_SLOTS]*CrdsVersionedValue = undefined;
         var index: usize = 0;
         for (keys) |key| {
             if (key < caller_cursor.*) {
@@ -185,7 +273,7 @@ pub const CrdsTable = struct {
             buf[index] = &entry;
             index += 1;
 
-            if (index == MAX_N_EPOCH_SLOTS) {
+            if (index == buf.len) {
                 break;
             }
         }
@@ -194,9 +282,8 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_duplicate_shreds_with_cursor(self: *Self, caller_cursor: *usize) ![]*CrdsVersionedValue {
+    pub fn get_duplicate_shreds_with_cursor(self: *Self, buf: []*CrdsVersionedValue, caller_cursor: *usize) ![]*CrdsVersionedValue {
         const keys = self.duplicate_shreds.keys();
-        var buf: [MAX_N_DUP_SHREDS]*CrdsVersionedValue = undefined;
         var index: usize = 0;
         for (keys) |key| {
             if (key < caller_cursor.*) {
@@ -207,7 +294,7 @@ pub const CrdsTable = struct {
             buf[index] = &entry;
             index += 1;
 
-            if (index == MAX_N_DUP_SHREDS) {
+            if (index == buf.len) {
                 break;
             }
         }
@@ -216,17 +303,86 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn get_contact_infos(self: *const Self) ![]*CrdsVersionedValue {
-        var entry_ptrs: [MAX_N_CONTACT_INFOS]*CrdsVersionedValue = undefined;
-        const size = @min(self.contact_infos.count(), MAX_N_CONTACT_INFOS);
+    pub fn get_contact_infos(self: *const Self, buf: []*CrdsVersionedValue) ![]*CrdsVersionedValue {
         const store_values = self.store.iterator().values;
         const contact_indexs = self.contact_infos.iterator().keys;
+
+        const size = @min(self.contact_infos.count(), buf.len);
+
         for (0..size) |i| {
             const index = contact_indexs[i];
-            const entry = &store_values[index];
-            entry_ptrs[i] = entry;
+            const entry = &store_values[index]; // does this dangle?
+            buf[i] = entry;
         }
-        return entry_ptrs[0..size];
+        return buf[0..size];
+    }
+
+    // ** shard getter fcns **
+    pub fn get_bitmask_matches(
+        self: *const Self,
+        alloc: std.mem.Allocator,
+        mask: u64,
+        mask_bits: u64,
+    ) !std.ArrayList(usize) {
+        const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
+        return indexs;
+    }
+
+    // ** purged values fcns **
+    pub fn purged_len(self: *Self) usize {
+        return self.purged.len;
+    }
+
+    pub fn get_purged_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+        var values = try std.ArrayList(Hash).initCapacity(alloc, self.purged.len);
+
+        // collect all the hash values
+        var curr_ptr = self.purged.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            values.appendAssumeCapacity(curr.data.hash);
+        }
+
+        return values;
+    }
+
+    pub fn trim_purged_values(self: *Self, oldest_timestamp: u64) !void {
+        var curr_ptr = self.purged.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            const data_timestamp = curr.data.timestamp;
+            if (data_timestamp < oldest_timestamp) {
+                self.purged.remove(curr);
+            } else {
+                break;
+            }
+        }
+    }
+
+    // ** failed insert values fcns **
+    pub fn failed_inserts_len(self: *Self) usize {
+        return self.failed_inserts.len;
+    }
+
+    pub fn get_failed_inserts_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+        var values = try std.ArrayList(Hash).initCapacity(alloc, self.failed_inserts.len);
+
+        // collect all the hash values
+        var curr_ptr = self.failed_inserts.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            values.appendAssumeCapacity(curr.data.hash);
+        }
+        return values;
+    }
+
+    pub fn trim_failed_inserts_values(self: *Self, oldest_timestamp: u64) !void {
+        var curr_ptr = self.failed_inserts.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            const data_timestamp = curr.data.timestamp;
+            if (data_timestamp < oldest_timestamp) {
+                self.failed_inserts.remove(curr);
+            } else {
+                break;
+            }
+        }
     }
 };
 
@@ -246,6 +402,25 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     }
 }
 
+test "gossip.crds_table: insert and get" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    var value = try CrdsValue.random(rng, keypair);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    try crds_table.insert(value, 0, null);
+
+    const label = value.label();
+    const x = crds_table.get(label).?;
+    _ = x;
+}
+
 test "gossip.crds_table: insert and get votes" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
@@ -257,75 +432,69 @@ test "gossip.crds_table: insert and get votes" {
         .Vote = .{ 0, vote },
     }, kp);
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
+    var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
-    try crds_table.insert(crds_value, 0);
+    try crds_table.insert(crds_value, 0, null);
 
     var cursor: usize = 0;
-    var votes = try crds_table.get_votes_with_cursor(&cursor);
+    var buf: [100]*CrdsVersionedValue = undefined;
+    var votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
 
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 1);
 
     // try inserting another vote
-    id = Pubkey.random(.{});
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+    id = Pubkey.random(rng, .{});
     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
     }, kp);
-    try crds_table.insert(crds_value, 1);
+    try crds_table.insert(crds_value, 1, null);
 
-    votes = try crds_table.get_votes_with_cursor(&cursor);
+    votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 2);
+
+    const v = try crds_table.get_bitmask_matches(std.testing.allocator, 10, 1);
+    defer v.deinit();
 }
 
 test "gossip.crds_table: insert and get contact_info" {
-    var kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
-    const unspecified_addr = SocketAddr.unspecified();
-    var legacy_contact_info = crds.LegacyContactInfo{
-        .id = id,
-        .gossip = unspecified_addr,
-        .tvu = unspecified_addr,
-        .tvu_forwards = unspecified_addr,
-        .repair = unspecified_addr,
-        .tpu = unspecified_addr,
-        .tpu_forwards = unspecified_addr,
-        .tpu_vote = unspecified_addr,
-        .rpc = unspecified_addr,
-        .rpc_pubsub = unspecified_addr,
-        .serve_repair = unspecified_addr,
-        .wallclock = 0,
-        .shred_version = 0,
-    };
+    const kp = try KeyPair.create([_]u8{1} ** 32);
+    var id = Pubkey.fromPublicKey(&kp.public_key, true);
+
+    var legacy_contact_info = crds.LegacyContactInfo.default();
+    legacy_contact_info.id = id;
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     }, kp);
 
-    var crds_table = CrdsTable.init(std.testing.allocator);
+    var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
     // test insertion
-    try crds_table.insert(crds_value, 0);
+    try crds_table.insert(crds_value, 0, null);
 
     // test retrieval
-    var nodes = try crds_table.get_contact_infos();
+    var buf: [100]*CrdsVersionedValue = undefined;
+    var nodes = try crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
     // test re-insertion
-    const result = crds_table.insert(crds_value, 0);
-    try std.testing.expectError(CrdsError.OldValue, result);
+    const result = crds_table.insert(crds_value, 0, null);
+    try std.testing.expectError(CrdsError.DuplicateValue, result);
 
     // test re-insertion with greater wallclock
-    crds_value.data.LegacyContactInfo.wallclock = 2;
-    try crds_table.insert(crds_value, 0);
+    crds_value.data.LegacyContactInfo.wallclock += 2;
+    const v = crds_value.data.LegacyContactInfo.wallclock;
+    try crds_table.insert(crds_value, 0, null);
 
     // check retrieval
-    nodes = try crds_table.get_contact_infos();
+    nodes = try crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == 2);
+    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == v);
 }

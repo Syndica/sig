@@ -1,65 +1,75 @@
 const std = @import("std");
 const bincode = @import("../bincode/bincode.zig");
 
-pub const varint_config = bincode.FieldConfig{
-    .serializer = serilaize_varint,
-    .deserializer = deserialize_varint,
-};
-
-pub fn serilaize_varint(writer: anytype, data: anytype, _: bincode.Params) !void {
-    var v = data;
-    while (v >= 0x80) {
-        var byte = @as(u8, @intCast(((v & 0x7F) | 0x80)));
-        v >>= 7;
-        try writer.writeByte(byte);
-    }
-    try writer.writeByte(@as(u8, @intCast(v)));
-    return;
-}
-
-pub fn deserialize_varint(_: ?std.mem.Allocator, comptime T: type, reader: anytype, _: bincode.Params) !T {
-    var out: T = 0;
-
-    var t_bits: u8 = switch (T) {
-        u16 => 16,
-        u32 => 32,
-        u64 => 64,
-        else => {
-            return error.InvalidType;
-        },
-    };
-
-    const ShiftT: type = switch (T) {
-        u16 => u4,
-        u32 => u5,
-        u64 => u6,
-        else => unreachable,
-    };
-
-    var shift: u32 = 0;
-    while (shift < t_bits) {
-        const byte: u8 = try reader.readByte();
-        out |= @as(T, @intCast((byte & 0x7F))) << @as(ShiftT, @intCast(shift));
-        if (byte & 0x80 == 0) {
-            if (@as(u8, @intCast(out >> @as(ShiftT, @intCast(shift)))) != byte) {
-                return error.TruncatedLastByte;
+pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            _ = params;
+            var v = data;
+            while (v >= 0x80) {
+                var byte = @as(u8, @intCast(((v & 0x7F) | 0x80)));
+                v >>= 7;
+                try writer.writeByte(byte);
             }
-            if (byte == 0 and (shift != 0 or out != 0)) {
-                return error.NotValidTrailingZeros;
-            }
-            return out;
+            try writer.writeByte(@as(u8, @intCast(v)));
         }
-        shift += 7;
-    }
-    return error.ShiftOverflows;
+
+        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !VarInt {
+            _ = params;
+            _ = allocator;
+
+            var out: VarInt = 0;
+
+            var t_bits: u8 = switch (VarInt) {
+                u16 => 16,
+                u32 => 32,
+                u64 => 64,
+                else => {
+                    return error.InvalidType;
+                },
+            };
+
+            const ShiftT: type = switch (VarInt) {
+                u16 => u4,
+                u32 => u5,
+                u64 => u6,
+                else => unreachable,
+            };
+
+            var shift: u32 = 0;
+            while (shift < t_bits) {
+                const byte: u8 = try reader.readByte();
+                out |= @as(VarInt, @intCast((byte & 0x7F))) << @as(ShiftT, @intCast(shift));
+                if (byte & 0x80 == 0) {
+                    if (@as(u8, @intCast(out >> @as(ShiftT, @intCast(shift)))) != byte) {
+                        return error.TruncatedLastByte;
+                    }
+                    if (byte == 0 and (shift != 0 or out != 0)) {
+                        return error.NotValidTrailingZeros;
+                    }
+                    return out;
+                }
+                shift += 7;
+            }
+            return error.ShiftOverflows;
+        }
+    };
+
+    return bincode.FieldConfig(VarInt){
+        .serializer = S.serialize,
+        .deserializer = S.deserialize,
+    };
 }
 
-pub fn serialize_short_u16(writer: anytype, data: anytype, _: bincode.Params) !void {
-    var val: u16 = data;
+pub const var_int_config_u16 = VarIntConfig(u16);
+pub const var_int_config_u64 = VarIntConfig(u64);
+
+pub fn serialize_short_u16(writer: anytype, data: u16, _: bincode.Params) !void {
+    var value = data;
     while (true) {
-        var elem = @as(u8, @intCast((val & 0x7f)));
-        val >>= 7;
-        if (val == 0) {
+        var elem = @as(u8, @intCast((value & 0x7f)));
+        value >>= 7;
+        if (value == 0) {
             try writer.writeByte(elem);
             break;
         } else {
@@ -69,7 +79,7 @@ pub fn serialize_short_u16(writer: anytype, data: anytype, _: bincode.Params) !v
     }
 }
 
-pub fn deserialize_short_u16(_: ?std.mem.Allocator, comptime T: type, reader: anytype, _: bincode.Params) !T {
+pub fn deserialize_short_u16(reader: anytype, _: bincode.Params) !u16 {
     var val: u16 = 0;
     for (0..MAX_ENCODING_LENGTH) |n| {
         var elem: u8 = try reader.readByte();

@@ -1,7 +1,7 @@
 const std = @import("std");
 const bincode = @import("../bincode/bincode.zig");
 
-pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig {
+pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             var list: std.ArrayList(Child) = data;
@@ -12,7 +12,7 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig {
             return;
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, comptime T: type, reader: anytype, params: bincode.Params) !T {
+        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
             var ally = allocator.?;
             var len = try bincode.read(ally, u64, reader, params);
             var list = try std.ArrayList(Child).initCapacity(ally, @as(usize, len));
@@ -24,7 +24,7 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig {
         }
     };
 
-    return bincode.FieldConfig{
+    return bincode.FieldConfig(std.ArrayList(Child)){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
     };

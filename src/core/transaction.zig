@@ -1,5 +1,5 @@
 const std = @import("std");
-const shortvec_config = @import("../utils/shortvec.zig").shortvec_config;
+const ShortVecConfig = @import("../utils/shortvec.zig").ShortVecConfig;
 const Signature = @import("signature.zig").Signature;
 const Pubkey = @import("pubkey.zig").Pubkey;
 const Hash = @import("hash.zig").Hash;
@@ -8,7 +8,7 @@ pub const Transaction = struct {
     signatures: []Signature,
     message: Message,
 
-    pub const @"!bincode-config:signatures" = shortvec_config;
+    pub const @"!bincode-config:signatures" = ShortVecConfig(Signature);
 
     // used in tests
     pub fn default() Transaction {
@@ -25,8 +25,8 @@ pub const Message = struct {
     recent_blockhash: Hash,
     instructions: []CompiledInstruction,
 
-    pub const @"!bincode-config:account_keys" = shortvec_config;
-    pub const @"!bincode-config:instructions" = shortvec_config;
+    pub const @"!bincode-config:account_keys" = ShortVecConfig(Pubkey);
+    pub const @"!bincode-config:instructions" = ShortVecConfig(CompiledInstruction);
 
     pub fn default() Message {
         return Message{
@@ -66,8 +66,8 @@ pub const CompiledInstruction = struct {
     /// The program input data.
     data: []u8,
 
-    pub const @"!bincode-config:accounts" = shortvec_config;
-    pub const @"!bincode-config:data" = shortvec_config;
+    pub const @"!bincode-config:accounts" = ShortVecConfig(u8);
+    pub const @"!bincode-config:data" = ShortVecConfig(u8);
 };
 
 test "core.transaction: tmp" {
