@@ -31,7 +31,6 @@ pub const CrdsError = error{
 
 pub const GossipRoute = enum {
     LocalMessage,
-    PullRequest,
     PullResponse,
     PushMessage,
 };
@@ -434,13 +433,76 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     }
 }
 
+test "gossip.crds_table: trim failed insertions" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+    var data = CrdsData{
+        .LegacyContactInfo = LegacyContactInfo.random(rng),
+    };
+    var value = try CrdsValue.initSigned(data, keypair);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    // timestamp = 100
+    try crds_table.insert(value, 100, null);
+
+    // should lead to prev being pruned
+    value = try CrdsValue.initSigned(data, keypair);
+    const result = crds_table.insert(value, 120, GossipRoute.PullResponse);
+    try std.testing.expectError(CrdsError.DuplicateValue, result);
+
+    try std.testing.expectEqual(crds_table.failed_inserts_len(), 1);
+
+    try crds_table.trim_failed_inserts_values(130);
+
+    try std.testing.expectEqual(crds_table.failed_inserts_len(), 0);
+}
+
+test "gossip.crds_table: trim pruned values" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+    var data = CrdsData{
+        .LegacyContactInfo = LegacyContactInfo.random(rng),
+    };
+    var value = try CrdsValue.initSigned(data, keypair);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    // timestamp = 100
+    try crds_table.insert(value, 100, null);
+
+    // should lead to prev being pruned
+    var new_data = CrdsData{
+        .LegacyContactInfo = LegacyContactInfo.random(rng),
+    };
+    new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
+    // older wallclock
+    new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
+    value = try CrdsValue.initSigned(new_data, keypair);
+    try crds_table.insert(value, 120, null);
+
+    try std.testing.expectEqual(crds_table.purged_len(), 1);
+
+    // its timestamp should be 120 so, 130 = clear pruned values
+    try crds_table.trim_purged_values(130);
+
+    try std.testing.expectEqual(crds_table.purged_len(), 0);
+}
+
 test "gossip.crds_table: insert and get" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-
     var value = try CrdsValue.random(rng, keypair);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);

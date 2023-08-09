@@ -114,14 +114,17 @@ pub const GossipService = struct {
         while (true) {
             // new pings
             try self.send_ping(&peer, logger);
-
-            // new pull msgs
-            var filters = new_pull_requests(self.allocator, &self.crds_table);
-            pull_request.deinit_crds_filters(&filters);
-
-            // new push msgs
             try self.push_contact_info();
 
+            // new pull msgs
+            var filters = new_pull_requests(
+                self.allocator,
+                &self.crds_table,
+                pull_request.MAX_BLOOM_SIZE,
+            );
+            defer pull_request.deinit_crds_filters(&filters);
+
+            // new push msgs
             try drain_push_queue_to_crds_table(
                 &self.crds_table,
                 &self.push_msg_queue,
@@ -142,10 +145,11 @@ pub const GossipService = struct {
     }
 
     fn new_pull_requests(
-        allocator: *const std.mem.Allocator,
+        allocator: std.mem.Allocator,
         crds_table: *CrdsTable,
+        bloom_size: usize,
     ) std.ArrayList(pull_request.CrdsFilter) {
-        var filters = pull_request.build_crds_filters(allocator, crds_table, pull_request.MAX_BLOOM_SIZE) catch {
+        var filters = pull_request.build_crds_filters(allocator, crds_table, bloom_size) catch {
             // TODO: handle this -- crds store not enough data?
             std.debug.print("failed to build crds filters", .{});
             return std.ArrayList(pull_request.CrdsFilter).init(allocator);
@@ -213,7 +217,7 @@ pub const GossipService = struct {
     }
 
     fn new_push_messages(
-        allocator: *const std.mem.Allocator,
+        allocator: std.mem.Allocator,
         crds_table: *CrdsTable,
         push_cursor: *u64,
     ) !std.AutoHashMap(Pubkey, CrdsValue) {
@@ -385,6 +389,70 @@ pub const GossipService = struct {
         }
     }
 };
+
+test "gossip.gossip_service: new pull messages" {
+    const allocator = std.testing.allocator;
+
+    var crds_table = try CrdsTable.init(allocator);
+    defer crds_table.deinit();
+
+    var keypair = try KeyPair.create([_]u8{1} ** 32);
+    var rng = std.rand.DefaultPrng.init(get_wallclock());
+
+    for (0..20) |_| {
+        var value = try CrdsValue.random(rng.random(), keypair);
+        try crds_table.insert(value, get_wallclock(), null);
+    }
+
+    var filters = GossipService.new_pull_requests(allocator, &crds_table, 2);
+    defer pull_request.deinit_crds_filters(&filters);
+
+    try std.testing.expect(filters.items.len > 0);
+}
+
+test "gossip.gossip_service: new push messages" {
+    const allocator = std.testing.allocator;
+
+    var crds_table = try CrdsTable.init(allocator);
+    defer crds_table.deinit();
+
+    var keypair = try KeyPair.create([_]u8{1} ** 32);
+    var rng = std.rand.DefaultPrng.init(get_wallclock());
+    var value = try CrdsValue.random(rng.random(), keypair);
+
+    var push_queue = std.ArrayList(CrdsValue).init(allocator);
+    defer push_queue.deinit();
+    var mutex = std.Thread.Mutex{};
+
+    try push_queue.append(value);
+    try GossipService.drain_push_queue_to_crds_table(
+        &crds_table,
+        &push_queue,
+        &mutex,
+    );
+    try std.testing.expect(crds_table.len() == 1);
+
+    var cursor: usize = 0;
+    var msgs = try GossipService.new_push_messages(
+        allocator,
+        &crds_table,
+        &cursor,
+    );
+
+    try std.testing.expect(cursor == 1);
+    try std.testing.expect(msgs.count() == 1);
+    msgs.deinit();
+
+    msgs = try GossipService.new_push_messages(
+        allocator,
+        &crds_table,
+        &cursor,
+    );
+
+    try std.testing.expect(cursor == 1);
+    try std.testing.expect(msgs.count() == 0);
+    msgs.deinit();
+}
 
 test "gossip.gossip_service: process contact_info push packet" {
     const allocator = std.testing.allocator;
