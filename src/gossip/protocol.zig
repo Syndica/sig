@@ -25,6 +25,7 @@ const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
 };
+pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 const PruneData = struct {
     /// Pubkey of the node that sent this prune data
@@ -47,7 +48,38 @@ pub const Protocol = union(enum(u32)) {
     PruneMessage: struct { Pubkey, PruneData },
     PingMessage: Ping,
     PongMessage: Pong,
+
+    pub fn sanitize(self: *Protocol) !void {
+        switch (self.*) {
+            .PullRequest => {},
+            .PullResponse => {},
+            .PushMessage => |*msg| {
+                const crds_values = msg[1];
+                for (crds_values) |value| {
+                    const data = value.data;
+                    try data.sanitize();
+                }
+            },
+            .PruneMessage => |*msg| {
+                const from = msg[0];
+                const value = msg[1];
+                if (!from.equals(&value.pubkey)) {
+                    return error.InvalidValue;
+                }
+                try sanitize_wallclock(value.wallclock);
+            },
+            // do nothing
+            .PingMessage => {},
+            .PongMessage => {},
+        }
+    }
 };
+
+pub fn sanitize_wallclock(wallclock: u64) !void {
+    if (wallclock >= MAX_WALLCLOCK) {
+        return error.InvalidValue;
+    }
+}
 
 pub const Ping = struct {
     from: Pubkey,

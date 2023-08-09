@@ -33,7 +33,8 @@ var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa = gpa_allocator.allocator();
 
 const PacketChannel = Channel(Packet);
-// const ProtocolChannel = Channel(Protocol);
+const ProtocolMessage = struct { from_addr: EndPoint, message: Protocol };
+const ProtocolChannel = Channel(ProtocolMessage);
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -48,6 +49,7 @@ pub const GossipService = struct {
     responder_channel: PacketChannel,
     crds_table: CrdsTable,
     allocator: std.mem.Allocator,
+    verified_channel: ProtocolChannel,
 
     push_msg_queue: std.ArrayList(CrdsValue),
     push_msg_queue_lock: std.Thread.Mutex = .{},
@@ -62,7 +64,9 @@ pub const GossipService = struct {
         exit: AtomicBool,
     ) !Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
+        var verified_channel = ProtocolChannel.init(allocator, 10000);
         var responder_channel = PacketChannel.init(allocator, 10000);
+
         var crds_table = try CrdsTable.init(allocator);
 
         return Self{
@@ -71,6 +75,7 @@ pub const GossipService = struct {
             .exit_sig = exit,
             .packet_channel = packet_channel,
             .responder_channel = responder_channel,
+            .verified_channel = verified_channel,
             .crds_table = crds_table,
             .allocator = allocator,
             .push_msg_queue = std.ArrayList(CrdsValue).init(allocator),
@@ -80,6 +85,8 @@ pub const GossipService = struct {
     pub fn deinit(self: *Self) void {
         self.packet_channel.deinit();
         self.responder_channel.deinit();
+        self.verified_channel.deinit();
+
         self.crds_table.deinit();
         self.push_msg_queue.deinit();
     }
@@ -89,12 +96,36 @@ pub const GossipService = struct {
         logger.infof("running gossip service at {any} with pubkey {s}", .{ self.gossip_socket.getLocalEndPoint(), id.cached_str.? });
         defer self.deinit();
 
-        // spawn gossip udp receiver thread
-        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{ self, logger });
-        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{ self.allocator, &self.crds_table, &self.packet_channel, logger });
-        var responder_handle = try Thread.spawn(.{}, Self.responder, .{self});
-        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{ self, logger });
+        // process input threads
+        var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{
+            &self.gossip_socket,
+            &self.packet_channel,
+            logger,
+        });
+        var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
+            self.allocator,
+            &self.packet_channel,
+            &self.verified_channel,
+        });
+        var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{
+            self.allocator,
+            &self.crds_table,
+            &self.verified_channel,
+            logger,
+        });
 
+        // periodically send output thread
+        var gossip_loop_handle = try Thread.spawn(.{}, Self.gossip_loop, .{
+            self,
+            logger,
+        });
+
+        // outputer thread
+        var responder_handle = try Thread.spawn(.{}, Self.responder, .{
+            self,
+        });
+
+        packet_verifier_handle.join();
         responder_handle.join();
         receiver_handle.join();
         packet_handle.join();
@@ -104,6 +135,38 @@ pub const GossipService = struct {
     fn responder(self: *Self) !void {
         while (self.responder_channel.receive()) |p| {
             _ = try self.gossip_socket.sendTo(p.from, p.data[0..p.size]);
+        }
+    }
+
+    fn verify_packets(
+        allocator: std.mem.Allocator,
+        packet_channel: *PacketChannel,
+        verified_channel: *ProtocolChannel,
+    ) !void {
+        var failed_protocol_msgs: usize = 0;
+
+        while (packet_channel.receive()) |packet| {
+            var protocol_message = bincode.readFromSlice(
+                allocator,
+                Protocol,
+                packet.data[0..packet.size],
+                bincode.Params.standard,
+            ) catch {
+                failed_protocol_msgs += 1;
+                std.debug.print("failed to deserialize protocol message", .{});
+                continue;
+            };
+            defer bincode.free(allocator, protocol_message);
+
+            // TODO: verify protocol message signatures
+            protocol_message.sanitize() catch {
+                std.debug.print("failed to sanitize protocol message", .{});
+                continue;
+            };
+
+            // TODO: send the pointers over the channel vs item copy
+            const msg = ProtocolMessage{ .from_addr = packet.from, .message = protocol_message };
+            verified_channel.send(msg);
         }
     }
 
@@ -263,9 +326,13 @@ pub const GossipService = struct {
         return push_messages;
     }
 
-    fn read_gossip_socket(self: *Self, logger: *Logger) !void {
+    fn read_gossip_socket(
+        gossip_socket: *UdpSocket,
+        packet_channel: *PacketChannel,
+        logger: *Logger,
+    ) !void {
         // we close the chan if no more packet's can ever be produced
-        defer self.packet_channel.close();
+        defer packet_channel.close();
 
         // handle packet reads
         var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -273,11 +340,11 @@ pub const GossipService = struct {
 
         var bytes_read: usize = undefined;
         while (bytes_read != 0) {
-            var recv_meta = try self.gossip_socket.receiveFrom(&read_buf);
+            var recv_meta = try gossip_socket.receiveFrom(&read_buf);
             bytes_read = recv_meta.numberOfBytes;
 
             // send packet through channel
-            self.packet_channel.send(Packet.init(recv_meta.sender, read_buf, bytes_read));
+            packet_channel.send(Packet.init(recv_meta.sender, read_buf, bytes_read));
 
             // reset buffer
             @memset(&read_buf, 0);
@@ -289,31 +356,21 @@ pub const GossipService = struct {
     pub fn process_packets(
         allocator: std.mem.Allocator,
         crds_table: *CrdsTable,
-        packet_channel: *PacketChannel,
+        verified_channel: *ProtocolChannel,
         logger: *Logger,
     ) !void {
-        var failed_protocol_msgs: usize = 0;
-
-        while (packet_channel.receive()) |p| {
+        while (verified_channel.receive()) |protocol_message| {
             // note: to recieve PONG messages (from a local spy node) from a PING
             // you need to modify: streamer/src/socket.rs
             // pub fn check(&self, addr: &SocketAddr) -> bool {
             //     return true;
             // }
 
-            var protocol_message = bincode.readFromSlice(
-                allocator,
-                Protocol,
-                p.data[0..p.size],
-                bincode.Params.standard,
-            ) catch {
-                failed_protocol_msgs += 1;
-                logger.debugf("failed to read protocol message from: {any} -- total failed: {d}", .{ p.from, failed_protocol_msgs });
-                continue;
-            };
-            defer bincode.free(allocator, protocol_message);
+            var message = protocol_message.message;
+            var from_addr = protocol_message.from_addr;
+            _ = from_addr;
 
-            switch (protocol_message) {
+            switch (message) {
                 .PongMessage => |*pong| {
                     if (pong.signature.verify(pong.from, &pong.hash.data)) {
                         logger.debugf("got a pong message", .{});
@@ -332,6 +389,7 @@ pub const GossipService = struct {
                     logger.debugf("got a push message: {any}", .{protocol_message});
                     // TODO: verify value matches pubkey
                     const values = push[1];
+                    // TODO: handle prune messages
                     insert_crds_values(crds_table, values, logger, GossipRoute.PushMessage, CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS);
                 },
                 .PullResponse => |*pull| {
@@ -454,19 +512,84 @@ test "gossip.gossip_service: new push messages" {
     msgs.deinit();
 }
 
+test "gossip.gossip_service: test packet verification" {
+    const allocator = std.testing.allocator;
+
+    var packet_channel = PacketChannel.init(allocator, 100);
+    defer packet_channel.deinit();
+
+    var verified_channel = ProtocolChannel.init(allocator, 100);
+    defer verified_channel.deinit();
+
+    var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{
+        allocator,
+        &packet_channel,
+        &verified_channel,
+    });
+
+    var keypair = try KeyPair.create([_]u8{1} ** 32);
+    var id = Pubkey.fromPublicKey(&keypair.public_key, true);
+
+    var rng = std.rand.DefaultPrng.init(get_wallclock());
+    var value = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), keypair);
+    var values = [_]crds.CrdsValue{value};
+    const protocol_msg = Protocol{
+        .PushMessage = .{ id, &values },
+    };
+
+    var peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    var from = peer.toEndpoint();
+
+    var buf = [_]u8{0} ** PACKET_DATA_SIZE;
+    var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
+    var packet = Packet.init(from, buf, out.len);
+
+    for (0..10) |_| {
+        packet_channel.send(packet);
+    }
+
+    // send one which fails sanitization
+    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 1), keypair);
+    value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
+    var values_v2 = [_]crds.CrdsValue{value_v2};
+    const protocol_msg_v2 = Protocol{
+        .PushMessage = .{ id, &values_v2 },
+    };
+    var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
+    var out_v2 = try bincode.writeToSlice(buf_v2[0..], protocol_msg_v2, bincode.Params{});
+    var packet_v2 = Packet.init(from, buf_v2, out_v2.len);
+    packet_channel.send(packet_v2);
+
+    // send one with a incorrect signature
+
+    for (0..10) |_| {
+        var msg = verified_channel.receive().?;
+        try std.testing.expect(msg.message.PushMessage[0].equals(&id));
+    }
+    try std.testing.expect(verified_channel.buffer.items.len == 0);
+
+    packet_channel.close();
+    verified_channel.close();
+    packet_verifier_handle.join();
+}
+
 test "gossip.gossip_service: process contact_info push packet" {
     const allocator = std.testing.allocator;
     var crds_table = try CrdsTable.init(allocator);
     defer crds_table.deinit();
 
-    var packet_channel = PacketChannel.init(allocator, 100);
-    defer packet_channel.deinit();
+    var verified_channel = ProtocolChannel.init(allocator, 100);
+    defer verified_channel.deinit();
 
     var logger = Logger.init(allocator, .debug);
     defer logger.deinit();
     logger.spawn();
 
-    var packet_handle = try Thread.spawn(.{}, GossipService.process_packets, .{ allocator, &crds_table, &packet_channel, logger });
+    var packet_handle = try Thread.spawn(
+        .{},
+        GossipService.process_packets,
+        .{ allocator, &crds_table, &verified_channel, logger },
+    );
 
     // send a push message
     var kp_bytes = [_]u8{1} ** 32;
@@ -487,10 +610,11 @@ test "gossip.gossip_service: process contact_info push packet" {
 
     // packet
     const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
-    var buf = [_]u8{0} ** PACKET_DATA_SIZE;
-    var bytes = try bincode.writeToSlice(buf[0..], msg, bincode.Params.standard);
-    const packet = Packet.init(peer, buf, bytes.len);
-    packet_channel.send(packet);
+    const protocol_msg = ProtocolMessage{
+        .from_addr = peer,
+        .message = msg,
+    };
+    verified_channel.send(protocol_msg);
 
     // correct insertion into table
     var buf2: [100]crds.CrdsVersionedValue = undefined;
@@ -498,6 +622,6 @@ test "gossip.gossip_service: process contact_info push packet" {
     var res = try crds_table.get_contact_infos(&buf2);
     try std.testing.expect(res.len == 1);
 
-    packet_channel.close();
+    verified_channel.close();
     packet_handle.join();
 }

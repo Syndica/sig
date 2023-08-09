@@ -13,10 +13,17 @@ const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
 
 pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
 }
+
+pub const MAX_EPOCH_SLOTS: u8 = 255;
+pub const MAX_VOTES: u8 = 32;
+pub const MAX_SLOT: u64 = 1_000_000_000_000_000;
+pub const MAX_SLOT_PER_ENTRY: usize = 2048 * 8;
+pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
 pub const CrdsVersionedValue = struct {
     ordinal: u64,
@@ -217,6 +224,10 @@ pub const LegacyContactInfo = struct {
     /// node shred version
     shred_version: u16,
 
+    pub fn sanitize(self: *const LegacyContactInfo) !void {
+        try sanitize_wallclock(self.wallclock);
+    }
+
     pub fn default() LegacyContactInfo {
         const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
         const wallclock = get_wallclock();
@@ -290,9 +301,67 @@ pub const CrdsData = union(enum(u32)) {
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
 
+    pub fn sanitize(self: *const CrdsData) !void {
+        switch (self.*) {
+            .LegacyContactInfo => |*v| {
+                try v.sanitize();
+            },
+            .Vote => |*v| {
+                const index = v[0];
+                if (index >= MAX_VOTES) {
+                    return error.ValueOutOfBounds;
+                }
+
+                const vote: Vote = v[1];
+                try vote.sanitize();
+            },
+            .EpochSlots => |*v| {
+                const index = v[0];
+                if (index >= MAX_EPOCH_SLOTS) {
+                    return error.ValueOutOfBounds;
+                }
+
+                const value: EpochSlots = v[1];
+                try value.sanitize();
+            },
+            .DuplicateShred => |*v| {
+                const index = v[0];
+                if (index >= MAX_DUPLICATE_SHREDS) {
+                    return error.ValueOutOfBounds;
+                }
+
+                const value: DuplicateShred = v[1];
+                try value.sanitize();
+            },
+            .LowestSlot => |*v| {
+                const index = v[0];
+                if (index >= 1) {
+                    return error.ValueOutOfBounds;
+                }
+
+                const value: LowestSlot = v[1];
+                try value.sanitize();
+            },
+            .LegacySnapshotHashes => |*v| {
+                try v.sanitize();
+            },
+            .AccountsHashes => |*v| {
+                try v.sanitize();
+            },
+            else => {
+                std.debug.print("sanitize not implemented for type: {any}\n", .{@tagName(self.*)});
+                return error.NotImplemented;
+            },
+        }
+    }
+
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 3);
-        switch (v) {
+        return CrdsData.random_from_index(rng, v);
+    }
+
+    pub fn random_from_index(rng: std.rand.Random, index: usize) CrdsData {
+        switch (index) {
             0 => {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
@@ -325,6 +394,11 @@ pub const Vote = struct {
             .slot = Slot.init(rng.int(u64)),
         };
     }
+
+    pub fn sanitize(self: *const Vote) !void {
+        try sanitize_wallclock(self.wallclock);
+        try self.transaction.sanitize();
+    }
 };
 
 pub const LowestSlot = struct {
@@ -334,6 +408,22 @@ pub const LowestSlot = struct {
     slots: []u64, //deprecated
     stash: []DeprecatedEpochIncompleteSlots, //deprecated
     wallclock: u64,
+
+    pub fn sanitize(value: *const LowestSlot) !void {
+        try sanitize_wallclock(value.wallclock);
+        if (value.lowest >= MAX_SLOT) {
+            return error.ValueOutOfBounds;
+        }
+        if (value.root != 0) {
+            return error.InvalidValue;
+        }
+        if (value.slots.len != 0) {
+            return error.InvalidValue;
+        }
+        if (value.stash.len != 0) {
+            return error.InvalidValue;
+        }
+    }
 };
 
 pub const DeprecatedEpochIncompleteSlots = struct {
@@ -354,6 +444,16 @@ pub const AccountsHashes = struct {
     from: Pubkey,
     hashes: []struct { u64, Hash },
     wallclock: u64,
+
+    pub fn sanitize(value: *const AccountsHashes) !void {
+        try sanitize_wallclock(value.wallclock);
+        for (value.hashes) |*snapshot_hash| {
+            const slot = snapshot_hash[0];
+            if (slot >= MAX_SLOT) {
+                return error.ValueOutOfBounds;
+            }
+        }
+    }
 };
 
 pub const EpochSlots = struct {
@@ -369,23 +469,59 @@ pub const EpochSlots = struct {
             .wallclock = get_wallclock(),
         };
     }
+
+    pub fn sanitize(value: *const EpochSlots) !void {
+        try sanitize_wallclock(value.wallclock);
+        for (value.slots) |slot| {
+            try slot.sanitize();
+        }
+    }
 };
 
 pub const CompressedSlots = union(enum(u32)) {
     Flate2: Flate2,
     Uncompressed: Uncompressed,
+
+    pub fn sanitize(self: *const CompressedSlots) !void {
+        switch (self.*) {
+            .Flate2 => |*v| try v.sanitize(),
+            .Uncompressed => |*v| try v.sanitize(),
+        }
+    }
 };
 
 pub const Flate2 = struct {
     first_slot: Slot,
     num: usize,
     compressed: []u8,
+
+    pub fn sanitize(self: *const Flate2) !void {
+        if (self.first_slot.value >= MAX_SLOT) {
+            return error.ValueOutOfBounds;
+        }
+        if (self.num >= MAX_SLOT_PER_ENTRY) {
+            return error.ValueOutOfBounds;
+        }
+    }
 };
 
 pub const Uncompressed = struct {
     first_slot: Slot,
     num: usize,
     slots: BitVec(u8),
+
+    pub fn sanitize(self: *const Uncompressed) !void {
+        if (self.first_slot.value >= MAX_SLOT) {
+            return error.ValueOutOfBounds;
+        }
+        if (self.num >= MAX_SLOT_PER_ENTRY) {
+            return error.ValueOutOfBounds;
+        }
+        if (self.slots.len % 8 != 0) {
+            return error.InvalidValue;
+        }
+        // TODO: check BitVec.capacity()
+    }
 };
 
 pub fn BitVec(comptime T: type) type {
@@ -511,6 +647,13 @@ pub const DuplicateShred = struct {
             .chunk = &slice,
         };
     }
+
+    pub fn sanitize(value: *const DuplicateShred) !void {
+        try sanitize_wallclock(value.wallclock);
+        if (value.chunk_index >= value.num_chunks) {
+            return error.ValueOutOfBounds;
+        }
+    }
 };
 
 pub const SnapshotHashes = struct {
@@ -519,6 +662,17 @@ pub const SnapshotHashes = struct {
     incremental: []struct { Slot, Hash },
     wallclock: u64,
 };
+
+test "gossip.crds: test sanitize CrdsData" {
+    var rng = std.rand.DefaultPrng.init(0);
+    var rand = rng.random();
+
+    for (0..4) |i| {
+        const data = CrdsData.random_from_index(rand, i);
+        std.debug.print("{any}\n", .{data});
+        data.sanitize() catch {};
+    }
+}
 
 test "gossip.crds: test CrdsValue label() and id() methods" {
     var kp_bytes = [_]u8{1} ** 32;
