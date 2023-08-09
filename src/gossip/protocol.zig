@@ -49,6 +49,21 @@ pub const Protocol = union(enum(u32)) {
     PingMessage: Ping,
     PongMessage: Pong,
 
+    pub fn verify_signature(self: *const Protocol) !void {
+        switch (self.*) {
+            .PullRequest => {},
+            .PullResponse => {},
+            .PushMessage => {},
+            .PruneMessage => {},
+            .PingMessage => |*ping| {
+                try ping.verify();
+            },
+            .PongMessage => |*pong| {
+                try pong.verify();
+            },
+        }
+    }
+
     pub fn sanitize(self: *Protocol) !void {
         switch (self.*) {
             .PullRequest => {},
@@ -89,11 +104,11 @@ pub const Ping = struct {
     const Self = @This();
 
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: KeyPair) !Self {
-        var sig = try keypair.sign(&token, null);
+        const sig = try keypair.sign(&token, null);
         var self = Self{
-            .from = Pubkey.fromPublicKey(keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
             .token = token,
-            .signature = sig,
+            .signature = Signature.init(sig.toBytes()),
         };
         return self;
     }
@@ -103,12 +118,18 @@ pub const Ping = struct {
         var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         rand.fill(&token);
         var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
-        var self = Self{
+
+        return Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key, true),
             .token = token,
             .signature = Signature.init(sig.toBytes()),
         };
-        return self;
+    }
+
+    pub fn verify(self: *Self) !void {
+        if (!self.signature.verify(self.from, &self.token)) {
+            return error.InvalidSignature;
+        }
     }
 };
 
@@ -122,17 +143,38 @@ pub const Pong = struct {
     pub fn init(ping: *Ping, keypair: *KeyPair) !Self {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        var sig = try keypair.sign(hash, null);
-        var self = Self{
+        const sig = try keypair.sign(hash, null);
+
+        return Self{
             .from = Pubkey.fromPublicKey(keypair.public_key, true),
             .hash = hash,
-            .signature = sig,
+            .signature = Signature.init(sig.toBytes()),
         };
-        return self;
+    }
+
+    pub fn verify(self: *Self) !void {
+        if (!self.signature.verify(self.from, &self.hash.data)) {
+            return error.InvalidSignature;
+        }
     }
 };
 
 const logger = std.log.scoped(.protocol);
+
+test "gossip.protocol: ping signatures match rust" {
+    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
+        125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
+        115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
+        61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
+        121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
+    }));
+    var ping = Ping.init([_]u8{0} ** PING_TOKEN_SIZE, keypair) catch unreachable;
+    const sig = ping.signature.data;
+
+    const rust_sig = [_]u8{ 52, 171, 91, 205, 183, 211, 38, 219, 53, 155, 163, 118, 202, 169, 15, 237, 147, 87, 209, 20, 6, 115, 24, 114, 196, 41, 217, 55, 123, 245, 35, 138, 126, 47, 233, 182, 90, 206, 13, 173, 212, 107, 94, 120, 167, 254, 14, 11, 253, 199, 158, 4, 203, 42, 173, 143, 214, 209, 132, 158, 223, 62, 214, 11 };
+    try testing.expect(std.mem.eql(u8, &sig, &rust_sig));
+    try ping.verify();
+}
 
 test "gossip.protocol: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
@@ -172,7 +214,6 @@ test "gossip.protocol: pull request serializes and deserializes" {
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
 
     // pull requests only use ContactInfo CRDS data
