@@ -524,6 +524,7 @@ pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var writer = stream.writer();
     var s = serializer(writer, params);
     const ss = s.serializer();
+
     try getty.serialize(null, data, ss);
     return stream.getWritten();
 }
@@ -532,6 +533,18 @@ pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: 
     var s = serializer(writer, params);
     const ss = s.serializer();
     try getty.serialize(alloc, data, ss);
+}
+
+pub fn get_serialized_size(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
+    var list = try std.ArrayList(u8).initCapacity(alloc, @bitSizeOf(@TypeOf(data)));
+    defer list.deinit();
+
+    var writer = list.writer();
+    var s = serializer(writer, params);
+    const ss = s.serializer();
+    try getty.serialize(alloc, data, ss);
+
+    return list.items.len;
 }
 
 // can call if dont require an allocator
@@ -605,6 +618,9 @@ test "bincode: custom field serialization" {
     var out = try writeToSlice(&buf, foo, Params{});
     std.debug.print("{any}", .{out});
     try std.testing.expect(out[out.len - 1] != 20); // skip worked
+
+    var size = try get_serialized_size(std.testing.allocator, foo, Params{});
+    try std.testing.expect(size > 0);
 
     var r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
     defer free(std.testing.allocator, r);

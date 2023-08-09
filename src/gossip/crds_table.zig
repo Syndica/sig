@@ -343,7 +343,7 @@ pub const CrdsTable = struct {
 
         for (0..size) |i| {
             const index = contact_indexs[i];
-            const entry = &store_values[index]; // does this dangle?
+            const entry = store_values[index];
             buf[i] = entry;
         }
         return buf[0..size];
