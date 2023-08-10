@@ -61,14 +61,14 @@ pub const CrdsValue = struct {
     }
 
     pub fn sign(self: *Self, keypair: KeyPair) !void {
-        var buf = [_]u8{0} ** 1500;
+        var buf = [_]u8{0} ** 2048;
         var bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         var sig = try keypair.sign(bytes, null);
         self.signature.data = sig.toBytes();
     }
 
     pub fn verify(self: *Self, pubkey: Pubkey) !bool {
-        var buf = [_]u8{0} ** 1500;
+        var buf = [_]u8{0} ** 2048;
         var msg = try bincode.writeToSlice(buf[0..], self.data, bincode.Params.standard);
         return self.signature.verify(pubkey, msg);
     }

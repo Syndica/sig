@@ -27,19 +27,6 @@ const PING_PONG_HASH_PREFIX: [16]u8 = .{
 };
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
-const PruneData = struct {
-    /// Pubkey of the node that sent this prune data
-    pubkey: Pubkey,
-    /// Pubkeys of nodes that should be pruned
-    prunes: []Pubkey,
-    /// Signature of this Prune Message
-    signature: Signature,
-    /// The Pubkey of the intended node/destination for this message
-    destination: Pubkey,
-    /// Wallclock of the node that generated this message
-    wallclock: u64,
-};
-
 /// Gossip protocol messages
 pub const Protocol = union(enum(u32)) {
     PullRequest: struct { CrdsFilter, CrdsValue },
@@ -49,12 +36,34 @@ pub const Protocol = union(enum(u32)) {
     PingMessage: Ping,
     PongMessage: Pong,
 
-    pub fn verify_signature(self: *const Protocol) !void {
+    pub fn verify_signature(self: *Protocol) !void {
         switch (self.*) {
-            .PullRequest => {},
-            .PullResponse => {},
-            .PushMessage => {},
-            .PruneMessage => {},
+            .PullRequest => |*pull| {
+                var value = pull[1];
+                if (try value.verify(value.id())) {
+                    return error.InvalidValue;
+                }
+            },
+            .PullResponse => |*pull| {
+                var values = pull[1];
+                for (values) |*value| {
+                    if (try value.verify(value.id())) {
+                        return error.InvalidValue;
+                    }
+                }
+            },
+            .PushMessage => |*push| {
+                var values = push[1];
+                for (values) |*value| {
+                    if (try value.verify(value.id())) {
+                        return error.InvalidValue;
+                    }
+                }
+            },
+            .PruneMessage => |*prune| {
+                var data = prune[1];
+                try data.verify();
+            },
             .PingMessage => |*ping| {
                 try ping.verify();
             },
@@ -143,10 +152,10 @@ pub const Pong = struct {
     pub fn init(ping: *Ping, keypair: *KeyPair) !Self {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        const sig = try keypair.sign(hash, null);
+        const sig = try keypair.sign(&hash.data, null);
 
         return Self{
-            .from = Pubkey.fromPublicKey(keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
             .hash = hash,
             .signature = Signature.init(sig.toBytes()),
         };
@@ -159,7 +168,106 @@ pub const Pong = struct {
     }
 };
 
+const PruneData = struct {
+    /// Pubkey of the node that sent this prune data
+    pubkey: Pubkey,
+    /// Pubkeys of nodes that should be pruned
+    prunes: []Pubkey,
+    /// Signature of this Prune Message
+    signature: Signature,
+    /// The Pubkey of the intended node/destination for this message
+    destination: Pubkey,
+    /// Wallclock of the node that generated this message
+    wallclock: u64,
+
+    const PruneSignableData = struct {
+        pubkey: Pubkey,
+        prunes: []Pubkey,
+        destination: Pubkey,
+        wallclock: u64,
+    };
+
+    pub fn random(rng: std.rand.Random, keypair: *KeyPair) !PruneData {
+        var self = PruneData{
+            .pubkey = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .prunes = &[0]Pubkey{},
+            .signature = Signature.init(.{0} ** 64),
+            .destination = Pubkey.random(rng, .{}),
+            .wallclock = crds.get_wallclock(),
+        };
+        try self.sign(keypair);
+
+        return self;
+    }
+
+    pub fn sign(self: *PruneData, keypair: *KeyPair) !void {
+        var slice: [1024]u8 = undefined; // TODO: fix sizing
+        var signable_data = PruneSignableData{
+            .pubkey = self.pubkey,
+            .prunes = self.prunes,
+            .destination = self.destination,
+            .wallclock = self.wallclock,
+        };
+        var out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
+        var sig = try keypair.sign(out, null);
+        self.signature.data = sig.toBytes();
+    }
+
+    pub fn verify(self: *const PruneData) !void {
+        var slice: [1024]u8 = undefined; // TODO: fix sizing
+        var signable_data = PruneSignableData{
+            .pubkey = self.pubkey,
+            .prunes = self.prunes,
+            .destination = self.destination,
+            .wallclock = self.wallclock,
+        };
+        var out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
+        if (!self.signature.verify(self.pubkey, out)) {
+            return error.InvalidSignature;
+        }
+    }
+};
+
 const logger = std.log.scoped(.protocol);
+
+test "gossip.protocol: test prune data sig verify" {
+    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
+        125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
+        115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
+        61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
+        121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
+    }));
+
+    var rng = DefaultPrng.init(crds.get_wallclock());
+    var prune = try PruneData.random(rng.random(), &keypair);
+
+    try prune.verify();
+
+    const rust_bytes = [_]u8{ 80, 98, 7, 181, 129, 96, 249, 247, 34, 39, 251, 41, 125, 241, 31, 25, 122, 103, 202, 48, 78, 160, 222, 65, 228, 81, 171, 237, 233, 87, 248, 29, 37, 0, 19, 66, 83, 207, 78, 86, 232, 157, 184, 144, 71, 12, 223, 86, 144, 169, 160, 171, 139, 248, 106, 63, 194, 178, 144, 119, 51, 60, 201, 7 };
+
+    var prune_v2 = PruneData{
+        .pubkey = Pubkey.fromPublicKey(&keypair.public_key, true),
+        .prunes = &[0]Pubkey{},
+        .signature = Signature.init(.{0} ** 64),
+        .destination = Pubkey.fromPublicKey(&keypair.public_key, true),
+        .wallclock = 0,
+    };
+    try prune_v2.sign(&keypair);
+
+    var sig_bytes = prune_v2.signature.data;
+    try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
+}
+
+test "gossip.protocol: test ping pong sig verify" {
+    var keypair = KeyPair.create(null) catch unreachable;
+
+    var ping = Ping.random(keypair);
+    var msg = Protocol{ .PingMessage = ping };
+    try msg.verify_signature();
+
+    var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
+    try pong.verify_signature();
+}
 
 test "gossip.protocol: ping signatures match rust" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{

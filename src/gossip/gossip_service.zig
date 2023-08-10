@@ -158,13 +158,17 @@ pub const GossipService = struct {
             };
             defer bincode.free(allocator, protocol_message);
 
-            // TODO: verify protocol message signatures
             protocol_message.sanitize() catch {
                 std.debug.print("failed to sanitize protocol message", .{});
                 continue;
             };
 
-            // TODO: send the pointers over the channel vs item copy
+            protocol_message.verify_signature() catch {
+                std.debug.print("failed to verify protocol message signature", .{});
+                continue;
+            };
+
+            // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
             const msg = ProtocolMessage{ .from_addr = packet.from, .message = protocol_message };
             verified_channel.send(msg);
         }
@@ -371,28 +375,12 @@ pub const GossipService = struct {
             _ = from_addr;
 
             switch (message) {
-                .PongMessage => |*pong| {
-                    if (pong.signature.verify(pong.from, &pong.hash.data)) {
-                        logger.debugf("got a pong message", .{});
-                    } else {
-                        logger.debugf("pong message verification failed...", .{});
-                    }
-                },
-                .PingMessage => |*ping| {
-                    if (ping.signature.verify(ping.from, &ping.token)) {
-                        logger.debugf("got a ping message", .{});
-                    } else {
-                        logger.debugf("ping message verification failed...", .{});
-                    }
-                },
                 .PushMessage => |*push| {
-                    logger.debugf("got a push message: {any}", .{protocol_message});
                     const values = push[1];
                     // TODO: handle prune messages
                     insert_crds_values(crds_table, values, logger, GossipRoute.PushMessage, CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS);
                 },
                 .PullResponse => |*pull| {
-                    logger.debugf("got a pull message: {any}", .{protocol_message});
                     const values = pull[1];
                     insert_crds_values(crds_table, values, logger, GossipRoute.PullResponse, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
                 },
@@ -412,8 +400,14 @@ pub const GossipService = struct {
                     // TODO: send them out as a pull response
                     _ = crds_values;
                 },
-                else => {
-                    logger.debugf("got a protocol message: {any}", .{protocol_message});
+                .PongMessage => |*pong| {
+                    _ = pong;
+                },
+                .PingMessage => |*ping| {
+                    _ = ping;
+                },
+                .PruneMessage => |*prune| {
+                    _ = prune;
                 },
             }
         }
