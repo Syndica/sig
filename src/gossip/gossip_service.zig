@@ -153,18 +153,18 @@ pub const GossipService = struct {
                 bincode.Params.standard,
             ) catch {
                 failed_protocol_msgs += 1;
-                std.debug.print("failed to deserialize protocol message", .{});
+                std.debug.print("failed to deserialize protocol message\n", .{});
                 continue;
             };
             defer bincode.free(allocator, protocol_message);
 
             protocol_message.sanitize() catch {
-                std.debug.print("failed to sanitize protocol message", .{});
+                std.debug.print("failed to sanitize protocol message\n", .{});
                 continue;
             };
 
             protocol_message.verify_signature() catch {
-                std.debug.print("failed to verify protocol message signature", .{});
+                std.debug.print("failed to verify protocol message signature\n", .{});
                 continue;
             };
 
@@ -522,7 +522,13 @@ test "gossip.gossip_service: test packet verification" {
     var id = Pubkey.fromPublicKey(&keypair.public_key, true);
 
     var rng = std.rand.DefaultPrng.init(get_wallclock());
-    var value = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), keypair);
+    var data = crds.CrdsData.random_from_index(rng.random(), 0);
+    data.LegacyContactInfo.id = id;
+    data.LegacyContactInfo.wallclock = 0;
+    var value = try CrdsValue.initSigned(data, keypair);
+
+    try std.testing.expect(try value.verify(id));
+
     var values = [_]crds.CrdsValue{value};
     const protocol_msg = Protocol{
         .PushMessage = .{ id, &values },
@@ -535,7 +541,7 @@ test "gossip.gossip_service: test packet verification" {
     var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
     var packet = Packet.init(from, buf, out.len);
 
-    for (0..10) |_| {
+    for (0..3) |_| {
         packet_channel.send(packet);
     }
 
@@ -552,11 +558,22 @@ test "gossip.gossip_service: test packet verification" {
     packet_channel.send(packet_v2);
 
     // send one with a incorrect signature
+    var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
+    var value2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), rand_keypair);
+    var values2 = [_]crds.CrdsValue{value2};
+    const protocol_msg2 = Protocol{
+        .PushMessage = .{ id, &values2 },
+    };
+    var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
+    var out2 = try bincode.writeToSlice(buf2[0..], protocol_msg2, bincode.Params{});
+    var packet2 = Packet.init(from, buf2, out2.len);
+    packet_channel.send(packet2);
 
-    for (0..10) |_| {
+    for (0..3) |_| {
         var msg = verified_channel.receive().?;
         try std.testing.expect(msg.message.PushMessage[0].equals(&id));
     }
+    try std.testing.expect(packet_channel.buffer.items.len == 0);
     try std.testing.expect(verified_channel.buffer.items.len == 0);
 
     packet_channel.close();

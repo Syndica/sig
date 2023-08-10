@@ -21,6 +21,8 @@ const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 
+const logger = std.log.scoped(.protocol);
+
 const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
@@ -40,14 +42,16 @@ pub const Protocol = union(enum(u32)) {
         switch (self.*) {
             .PullRequest => |*pull| {
                 var value = pull[1];
-                if (try value.verify(value.id())) {
+                const is_verified = try value.verify(value.id());
+                if (!is_verified) {
                     return error.InvalidValue;
                 }
             },
             .PullResponse => |*pull| {
                 var values = pull[1];
                 for (values) |*value| {
-                    if (try value.verify(value.id())) {
+                    const is_verified = try value.verify(value.id());
+                    if (!is_verified) {
                         return error.InvalidValue;
                     }
                 }
@@ -55,7 +59,8 @@ pub const Protocol = union(enum(u32)) {
             .PushMessage => |*push| {
                 var values = push[1];
                 for (values) |*value| {
-                    if (try value.verify(value.id())) {
+                    const is_verified = try value.verify(value.id());
+                    if (!is_verified) {
                         return error.InvalidValue;
                     }
                 }
@@ -227,8 +232,6 @@ const PruneData = struct {
         }
     }
 };
-
-const logger = std.log.scoped(.protocol);
 
 test "gossip.protocol: test prune data sig verify" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
