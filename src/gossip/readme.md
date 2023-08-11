@@ -24,12 +24,11 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 
 Gossip data is stored in a indexable-HashMap which is refered to as a Conflict-free Replicated Data Store (CRDS) located in `crds_table.zig`. 
 
-The data types we are tracking are defined in `crds.zig` which includes `CrdsData` and `CrdsValue` datastructures. A `CrdsData` enum covers various gossip data types (including `ContactInfo` for node details like public keys and addresses, `Vote` for block validity signatures (being phased out for lower bandwidth), and more), while `CrdsValue` holds a `CrdsData` struct and a signature over its data.
+The data types we are tracking are defined in `crds.zig` which includes `CrdsData` and `CrdsValue` datastructures. A `CrdsData` enum covers various gossip data types (including `ContactInfo` for node details like public keys and addresses, `Vote` for block validity signatures (being phased out for lower bandwidth), and more), while `CrdsValue` holds a `CrdsData` struct and a signature over its data. When processing incoming gossip data from the network, we first verify the signature of the `CrdsValue` and then insert it into the CRDS table.
 
 <div align="center">
-<img src="imgs/2023-08-08-12-35-30.png" width="420" height="200">
+<img src="imgs/2023-08-11-12-41-17.png" width="420" height="200">
 </div>
-
 
 ### Inserting Data: ValueLabels and VersionedValues 
 
@@ -37,7 +36,7 @@ For each `CrdsData` type, there is a corresponding `CrdsValueLabel` which define
 
 #### CrdsTable Keys: `CrdsValueLabel`
 
-For example, a `LegacyContactInfo` struct includes many socket address fields, however, its corresponding `CrdsValueLabel` is only its pubkey. If we assume that each validator corresponds to one `Pubkey`, this means we'll only store one `LegacyContactInfo` per validator in the CRDS table. 
+For example, a `LegacyContactInfo` struct includes many socket address fields, however, its corresponding `CrdsValueLabel` is only its pubkey. This means we'll only store one `LegacyContactInfo` per `Pubkey` in the CRDS table (ie, if we assume that each validator corresponds to one `Pubkey`, then this means well only store on contact info per validator). 
 
 ```zig=
 // the full contact info struct (including pubkeys, sockets, and more)
@@ -84,7 +83,7 @@ pub const CrdsVersionedValue = struct {
 ### Efficient DataType Retrieval 
 
 Were also interested in storing specific Crds types in a way which allows for efficient retrieval. 
-For example, when broadcasting data to the rest of the network, it would be nice to ge all the `ContactInfo` values which are stored in the CRDS table.
+For example, when broadcasting data to the rest of the network, it would be nice to get all the `ContactInfo` values which are stored in the CRDS table.
 This is why we use an **indexable** hash map as our main datastructure.
 
 For example, when inserting values into the table, we recieve its corresponding index from the insertion (`crds_index = crds_table.insert(&versioned_value)`)
@@ -101,8 +100,7 @@ For example, a listener would track their own cursor and periodically call the g
 
 ## Protocol Messages: Pull
 
-There are two types of Pull messages, Pull requests and Pull responses. Pull request messages request CRDS data which a node is missing. Pull response messages 
-are responses to Pull requests and include the missing data. 
+There are two types of Pull messages: requests and responses. Pull requests represent the data a node currently has and requests CRDS data which its missing. Pull responses are responses to pull requests and include missing data. 
 
 ### Building Pull *Requests*
 
@@ -113,22 +111,18 @@ Since the crds table can store a large amount of values, instead of constructing
 we partition the data in the crds table across multiple bloom filters based on the hash value's first `N` bits.
 
 For example, if we are paritioning on the first 3 bits we would use, 2^3 = 8 `Bloom` filters: 
-  - the first bloom containing hash values whos bits start with 000
-  - the second bloom containing hash values whos bits start with 001
+  - the first bloom filter would contain hash values whos first 3 bits are equal to 000
+  - the second bloom filter would contain hash values whos first 3 bits are equal to 001
   - ... 
-  - and lastly, the eight bloom containing hash values whos bits start with 111
+  - and lastly, the eight bloom filter would contain hash values whos first 3 bits are equal to 111
 
-If we were tracking a `Hash` with bits `00101110101`, we would only consider its first 3 bits, `001`, and so we would add the hash to the first bloom filter (`@cast(usize, 001) = 1`)
+For example, if we are tracking a `Hash` with bits `00101110101`, we would only consider its first 3 bits, `001`, and so we would add the hash to the first bloom filter (`@cast(usize, 001) = 1`)
 
-Implementing this we use the `CrdsFilterSet` struct which is a list of `CrdsFilters`. Throughout the codebase, the first bits: `N`, is called `mask_bits`. `mask_bits` is a variable which depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the crds table, and more and so it 
+To implement this we use the `CrdsFilterSet` struct which is a list of `CrdsFilters`. Throughout the codebase, the first bits: `N`, is called `mask_bits`. `mask_bits` is a variable which depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the crds table, and more and so it 
 will likely be different for each pull request. 
 
 After we construct this filter set (ie, compute the `mask_bits` and init `2^mask_bits` bloom filters), we add all of the `CrdsValues` in the CRDS table into it, 
 and construct a list of `CrdsFilter`s to send to other random nodes.
-
-<div align="center">
-<img src="imgs/2023-08-08-12-15-44.png" width="900" height="450">
-</div>
 
 ```python 
 ## main function for building pull requests
@@ -207,6 +201,10 @@ fn compute_mask(index: u64, mask_bits: u64) u64:
 Notice how the result will be ones everywhere except for the first `mask_bits` bits, which represent the filter's index.
 After getting the vector of filters, we then send each filter out to a random peer weighted by stake weight.
 
+<div align="center">
+<img src="imgs/2023-08-08-12-15-44.png" width="900" height="450">
+</div>
+
 ### Building Pull *Responses*
 
 To build a Pull *Response*, we iterate over values stored in the Crds table, filter the values to match the `CrdsFilter`'s `mask`, and find values which are not included in the request's `Bloom` filter. To find values which match the filter's `mask`, we use the `CrdsShards` struct which is located in `crds_shards.zig`.
@@ -217,20 +215,22 @@ To build a Pull *Response*, we iterate over values stored in the Crds table, fil
 
 #### `CrdsShards`
 
-The `CrdsShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `CrdsFilterSet` structure). Whenever we insert a new value in 
+The `CrdsShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `CrdsFilterSet` structure and the `mask_bits`). Whenever we insert a new value in 
 the `CrdsTable`, we insert its hash into the `CrdsShard` structure. 
 
-To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes crds values which the first `shard_bits` of their hash value is equal to `k`. The keys in the hash map are of type `usize` which is the crds table index of the hash. And the values of the
-hash map are of type `u64` which represent the hash value represented as a `u64`.
+To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes crds values which the first `shard_bits` of their hash value is equal to `k`. 
+- The keys in the hash map are of type `usize` which is the crds table index of the hash. 
+- And the values of the hash map are of type `u64` which represent the hash value represented as a `u64`.
+
 The struct allows us to quickly look up all the crds values whos hash matches a pull requests `mask` (compared to iterating over all the crds values).
 
 *Note:* `shard_bits` is a hardcoded constant in the program equal to `12`, so we will have 2^12 = 4096 shard indexs.
 
-Inserting a hash value into the `CrdsShards` struct is straightforward 
-  - take the first 8 bytes of a hash and cast it to a `u64` (`hash_u64 = @as(u64, hash[0..8])`)
-  - compute the first `shard_bits` bits of the `u64` by computing `shard_index = hash_u64 >> (64 - shard_bits)`
-  - get the corresponding shard: `self.shards[shard_index]`
-  - insert the crds table index along with the `u64_hash` into the shard
+After inserting a new value in the Crds table, inserting its hash value into the `CrdsShards` struct is straightforward:
+- take the first 8 bytes of a hash and cast it to a `u64` (`hash_u64 = @as(u64, hash[0..8])`)
+- compute the first `shard_bits` bits of the `u64` by computing `shard_index = hash_u64 >> (64 - shard_bits)`
+- get the corresponding shard: `self.shards[shard_index]`
+- insert the crds table index along with the `u64_hash` into the shard
 
 ```python 
 def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
