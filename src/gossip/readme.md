@@ -18,34 +18,26 @@ This function `spawn`ed and is a long running process. It listens to the packet 
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
 - `crds_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `crds_table` and constructing pull responses
 
-## Datatypes and Datastructures
-
-- data types which we track are defined in `crds.zig` which include `CrdsData` and `CrdsValue`
-    - a `CrdsData` is an enum over the possible gossip data types 
-    - a `CrdsValue` contains a `CrdsData` struct and a signature of the `CrdsData` - these are propogated on the network and their signature is verified before processing their data.
-
-- there are many `CrdsData` types used throughout the codebase, but ones of particular importance include:
-    - `ContactInfo`/`LegacyContactInfo`: which includes node specific information such as the nodes public key and socket addresses for specific validator tasks (including gossip, tvu, tpu, repair, ...). This structure is critical for discovering the rest of the network. 
-    - `Vote`: which includes a validators signature that a specific block is valid. Note, this data is slowly being phased out of the gossip protocol because its not required and takes up a lot of network bandwidth.
-    - `EpochSlots`: // TODO
-    - `DuplicateShred`: // TODO
+## Gossip Datastructures and Datatypes
 
 ### CrdsTable: Storing Gossip Data 
 
-- gossip data is stored in a Conflict-free Replicated Data Store (CRDS) located in `crds_table.zig`.
-- to store this data we use an indexable HashMap which uses a `CrdsValueLabel` as 
-its keys and a `CrdsVersionedValue` as its values
+Gossip data is stored in a indexable-HashMap which is refered to as a Conflict-free Replicated Data Store (CRDS) located in `crds_table.zig`. 
+
+The data types we are tracking are defined in `crds.zig` which includes `CrdsData` and `CrdsValue` datastructures. A `CrdsData` enum covers various gossip data types (including `ContactInfo` for node details like public keys and addresses, `Vote` for block validity signatures (being phased out for lower bandwidth), and `EpochSlots` and `DuplicateShred`), while `CrdsValue` holds a `CrdsData` struct and a signature over its data.
 
 <div align="center">
 <img src="imgs/2023-08-08-12-35-30.png" width="420" height="200">
 </div>
 
-- new crds data comes from push messages and pull responses
 
-### ValueLabels and VersionedValues 
+### Inserting Data: ValueLabels and VersionedValues 
 
-- each `CrdsData` type has a corresponding `CrdsValueLabel` which defines how the data is stored/replaced 
-- for example a `LegacyContactInfo` struct includes many socket address fields, however, its corresponding label is only its pubkey
+For each `CrdsData` type, there is a corresponding `CrdsValueLabel` which defines how the data is stored/replaced. When inserting `CrdsData` values into the CRDS table HashMap, we use the `CrdsValueLabel` structure as the keys and a `CrdsVersionedValue` structure for the values.
+
+#### CrdsTable Keys: `CrdsValueLabel`
+
+For example, a `LegacyContactInfo` struct includes many socket address fields, however, its corresponding `CrdsValueLabel` is only its pubkey. If we assume that each validator corresponds to one `Pubkey`, this means we'll only store one `LegacyContactInfo` per validator in the CRDS table. 
 
 ```zig=
 // the full contact info struct (including pubkeys, sockets, and more)
@@ -71,8 +63,11 @@ pub const CrdsValueLabel = union(enum) {
 }
 ```
 
-- assuming each validator corresponds to one pubkey, this means we'll only store one `ContactInfo` per validator. 
-- when inserting a `CrdsData` whos label already exist in the table, we keep the one with the largest wallclock time (ie, the newest) and discard the other.
+To handle duplicate labels, when inserting a `CrdsData` whos label already exist in the table, we keep the value with the largest wallclock time (ie, the newest).
+
+### CrdsTable Values: `CrdsVersionedValue`
+
+- 
 
 ### Storing Specific Data Types
 
