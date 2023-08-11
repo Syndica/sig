@@ -135,9 +135,9 @@ pub const CrdsTable = struct {
         const versioned_value = CrdsVersionedValue{
             .value = value,
             .value_hash = value_hash,
-            .local_timestamp = now,
+            .timestamp_on_insertion = now,
+            .cursor_on_insertion = self.cursor,
             .num_push_dups = 0,
-            .ordinal = self.cursor,
         };
 
         const label = value.label();
@@ -180,17 +180,17 @@ pub const CrdsTable = struct {
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
-                    const did_remove = self.votes.swapRemove(old_entry.ordinal);
+                    var did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
                     std.debug.assert(did_remove);
                     try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
-                    const did_remove = self.epoch_slots.swapRemove(old_entry.ordinal);
+                    var did_remove = self.epoch_slots.swapRemove(old_entry.cursor_on_insertion);
                     std.debug.assert(did_remove);
                     try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
-                    const did_remove = self.duplicate_shreds.swapRemove(old_entry.ordinal);
+                    var did_remove = self.duplicate_shreds.swapRemove(old_entry.cursor_on_insertion);
                     std.debug.assert(did_remove);
                     try self.duplicate_shreds.put(self.cursor, entry_index);
                 },

@@ -26,10 +26,10 @@ pub const MAX_SLOT_PER_ENTRY: usize = 2048 * 8;
 pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
 pub const CrdsVersionedValue = struct {
-    ordinal: u64,
     value: CrdsValue,
-    local_timestamp: u64,
     value_hash: Hash,
+    timestamp_on_insertion: u64,
+    cursor_on_insertion: u64,
     /// Number of times duplicates of this value are recevied from gossip push.
     num_push_dups: u8,
 };
