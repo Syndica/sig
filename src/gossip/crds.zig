@@ -228,16 +228,12 @@ pub const LegacyContactInfo = struct {
         try sanitize_wallclock(self.wallclock);
     }
 
-    pub fn default() LegacyContactInfo {
+    pub fn default(id: Pubkey) LegacyContactInfo {
         const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
         const wallclock = get_wallclock();
 
-        var seed: u64 = @intCast(std.time.milliTimestamp());
-        var rand = std.rand.DefaultPrng.init(seed);
-        const rng = rand.random();
-
         return LegacyContactInfo{
-            .id = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .id = id,
             .gossip = unspecified_addr,
             .tvu = unspecified_addr,
             .tvu_forwards = unspecified_addr,
@@ -271,6 +267,18 @@ pub const LegacyContactInfo = struct {
         };
     }
 };
+
+pub fn sanitize_socket(socket: *const SocketAddr) !void {
+    if (socket.port() == 0) {
+        return error.InvalidPort;
+    }
+    if (socket.is_unspecified()) {
+        return error.UnspecifiedAddress;
+    }
+    if (socket.is_multicast()) {
+        return error.MulticastAddress;
+    }
+}
 
 pub const CrdsValueLabel = union(enum) {
     LegacyContactInfo: Pubkey,
@@ -680,8 +688,7 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk, true);
 
-    var legacy_contact_info = LegacyContactInfo.default();
-    legacy_contact_info.id = id;
+    var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
 
     var crds_value = try CrdsValue.initSigned(CrdsData{
@@ -735,9 +742,8 @@ test "gossip.crds: crds data serialization matches rust" {
 
     const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
 
-    var legacy_contact_info = LegacyContactInfo.default();
+    var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.gossip = gossip_addr;
-    legacy_contact_info.id = id;
     legacy_contact_info.wallclock = 0;
 
     var crds_data = CrdsData{

@@ -117,6 +117,29 @@ pub const SocketAddr = union(enum(u8)) {
             },
         }
     }
+
+    pub fn is_unspecified(self: *const Self) bool {
+        switch (self.*) {
+            .V4 => |addr| {
+                return std.mem.readIntBig(u32, addr.ip.octets) == 0;
+            },
+            .V6 => |addr| {
+                return std.mem.readIntBig(u128, addr.ip.octets) == 0;
+            },
+        }
+    }
+
+    pub fn is_multicast(self: *const Self) bool {
+        switch (self.*) {
+            .V4 => |addr| {
+                const octets = addr.ip.octets;
+                return octets[0] >= 224 and octets[0] <= 239;
+            },
+            .V6 => |addr| {
+                return addr.ip.is_multicast();
+            },
+        }
+    }
 };
 
 pub const SocketAddrV4 = struct {
@@ -160,6 +183,11 @@ pub const Ipv6Addr = struct {
 
     pub fn eql(self: *const Self, other: *const Self) bool {
         return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
+    }
+
+    /// defined in https://tools.ietf.org/html/rfc4291
+    pub fn is_multicast(self: *const Self) bool {
+        return self.octets[0] == 255;
     }
 };
 

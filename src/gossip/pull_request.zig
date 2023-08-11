@@ -32,13 +32,16 @@ pub fn build_crds_filters(
     alloc: std.mem.Allocator,
     crds_table: *CrdsTable,
     bloom_size: usize,
+    max_n_filters: usize,
 ) !ArrayList(CrdsFilter) {
     crds_table.read();
     defer crds_table.release_read();
 
     const num_items = crds_table.len() + crds_table.purged_len() + crds_table.failed_inserts_len();
 
-    var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
+    var filter_set = CrdsFilterSet.init(alloc, num_items, bloom_size) catch {
+        return error.CrdsFilterSetInitFailed;
+    };
 
     // add all crds values
     const crds_values = crds_table.store.iterator().values;
@@ -58,7 +61,7 @@ pub fn build_crds_filters(
     }
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consume_for_crds_filters(alloc, MAX_NUM_PULL_REQUESTS);
+    const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);
     return filters;
 }
 
@@ -237,7 +240,7 @@ test "gossip.pull: test build_crds_filters" {
 
     for (0..64) |_| {
         var id = Pubkey.random(rng, .{});
-        var legacy_contact_info = crds.LegacyContactInfo.default();
+        var legacy_contact_info = crds.LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
         var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
             .LegacyContactInfo = legacy_contact_info,
@@ -250,7 +253,7 @@ test "gossip.pull: test build_crds_filters" {
     const num_items = crds_table.len();
 
     // build filters
-    var filters = try build_crds_filters(std.testing.allocator, &crds_table, max_bytes);
+    var filters = try build_crds_filters(std.testing.allocator, &crds_table, max_bytes, 100);
     defer deinit_crds_filters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;

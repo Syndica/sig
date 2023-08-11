@@ -560,8 +560,7 @@ test "gossip.crds_table: insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&kp.public_key, true);
 
-    var legacy_contact_info = crds.LegacyContactInfo.default();
-    legacy_contact_info.id = id;
+    var legacy_contact_info = crds.LegacyContactInfo.default(id);
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     }, kp);

@@ -21,12 +21,11 @@ const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 
+const Ping = @import("./ping_pong.zig").Ping;
+const Pong = @import("./ping_pong.zig").Pong;
+
 const logger = std.log.scoped(.protocol);
 
-const PING_TOKEN_SIZE: usize = 32;
-const PING_PONG_HASH_PREFIX: [16]u8 = .{
-    'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
-};
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Gossip protocol messages
@@ -109,69 +108,6 @@ pub fn sanitize_wallclock(wallclock: u64) !void {
         return error.InvalidValue;
     }
 }
-
-pub const Ping = struct {
-    from: Pubkey,
-    token: [PING_TOKEN_SIZE]u8,
-    signature: Signature,
-
-    const Self = @This();
-
-    pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: KeyPair) !Self {
-        const sig = try keypair.sign(&token, null);
-        var self = Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
-            .token = token,
-            .signature = Signature.init(sig.toBytes()),
-        };
-        return self;
-    }
-
-    pub fn random(keypair: KeyPair) Self {
-        var token: [PING_TOKEN_SIZE]u8 = undefined;
-        var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        rand.fill(&token);
-        var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
-
-        return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
-            .token = token,
-            .signature = Signature.init(sig.toBytes()),
-        };
-    }
-
-    pub fn verify(self: *Self) !void {
-        if (!self.signature.verify(self.from, &self.token)) {
-            return error.InvalidSignature;
-        }
-    }
-};
-
-pub const Pong = struct {
-    from: Pubkey,
-    hash: Hash, // Hash of received ping token.
-    signature: Signature,
-
-    const Self = @This();
-
-    pub fn init(ping: *Ping, keypair: *KeyPair) !Self {
-        var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        const sig = try keypair.sign(&hash.data, null);
-
-        return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
-            .hash = hash,
-            .signature = Signature.init(sig.toBytes()),
-        };
-    }
-
-    pub fn verify(self: *Self) !void {
-        if (!self.signature.verify(self.from, &self.hash.data)) {
-            return error.InvalidSignature;
-        }
-    }
-};
 
 const PruneData = struct {
     /// Pubkey of the node that sent this prune data
@@ -261,32 +197,6 @@ test "gossip.protocol: test prune data sig verify" {
     try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
 }
 
-test "gossip.protocol: test ping pong sig verify" {
-    var keypair = KeyPair.create(null) catch unreachable;
-
-    var ping = Ping.random(keypair);
-    var msg = Protocol{ .PingMessage = ping };
-    try msg.verify_signature();
-
-    var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
-    try pong.verify_signature();
-}
-
-test "gossip.protocol: ping signatures match rust" {
-    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
-        125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
-        115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
-        61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
-        121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
-    }));
-    var ping = Ping.init([_]u8{0} ** PING_TOKEN_SIZE, keypair) catch unreachable;
-    const sig = ping.signature.data;
-
-    const rust_sig = [_]u8{ 52, 171, 91, 205, 183, 211, 38, 219, 53, 155, 163, 118, 202, 169, 15, 237, 147, 87, 209, 20, 6, 115, 24, 114, 196, 41, 217, 55, 123, 245, 35, 138, 126, 47, 233, 182, 90, 206, 13, 173, 212, 107, 94, 120, 167, 254, 14, 11, 253, 199, 158, 4, 203, 42, 173, 143, 214, 209, 132, 158, 223, 62, 214, 11 };
-    try testing.expect(std.mem.eql(u8, &sig, &rust_sig));
-    try ping.verify();
-}
-
 test "gossip.protocol: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
@@ -302,19 +212,15 @@ test "gossip.protocol: ping message serializes and deserializes correctly" {
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-test "gossip.protocol: ping message matches rust bytes" {
+test "gossip.protocol: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var original = Protocol{ .PingMessage = Ping.random(keypair) };
-    var buf = [_]u8{0} ** 1232;
+    var ping = Ping.random(keypair);
+    var msg = Protocol{ .PingMessage = ping };
+    try msg.verify_signature();
 
-    var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
-
-    var deserialized = try bincode.readFromSlice(testing.allocator, Protocol, serialized, bincode.Params.standard);
-
-    try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
-    try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
-    try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
+    var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
+    try pong.verify_signature();
 }
 
 test "gossip.protocol: pull request serializes and deserializes" {
