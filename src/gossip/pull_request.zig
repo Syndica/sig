@@ -42,6 +42,7 @@ pub fn build_crds_filters(
     var filter_set = CrdsFilterSet.init(alloc, num_items, bloom_size) catch {
         return error.CrdsFilterSetInitFailed;
     };
+    errdefer filter_set.deinit();
 
     // add all crds values
     const crds_values = crds_table.store.iterator().values;

@@ -11,7 +11,7 @@ const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
 const SocketAddr = @import("net.zig").SocketAddr;
 const Protocol = @import("protocol.zig").Protocol;
-const Ping = @import("protocol.zig").Ping;
+const Ping = @import("ping_pong.zig").Ping;
 const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const CrdsValue = crds.CrdsValue;
@@ -46,9 +46,6 @@ const MAX_VALUES_PER_PUSH: u64 = PACKET_DATA_SIZE * 64;
 
 pub const GossipService = struct {
     cluster_info: *ClusterInfo,
-    keypair: KeyPair,
-    id: Pubkey,
-
     gossip_socket: UdpSocket,
     exit_sig: AtomicBool,
     packet_channel: PacketChannel,
@@ -75,13 +72,8 @@ pub const GossipService = struct {
 
         var crds_table = try CrdsTable.init(allocator);
 
-        const keypair = cluster_info.our_keypair;
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
-
         return Self{
             .cluster_info = cluster_info,
-            .keypair = keypair,
-            .id = pubkey,
             .gossip_socket = gossip_socket,
             .exit_sig = exit,
             .packet_channel = packet_channel,
@@ -145,7 +137,7 @@ pub const GossipService = struct {
 
     fn responder(self: *Self) !void {
         while (self.responder_channel.receive()) |p| {
-            _ = try self.gossip_socket.sendTo(p.from, p.data[0..p.size]);
+            _ = try self.gossip_socket.sendTo(p.addr, p.data[0..p.size]);
         }
     }
 
@@ -180,7 +172,7 @@ pub const GossipService = struct {
             };
 
             // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
-            const msg = ProtocolMessage{ .from_addr = packet.from, .message = protocol_message };
+            const msg = ProtocolMessage{ .from_addr = packet.addr, .message = protocol_message };
             verified_channel.send(msg);
         }
     }
@@ -197,13 +189,14 @@ pub const GossipService = struct {
 
             // new pull msgs
             const my_contact_info = try self.get_contact_info();
-            _ = new_pull_requests(
+            var packets = try new_pull_requests(
                 self.allocator,
                 &self.crds_table,
                 pull_request.MAX_BLOOM_SIZE,
                 my_contact_info,
-                self.keypair,
+                logger,
             );
+            defer packets.deinit();
 
             // new push msgs
             try drain_push_queue_to_crds_table(
@@ -230,10 +223,9 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         crds_table: *CrdsTable,
         bloom_size: usize,
-        my_contact_info: crds.LegacyContactInfo,
-        keypair: KeyPair,
-    ) !void {
-
+        my_contact_info: CrdsValue,
+        logger: *Logger,
+    ) !std.ArrayList(Packet) {
         // NOTE: these filters need to be de-init at some point
         // should serialize them into packets and de-init asap imo
         // ie, PacketBatch them
@@ -243,54 +235,48 @@ pub const GossipService = struct {
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
         ) catch |err| {
-            std.debug.print("failed to build crds filters: {any}\n", .{err});
-            return std.ArrayList(CrdsFilter).init(allocator);
+            logger.debugf("failed to build crds filters: {any}\n", .{err});
+            return error.FailedToBuildFilters;
         };
-        // TODO: this breaks a lot but we dont use these values yet
+        // we serialize at the end of this function so this is ok
         defer pull_request.deinit_crds_filters(&filters);
 
-        // get contact infos from the crds table
-        // randomly sample a contact for each filter
-        // create a hashmap from it HashMap(ContactInfo, Vec<Filters>)
-        // Vec<Filters> incase more than one filter has the same contact
-
+        // get ndoes from crds table
         var buf: [MAX_NUM_PULL_REQUESTS]crds.CrdsVersionedValue = undefined;
+        const contact_infos = try crds_table.get_contact_infos(&buf);
 
-        // TODO: better filtering
-        const contact_infos = try crds_table.get_contact_infos(&buf); 
-        // filter only valid gossip addresses 
+        // filter only valid gossip addresses
         var valid_contact_infos: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
-        var i: usize = 0;
+        var valid_contact_len: usize = 0;
         for (contact_infos) |contact_info| {
+            const peer_info = contact_info.value.data.LegacyContactInfo;
+            const peer_gossip_addr = peer_info.gossip;
+
+            if (crds.sanitize_socket(&peer_gossip_addr)) {
+                valid_contact_infos[valid_contact_len] = peer_info;
+                valid_contact_len += 1;
+            } else |_| {}
         }
 
-
-        if (contact_infos.len == 0) {
+        if (valid_contact_len == 0) {
             return error.NoPeers;
         }
 
+        var output = try std.ArrayList(Packet).initCapacity(allocator, filters.items.len);
+        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+
         var rng = std.rand.DefaultPrng.init(crds.get_wallclock());
-        var output = std.AutoHashMap(crds.LegacyContactInfo, std.ArrayList(CrdsFilter)).init(allocator);
+        for (filters.items) |filter| {
+            const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info } };
 
-        // output = Vec<(SocketAddr, Protocol)>
-        // need to verify gossip addrs is ok()
-        // output => PacketBatch
-        const my_contact_info_value = CrdsValue.initSigned(
-            crds.CrdsData{ .LegacyContactInfo = my_contact_info },
-            keypair,
-        );
-
-        for (filters) |filter| {
             // TODO: incorperate stake weight in random sampling
-            const peer_index = rng.random().intRangeAtMost(usize, 0, contact_infos.len);
-            const peer = contact_infos[peer_index];
-            const peer_contact_info = peer.value.data.LegacyContactInfo;
-            const peer_gossip_addr = peer_contact_info.gossip;
+            const peer_index = rng.random().intRangeAtMost(usize, 0, valid_contact_len - 1);
+            const peer_contact_info = valid_contact_infos[peer_index];
+            const peer_addr = peer_contact_info.gossip.toEndpoint();
 
-
-            const protocol_msg = Protocol{ .PullRequest = .{
-                filter, my_contact_info_value
-            }};
+            var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+            var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
+            output.appendAssumeCapacity(packet);
         }
 
         return output;
@@ -521,6 +507,10 @@ pub const GossipService = struct {
 test "gossip.gossip_service: new pull messages" {
     const allocator = std.testing.allocator;
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var crds_table = try CrdsTable.init(allocator);
     defer crds_table.deinit();
 
@@ -532,10 +522,16 @@ test "gossip.gossip_service: new pull messages" {
         try crds_table.insert(value, get_wallclock(), null);
     }
 
-    var filters = GossipService.new_pull_requests(allocator, &crds_table, 2);
-    defer pull_request.deinit_crds_filters(&filters);
+    var id = Pubkey.fromPublicKey(&keypair.public_key, true);
+    var contact_info = crds.LegacyContactInfo.default(id);
+    var value = try CrdsValue.initSigned(crds.CrdsData{
+        .LegacyContactInfo = contact_info,
+    }, keypair);
 
-    try std.testing.expect(filters.items.len > 0);
+    var packets = try GossipService.new_pull_requests(allocator, &crds_table, 2, value, logger);
+    defer packets.deinit();
+
+    try std.testing.expect(packets.items.len > 0);
 }
 
 test "gossip.gossip_service: new push messages" {
@@ -685,7 +681,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var id = Pubkey.fromPublicKey(&pk, true);
 
     // new contact info
-    var legacy_contact_info = crds.LegacyContactInfo.default();
+    var legacy_contact_info = crds.LegacyContactInfo.default(id);
     var crds_data = crds.CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     };

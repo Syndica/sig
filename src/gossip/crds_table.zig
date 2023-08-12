@@ -202,7 +202,7 @@ pub const CrdsTable = struct {
             try self.shards.remove(entry_index, &old_entry.value_hash);
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
-            const did_remove = self.entries.swapRemove(old_entry.ordinal);
+            const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
             std.debug.assert(did_remove);
             try self.entries.put(self.cursor, entry_index);
 

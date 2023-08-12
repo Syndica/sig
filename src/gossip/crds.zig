@@ -677,7 +677,6 @@ test "gossip.crds: test sanitize CrdsData" {
 
     for (0..4) |i| {
         const data = CrdsData.random_from_index(rand, i);
-        std.debug.print("{any}\n", .{data});
         data.sanitize() catch {};
     }
 }
@@ -724,7 +723,7 @@ test "gossip.crds: contact info serialization matches rust" {
 
     var buf = [_]u8{0} ** 1024;
 
-    var legacy_contact_info = LegacyContactInfo.default();
+    var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.gossip = gossip_addr;
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = 0;

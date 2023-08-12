@@ -121,10 +121,10 @@ pub const SocketAddr = union(enum(u8)) {
     pub fn is_unspecified(self: *const Self) bool {
         switch (self.*) {
             .V4 => |addr| {
-                return std.mem.readIntBig(u32, addr.ip.octets) == 0;
+                return std.mem.readIntBig(u32, &addr.ip.octets) == 0;
             },
             .V6 => |addr| {
-                return std.mem.readIntBig(u128, addr.ip.octets) == 0;
+                return std.mem.readIntBig(u128, &addr.ip.octets) == 0;
             },
         }
     }
