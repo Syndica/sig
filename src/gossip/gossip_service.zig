@@ -219,6 +219,60 @@ pub const GossipService = struct {
         }
     }
 
+    fn get_gossip_nodes(
+        crds_table: *CrdsTable,
+        my_contact_info: *const CrdsValue,
+        nodes: []crds.LegacyContactInfo,
+        comptime max_size: usize,
+    ) ![]crds.LegacyContactInfo {
+        crds_table.read();
+        var buf: [max_size]crds.CrdsVersionedValue = undefined;
+        const contact_infos = try crds_table.get_contact_infos(&buf);
+        crds_table.release_read();
+
+        if (contact_infos.len == 0) {
+            return error.NoPeers;
+        }
+
+        // filter only valid gossip addresses
+        const active_timeout = 60 * std.time.ms_per_s;
+        const now = get_wallclock();
+        const too_old_ts = now -| active_timeout;
+
+        const my_pubkey = my_contact_info.id();
+        const my_shred_version = my_contact_info.data.LegacyContactInfo.shred_version;
+
+        var node_index: usize = 0;
+        for (contact_infos) |contact_info| {
+            const peer_info = contact_info.value.data.LegacyContactInfo;
+            const peer_gossip_addr = peer_info.gossip;
+
+            // filter inactive nodes
+            if (contact_info.timestamp_on_insertion < too_old_ts) {
+                continue;
+            }
+            // filter self
+            if (contact_info.value.id().equals(&my_pubkey)) {
+                continue;
+            }
+            // filter matching shred version or my_shred_version == 0
+            if (my_shred_version != 0 and my_shred_version != peer_info.shred_version) {
+                continue;
+            }
+            // filter on valid gossip address
+            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+
+            nodes[node_index] = peer_info;
+            node_index += 1;
+
+            if (node_index == nodes.len) {
+                break;
+            }
+        }
+
+        return nodes[0..node_index];
+    }
+
     fn new_pull_requests(
         allocator: std.mem.Allocator,
         crds_table: *CrdsTable,
@@ -241,38 +295,22 @@ pub const GossipService = struct {
         // we serialize at the end of this function so this is ok
         defer pull_request.deinit_crds_filters(&filters);
 
-        // get ndoes from crds table
-        var buf: [MAX_NUM_PULL_REQUESTS]crds.CrdsVersionedValue = undefined;
-        const contact_infos = try crds_table.get_contact_infos(&buf);
-
-        // filter only valid gossip addresses
-        var valid_contact_infos: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
-        var valid_contact_len: usize = 0;
-        for (contact_infos) |contact_info| {
-            const peer_info = contact_info.value.data.LegacyContactInfo;
-            const peer_gossip_addr = peer_info.gossip;
-
-            if (crds.sanitize_socket(&peer_gossip_addr)) {
-                valid_contact_infos[valid_contact_len] = peer_info;
-                valid_contact_len += 1;
-            } else |_| {}
-        }
-
-        if (valid_contact_len == 0) {
-            return error.NoPeers;
-        }
+        // get nodes from crds table
+        var buf: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
+        var peers = try get_gossip_nodes(crds_table, &my_contact_info, &buf, MAX_NUM_PULL_REQUESTS);
+        const num_peers = peers.len;
 
         var output = try std.ArrayList(Packet).initCapacity(allocator, filters.items.len);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
         var rng = std.rand.DefaultPrng.init(crds.get_wallclock());
         for (filters.items) |filter| {
-            const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info } };
-
             // TODO: incorperate stake weight in random sampling
-            const peer_index = rng.random().intRangeAtMost(usize, 0, valid_contact_len - 1);
-            const peer_contact_info = valid_contact_infos[peer_index];
+            const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
+            const peer_contact_info = peers[peer_index];
             const peer_addr = peer_contact_info.gossip.toEndpoint();
+
+            const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info } };
 
             var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
             var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
@@ -313,6 +351,8 @@ pub const GossipService = struct {
 
         var legacy_contact_info = crds.LegacyContactInfo.default(id);
         legacy_contact_info.gossip = gossip_addr;
+        // TODO: use correct shred version
+        legacy_contact_info.shred_version = 0;
 
         var crds_data = crds.CrdsData{
             .LegacyContactInfo = legacy_contact_info,
