@@ -494,6 +494,7 @@ pub const GossipService = struct {
             push_messages.deinit();
         }
 
+        // build peers => values list
         var n_values: u32 = 0;
         const active_set_peers = active_set.get_peers();
         for (crds_entries) |entry| {
@@ -527,46 +528,27 @@ pub const GossipService = struct {
             }
         }
 
-        // hash_map.map(|peer_pubkey, entry| (crds.get_gossip(peer_pubkey), entry))
-        // (SocketAddr, Vec<Entry>)
-        var socket_push_msgs = std.AutoHashMap(EndPoint, std.ArrayList(CrdsValue)).init(allocator);
-        defer {
-            var push_iter = socket_push_msgs.iterator();
-            while (push_iter.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            socket_push_msgs.deinit();
-        }
+        // build Push msg packets
+        var push_packets = std.ArrayList(Packet).init(allocator);
+        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+
+        const max_chunk_size = PUSH_MESSAGE_MAX_PAYLOAD_SIZE;
+        var buf_byte_size: u64 = 0;
+        var protocol_msg_entries = std.ArrayList(CrdsValue).init(allocator);
+        defer protocol_msg_entries.deinit();
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |entry| {
+            const peer_entries = entry.value_ptr.*;
+
+            // get gossip address
             const peer_pubkey = entry.key_ptr.*;
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
             }).?;
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip.toEndpoint();
 
-            // copy the slice
-            const ref_entry_list = entry.value_ptr.*;
-            var entry_list = std.ArrayList(CrdsValue).init(allocator);
-            try entry_list.appendSlice(ref_entry_list.items);
-
-            try socket_push_msgs.put(peer_gossip_addr, entry_list);
-        }
-
-        var push_packets = std.ArrayList(Packet).init(allocator);
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        const max_chunk_size = PUSH_MESSAGE_MAX_PAYLOAD_SIZE;
-
-        var push_socket_iter = socket_push_msgs.iterator();
-        while (push_socket_iter.next()) |entry| {
-            const peer_gossip_addr = entry.key_ptr.*;
-            const peer_entries = entry.value_ptr.*;
-
-            var buf_byte_size: u64 = 0;
-            var protocol_msg_entries = std.ArrayList(CrdsValue).init(allocator);
-            defer protocol_msg_entries.deinit();
-
+            // fit push messages into Packets
             for (peer_entries.items) |peer_entry| {
                 const data_byte_size = try bincode.get_serialized_size(allocator, peer_entry, bincode.Params{});
 
@@ -585,9 +567,20 @@ pub const GossipService = struct {
                     protocol_msg_entries.clearRetainingCapacity();
                     try protocol_msg_entries.append(peer_entry);
                 } else {
+                    // should never have a chunk larger than the max
                     unreachable;
                 }
             }
+
+            if (buf_byte_size > 0) {
+                const protocol_msg = Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_entries.items } };
+                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+                var packet = Packet.init(peer_gossip_addr, packet_buf, msg_slice.len);
+                try push_packets.append(packet);
+            }
+
+            buf_byte_size = 0;
+            protocol_msg_entries.clearRetainingCapacity();
         }
 
         return push_packets;
