@@ -169,6 +169,38 @@ const PruneData = struct {
     }
 };
 
+test "gossip.protocol: push message serialization is predictable" {
+    var rng = DefaultPrng.init(crds.get_wallclock());
+    var pubkey = Pubkey.random(rng.random(), .{});
+    var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
+    defer values.deinit();
+
+    var msg = Protocol{ .PushMessage = .{ pubkey, values.items } };
+    const empty_size = try bincode.get_serialized_size(
+        std.testing.allocator,
+        msg,
+        bincode.Params{},
+    );
+
+    var value = try CrdsValue.random(rng.random(), try KeyPair.create(null));
+    const value_size = try bincode.get_serialized_size(
+        std.testing.allocator,
+        value,
+        bincode.Params{},
+    );
+    try values.append(value);
+    try std.testing.expect(values.items.len == 1);
+
+    var msg_with_value = Protocol{ .PushMessage = .{ pubkey, values.items } };
+    const msg_value_size = try bincode.get_serialized_size(
+        std.testing.allocator,
+        msg_with_value,
+        bincode.Params{},
+    );
+    std.debug.print("value_size, empty_size, msg_value_size: {d} {d} {d}\n", .{ value_size, empty_size, msg_value_size });
+    try std.testing.expectEqual(value_size + empty_size, msg_value_size);
+}
+
 test "gossip.protocol: test prune data sig verify" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,

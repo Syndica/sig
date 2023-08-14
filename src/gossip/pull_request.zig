@@ -73,6 +73,13 @@ pub fn deinit_crds_filters(filters: *ArrayList(CrdsFilter)) void {
     filters.deinit();
 }
 
+pub fn shuffle_first_n(rng: std.rand.Random, comptime T: type, buf: []T, n: usize) void {
+    for (0..n) |i| {
+        const j = rng.intRangeLessThan(usize, 0, buf.len);
+        std.mem.swap(T, &buf[i], &buf[j]);
+    }
+}
+
 pub const CrdsFilterSet = struct {
     filters: ArrayList(Bloom),
 
@@ -136,7 +143,6 @@ pub const CrdsFilterSet = struct {
         const set_size = self.len();
         var indexs = try ArrayList(usize).initCapacity(alloc, set_size);
         defer indexs.deinit();
-
         for (0..set_size) |i| {
             indexs.appendAssumeCapacity(i);
         }
@@ -145,13 +151,10 @@ pub const CrdsFilterSet = struct {
         const can_consume_all = max_size >= set_size;
 
         if (!can_consume_all) {
+
             // shuffle the indexs
-            var seed = @as(u64, @intCast(std.time.milliTimestamp()));
-            var rand = std.rand.DefaultPrng.init(seed);
-            for (0..output_size) |i| {
-                const j = @min(set_size, @max(0, rand.random().int(usize)));
-                std.mem.swap(usize, &indexs.items[i], &indexs.items[j]);
-            }
+            var rng = std.rand.DefaultPrng.init(crds.get_wallclock());
+            shuffle_first_n(rng.random(), usize, indexs.items, output_size);
 
             // release others
             for (output_size..set_size) |i| {

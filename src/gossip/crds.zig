@@ -60,6 +60,10 @@ pub const CrdsValue = struct {
         return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
+    pub fn random_with_index(rng: std.rand.Random, keypair: KeyPair, index: usize) !Self {
+        return try Self.initSigned(CrdsData.random_from_index(rng, index), keypair);
+    }
+
     pub fn sign(self: *Self, keypair: KeyPair) !void {
         var buf = [_]u8{0} ** 2048;
         var bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
