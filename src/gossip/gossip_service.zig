@@ -44,7 +44,8 @@ const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
 const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
 
-const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * 64;
+const MAX_PACKETS_PER_PUSH: usize = 64;
+const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH);
 
 const PUSH_MESSAGE_MAX_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
@@ -191,6 +192,12 @@ pub const GossipService = struct {
         // solana-gossip spy -- local node for testing
         const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
         var last_push_ts: u64 = 0;
+        var should_send_pull_requests = true;
+
+        const my_contact_info = try self.get_contact_info();
+        const my_keypair = self.cluster_info.our_keypair;
+        const my_pubkey = my_contact_info.id();
+        const my_shred_version = my_contact_info.data.LegacyContactInfo.shred_version;
 
         while (true) {
             const top_of_loop_ts = get_wallclock();
@@ -199,18 +206,32 @@ pub const GossipService = struct {
             try self.send_ping(&peer, logger);
 
             // new pull msgs
-            const my_contact_info = try self.get_contact_info();
-            var pull_packets = new_pull_requests(
-                self.allocator,
-                &self.crds_table,
-                pull_request.MAX_BLOOM_SIZE,
-                my_contact_info,
-                logger,
-            ) catch |e| blk: {
-                std.debug.print("failed to generate pull requests: {any}\n", .{e});
-                break :blk std.ArrayList(Packet).init(self.allocator);
-            };
-            defer pull_packets.deinit();
+            if (should_send_pull_requests) {
+                // update wallclock and sign
+                my_contact_info.wallclock = get_wallclock();
+                const my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                    .LegacyContactInfo = my_contact_info,
+                }, my_keypair);
+
+                var pull_packets = new_pull_requests(
+                    self.allocator,
+                    &self.crds_table,
+                    pull_request.MAX_BLOOM_SIZE,
+                    my_contact_info_value,
+                    logger,
+                ) catch |e| blk: {
+                    std.debug.print("failed to generate pull requests: {any}\n", .{e});
+                    break :blk std.ArrayList(Packet).init(self.allocator);
+                };
+                defer pull_packets.deinit();
+
+                // send packets
+                for (pull_packets.items) |packet| {
+                    self.responder_channel.send(packet);
+                }
+            }
+            // every other loop
+            should_send_pull_requests = !should_send_pull_requests;
 
             // new push msgs
             try drain_push_queue_to_crds_table(
@@ -218,8 +239,6 @@ pub const GossipService = struct {
                 &self.push_msg_queue,
                 &self.push_msg_queue_lock,
             );
-
-            const my_pubkey = my_contact_info.id();
             var push_packets = try new_push_messages(
                 self.allocator,
                 &self.crds_table,
@@ -229,26 +248,27 @@ pub const GossipService = struct {
             );
             defer push_packets.deinit();
 
-            // send packets
             for (push_packets.items) |packet| {
-                self.responder_channel.send(packet);
-            }
-            for (pull_packets.items) |packet| {
                 self.responder_channel.send(packet);
             }
 
             // trim data
             try trim_crds_table(&self.crds_table);
 
-            const should_reset = top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2;
-            if (should_reset) {
+            // periodic things
+            if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
+                // update wallclock and sign
+                my_contact_info.wallclock = get_wallclock();
+                var my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                    .LegacyContactInfo = my_contact_info,
+                }, my_keypair);
+
                 // push contact info
                 self.push_msg_queue_lock.lock();
-                try self.push_msg_queue.append(my_contact_info);
+                try self.push_msg_queue.append(my_contact_info_value);
                 self.push_msg_queue_lock.unlock();
 
                 // reset push active set
-                const my_shred_version = my_contact_info.data.LegacyContactInfo.shred_version;
                 try self.active_set.reset(&self.crds_table, my_pubkey, my_shred_version);
                 last_push_ts = get_wallclock();
             }
@@ -399,8 +419,7 @@ pub const GossipService = struct {
         );
     }
 
-    fn get_contact_info(self: *Self) !crds.CrdsValue {
-        const keypair = self.cluster_info.our_keypair;
+    fn get_contact_info(self: *Self) !crds.LegacyContactInfo {
         const id = self.cluster_info.our_contact_info.pubkey;
         const gossip_socket = self.gossip_socket;
 
@@ -412,11 +431,7 @@ pub const GossipService = struct {
         // TODO: use correct shred version
         legacy_contact_info.shred_version = 0;
 
-        var crds_data = crds.CrdsData{
-            .LegacyContactInfo = legacy_contact_info,
-        };
-        var crds_value = try crds.CrdsValue.initSigned(crds_data, keypair);
-        return crds_value;
+        return legacy_contact_info;
     }
 
     fn push_contact_info(self: *Self) !void {
@@ -489,7 +504,7 @@ pub const GossipService = struct {
         }
 
         // adjust cursor for values not sent this round
-        // NOTE: bug in labs client?
+        // NOTE: labs client doesnt do this? - bug?
         const num_values_not_considered = crds_entries.len - num_values_considered;
         push_cursor.* -= num_values_not_considered;
 
@@ -507,7 +522,7 @@ pub const GossipService = struct {
         }
 
         // build Push msg packets
-        var push_packets = std.ArrayList(Packet).init(allocator);
+        var push_packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH * @as(u64, active_set.len));
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
         const max_chunk_size = PUSH_MESSAGE_MAX_PAYLOAD_SIZE;
