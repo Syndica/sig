@@ -764,6 +764,7 @@ test "gossip.gossip_service: new push messages" {
     var id = Pubkey.fromPublicKey(&keypair.public_key, false);
     var value = try CrdsValue.random(rng.random(), keypair);
 
+    // set the active set 
     var active_set = ActiveSet.init();
     try active_set.reset(&crds_table, id, 0);
     std.debug.print("active set len: {d}\n", .{active_set.len});
@@ -788,23 +789,22 @@ test "gossip.gossip_service: new push messages" {
         id,
         &cursor,
     );
+
+    try std.testing.expectEqual(cursor, 11);
+    try std.testing.expect(msgs.items.len > 0);
     msgs.deinit();
 
-    // try std.testing.expectEqual(cursor, 11);
-    // try std.testing.expectEqual(msgs.items.len, 11);
-    // msgs.deinit();
+    msgs = try GossipService.new_push_messages(
+        allocator,
+        &crds_table,
+        &active_set,
+        id,
+        &cursor,
+    );
 
-    // msgs = try GossipService.new_push_messages(
-    //     allocator,
-    //     &crds_table,
-    //     &active_set,
-    //     id,
-    //     &cursor,
-    // );
-
-    // try std.testing.expect(cursor == 11);
-    // try std.testing.expect(msgs.items.len == 0);
-    // msgs.deinit();
+    try std.testing.expect(cursor == 11);
+    try std.testing.expect(msgs.items.len == 0);
+    msgs.deinit();
 }
 
 test "gossip.gossip_service: test packet verification" {
