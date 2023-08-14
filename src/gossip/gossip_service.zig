@@ -437,15 +437,6 @@ pub const GossipService = struct {
         return legacy_contact_info;
     }
 
-    fn push_contact_info(self: *Self) !void {
-        const contact_info = try self.get_contact_info();
-
-        self.push_msg_queue_lock.lock();
-        defer self.push_msg_queue_lock.unlock();
-
-        try self.push_msg_queue.append(contact_info);
-    }
-
     fn drain_push_queue_to_crds_table(
         crds_table: *CrdsTable,
         push_msg_queue: *std.ArrayList(CrdsValue),
@@ -654,10 +645,6 @@ pub const GossipService = struct {
                         100,
                         now,
                     );
-                    // const respose = Protocol {
-                    //     .PullResponse = .{
-                    //     }
-                    // }
 
                     // TODO: send them out as a pull response
                     _ = crds_values;
