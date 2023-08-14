@@ -194,10 +194,10 @@ pub const GossipService = struct {
         var last_push_ts: u64 = 0;
         var should_send_pull_requests = true;
 
-        const my_contact_info = try self.get_contact_info();
         const my_keypair = self.cluster_info.our_keypair;
-        const my_pubkey = my_contact_info.id();
-        const my_shred_version = my_contact_info.data.LegacyContactInfo.shred_version;
+        var my_contact_info = try self.get_contact_info();
+        const my_pubkey = my_contact_info.id;
+        const my_shred_version = my_contact_info.shred_version;
 
         while (true) {
             const top_of_loop_ts = get_wallclock();
@@ -239,13 +239,16 @@ pub const GossipService = struct {
                 &self.push_msg_queue,
                 &self.push_msg_queue_lock,
             );
-            var push_packets = try new_push_messages(
+            var push_packets = new_push_messages(
                 self.allocator,
                 &self.crds_table,
                 &self.active_set,
                 my_pubkey,
                 &self.push_cursor,
-            );
+            ) catch |e| blk: {
+                std.debug.print("failed to generate push messages: {any}\n", .{e});
+                break :blk std.ArrayList(Packet).init(self.allocator);
+            };
             defer push_packets.deinit();
 
             for (push_packets.items) |packet| {
@@ -477,6 +480,17 @@ pub const GossipService = struct {
         const now = get_wallclock();
         var total_byte_size: usize = 0;
 
+        // derive the active set
+        const active_set_peers = try active_set.get_fanout_peers(
+            allocator,
+            crds_table,
+        );
+        defer active_set_peers.deinit();
+
+        if (active_set_peers.items.len == 0) {
+            return error.NoPeers;
+        }
+
         // find new values in crds table
         var push_messages = std.ArrayList(CrdsValue).init(allocator);
         defer push_messages.deinit();
@@ -508,19 +522,6 @@ pub const GossipService = struct {
         const num_values_not_considered = crds_entries.len - num_values_considered;
         push_cursor.* -= num_values_not_considered;
 
-        // derive the active set
-        const active_set_peers = active_set.get_fanout_peers();
-        // retrieve the gossip endpoints
-        var active_set_addrs = try std.ArrayList(EndPoint).initCapacity(allocator, active_set_peers.len);
-        defer active_set_addrs.deinit();
-        for (active_set_peers) |peer_pubkey| {
-            const peer_info = crds_table.get(crds.CrdsValueLabel{
-                .LegacyContactInfo = peer_pubkey,
-            }).?;
-            const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip.toEndpoint();
-            active_set_addrs.appendAssumeCapacity(peer_gossip_addr);
-        }
-
         // build Push msg packets
         var push_packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH * @as(u64, active_set.len));
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -544,8 +545,8 @@ pub const GossipService = struct {
                 var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
 
                 // write to all push peers
-                for (active_set_addrs.items) |peer_gossip_addr| {
-                    var packet = Packet.init(peer_gossip_addr, packet_buf, msg_slice.len);
+                for (active_set_peers.items) |peer_gossip_endpoint| {
+                    var packet = Packet.init(peer_gossip_endpoint, packet_buf, msg_slice.len);
                     try push_packets.append(packet);
                 }
 
@@ -563,8 +564,8 @@ pub const GossipService = struct {
         if (buf_byte_size > 0) {
             const protocol_msg = Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } };
             var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-            for (active_set_addrs.items) |peer_gossip_addr| {
-                var packet = Packet.init(peer_gossip_addr, packet_buf, msg_slice.len);
+            for (active_set_peers.items) |peer_gossip_endpoint| {
+                var packet = Packet.init(peer_gossip_endpoint, packet_buf, msg_slice.len);
                 try push_packets.append(packet);
             }
         }

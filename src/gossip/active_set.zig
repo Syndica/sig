@@ -65,9 +65,29 @@ pub const ActiveSet = struct {
         };
     }
 
-    pub fn get_fanout_peers(self: *const Self) []const Pubkey {
-        const size = @min(CRDS_GOSSIP_PUSH_FANOUT, self.len);
-        return self.peers[0..size];
+    pub fn get_fanout_peers(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+        crds_table: *CrdsTable,
+    ) !std.ArrayList(EndPoint) {
+        var active_set_endpoints = std.ArrayList(EndPoint).init(allocator);
+        errdefer active_set_endpoints.deinit();
+
+        for (self.peers[0..self.len]) |peer_pubkey| {
+            const peer_info = crds_table.get(crds.CrdsValueLabel{
+                .LegacyContactInfo = peer_pubkey,
+            }).?;
+            const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
+
+            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+            try active_set_endpoints.append(peer_gossip_addr.toEndpoint());
+
+            if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
+                break;
+            }
+        }
+
+        return active_set_endpoints;
     }
 
     pub fn reset(self: *Self, crds_table: *CrdsTable, my_pubkey: Pubkey, my_shred_version: u16) !void {
