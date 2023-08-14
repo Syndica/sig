@@ -43,7 +43,9 @@ const ProtocolChannel = Channel(ProtocolMessage);
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
 const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
+
 const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * 64;
+
 const PUSH_MESSAGE_MAX_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
 const GOSSIP_SLEEP_MILLIS: u64 = 100;
@@ -451,8 +453,8 @@ pub const GossipService = struct {
         my_pubkey: Pubkey,
         push_cursor: *u64,
     ) !std.ArrayList(Packet) {
-        var buf: [64]crds.CrdsVersionedValue = undefined;
-
+        // TODO: find a better static value?
+        var buf: [512]crds.CrdsVersionedValue = undefined;
         crds_table.read();
         var crds_entries = try crds_table.get_entries_with_cursor(&buf, push_cursor);
         crds_table.release_read();
@@ -460,10 +462,11 @@ pub const GossipService = struct {
         const now = get_wallclock();
         var total_byte_size: usize = 0;
 
-        // TODO: init with capacity with a decent estimate? (active_set.len * crds_entries.len)?
+        // find new values in crds table
         var push_messages = std.ArrayList(CrdsValue).init(allocator);
         defer push_messages.deinit();
 
+        var num_values_considered: usize = 0;
         for (crds_entries) |entry| {
             const value = entry.value;
 
@@ -471,6 +474,7 @@ pub const GossipService = struct {
             const too_old = entry_time < now -| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
             const too_new = entry_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
             if (too_old or too_new) {
+                num_values_considered += 1;
                 continue;
             }
 
@@ -481,11 +485,13 @@ pub const GossipService = struct {
                 break;
             }
             try push_messages.append(value);
+            num_values_considered += 1;
         }
 
         // adjust cursor for values not sent this round
-        const values_dropped = crds_entries.len - push_messages.items.len;
-        push_cursor.* -= values_dropped;
+        // NOTE: bug in labs client?
+        const num_values_not_considered = crds_entries.len - num_values_considered;
+        push_cursor.* -= num_values_not_considered;
 
         // derive the active set
         const active_set_peers = active_set.get_fanout_peers();
@@ -512,9 +518,10 @@ pub const GossipService = struct {
 
         for (push_messages.items) |crds_value| {
             const data_byte_size = try bincode.get_serialized_size(allocator, crds_value, bincode.Params{});
+            const new_chunk_size = buf_byte_size + data_byte_size;
 
-            if (buf_byte_size + data_byte_size <= max_chunk_size) {
-                buf_byte_size += data_byte_size;
+            if (new_chunk_size <= max_chunk_size) {
+                buf_byte_size = new_chunk_size;
                 try protocol_msg_values.append(crds_value);
             } else if (data_byte_size <= max_chunk_size) {
                 // write to Push to packet
@@ -537,6 +544,7 @@ pub const GossipService = struct {
             }
         }
 
+        // write whats left
         if (buf_byte_size > 0) {
             const protocol_msg = Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } };
             var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
@@ -840,6 +848,16 @@ test "gossip.gossip_service: test packet verification" {
         var msg = verified_channel.receive().?;
         try std.testing.expect(msg.message.PushMessage[0].equals(&id));
     }
+
+    var attempt_count: u16 = 0;
+    while (packet_channel.buffer.items.len != 0) {
+        std.time.sleep(std.time.ns_per_ms * 10);
+        attempt_count += 1;
+        if (attempt_count > 10) {
+            try std.testing.expect(false);
+        }
+    }
+
     try std.testing.expect(packet_channel.buffer.items.len == 0);
     try std.testing.expect(verified_channel.buffer.items.len == 0);
 
