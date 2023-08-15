@@ -21,10 +21,93 @@ const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 
-const PING_TOKEN_SIZE: usize = 32;
-const PING_PONG_HASH_PREFIX: [16]u8 = .{
-    'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
+const Ping = @import("./ping_pong.zig").Ping;
+const Pong = @import("./ping_pong.zig").Pong;
+
+const logger = std.log.scoped(.protocol);
+
+pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
+
+/// Gossip protocol messages
+pub const Protocol = union(enum(u32)) {
+    PullRequest: struct { CrdsFilter, CrdsValue },
+    PullResponse: struct { Pubkey, []CrdsValue },
+    PushMessage: struct { Pubkey, []CrdsValue },
+    PruneMessage: struct { Pubkey, PruneData },
+    PingMessage: Ping,
+    PongMessage: Pong,
+
+    pub fn verify_signature(self: *Protocol) !void {
+        switch (self.*) {
+            .PullRequest => |*pull| {
+                var value = pull[1];
+                const is_verified = try value.verify(value.id());
+                if (!is_verified) {
+                    return error.InvalidValue;
+                }
+            },
+            .PullResponse => |*pull| {
+                var values = pull[1];
+                for (values) |*value| {
+                    const is_verified = try value.verify(value.id());
+                    if (!is_verified) {
+                        return error.InvalidValue;
+                    }
+                }
+            },
+            .PushMessage => |*push| {
+                var values = push[1];
+                for (values) |*value| {
+                    const is_verified = try value.verify(value.id());
+                    if (!is_verified) {
+                        return error.InvalidValue;
+                    }
+                }
+            },
+            .PruneMessage => |*prune| {
+                var data = prune[1];
+                try data.verify();
+            },
+            .PingMessage => |*ping| {
+                try ping.verify();
+            },
+            .PongMessage => |*pong| {
+                try pong.verify();
+            },
+        }
+    }
+
+    pub fn sanitize(self: *Protocol) !void {
+        switch (self.*) {
+            .PullRequest => {},
+            .PullResponse => {},
+            .PushMessage => |*msg| {
+                const crds_values = msg[1];
+                for (crds_values) |value| {
+                    const data = value.data;
+                    try data.sanitize();
+                }
+            },
+            .PruneMessage => |*msg| {
+                const from = msg[0];
+                const value = msg[1];
+                if (!from.equals(&value.pubkey)) {
+                    return error.InvalidValue;
+                }
+                try sanitize_wallclock(value.wallclock);
+            },
+            // do nothing
+            .PingMessage => {},
+            .PongMessage => {},
+        }
+    }
 };
+
+pub fn sanitize_wallclock(wallclock: u64) !void {
+    if (wallclock >= MAX_WALLCLOCK) {
+        return error.InvalidValue;
+    }
+}
 
 const PruneData = struct {
     /// Pubkey of the node that sent this prune data
@@ -37,70 +120,114 @@ const PruneData = struct {
     destination: Pubkey,
     /// Wallclock of the node that generated this message
     wallclock: u64,
-};
 
-/// Gossip protocol messages
-pub const Protocol = union(enum(u32)) {
-    PullRequest: struct { CrdsFilter, CrdsValue },
-    PullResponse: struct { Pubkey, []CrdsValue },
-    PushMessage: struct { Pubkey, []CrdsValue },
-    PruneMessage: struct { Pubkey, PruneData },
-    PingMessage: Ping,
-    PongMessage: Pong,
-};
+    const PruneSignableData = struct {
+        pubkey: Pubkey,
+        prunes: []Pubkey,
+        destination: Pubkey,
+        wallclock: u64,
+    };
 
-pub const Ping = struct {
-    from: Pubkey,
-    token: [PING_TOKEN_SIZE]u8,
-    signature: Signature,
-
-    const Self = @This();
-
-    pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: KeyPair) !Self {
-        var sig = try keypair.sign(&token, null);
-        var self = Self{
-            .from = Pubkey.fromPublicKey(keypair.public_key, true),
-            .token = token,
-            .signature = sig,
+    pub fn random(rng: std.rand.Random, keypair: *KeyPair) !PruneData {
+        var self = PruneData{
+            .pubkey = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .prunes = &[0]Pubkey{},
+            .signature = Signature.init(.{0} ** 64),
+            .destination = Pubkey.random(rng, .{}),
+            .wallclock = crds.get_wallclock(),
         };
+        try self.sign(keypair);
+
         return self;
     }
 
-    pub fn random(keypair: KeyPair) Self {
-        var token: [PING_TOKEN_SIZE]u8 = undefined;
-        var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        rand.fill(&token);
-        var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
-        var self = Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
-            .token = token,
-            .signature = Signature.init(sig.toBytes()),
+    pub fn sign(self: *PruneData, keypair: *KeyPair) !void {
+        var slice: [1024]u8 = undefined; // TODO: fix sizing
+        var signable_data = PruneSignableData{
+            .pubkey = self.pubkey,
+            .prunes = self.prunes,
+            .destination = self.destination,
+            .wallclock = self.wallclock,
         };
-        return self;
+        var out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
+        var sig = try keypair.sign(out, null);
+        self.signature.data = sig.toBytes();
+    }
+
+    pub fn verify(self: *const PruneData) !void {
+        var slice: [1024]u8 = undefined; // TODO: fix sizing
+        var signable_data = PruneSignableData{
+            .pubkey = self.pubkey,
+            .prunes = self.prunes,
+            .destination = self.destination,
+            .wallclock = self.wallclock,
+        };
+        var out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
+        if (!self.signature.verify(self.pubkey, out)) {
+            return error.InvalidSignature;
+        }
     }
 };
 
-pub const Pong = struct {
-    from: Pubkey,
-    hash: Hash, // Hash of received ping token.
-    signature: Signature,
+test "gossip.protocol: push message serialization is predictable" {
+    var rng = DefaultPrng.init(crds.get_wallclock());
+    var pubkey = Pubkey.random(rng.random(), .{});
+    var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
+    defer values.deinit();
 
-    const Self = @This();
+    var msg = Protocol{ .PushMessage = .{ pubkey, values.items } };
+    const empty_size = try bincode.get_serialized_size(
+        std.testing.allocator,
+        msg,
+        bincode.Params{},
+    );
 
-    pub fn init(ping: *Ping, keypair: *KeyPair) !Self {
-        var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        var sig = try keypair.sign(hash, null);
-        var self = Self{
-            .from = Pubkey.fromPublicKey(keypair.public_key, true),
-            .hash = hash,
-            .signature = sig,
-        };
-        return self;
-    }
-};
+    var value = try CrdsValue.random(rng.random(), try KeyPair.create(null));
+    const value_size = try bincode.get_serialized_size(
+        std.testing.allocator,
+        value,
+        bincode.Params{},
+    );
+    try values.append(value);
+    try std.testing.expect(values.items.len == 1);
 
-const logger = std.log.scoped(.protocol);
+    var msg_with_value = Protocol{ .PushMessage = .{ pubkey, values.items } };
+    const msg_value_size = try bincode.get_serialized_size(
+        std.testing.allocator,
+        msg_with_value,
+        bincode.Params{},
+    );
+    std.debug.print("value_size, empty_size, msg_value_size: {d} {d} {d}\n", .{ value_size, empty_size, msg_value_size });
+    try std.testing.expectEqual(value_size + empty_size, msg_value_size);
+}
+
+test "gossip.protocol: test prune data sig verify" {
+    var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
+        125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
+        115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
+        61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
+        121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
+    }));
+
+    var rng = DefaultPrng.init(crds.get_wallclock());
+    var prune = try PruneData.random(rng.random(), &keypair);
+
+    try prune.verify();
+
+    const rust_bytes = [_]u8{ 80, 98, 7, 181, 129, 96, 249, 247, 34, 39, 251, 41, 125, 241, 31, 25, 122, 103, 202, 48, 78, 160, 222, 65, 228, 81, 171, 237, 233, 87, 248, 29, 37, 0, 19, 66, 83, 207, 78, 86, 232, 157, 184, 144, 71, 12, 223, 86, 144, 169, 160, 171, 139, 248, 106, 63, 194, 178, 144, 119, 51, 60, 201, 7 };
+
+    var prune_v2 = PruneData{
+        .pubkey = Pubkey.fromPublicKey(&keypair.public_key, true),
+        .prunes = &[0]Pubkey{},
+        .signature = Signature.init(.{0} ** 64),
+        .destination = Pubkey.fromPublicKey(&keypair.public_key, true),
+        .wallclock = 0,
+    };
+    try prune_v2.sign(&keypair);
+
+    var sig_bytes = prune_v2.signature.data;
+    try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
+}
 
 test "gossip.protocol: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
@@ -117,19 +244,15 @@ test "gossip.protocol: ping message serializes and deserializes correctly" {
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-test "gossip.protocol: ping message matches rust bytes" {
+test "gossip.protocol: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var original = Protocol{ .PingMessage = Ping.random(keypair) };
-    var buf = [_]u8{0} ** 1232;
+    var ping = Ping.random(keypair);
+    var msg = Protocol{ .PingMessage = ping };
+    try msg.verify_signature();
 
-    var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
-
-    var deserialized = try bincode.readFromSlice(testing.allocator, Protocol, serialized, bincode.Params.standard);
-
-    try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
-    try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
-    try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
+    var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
+    try pong.verify_signature();
 }
 
 test "gossip.protocol: pull request serializes and deserializes" {
@@ -140,7 +263,6 @@ test "gossip.protocol: pull request serializes and deserializes" {
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
 
     // pull requests only use ContactInfo CRDS data

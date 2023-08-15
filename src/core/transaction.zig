@@ -17,6 +17,20 @@ pub const Transaction = struct {
             .message = Message.default(),
         };
     }
+
+    pub fn sanitize(self: *const Transaction) !void {
+        const num_required_sigs = self.message.header.num_required_signatures;
+        const num_signatures = self.signatures.len;
+        if (num_required_sigs > num_signatures) {
+            return error.InsufficientSignatures;
+        }
+
+        const num_account_keys = self.message.account_keys.len;
+        if (num_signatures > num_account_keys) {
+            return error.TooManySignatures;
+        }
+        try self.message.sanitize();
+    }
 };
 
 pub const Message = struct {
@@ -39,6 +53,12 @@ pub const Message = struct {
             .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
             .instructions = &[_]CompiledInstruction{},
         };
+    }
+
+    pub fn sanitize(self: *const Message) !void {
+        // TODO:
+        std.debug.print("sanitize not implemented for type: Message\n", .{});
+        _ = self;
     }
 };
 

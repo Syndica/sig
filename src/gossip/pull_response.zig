@@ -113,14 +113,14 @@ test "gossip.pull: test filter_crds_values" {
     const max_bytes = 10;
 
     // recver
-    var filters = try crds_pull_req.build_crds_filters(std.testing.allocator, &crds_table, max_bytes);
+    var filters = try crds_pull_req.build_crds_filters(std.testing.allocator, &crds_table, max_bytes, 100);
     defer crds_pull_req.deinit_crds_filters(&filters);
     var filter = filters.items[0];
 
     // corresponding value
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk, true);
-    var legacy_contact_info = crds.LegacyContactInfo.default();
+    var legacy_contact_info = crds.LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
     var crds_value = try CrdsValue.initSigned(crds.CrdsData{
