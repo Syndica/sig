@@ -30,8 +30,6 @@ pub const CrdsVersionedValue = struct {
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
-    /// Number of times duplicates of this value are recevied from gossip push.
-    num_push_dups: u8,
 };
 
 pub const CrdsValue = struct {

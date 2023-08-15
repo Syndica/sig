@@ -16,6 +16,7 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;
 
 const CrdsTable = @import("crds_table.zig").CrdsTable;
+const HashAndTime = @import("crds_table.zig").HashAndTime;
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
 
@@ -31,13 +32,14 @@ pub const KEYS: f64 = 8;
 pub fn build_crds_filters(
     alloc: std.mem.Allocator,
     crds_table: *CrdsTable,
+    failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
 ) !ArrayList(CrdsFilter) {
     crds_table.read();
     defer crds_table.release_read();
 
-    const num_items = crds_table.len() + crds_table.purged_len() + crds_table.failed_inserts_len();
+    const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
     var filter_set = CrdsFilterSet.init(alloc, num_items, bloom_size) catch {
         return error.CrdsFilterSetInitFailed;
@@ -51,13 +53,12 @@ pub fn build_crds_filters(
         filter_set.add(&hash);
     }
     // add purged values
-    const purged_values = try crds_table.get_purged_values(alloc);
+    const purged_values = try crds_table.purged.get_values(alloc);
     for (purged_values.items) |hash| {
         filter_set.add(&hash);
     }
     // add failed inserts
-    const failed_inserts = try crds_table.get_failed_inserts_values(alloc);
-    for (failed_inserts.items) |hash| {
+    for (failed_pull_hashes.items) |hash| {
         filter_set.add(&hash);
     }
 
@@ -257,7 +258,14 @@ test "gossip.pull: test build_crds_filters" {
     const num_items = crds_table.len();
 
     // build filters
-    var filters = try build_crds_filters(std.testing.allocator, &crds_table, max_bytes, 100);
+    const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
+    var filters = try build_crds_filters(
+        std.testing.allocator,
+        &crds_table,
+        &failed_pull_hashes,
+        max_bytes,
+        100,
+    );
     defer deinit_crds_filters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;

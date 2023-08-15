@@ -113,7 +113,14 @@ test "gossip.pull: test filter_crds_values" {
     const max_bytes = 10;
 
     // recver
-    var filters = try crds_pull_req.build_crds_filters(std.testing.allocator, &crds_table, max_bytes, 100);
+    const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
+    var filters = try crds_pull_req.build_crds_filters(
+        std.testing.allocator,
+        &crds_table,
+        &failed_pull_hashes,
+        max_bytes,
+        100,
+    );
     defer crds_pull_req.deinit_crds_filters(&filters);
     var filter = filters.items[0];
 
