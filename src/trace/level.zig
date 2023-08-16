@@ -1,4 +1,3 @@
-const std = @import("std");
 
 pub const Level = enum {
     /// Error: something has gone wrong. This might be recoverable or might

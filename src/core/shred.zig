@@ -1,4 +1,3 @@
-const std = @import("std");
 
 /// ***ShredVersion***
 /// Currently it's being manually set.
