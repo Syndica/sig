@@ -66,11 +66,11 @@ pub const GossipService = struct {
     cluster_info: *ClusterInfo,
     gossip_socket: UdpSocket,
     exit_sig: AtomicBool,
-    packet_channel: PacketChannel,
-    responder_channel: PacketChannel,
+    packet_channel: *PacketChannel,
+    responder_channel: *PacketChannel,
     crds_table: CrdsTable,
     allocator: std.mem.Allocator,
-    verified_channel: ProtocolChannel,
+    verified_channel: *ProtocolChannel,
 
     // push message things
     active_set: ActiveSet,
@@ -133,19 +133,19 @@ pub const GossipService = struct {
         // process input threads
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{
             &self.gossip_socket,
-            &self.packet_channel,
+            self.packet_channel,
             logger,
         });
         var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
             self.allocator,
-            &self.packet_channel,
-            &self.verified_channel,
+            self.packet_channel,
+            self.verified_channel,
         });
         var packet_handle = try Thread.spawn(.{}, Self.process_protocol_messages, .{
             self.allocator,
             &self.crds_table,
-            &self.verified_channel,
-            &self.responder_channel,
+            self.verified_channel,
+            self.responder_channel,
             &self.failed_pull_hashes,
             &self.failed_pull_hashes_lock,
             &self.active_set,
@@ -1059,8 +1059,8 @@ test "gossip.gossip_service: test packet verification" {
 
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{
         allocator,
-        &packet_channel,
-        &verified_channel,
+        packet_channel,
+        verified_channel,
     });
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -1171,8 +1171,8 @@ test "gossip.gossip_service: process contact_info push packet" {
         .{
             allocator,
             &crds_table,
-            &verified_channel,
-            &responder_channel,
+            verified_channel,
+            responder_channel,
             &failed_pull,
             &failed_pull_lock,
             &active_set,

@@ -57,7 +57,8 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var logger = Logger.init(gpa, .debug);
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    var logger = Logger.init(arena.allocator(), .debug);
     logger.spawn();
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
