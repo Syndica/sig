@@ -668,6 +668,10 @@ pub const GossipService = struct {
         defer failed_insert_indexs.deinit();
 
         // handle prune messages
+        if (failed_insert_indexs.items.len == 0) {
+            return std.ArrayList(Packet).init(allocator);
+        }
+
         const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
             return error.CantFindContactInfo;
         };
@@ -873,6 +877,71 @@ pub const GossipService = struct {
         return failed_insert_indexs;
     }
 };
+
+test "gossip.gossip_service: generate prune messages" {
+    const allocator = std.testing.allocator;
+
+    var kp = try KeyPair.create(null);
+    var rng = std.rand.DefaultPrng.init(get_wallclock());
+    var push_from = Pubkey.random(rng.random(), .{});
+
+    var values = std.ArrayList(CrdsValue).init(allocator);
+    defer values.deinit();
+    for (0..10) |_| {
+        try values.append(try CrdsValue.random(rng.random(), kp));
+    }
+
+    var crds_table = try CrdsTable.init(allocator);
+    defer crds_table.deinit();
+
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
+    // insert contact info to send prunes to
+    var contact_info = crds.LegacyContactInfo.random(rng.random());
+    contact_info.id = push_from;
+    var ci_value = try CrdsValue.initSigned(crds.CrdsData{
+        .LegacyContactInfo = contact_info,
+    }, kp);
+    try crds_table.insert(ci_value, get_wallclock());
+
+    var packets = try GossipService.handle_push_message(
+        push_from,
+        values.items,
+        allocator,
+        &crds_table,
+        &kp,
+        logger,
+    );
+    defer packets.deinit();
+    try std.testing.expect(packets.items.len == 0);
+
+    var prune_packets = try GossipService.handle_push_message(
+        push_from,
+        values.items,
+        allocator,
+        &crds_table,
+        &kp,
+        logger,
+    );
+    defer prune_packets.deinit();
+    try std.testing.expect(prune_packets.items.len > 0);
+
+    var packet = prune_packets.items[0];
+    var protocol_message = try bincode.readFromSlice(
+        allocator,
+        Protocol,
+        packet.data[0..packet.size],
+        bincode.Params.standard,
+    );
+    defer bincode.free(allocator, protocol_message);
+
+    var msg = protocol_message.PruneMessage;
+    var prune_data = msg[1];
+    try std.testing.expect(prune_data.destination.equals(&push_from));
+    try std.testing.expect(prune_data.prunes.len == 10);
+}
 
 test "gossip.gossip_service: new pull messages" {
     const allocator = std.testing.allocator;
