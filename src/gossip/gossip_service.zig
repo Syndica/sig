@@ -564,7 +564,6 @@ pub const GossipService = struct {
                     try push_messages.put(peer, peer_entry);
                 }
             }
-
             num_values_considered += 1;
         }
         active_set_lock.unlockShared();

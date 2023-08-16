@@ -1,18 +1,10 @@
 const std = @import("std");
-const ClusterInfo = @import("cluster_info.zig").ClusterInfo;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
-const Packet = @import("packet.zig").Packet;
-const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
-const Channel = @import("../sync/channel.zig").Channel;
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
-const SocketAddr = @import("net.zig").SocketAddr;
-const Protocol = @import("protocol.zig").Protocol;
-const Ping = @import("ping_pong.zig").Ping;
-const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const CrdsValue = crds.CrdsValue;
 
@@ -22,15 +14,9 @@ const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
-const CrdsError = _crds_table.CrdsError;
-const Logger = @import("../trace/log.zig").Logger;
-const GossipRoute = _crds_table.GossipRoute;
 
 const pull_request = @import("../gossip/pull_request.zig");
-const CrdsFilter = pull_request.CrdsFilter;
-const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 
-const pull_response = @import("../gossip/pull_response.zig");
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 
 const Bloom = @import("../bloom/bloom.zig").Bloom;

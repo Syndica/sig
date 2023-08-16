@@ -1,7 +1,6 @@
 const std = @import("std");
 const GossipService = @import("gossip_service.zig").GossipService;
 const ClusterInfo = @import("cluster_info.zig").ClusterInfo;
-const network = @import("zig-network");
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 const AtomicBool = std.atomic.Atomic(bool);

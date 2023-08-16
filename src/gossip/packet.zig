@@ -1,4 +1,3 @@
-const std = @import("std");
 const network = @import("zig-network");
 
 /// Maximum over-the-wire size of a Transaction

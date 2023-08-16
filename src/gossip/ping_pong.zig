@@ -2,9 +2,6 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
-const bincode = @import("../bincode/bincode.zig");
-const Channel = @import("../sync/channel");
-const SocketAddr = @import("net.zig").SocketAddr;
 
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
@@ -16,12 +13,9 @@ const LegacyContactInfo = crds.LegacyContactInfo;
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
 
-const Option = @import("../option.zig").Option;
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
-
-const Protocol = @import("./protocol.zig").Protocol;
 
 const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{

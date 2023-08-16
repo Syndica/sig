@@ -1,22 +1,15 @@
 const std = @import("std");
-const SocketAddr = @import("net.zig").SocketAddr;
 const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
-const Signature = @import("../core/signature.zig").Signature;
-const Transaction = @import("../core/transaction.zig").Transaction;
-const Slot = @import("../core/slot.zig").Slot;
-const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
-const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;
 
 const CrdsTable = @import("crds_table.zig").CrdsTable;
-const HashAndTime = @import("crds_table.zig").HashAndTime;
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
 

@@ -8,8 +8,6 @@ const hash = @import("../core/hash.zig");
 const Hash = hash.Hash;
 const CompareResult = hash.CompareResult;
 
-const SocketAddr = @import("net.zig").SocketAddr;
-
 const CrdsShards = @import("./crds_shards.zig").CrdsShards;
 
 const crds = @import("./crds.zig");
