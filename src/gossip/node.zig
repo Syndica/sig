@@ -8,7 +8,6 @@ const var_int = @import("../utils/varint.zig");
 const var_int_config_u16 = var_int.var_int_config_u16;
 const var_int_config_u64 = var_int.var_int_config_u64;
 
-const serialize_varint = @import("../utils/varint.zig").serilaize_varint;
 const ShortVecArrayListConfig = @import("../utils/shortvec.zig").ShortVecArrayListConfig;
 const SocketAddr = @import("net.zig").SocketAddr;
 const IpAddr = @import("net.zig").IpAddr;

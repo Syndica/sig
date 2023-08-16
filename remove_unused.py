@@ -23,53 +23,61 @@ while 1:
     if len(dirs) == 0: 
         break 
 
-for filename in zig_files:
-    print(filename)
+n_remove_iter = 0
+n_removes = 1
+while n_removes > 0:
+    n_removes = 0
+    print(f"iteration: {n_remove_iter}, lines removed: {n_removes}")
+    n_remove_iter += 1
 
-    # open and read lines of file 
-    with open(filename, 'r') as f:
-        full_lines = f.readlines()
+    for filename in zig_files:
+        print(filename)
 
-    # filter lines to start with 'const' or 'pub const' 
-    lines = [line for line in full_lines if line.startswith('const') or line.startswith('pub const')]
+        # open and read lines of file 
+        with open(filename, 'r') as f:
+            full_lines = f.readlines()
 
-    # get lines which include '@import' 
-    lines = [line for line in lines if '@import' in line]
+        # filter lines to start with 'const' or 'pub const' 
+        lines = [line for line in full_lines if line.startswith('const') or line.startswith('pub const')]
 
-    # parse the value {VAR} name in 'const {VAR} = @import ...' 
-    import_var_names = []
-    for (i, line) in enumerate(full_lines):
-        if not (line.startswith('const') or line.startswith('pub const')):
-            continue 
+        # get lines which include '@import' 
+        lines = [line for line in lines if '@import' in line]
 
-        if '@import' not in line:
-            continue
+        # parse the value {VAR} name in 'const {VAR} = @import ...' 
+        import_var_names = []
+        for (i, line) in enumerate(full_lines):
+            if not (line.startswith('const') or line.startswith('pub const')):
+                continue 
 
-        start_index = line.index("const ")
-        end_index = line.index(" = ")
-        var_name = line[start_index + 6:end_index]
-        import_var_names.append((var_name, i))
+            if '@import' not in line:
+                continue
 
-    unused_vars = import_var_names.copy()
-    for i, line in enumerate(full_lines):
+            start_index = line.index("const ")
+            end_index = line.index(" = ")
+            var_name = line[start_index + 6:end_index]
+            import_var_names.append((var_name, i))
 
-        for var, line_num in import_var_names: 
-            if (var in line) and (i != line_num):
-                if (var, line_num) in unused_vars:
-                    unused_vars.remove((var, line_num))
+        unused_vars = import_var_names.copy()
+        for i, line in enumerate(full_lines):
 
-    new_lines = []
-    lines_to_remove = [i for (_, i) in unused_vars]
+            for var, line_num in import_var_names: 
+                if (var in line) and (i != line_num):
+                    if (var, line_num) in unused_vars:
+                        unused_vars.remove((var, line_num))
 
-    for (i, line) in enumerate(full_lines): 
-        if i in lines_to_remove: 
-            continue
-        new_lines.append(line)
+        new_lines = []
+        lines_to_remove = [i for (_, i) in unused_vars]
+        n_removes += len(lines_to_remove)
 
-    print(unused_vars)
+        for (i, line) in enumerate(full_lines): 
+            if i in lines_to_remove: 
+                continue
+            new_lines.append(line)
 
-    # write 
-    with open(filename, 'w') as f:
-        f.writelines(new_lines)
+        print(unused_vars)
+
+        # write 
+        with open(filename, 'w') as f:
+            f.writelines(new_lines)
 
             
