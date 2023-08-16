@@ -382,6 +382,14 @@ def filter_crds_values(
     return values
 ```
 
+### Handling Pull Responses
+
+- when recieving a pull response, we insert all the values recieved in the crds table 
+- if any values fail to be inserted we track their hash in an array `failed_pull_hashes` (due to having an old wallclock times, or being duplicate data)
+- these values are used when constructing the next Pull Request so that the values are not sent again 
+- the `failed_pull_hashes` array is periodically trimmed to remove old values
+- we also do the same thing for values that are pruned in the crds table (ie, values which are overwritten) in `CrdsTable.pruned`
+
 ## Protocol Messages: Push
 
 ### Sending Push Messages 
@@ -415,5 +423,14 @@ This means, **high stake nodes are more likely to send push messages to other hi
 When recieving a new `PushMessage`, the values are inserted into the CrdsTable. While inserting these values, duplicate values are tracked, and nodes which send a large number of duplicates are sent prune messages to say, 'stop sending me this duplicate data'.
 
 ## Protocol Message: Prune Messages
+
+## Sending Prune Message
+
+- each crds value contains an 'origin'/'origin_node' which defines the pubkey of the node which created the value 
+- since PlumTree propogates values across multiple nodes, along with the origin, there is also the node which sent the value to the node: refered to as 'from_node'
+- prune messages are 'from' and 'origin' specific, meaning we send a prune message to a 'from_node' and contains a list of 'origin' pubkeys whos values should not be pushed to the local node anymore  
+- note: in the solana-labs client, to compute what nodes to send a prune message to, it uses the number of duplicates sent, along with the nodes stake weight and a minimum number of nodes to keep, to decide which nodes to prune
+
+## Recieving Prune Messages
 
 ## Protocol Message: Ping/Pong

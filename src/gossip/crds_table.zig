@@ -403,36 +403,7 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     }
 }
 
-// test "gossip.crds_table: trim failed insertions" {
-//     const keypair = try KeyPair.create([_]u8{1} ** 32);
-
-//     var seed: u64 = @intCast(std.time.milliTimestamp());
-//     var rand = std.rand.DefaultPrng.init(seed);
-//     const rng = rand.random();
-//     var data = CrdsData{
-//         .LegacyContactInfo = LegacyContactInfo.random(rng),
-//     };
-//     var value = try CrdsValue.initSigned(data, keypair);
-
-//     var crds_table = try CrdsTable.init(std.testing.allocator);
-//     defer crds_table.deinit();
-
-//     // timestamp = 100
-//     try crds_table.insert(value, 100, null);
-
-//     // should lead to prev being pruned
-//     value = try CrdsValue.initSigned(data, keypair);
-//     const result = crds_table.insert(value, 120, GossipRoute.PullResponse);
-//     try std.testing.expectError(CrdsError.DuplicateValue, result);
-
-//     try std.testing.expectEqual(crds_table.failed_inserts_len(), 1);
-
-//     try crds_table.trim_failed_inserts_values(130);
-
-//     try std.testing.expectEqual(crds_table.failed_inserts_len(), 0);
-// }
-
-test "gossip.crds_table: trim pruned values" {
+test "gossip.HashTimeQueue: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
