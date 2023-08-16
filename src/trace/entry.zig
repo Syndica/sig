@@ -4,6 +4,7 @@ const Field = @import("field.zig").Field;
 const Level = @import("level.zig").Level;
 const logfmt = @import("logfmt.zig");
 const Logger = @import("./log.zig").Logger;
+const Channel = @import("../sync/channel.zig").Channel;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -14,17 +15,17 @@ pub const Entry = struct {
     fields: std.ArrayList(Field),
     time: time.DateTime,
     message: std.ArrayList(u8),
-    logger: *Logger,
+    channel: *Channel(*Entry),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, logger: *Logger) *Self {
+    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*Entry)) *Self {
         var self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
         self.* = Self{
             .allocator = allocator,
             .fields = std.ArrayList(Field).init(allocator),
             .level = Level.debug,
-            .logger = logger,
+            .channel = channel,
             .time = time.DateTime.epoch_unix,
             .message = std.ArrayList(u8).init(allocator),
         };
@@ -51,7 +52,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .info;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -60,7 +61,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .debug;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -69,7 +70,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .err;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -78,7 +79,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .warn;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn info(self: *Self, comptime msg: []const u8) void {
@@ -87,7 +88,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .info;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn debug(self: *Self, comptime msg: []const u8) void {
@@ -96,7 +97,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .debug;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn err(self: *Self, comptime msg: []const u8) void {
@@ -105,7 +106,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .err;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn warn(self: *Self, comptime msg: []const u8) void {
@@ -114,7 +115,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .warn;
-        self.logger.appendEntry(self);
+        self.channel.send(self);
     }
 
     pub fn format(
@@ -139,7 +140,8 @@ const A = enum(u8) {
 test "trace.entry: should info log correctly" {
     var logger = Logger.init(testing.allocator, Level.info);
     defer logger.deinit();
-    var entry = Entry.init(testing.allocator, logger);
+    var entry = Entry.init(testing.allocator, &logger.channel);
+    defer entry.deinit();
 
     var anull: ?u8 = null;
 

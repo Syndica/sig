@@ -120,7 +120,7 @@ fn valToValue(allocator: Allocator, val: anytype) Value {
                 .Slice => {
                     if (@TypeOf(info.child) == u8) {
                         var str = allocator.alloc(u8, info.size) catch unreachable;
-                        @memcpy(str, val);
+                        @memcpy(str, val[0..]);
                         return .{ .string = str };
                     } else {
                         @compileError("┓\n|\n|--> Invalid field type: can only create value for []u8, not type '" ++ @typeName(@TypeOf(val)) ++ "'\n\n");
