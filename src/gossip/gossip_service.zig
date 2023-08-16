@@ -792,8 +792,8 @@ test "gossip.gossip_service: test packet verification" {
 
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{
         allocator,
-        &packet_channel,
-        &verified_channel,
+        packet_channel,
+        verified_channel,
     });
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -884,7 +884,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.process_packets,
-        .{ allocator, &crds_table, &verified_channel, logger },
+        .{ allocator, &crds_table, verified_channel, logger },
     );
 
     // send a push message
