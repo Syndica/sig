@@ -2,6 +2,8 @@
 
 The Solana gossip protocol is a variation of the ["Plum Tree"](https://www.dpss.inesc-id.pt/~ler/reports/srds07.pdf).
 
+For an introduction to Solana's gossip protocol, checkout the technical sections of this [blogpost](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/).
+
 ## File outline 
 
 - `crds_table.zig`: where gossip data is stored 
@@ -9,8 +11,8 @@ The Solana gossip protocol is a variation of the ["Plum Tree"](https://www.dpss.
 - `pull_request.zig`: logic for sending pull *requests* 
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
 - `crds_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `crds_table` and constructing pull responses
-- `ping_pong.zig`: logic for sending ping/pong messages as a heartbeat check
 - `active_set.zig`: logic for deriving list of peers to send push messages to
+- `ping_pong.zig`: logic for sending ping/pong messages as a heartbeat check
 
 ## Gossip Datastructures and Datatypes
 
@@ -410,6 +412,10 @@ Because sometimes there are more CRDS values to push than can fit inside one of 
 
 The solana-labs rust implementation uses stake weight information to build their `ActiveSet`. However, since Sig doesnt have stake weight information implemented yet, in our implementation, we randomly sample a number of nodes stored in the CRDS table. This set of nodes is reset and periodically re-sampled to reduce the chance of eclipse attacks.
 
+<div align="center">
+<img src="imgs/2023-08-16-14-54-46.png" width="350" height="250">
+</div>
+
 #### Solana-Labs' Active Set
 
 For completness, the solana-labs client's `ActiveSet` implementation is also worth discussing. Their `PushActiveSet` contains multiple `PushActiveSetEntry` structs where each `Entry` corresponds to a different probability distribution over possible nodes to be included in the active set. 
@@ -420,13 +426,18 @@ When building the active set, the local node's stake weight decides which entry 
 
 This means, **high stake nodes are more likely to send push messages to other high stake nodes, while low stake nodes send push messages to random nodes**.
 
+
+<div align="center">
+<img src="imgs/2023-08-16-15-55-21.png" width="350" height="250">
+</div>
+
 ### Recieving Push Messages 
 
 When recieving a new `PushMessage`, the values are inserted into the CrdsTable. While inserting these values, duplicate/values which failed the insertion are tracked, and the nodes who sent those values are sent prune messages to say, 'stop sending me this duplicate data'.
 
 ## Protocol Message: Prune Messages
 
-## Sending Prune Message
+### Sending Prune Message
 
 A Prune message is defined as follows: 
 
@@ -472,7 +483,7 @@ def handle_push_message(
 
 *Note:* in the solana-labs client, to compute what nodes to send a prune message to, it uses the number of duplicates sent, along with the nodes stake weight and a minimum number of nodes to keep - since Sig doesnt have stake weight information, we follow a simpler approach and prune any values which fail insertion. 
 
-## Recieving Prune Messages
+### Recieving Prune Messages
 
 When a prune messages is received, we track which `from_address` pruned a specific `origin` using a `HashMap(from_address: Pubkey, origin_bloom: Bloom)` where  `from_address: Pubkey` is the address which sent the prune message to a `Bloom` filter which origins are inserted into.
 
