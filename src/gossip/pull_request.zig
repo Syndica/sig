@@ -244,7 +244,7 @@ test "gossip.pull: test build_crds_filters" {
             .LegacyContactInfo = legacy_contact_info,
         }, kp);
 
-        try crds_table.insert(crds_value, 0, null);
+        try crds_table.insert(crds_value, 0);
     }
 
     const max_bytes = 2;

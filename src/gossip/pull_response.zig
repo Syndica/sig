@@ -91,7 +91,7 @@ test "gossip.pull: test filter_crds_values" {
 
     for (0..100) |_| {
         var crds_value = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(crds_value, 0, null);
+        try crds_table.insert(crds_value, 0);
     }
 
     const max_bytes = 10;
@@ -121,7 +121,7 @@ test "gossip.pull: test filter_crds_values" {
     // insert more values which the filters should be missing
     for (0..64) |_| {
         var v2 = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(v2, 0, null);
+        try crds_table.insert(v2, 0);
     }
 
     var values = try filter_crds_values(

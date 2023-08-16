@@ -1,4 +1,3 @@
-
 /// ***ShredVersion***
 /// Currently it's being manually set.
 ///

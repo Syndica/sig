@@ -99,11 +99,11 @@ pub const Logger = struct {
     }
 
     pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.allocator, self).warn(fmt, args);
+        Entry.init(self.allocator, self).warnf(fmt, args);
     }
 
     pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.allocator, self).err(fmt, args);
+        Entry.init(self.allocator, self).errf(fmt, args);
     }
 
     pub fn appendEntry(self: *Self, e: *Entry) void {

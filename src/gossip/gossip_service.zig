@@ -40,9 +40,6 @@ const CRDS_GOSSIP_PUSH_FANOUT = @import("../gossip/active_set.zig").CRDS_GOSSIP_
 const Hash = @import("../core/hash.zig").Hash;
 const HashTimeQueue = _crds_table.HashTimeQueue;
 
-var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa = gpa_allocator.allocator();
-
 const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_addr: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
@@ -501,7 +498,7 @@ pub const GossipService = struct {
         defer crds_table.release_write();
 
         while (push_msg_queue.popOrNull()) |crds_value| {
-            crds_table.insert(crds_value, wallclock, GossipRoute.LocalMessage) catch {};
+            crds_table.insert(crds_value, wallclock) catch {};
         }
     }
 
@@ -651,6 +648,65 @@ pub const GossipService = struct {
         logger.debugf("reading gossip exiting...", .{});
     }
 
+    pub fn handle_push_message(
+        push_from: Pubkey,
+        push_values: []CrdsValue,
+        allocator: std.mem.Allocator,
+        crds_table: *CrdsTable,
+        my_keypair: *KeyPair,
+        logger: *Logger,
+    ) !std.ArrayList(Packet) {
+        const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+
+        const failed_insert_indexs = insert_crds_values(
+            allocator,
+            crds_table,
+            push_values,
+            logger,
+            CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
+        );
+        defer failed_insert_indexs.deinit();
+
+        // handle prune messages
+        const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
+            return error.CantFindContactInfo;
+        };
+        const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
+        try crds.sanitize_socket(&from_gossip_addr);
+
+        var n_packets = failed_insert_indexs.items.len / MAX_PRUNE_DATA_NODES;
+        var prune_packets = try std.ArrayList(Packet).initCapacity(allocator, n_packets);
+
+        var failed_origins = try std.ArrayList(Pubkey).initCapacity(allocator, MAX_PRUNE_DATA_NODES);
+        defer failed_origins.deinit();
+
+        const now = get_wallclock();
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        for (failed_insert_indexs.items, 0..) |insert_index, i| {
+            const origin = push_values[insert_index].id();
+            // TODO: account for duplicate origin values? (to reduce egress)
+            failed_origins.appendAssumeCapacity(origin);
+
+            const is_last_iter = i == failed_insert_indexs.items.len - 1;
+            if (failed_origins.items.len == MAX_PRUNE_DATA_NODES or is_last_iter) {
+                // create protocol message
+                var prune_data = PruneData.init(my_pubkey, failed_origins.items, push_from, now);
+                try prune_data.sign(my_keypair);
+
+                // put it into a packet
+                var msg = Protocol{ .PruneMessage = .{ my_pubkey, prune_data } };
+                var msg_slice = try bincode.writeToSlice(&buf, msg, bincode.Params{});
+                var packet = Packet.init(from_gossip_addr.toEndpoint(), buf, msg_slice.len);
+                try prune_packets.append(packet);
+
+                // reset array
+                failed_origins.clearRetainingCapacity();
+            }
+        }
+
+        return prune_packets;
+    }
+
     pub fn process_protocol_messages(
         allocator: std.mem.Allocator,
         crds_table: *CrdsTable,
@@ -674,56 +730,22 @@ pub const GossipService = struct {
 
             var message = protocol_message.message;
             var from_addr = protocol_message.from_addr;
+            _ = from_addr;
 
             switch (message) {
                 .PushMessage => |*push| {
-                    const values = push[1];
-                    const failed_insert_indexs = insert_crds_values(
+                    const prune_packets = handle_push_message(
+                        push[0],
+                        push[1],
                         allocator,
                         crds_table,
-                        values,
+                        my_keypair,
                         logger,
-                        GossipRoute.PushMessage,
-                        CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
-                    );
-                    defer failed_insert_indexs.deinit();
-
-                    // handle prune messages
-                    const from_pubkey = push[0];
-                    const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = from_pubkey }) orelse continue;
-                    const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
-                    crds.sanitize_socket(&from_gossip_addr) catch continue;
-
-                    var n_packets = failed_insert_indexs.items.len / MAX_PRUNE_DATA_NODES;
-                    var prune_packets = try std.ArrayList(Packet).initCapacity(allocator, n_packets);
+                    ) catch |err| {
+                        logger.warnf("error handling push message: {s}", .{@errorName(err)});
+                        continue;
+                    };
                     defer prune_packets.deinit();
-
-                    var failed_origins = try std.ArrayList(Pubkey).initCapacity(allocator, MAX_PRUNE_DATA_NODES);
-                    defer failed_origins.deinit();
-
-                    const now = get_wallclock();
-                    var buf: [PACKET_DATA_SIZE]u8 = undefined;
-                    for (failed_insert_indexs.items, 0..) |insert_index, i| {
-                        const origin = values[insert_index].id();
-                        // TODO: account for duplicate origin values? (to reduce egress)
-                        failed_origins.appendAssumeCapacity(origin);
-
-                        const is_last_iter = i == failed_insert_indexs.items.len - 1;
-                        if (failed_origins.items.len == MAX_PRUNE_DATA_NODES or is_last_iter) {
-                            // create protocol message
-                            var prune_data = PruneData.init(my_pubkey, failed_origins.items, from_pubkey, now);
-                            try prune_data.sign(my_keypair);
-
-                            // put it into a packet
-                            var msg = Protocol{ .PruneMessage = .{ my_pubkey, prune_data } };
-                            var msg_slice = try bincode.writeToSlice(&buf, msg, bincode.Params{});
-                            var packet = Packet.init(from_addr, buf, msg_slice.len);
-                            try prune_packets.append(packet);
-
-                            // reset array
-                            failed_origins.clearRetainingCapacity();
-                        }
-                    }
 
                     for (prune_packets.items) |packet| {
                         responder_channel.send(packet);
@@ -736,7 +758,6 @@ pub const GossipService = struct {
                         crds_table,
                         values,
                         logger,
-                        GossipRoute.PullResponse,
                         CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
                     );
                     defer failed_insert_indexs.deinit();
@@ -817,7 +838,6 @@ pub const GossipService = struct {
         crds_table: *CrdsTable,
         values: []crds.CrdsValue,
         logger: *Logger,
-        route: GossipRoute,
         timeout: u64,
     ) std.ArrayList(usize) {
         var now = get_wallclock();
@@ -834,7 +854,7 @@ pub const GossipService = struct {
                 continue;
             }
 
-            crds_table.insert(value, now, route) catch |err| {
+            crds_table.insert(value, now) catch |err| {
                 switch (err) {
                     CrdsError.OldValue => {
                         logger.debugf("failed to insert into crds: {any}", .{value});
@@ -869,7 +889,7 @@ test "gossip.gossip_service: new pull messages" {
 
     for (0..20) |_| {
         var value = try CrdsValue.random(rng.random(), keypair);
-        try crds_table.insert(value, get_wallclock(), null);
+        try crds_table.insert(value, get_wallclock());
     }
 
     var id = Pubkey.fromPublicKey(&keypair.public_key, true);
@@ -905,7 +925,7 @@ test "gossip.gossip_service: new push messages" {
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
         var value = try CrdsValue.random_with_index(rng.random(), keypair, 0); // contact info
-        try crds_table.insert(value, get_wallclock(), null);
+        try crds_table.insert(value, get_wallclock());
     }
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);

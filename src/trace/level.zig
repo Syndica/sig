@@ -1,4 +1,3 @@
-
 pub const Level = enum {
     /// Error: something has gone wrong. This might be recoverable or might
     /// be followed by the program exiting.

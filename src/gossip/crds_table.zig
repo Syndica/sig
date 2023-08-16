@@ -27,12 +27,6 @@ pub const CrdsError = error{
     DuplicateValue,
 };
 
-pub const GossipRoute = enum {
-    LocalMessage,
-    PullResponse,
-    PushMessage,
-};
-
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 // TODO: benchmark other structs?
 const PurgedQ = std.TailQueue(HashAndTime);
@@ -121,10 +115,7 @@ pub const CrdsTable = struct {
         return self.store.count();
     }
 
-    pub fn insert(self: *Self, value: CrdsValue, now: u64, maybe_route: ?GossipRoute) !void {
-        // TODO: clean up?
-        _ = maybe_route;
-
+    pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
         // TODO: check to make sure this sizing is correct or use heap
 
         var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
@@ -416,7 +407,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     defer crds_table.deinit();
 
     // timestamp = 100
-    try crds_table.insert(value, 100, null);
+    try crds_table.insert(value, 100);
 
     // should lead to prev being pruned
     var new_data = CrdsData{
@@ -426,7 +417,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
     value = try CrdsValue.initSigned(new_data, keypair);
-    try crds_table.insert(value, 120, null);
+    try crds_table.insert(value, 120);
 
     try std.testing.expectEqual(crds_table.purged.len(), 1);
 
@@ -447,7 +438,7 @@ test "gossip.crds_table: insert and get" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    try crds_table.insert(value, 0, null);
+    try crds_table.insert(value, 0);
 
     const label = value.label();
     const x = crds_table.get(label).?;
@@ -467,7 +458,7 @@ test "gossip.crds_table: insert and get votes" {
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
-    try crds_table.insert(crds_value, 0, null);
+    try crds_table.insert(crds_value, 0);
 
     var cursor: usize = 0;
     var buf: [100]CrdsVersionedValue = undefined;
@@ -485,7 +476,7 @@ test "gossip.crds_table: insert and get votes" {
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
     }, kp);
-    try crds_table.insert(crds_value, 1, null);
+    try crds_table.insert(crds_value, 1);
 
     votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
@@ -508,7 +499,7 @@ test "gossip.crds_table: insert and get contact_info" {
     defer crds_table.deinit();
 
     // test insertion
-    try crds_table.insert(crds_value, 0, null);
+    try crds_table.insert(crds_value, 0);
 
     // test retrieval
     var buf: [100]CrdsVersionedValue = undefined;
@@ -517,13 +508,13 @@ test "gossip.crds_table: insert and get contact_info" {
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
     // test re-insertion
-    const result = crds_table.insert(crds_value, 0, null);
+    const result = crds_table.insert(crds_value, 0);
     try std.testing.expectError(CrdsError.DuplicateValue, result);
 
     // test re-insertion with greater wallclock
     crds_value.data.LegacyContactInfo.wallclock += 2;
     const v = crds_value.data.LegacyContactInfo.wallclock;
-    try crds_table.insert(crds_value, 0, null);
+    try crds_table.insert(crds_value, 0);
 
     // check retrieval
     nodes = try crds_table.get_contact_infos(&buf);

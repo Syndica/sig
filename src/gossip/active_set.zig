@@ -145,7 +145,7 @@ test "gossip.active_set: init/deinit" {
     for (0..CRDS_GOSSIP_PUSH_FANOUT) |_| {
         var keypair = try KeyPair.create(null);
         var value = try CrdsValue.random_with_index(rng.random(), keypair, 0);
-        try crds_table.insert(value, get_wallclock(), null);
+        try crds_table.insert(value, get_wallclock());
     }
 
     var kp = try KeyPair.create(null);
