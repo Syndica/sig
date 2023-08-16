@@ -31,11 +31,10 @@ pub const Logger = struct {
             .handle = null,
             .channel = Channel(*Entry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
         };
-        self.spawn();
         return self;
     }
 
-    fn spawn(self: *Self) void {
+    pub fn spawn(self: *Self) void {
         self.handle = std.Thread.spawn(.{}, Logger.run, .{self}) catch @panic("could not spawn Logger");
     }
 

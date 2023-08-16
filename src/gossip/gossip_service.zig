@@ -57,11 +57,11 @@ pub const GossipService = struct {
     cluster_info: *ClusterInfo,
     gossip_socket: UdpSocket,
     exit_sig: AtomicBool,
-    packet_channel: PacketChannel,
-    responder_channel: PacketChannel,
+    packet_channel: *PacketChannel,
+    responder_channel: *PacketChannel,
     crds_table: CrdsTable,
     allocator: std.mem.Allocator,
-    verified_channel: ProtocolChannel,
+    verified_channel: *ProtocolChannel,
 
     active_set: ActiveSet,
     push_msg_queue: std.ArrayList(CrdsValue),
@@ -113,18 +113,18 @@ pub const GossipService = struct {
         // process input threads
         var receiver_handle = try Thread.spawn(.{}, Self.read_gossip_socket, .{
             &self.gossip_socket,
-            &self.packet_channel,
+            self.packet_channel,
             logger,
         });
         var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
             self.allocator,
-            &self.packet_channel,
-            &self.verified_channel,
+            self.packet_channel,
+            self.verified_channel,
         });
         var packet_handle = try Thread.spawn(.{}, Self.process_packets, .{
             self.allocator,
             &self.crds_table,
-            &self.verified_channel,
+            self.verified_channel,
             logger,
         });
 
@@ -792,8 +792,8 @@ test "gossip.gossip_service: test packet verification" {
 
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{
         allocator,
-        &packet_channel,
-        &verified_channel,
+        packet_channel,
+        verified_channel,
     });
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -884,7 +884,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.process_packets,
-        .{ allocator, &crds_table, &verified_channel, logger },
+        .{ allocator, &crds_table, verified_channel, logger },
     );
 
     // send a push message
