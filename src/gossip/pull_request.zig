@@ -30,7 +30,7 @@ pub fn build_crds_filters(
     max_n_filters: usize,
 ) !ArrayList(CrdsFilter) {
     crds_table.read();
-    defer crds_table.release_read();
+    errdefer crds_table.release_read(); // ensure lock is released even on errors
 
     const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
@@ -54,6 +54,7 @@ pub fn build_crds_filters(
     for (failed_pull_hashes.items) |hash| {
         filter_set.add(&hash);
     }
+    crds_table.release_read();
 
     // note: filter set is deinit() in this fcn
     const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);

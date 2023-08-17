@@ -110,6 +110,9 @@ pub const ActiveSet = struct {
         errdefer active_set_endpoints.deinit();
 
         // change to while loop
+        crds_table.read();
+        errdefer crds_table.release_read();
+
         for (self.peers[0..self.len]) |peer_pubkey| {
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
@@ -129,6 +132,7 @@ pub const ActiveSet = struct {
                 break;
             }
         }
+        crds_table.release_read();
 
         return active_set_endpoints;
     }

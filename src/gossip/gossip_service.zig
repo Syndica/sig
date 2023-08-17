@@ -351,6 +351,7 @@ pub const GossipService = struct {
         std.debug.assert(MAX_SIZE == nodes.len);
 
         crds_table.read();
+        errdefer crds_table.release_read();
         var buf: [MAX_SIZE]crds.CrdsVersionedValue = undefined;
         const contact_infos = try crds_table.get_contact_infos(&buf);
         crds_table.release_read();
@@ -489,7 +490,7 @@ pub const GossipService = struct {
         push_msg_queue: *std.ArrayList(CrdsValue),
         push_msg_queue_lock: *std.Thread.Mutex,
     ) !void {
-        const wallclock = get_wallclock();
+        const now = get_wallclock();
 
         push_msg_queue_lock.lock();
         defer push_msg_queue_lock.unlock();
@@ -498,7 +499,7 @@ pub const GossipService = struct {
         defer crds_table.release_write();
 
         while (push_msg_queue.popOrNull()) |crds_value| {
-            crds_table.insert(crds_value, wallclock) catch {};
+            crds_table.insert(crds_value, now) catch {};
         }
     }
 
@@ -513,6 +514,7 @@ pub const GossipService = struct {
         // TODO: find a better static value?
         var buf: [512]crds.CrdsVersionedValue = undefined;
         crds_table.read();
+        errdefer crds_table.release_read();
         var crds_entries = try crds_table.get_entries_with_cursor(&buf, push_cursor);
         crds_table.release_read();
 
@@ -526,6 +528,7 @@ pub const GossipService = struct {
         defer push_messages.deinit();
 
         active_set_lock.lockShared();
+        errdefer active_set_lock.unlockShared();
 
         var num_values_considered: usize = 0;
         for (crds_entries) |entry| {
@@ -673,9 +676,13 @@ pub const GossipService = struct {
             return std.ArrayList(Packet).init(allocator);
         }
 
+        crds_table.read();
         const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
+            crds_table.release_read();
             return error.CantFindContactInfo;
         };
+        crds_table.release_read();
+
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
         try crds.sanitize_socket(&from_gossip_addr);
 
