@@ -481,6 +481,10 @@ def handle_push_message(
 }
 ```
 
+<div align="center">
+<img src="imgs/2023-08-17-11-46-12.png" width="350" height="250">
+</div>
+
 *Note:* in the solana-labs client, to compute what nodes to send a prune message to, it uses the number of duplicates sent, along with the nodes stake weight and a minimum number of nodes to keep - since Sig doesnt have stake weight information, we follow a simpler approach and prune any values which fail insertion. 
 
 ### Recieving Prune Messages

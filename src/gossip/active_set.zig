@@ -31,7 +31,7 @@ const BLOOM_MAX_BITS: usize = 1024 * 8 * 4;
 pub const ActiveSet = struct {
     // store pubkeys as keys in crds table bc the data can change
     peers: [NUM_ACTIVE_SET_ENTRIES]Pubkey,
-    pruned_nodes: std.AutoHashMap(Pubkey, Bloom),
+    pruned_peers: std.AutoHashMap(Pubkey, Bloom),
     len: u8 = 0,
 
     const Self = @This();
@@ -57,7 +57,7 @@ pub const ActiveSet = struct {
         var pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(alloc);
 
         if (crds_peers.len == 0) {
-            return Self{ .peers = peers, .len = 0, .pruned_nodes = pruned_peers };
+            return Self{ .peers = peers, .len = 0, .pruned_peers = pruned_peers };
         }
 
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
@@ -81,20 +81,20 @@ pub const ActiveSet = struct {
         return Self{
             .peers = peers,
             .len = size,
-            .pruned_nodes = pruned_peers,
+            .pruned_peers = pruned_peers,
         };
     }
 
     pub fn deinit(self: *Self) void {
         for (self.peers[0..self.len]) |peer| {
-            var entry = self.pruned_nodes.getEntry(peer).?;
+            var entry = self.pruned_peers.getEntry(peer).?;
             entry.value_ptr.deinit();
         }
-        self.pruned_nodes.deinit();
+        self.pruned_peers.deinit();
     }
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
-        if (self.pruned_nodes.getEntry(from)) |entry| {
+        if (self.pruned_peers.getEntry(from)) |entry| {
             const origin_bytes = origin.data;
             entry.value_ptr.add(&origin_bytes);
         }
@@ -118,7 +118,7 @@ pub const ActiveSet = struct {
 
             crds.sanitize_socket(&peer_gossip_addr) catch continue;
 
-            const entry = self.pruned_nodes.getEntry(peer_pubkey).?;
+            const entry = self.pruned_peers.getEntry(peer_pubkey).?;
             const origin_bytes = origin.data;
             if (entry.value_ptr.contains(&origin_bytes)) {
                 continue;

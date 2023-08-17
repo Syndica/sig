@@ -17,6 +17,8 @@ const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
+const Logger = @import("../trace/log.zig").Logger;
+
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -213,6 +215,43 @@ pub const CrdsTable = struct {
                 return CrdsError.DuplicateValue;
             }
         }
+    }
+
+    pub fn insert_values(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        values: []crds.CrdsValue,
+        timeout: u64,
+        logger: *Logger,
+    ) std.ArrayList(usize) {
+        var now = crds.get_wallclock();
+
+        var failed_insert_indexs = std.ArrayList(usize).init(allocator);
+        for (values, 0..) |value, index| {
+            const value_time = value.wallclock();
+            const is_too_new = value_time > now +| timeout;
+            const is_too_old = value_time < now -| timeout;
+            if (is_too_new or is_too_old) {
+                continue;
+            }
+
+            self.insert(value, now) catch |err| {
+                switch (err) {
+                    CrdsError.OldValue => {
+                        logger.debugf("failed to insert into crds: OldValue", .{});
+                    },
+                    CrdsError.DuplicateValue => {
+                        logger.debugf("failed to insert into crds: DuplicateValue", .{});
+                    },
+                    else => {
+                        logger.debugf("failed to insert into crds with unkown error: {any}", .{err});
+                    },
+                }
+                failed_insert_indexs.append(index) catch unreachable;
+            };
+        }
+
+        return failed_insert_indexs;
     }
 
     // ** getter functions **

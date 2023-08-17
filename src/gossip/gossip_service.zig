@@ -658,13 +658,14 @@ pub const GossipService = struct {
     ) !std.ArrayList(Packet) {
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
 
-        const failed_insert_indexs = insert_crds_values(
+        crds_table.write();
+        const failed_insert_indexs = crds_table.insert_values(
             allocator,
-            crds_table,
             push_values,
-            logger,
             CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
+            logger,
         );
+        crds_table.release_write();
         defer failed_insert_indexs.deinit();
 
         // handle prune messages
@@ -757,13 +758,16 @@ pub const GossipService = struct {
                 },
                 .PullResponse => |*pull| {
                     const values = pull[1];
-                    const failed_insert_indexs = insert_crds_values(
+
+                    crds_table.write();
+                    const failed_insert_indexs = crds_table.insert_values(
                         allocator,
-                        crds_table,
                         values,
-                        logger,
                         CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
+                        logger,
                     );
+                    crds_table.release_write();
+
                     defer failed_insert_indexs.deinit();
 
                     // track failed inserts to use when constructing
@@ -835,46 +839,6 @@ pub const GossipService = struct {
                 },
             }
         }
-    }
-
-    pub fn insert_crds_values(
-        allocator: std.mem.Allocator,
-        crds_table: *CrdsTable,
-        values: []crds.CrdsValue,
-        logger: *Logger,
-        timeout: u64,
-    ) std.ArrayList(usize) {
-        var now = get_wallclock();
-
-        crds_table.write();
-        defer crds_table.release_write();
-
-        var failed_insert_indexs = std.ArrayList(usize).init(allocator);
-        for (values, 0..) |value, index| {
-            const value_time = value.wallclock();
-            const is_too_new = value_time > now +| timeout;
-            const is_too_old = value_time < now -| timeout;
-            if (is_too_new or is_too_old) {
-                continue;
-            }
-
-            crds_table.insert(value, now) catch |err| {
-                switch (err) {
-                    CrdsError.OldValue => {
-                        logger.debugf("failed to insert into crds: {any}", .{value});
-                    },
-                    CrdsError.DuplicateValue => {
-                        logger.debugf("failed to insert into crds: {any}", .{value});
-                    },
-                    else => {
-                        logger.debugf("failed to insert into crds with unkown error: {any}", .{err});
-                    },
-                }
-                failed_insert_indexs.append(index) catch unreachable;
-            };
-        }
-
-        return failed_insert_indexs;
     }
 };
 
