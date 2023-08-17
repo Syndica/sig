@@ -522,11 +522,24 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
     var writer = stream.writer();
+
     var s = serializer(writer, params);
     const ss = s.serializer();
 
     try getty.serialize(null, data, ss);
     return stream.getWritten();
+}
+
+pub fn writeToArray(alloc: std.mem.Allocator, data: anytype, params: Params) !std.ArrayList(u8) {
+    // var array_buf = try std.ArrayList(u8).initCapacity(alloc, @bitSizeOf(@TypeOf(data)));
+    var array_buf = try std.ArrayList(u8).initCapacity(alloc, 2048);
+
+    var s = serializer(array_buf.writer(), params);
+    const ss = s.serializer();
+
+    try getty.serialize(alloc, data, ss);
+
+    return array_buf;
 }
 
 pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: Params) !void {
@@ -536,13 +549,8 @@ pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: 
 }
 
 pub fn get_serialized_size(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
-    var list = try std.ArrayList(u8).initCapacity(alloc, @bitSizeOf(@TypeOf(data)));
+    var list = try writeToArray(alloc, data, params);
     defer list.deinit();
-
-    var writer = list.writer();
-    var s = serializer(writer, params);
-    const ss = s.serializer();
-    try getty.serialize(alloc, data, ss);
 
     return list.items.len;
 }
@@ -705,6 +713,11 @@ test "bincode: test serialization" {
     var out4 = try writeToSlice(&buf6, _s, Params.standard);
     var result = try readFromSlice(null, s, out4, Params{});
     try std.testing.expectEqual(result, _s);
+
+    // ensure write to array works too
+    var array_buf = try writeToArray(std.testing.allocator, _s, Params.standard);
+    defer array_buf.deinit();
+    try std.testing.expectEqualSlices(u8, out4, array_buf.items);
 }
 
 test "bincode: (legacy) serialize an array" {

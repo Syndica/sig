@@ -24,6 +24,8 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 
+pub const CRDS_UNIQUE_PUBKEY_CAPACITY: usize = 8192;
+
 pub const CrdsError = error{
     OldValue,
     DuplicateValue,
@@ -32,6 +34,11 @@ pub const CrdsError = error{
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 // TODO: benchmark other structs?
 const PurgedQ = std.TailQueue(HashAndTime);
+
+// indexable HashSet
+pub fn AutoArrayHashSet(comptime T: type) type {
+    return AutoArrayHashMap(T, void);
+}
 
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
@@ -49,7 +56,7 @@ pub const CrdsTable = struct {
     store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
 
     // special types tracked with their index
-    contact_infos: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
+    contact_infos: AutoArrayHashSet(usize),
     votes: AutoArrayHashMap(usize, usize),
     epoch_slots: AutoArrayHashMap(usize, usize),
     duplicate_shreds: AutoArrayHashMap(usize, usize),
@@ -57,6 +64,9 @@ pub const CrdsTable = struct {
 
     // tracking for cursor to index
     entries: AutoArrayHashMap(u64, usize),
+
+    // Indices of all crds values associated with a node.
+    node_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
 
     // used to build pull responses efficiently
     shards: CrdsShards,
@@ -70,19 +80,23 @@ pub const CrdsTable = struct {
     // thread safe
     lock: RwLock = .{},
 
+    allocator: std.mem.Allocator,
+
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
-            .contact_infos = AutoArrayHashMap(usize, void).init(allocator),
+            .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
+            .node_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
             .shards = try CrdsShards.init(allocator),
             .purged = HashTimeQueue.init(),
+            .allocator = allocator,
         };
     }
 
@@ -93,8 +107,9 @@ pub const CrdsTable = struct {
         self.votes.deinit();
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
-        self.shards.deinit();
         self.entries.deinit();
+        self.node_to_values.deinit();
+        self.shards.deinit();
     }
 
     pub fn write(self: *Self) void {
@@ -118,11 +133,9 @@ pub const CrdsTable = struct {
     }
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
-        // TODO: check to make sure this sizing is correct or use heap
-
-        var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
-        var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
-        const value_hash = Hash.generateSha256Hash(bytes);
+        const bytes = try bincode.writeToArray(self.allocator, value, bincode.Params.standard);
+        const value_hash = Hash.generateSha256Hash(bytes.items);
+        bytes.deinit();
         const versioned_value = CrdsVersionedValue{
             .value = value,
             .value_hash = value_hash,
@@ -133,6 +146,7 @@ pub const CrdsTable = struct {
         const label = value.label();
         var result = try self.store.getOrPut(label);
         const entry_index = result.index;
+        const origin = value.id();
 
         // entry doesnt exist
         if (!result.found_existing) {
@@ -156,6 +170,15 @@ pub const CrdsTable = struct {
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
             try self.entries.put(self.cursor, entry_index);
+
+            const maybe_node_entry = self.node_to_values.getEntry(origin);
+            if (maybe_node_entry) |node_entry| {
+                try node_entry.value_ptr.put(entry_index, {});
+            } else {
+                var indexs = AutoArrayHashSet(usize).init(self.allocator);
+                try indexs.put(entry_index, {});
+                try self.node_to_values.put(origin, indexs);
+            }
 
             result.value_ptr.* = versioned_value;
 
@@ -195,6 +218,10 @@ pub const CrdsTable = struct {
             const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
             std.debug.assert(did_remove);
             try self.entries.put(self.cursor, entry_index);
+
+            // As long as the pubkey does not change, self.records
+            // does not need to be updated.
+            std.debug.assert(old_entry.value.id().equals(&origin));
 
             self.purged.insert(old_entry.value_hash, now);
 
@@ -366,6 +393,11 @@ pub const CrdsTable = struct {
     ) !std.ArrayList(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
+    }
+
+    // ** triming values in the crdstable **
+    pub fn attempt_trim(self: *Self) void {
+        _ = self;
     }
 };
 

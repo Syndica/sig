@@ -766,6 +766,8 @@ pub const GossipService = struct {
                 .PullResponse => |*pull| {
                     const values = pull[1];
 
+                    // TODO: filter the values
+
                     crds_table.write();
                     const failed_insert_indexs = crds_table.insert_values(
                         allocator,
