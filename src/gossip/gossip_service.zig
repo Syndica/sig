@@ -320,12 +320,12 @@ pub const GossipService = struct {
                 // reset push active set
                 self.active_set_lock.lock();
                 self.active_set.deinit();
-                self.active_set = try ActiveSet.rotate(
+                self.active_set = ActiveSet.rotate(
                     self.allocator,
                     &self.crds_table,
                     my_pubkey,
                     my_shred_version,
-                );
+                ) catch unreachable;
                 self.active_set_lock.unlock();
 
                 last_push_ts = get_wallclock();

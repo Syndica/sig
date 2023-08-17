@@ -47,6 +47,8 @@ pub fn filter_crds_values(
     caller_wallclock = caller_wallclock + jitter;
 
     var output = ArrayList(CrdsValue).init(alloc);
+    errdefer output.deinit();
+
     var bloom = filter.filter;
 
     var match_indexs = try crds_table.get_bitmask_matches(alloc, filter.mask, filter.mask_bits);
