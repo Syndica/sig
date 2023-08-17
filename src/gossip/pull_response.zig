@@ -36,7 +36,7 @@ pub fn filter_crds_values(
     const rng = rand.random();
 
     const jitter = rng.intRangeAtMost(u64, 0, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 4);
-    caller_wallclock = caller_wallclock + jitter;
+    const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
     var output = ArrayList(CrdsValue).init(alloc);
     errdefer output.deinit();
@@ -50,7 +50,7 @@ pub fn filter_crds_values(
         var entry = crds_table.store.iterator().values[entry_index];
 
         // entry is too new
-        if (entry.value.wallclock() > caller_wallclock) {
+        if (entry.value.wallclock() > caller_wallclock_with_jitter) {
             continue;
         }
         // entry is already contained in the bloom
@@ -121,10 +121,9 @@ test "gossip.pull: test filter_crds_values" {
     var values = try filter_crds_values(
         std.testing.allocator,
         &crds_table,
-        &crds_value,
         &filter,
         100,
-        @intCast(std.time.milliTimestamp()),
+        crds_value.wallclock(),
     );
     defer values.deinit();
 
