@@ -774,7 +774,6 @@ pub const GossipService = struct {
                         logger,
                     );
                     crds_table.release_write();
-
                     defer failed_insert_indexs.deinit();
 
                     // track failed inserts to use when constructing
@@ -800,17 +799,33 @@ pub const GossipService = struct {
                     var value = pull[1]; // contact info
                     const now = get_wallclock();
 
+                    var caller_wallclock = value.wallclock();
+                    const is_too_old = caller_wallclock < now -| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
+                    const is_too_new = caller_wallclock > now +| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
+                    if (is_too_old or is_too_new) {
+                        continue;
+                    }
+
                     const crds_values = try pull_response.filter_crds_values(
                         allocator,
                         crds_table,
-                        &value,
                         &filter,
                         100,
-                        now,
+                        caller_wallclock,
                     );
+                    defer crds_values.deinit();
 
-                    // TODO: send them out as a pull response
-                    _ = crds_values;
+                    // const protocol_msg = Protocol {
+                    //     .PullResponse = .{
+                    //         my_pubkey, crds_values.items,
+                    //     }
+                    // };
+                    // var buf: [PACKET_DATA_SIZE]u8 = undefined;
+                    // @memset(&buf, 0);
+
+                    // var buf_slice = try bincode.writeToSlice(&buf, protocol_msg, bincode.Params{});
+                    // var packet = Packet.init(from_addr, buf, buf_slice.len);
+                    // responder_channel.send(packet);
                 },
                 .PruneMessage => |*prune| {
                     const prune_msg: PruneData = prune[1];

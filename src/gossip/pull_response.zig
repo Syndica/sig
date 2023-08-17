@@ -20,22 +20,14 @@ pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 pub fn filter_crds_values(
     alloc: std.mem.Allocator,
     crds_table: *CrdsTable,
-    value: *CrdsValue,
     filter: *CrdsFilter,
     output_size_limit: usize,
-    now: u64,
+    caller_wallclock: u64,
 ) !ArrayList(CrdsValue) {
     crds_table.read();
     defer crds_table.release_read();
 
     if (output_size_limit == 0) {
-        return ArrayList(CrdsValue).init(alloc);
-    }
-
-    var caller_wallclock = value.wallclock();
-    const is_too_old = caller_wallclock < now -| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
-    const is_too_new = caller_wallclock > now +| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
-    if (is_too_old or is_too_new) {
         return ArrayList(CrdsValue).init(alloc);
     }
 
