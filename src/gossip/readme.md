@@ -413,7 +413,7 @@ Because sometimes there are more CRDS values to push than can fit inside one of 
 The solana-labs rust implementation uses stake weight information to build their `ActiveSet`. However, since Sig doesnt have stake weight information implemented yet, in our implementation, we randomly sample a number of nodes stored in the CRDS table. This set of nodes is reset and periodically re-sampled to reduce the chance of eclipse attacks.
 
 <div align="center">
-<img src="imgs/2023-08-16-14-54-46.png" width="350" height="250">
+<img src="imgs/2023-08-16-14-54-46.png" width="450" height="350">
 </div>
 
 #### Solana-Labs' Active Set
@@ -426,9 +426,8 @@ When building the active set, the local node's stake weight decides which entry 
 
 This means, **high stake nodes are more likely to send push messages to other high stake nodes, while low stake nodes send push messages to random nodes**.
 
-
 <div align="center">
-<img src="imgs/2023-08-16-15-55-21.png" width="350" height="250">
+<img src="imgs/2023-08-16-15-55-21.png" width="650" height="450">
 </div>
 
 ### Recieving Push Messages 
@@ -482,7 +481,7 @@ def handle_push_message(
 ```
 
 <div align="center">
-<img src="imgs/2023-08-17-11-46-12.png" width="350" height="250">
+<img src="imgs/2023-08-17-11-46-12.png" width="550" height="950">
 </div>
 
 *Note:* in the solana-labs client, to compute what nodes to send a prune message to, it uses the number of duplicates sent, along with the nodes stake weight and a minimum number of nodes to keep - since Sig doesnt have stake weight information, we follow a simpler approach and prune any values which fail insertion. 
