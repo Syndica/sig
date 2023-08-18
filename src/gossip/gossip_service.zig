@@ -889,6 +889,10 @@ test "gossip.gossip_service: generate prune messages" {
     // insert contact info to send prunes to
     var contact_info = crds.LegacyContactInfo.random(rng.random());
     contact_info.id = push_from;
+    // valid socket addr
+    var gossip_socket = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 20);
+    contact_info.gossip = gossip_socket;
+
     var ci_value = try CrdsValue.initSigned(crds.CrdsData{
         .LegacyContactInfo = contact_info,
     }, kp);

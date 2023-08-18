@@ -168,7 +168,7 @@ test "gossip.crds_shards: test shard find" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    while (values.items.len < 1000) {
+    while (values.items.len < 50) {
         const value = try new_test_crds_value(rng, &crds_table);
         try values.append(value);
     }

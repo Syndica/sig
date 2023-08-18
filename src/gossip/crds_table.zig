@@ -108,8 +108,13 @@ pub const CrdsTable = struct {
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
         self.entries.deinit();
-        self.node_to_values.deinit();
         self.shards.deinit();
+
+        var iter = self.node_to_values.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.node_to_values.deinit();
     }
 
     pub fn write(self: *Self) void {
