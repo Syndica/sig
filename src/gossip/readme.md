@@ -94,6 +94,16 @@ Note the cursor value is tracked in the `CrdsVersionedValue` structure using the
 We can then use getter functions such as, `get_votes_with_cursor`, which allows you to retrieve vote `CrdsVersionedValue`s which are past a certain cursor index.
 For example, a listener would track their own cursor and periodically call the getter functions to retrieve new values.
 
+### Bounding Memory Growth
+
+The crds table is also periodically trimmed to maintian a max number of unique pubkeys so 
+memory growth is bounded. The max number of pubkeys is set to `8192` in the codebase and the method `attempt_trim` which is periodically called to remove pubkeys when we approach 90% capacity.
+
+We use the field `CrdsTable.pubkey_to_values` to track all the crds values in the table associated with a specific node pubkey. When triming we iterate over the oldest pubkeys
+and remove all their values from the table. 
+
+In the solana-labs implementation, the gossip pubkeys with the smallest stake weight are removed first, however we dont have stake weight information yet in Sig, this is future work.
+
 ## Protocol Messages
 
 Before processing protocol messages we deserialize and verify them, including:
