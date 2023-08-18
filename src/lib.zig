@@ -43,6 +43,8 @@ pub const version = struct {
 pub const sync = struct {
     pub usingnamespace @import("sync/channel.zig");
     pub usingnamespace @import("sync/mpmc.zig");
+    pub usingnamespace @import("sync/ref.zig");
+    pub usingnamespace @import("sync/mux.zig");
 };
 
 pub const utils = struct {
