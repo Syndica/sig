@@ -866,7 +866,9 @@ pub const GossipService = struct {
             }
 
             crds_table.write();
-            crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
+            crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
+            };
             crds_table.release_write();
         }
     }
