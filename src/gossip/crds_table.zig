@@ -4,9 +4,9 @@ const AutoHashMap = std.AutoHashMap;
 
 const bincode = @import("../bincode/bincode.zig");
 
-const hash_ = @import("../core/hash.zig");
-const Hash = hash_.Hash;
-const CompareResult = hash_.CompareResult;
+const _hash = @import("../core/hash.zig");
+const Hash = _hash.Hash;
+const CompareResult = _hash.CompareResult;
 
 const CrdsShards = @import("./crds_shards.zig").CrdsShards;
 

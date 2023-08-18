@@ -10,9 +10,9 @@ const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
 const SocketAddr = @import("net.zig").SocketAddr;
-const protocol_ = @import("protocol.zig");
-const Protocol = protocol_.Protocol;
-const PruneData = protocol_.PruneData;
+const _protocol = @import("protocol.zig");
+const Protocol = _protocol.Protocol;
+const PruneData = _protocol.PruneData;
 
 const Ping = @import("ping_pong.zig").Ping;
 const bincode = @import("../bincode/bincode.zig");
