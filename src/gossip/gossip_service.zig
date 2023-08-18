@@ -26,8 +26,10 @@ const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
 const CrdsError = _crds_table.CrdsError;
+const HashTimeQueue = _crds_table.HashTimeQueue;
+const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
+
 const Logger = @import("../trace/log.zig").Logger;
-const GossipRoute = _crds_table.GossipRoute;
 
 const pull_request = @import("../gossip/pull_request.zig");
 const CrdsFilter = pull_request.CrdsFilter;
@@ -38,7 +40,6 @@ const ActiveSet = @import("../gossip/active_set.zig").ActiveSet;
 const CRDS_GOSSIP_PUSH_FANOUT = @import("../gossip/active_set.zig").CRDS_GOSSIP_PUSH_FANOUT;
 
 const Hash = @import("../core/hash.zig").Hash;
-const HashTimeQueue = _crds_table.HashTimeQueue;
 
 const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_addr: EndPoint, message: Protocol };
@@ -862,6 +863,10 @@ pub const GossipService = struct {
                     _ = ping;
                 },
             }
+
+            crds_table.write();
+            crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
+            crds_table.release_write();
         }
     }
 };

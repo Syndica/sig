@@ -217,7 +217,7 @@ pub const CrdsTable = struct {
 
             // remove and insert to make sure the shard ordering is oldest-to-newest
             // NOTE: do we need the ordering to be oldest-to-newest?
-            try self.shards.remove(entry_index, &old_entry.value_hash);
+            self.shards.remove(entry_index, &old_entry.value_hash);
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
             const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
@@ -401,7 +401,7 @@ pub const CrdsTable = struct {
     }
 
     // ** triming values in the crdstable **
-    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) !void {
+    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) void {
         const n_pubkeys = self.pubkey_to_values.keys().len;
         // 90% close to capacity
         const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
@@ -437,7 +437,7 @@ pub const CrdsTable = struct {
 
                 const hash = entry_value.value_hash;
                 self.purged.insert(hash, now);
-                try self.shards.remove(entry_index, &hash);
+                self.shards.remove(entry_index, &hash);
                 {
                     var did_remove = self.entries.swapRemove(entry_value.cursor_on_insertion);
                     std.debug.assert(did_remove);
@@ -552,7 +552,7 @@ test "gossip.crds_table: trim pruned values" {
     try std.testing.expectEqual(crds_table.purged.len(), 0);
     try std.testing.expectEqual(crds_table.pubkey_to_values.count(), 10);
 
-    try crds_table.attempt_trim(5);
+    crds_table.attempt_trim(5);
 
     try std.testing.expectEqual(crds_table.len(), 5);
     try std.testing.expectEqual(crds_table.pubkey_to_values.count(), 5);
