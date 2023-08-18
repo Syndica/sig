@@ -8,8 +8,6 @@ const hash = @import("../core/hash.zig");
 const Hash = hash.Hash;
 const CompareResult = hash.CompareResult;
 
-const SocketAddr = @import("net.zig").SocketAddr;
-
 const CrdsShards = @import("./crds_shards.zig").CrdsShards;
 
 const crds = @import("./crds.zig");
@@ -18,6 +16,8 @@ const CrdsData = crds.CrdsData;
 const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
+
+const Logger = @import("../trace/log.zig").Logger;
 
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -29,16 +29,9 @@ pub const CrdsError = error{
     DuplicateValue,
 };
 
-pub const GossipRoute = enum {
-    LocalMessage,
-    PullResponse,
-    PushMessage,
-};
-
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 // TODO: benchmark other structs?
 const PurgedQ = std.TailQueue(HashAndTime);
-const FailedInsertsQ = std.TailQueue(HashAndTime);
 
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
@@ -69,8 +62,7 @@ pub const CrdsTable = struct {
     shards: CrdsShards,
 
     // used when sending pull requests
-    purged: PurgedQ,
-    failed_inserts: FailedInsertsQ,
+    purged: HashTimeQueue,
 
     // head of the store
     cursor: usize = 0,
@@ -90,8 +82,7 @@ pub const CrdsTable = struct {
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .shards = try CrdsShards.init(allocator),
-            .purged = PurgedQ{},
-            .failed_inserts = FailedInsertsQ{},
+            .purged = HashTimeQueue.init(),
         };
     }
 
@@ -126,7 +117,7 @@ pub const CrdsTable = struct {
         return self.store.count();
     }
 
-    pub fn insert(self: *Self, value: CrdsValue, now: u64, maybe_route: ?GossipRoute) !void {
+    pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
         // TODO: check to make sure this sizing is correct or use heap
 
         var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
@@ -137,7 +128,6 @@ pub const CrdsTable = struct {
             .value_hash = value_hash,
             .timestamp_on_insertion = now,
             .cursor_on_insertion = self.cursor,
-            .num_push_dups = 0,
         };
 
         const label = value.label();
@@ -206,11 +196,7 @@ pub const CrdsTable = struct {
             std.debug.assert(did_remove);
             try self.entries.put(self.cursor, entry_index);
 
-            var node = PurgedQ.Node{ .data = HashAndTime{
-                .hash = old_entry.value_hash,
-                .timestamp = now,
-            } };
-            self.purged.append(&node);
+            self.purged.insert(old_entry.value_hash, now);
 
             result.value_ptr.* = versioned_value;
 
@@ -220,29 +206,52 @@ pub const CrdsTable = struct {
         } else {
             const old_entry = result.value_ptr.*;
 
-            var node_data = HashAndTime{
-                .hash = old_entry.value_hash,
-                .timestamp = now,
-            };
-
-            if (maybe_route) |route| {
-                if (route == GossipRoute.PullResponse) {
-                    var failed_insert_node = FailedInsertsQ.Node{ .data = node_data };
-                    self.failed_inserts.append(&failed_insert_node);
-                }
-            }
-
             if (old_entry.value_hash.cmp(&versioned_value.value_hash) != CompareResult.Equal) {
                 // if hash isnt the same and override() is false then msg is old
-                var purged_node = PurgedQ.Node{ .data = node_data };
-                self.purged.append(&purged_node);
-
+                self.purged.insert(old_entry.value_hash, now);
                 return CrdsError.OldValue;
             } else {
                 // hash is the same then its a duplicate
                 return CrdsError.DuplicateValue;
             }
         }
+    }
+
+    pub fn insert_values(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        values: []crds.CrdsValue,
+        timeout: u64,
+        logger: *Logger,
+    ) std.ArrayList(usize) {
+        var now = crds.get_wallclock();
+
+        var failed_insert_indexs = std.ArrayList(usize).init(allocator);
+        for (values, 0..) |value, index| {
+            const value_time = value.wallclock();
+            const is_too_new = value_time > now +| timeout;
+            const is_too_old = value_time < now -| timeout;
+            if (is_too_new or is_too_old) {
+                continue;
+            }
+
+            self.insert(value, now) catch |err| {
+                switch (err) {
+                    CrdsError.OldValue => {
+                        logger.debugf("failed to insert into crds: OldValue", .{});
+                    },
+                    CrdsError.DuplicateValue => {
+                        logger.debugf("failed to insert into crds: DuplicateValue", .{});
+                    },
+                    else => {
+                        logger.debugf("failed to insert into crds with unkown error: {any}", .{err});
+                    },
+                }
+                failed_insert_indexs.append(index) catch unreachable;
+            };
+        }
+
+        return failed_insert_indexs;
     }
 
     // ** getter functions **
@@ -358,62 +367,51 @@ pub const CrdsTable = struct {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
     }
+};
 
-    // ** purged values fcns **
-    pub fn purged_len(self: *Self) usize {
-        return self.purged.len;
+pub const HashTimeQueue = struct {
+    const QueueT = std.TailQueue(HashAndTime);
+    queue: QueueT,
+
+    const Self = @This();
+
+    pub fn init() Self {
+        return Self{
+            .queue = std.TailQueue(HashAndTime){},
+        };
     }
 
-    pub fn get_purged_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
-        var values = try std.ArrayList(Hash).initCapacity(alloc, self.purged.len);
-
-        // collect all the hash values
-        var curr_ptr = self.purged.first;
-        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
-            values.appendAssumeCapacity(curr.data.hash);
-        }
-
-        return values;
+    pub fn len(self: *Self) usize {
+        return self.queue.len;
     }
 
-    pub fn trim_purged_values(self: *Self, oldest_timestamp: u64) !void {
-        var curr_ptr = self.purged.first;
+    pub fn insert(self: *Self, v: Hash, now: u64) void {
+        var node = PurgedQ.Node{ .data = HashAndTime{
+            .hash = v,
+            .timestamp = now,
+        } };
+        self.queue.append(&node);
+    }
+
+    pub fn trim(self: *Self, oldest_timestamp: u64) void {
+        var curr_ptr = self.queue.first;
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {
             const data_timestamp = curr.data.timestamp;
             if (data_timestamp < oldest_timestamp) {
-                self.purged.remove(curr);
+                self.queue.remove(curr);
             } else {
                 break;
             }
         }
     }
 
-    // ** failed insert values fcns **
-    pub fn failed_inserts_len(self: *Self) usize {
-        return self.failed_inserts.len;
-    }
-
-    pub fn get_failed_inserts_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
-        var values = try std.ArrayList(Hash).initCapacity(alloc, self.failed_inserts.len);
-
-        // collect all the hash values
-        var curr_ptr = self.failed_inserts.first;
+    pub fn get_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+        var hashes = try std.ArrayList(Hash).initCapacity(alloc, self.queue.len);
+        var curr_ptr = self.queue.first;
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {
-            values.appendAssumeCapacity(curr.data.hash);
+            hashes.appendAssumeCapacity(curr.data.hash);
         }
-        return values;
-    }
-
-    pub fn trim_failed_inserts_values(self: *Self, oldest_timestamp: u64) !void {
-        var curr_ptr = self.failed_inserts.first;
-        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
-            const data_timestamp = curr.data.timestamp;
-            if (data_timestamp < oldest_timestamp) {
-                self.failed_inserts.remove(curr);
-            } else {
-                break;
-            }
-        }
+        return hashes;
     }
 };
 
@@ -433,7 +431,7 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     }
 }
 
-test "gossip.crds_table: trim failed insertions" {
+test "gossip.HashTimeQueue: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
@@ -448,36 +446,7 @@ test "gossip.crds_table: trim failed insertions" {
     defer crds_table.deinit();
 
     // timestamp = 100
-    try crds_table.insert(value, 100, null);
-
-    // should lead to prev being pruned
-    value = try CrdsValue.initSigned(data, keypair);
-    const result = crds_table.insert(value, 120, GossipRoute.PullResponse);
-    try std.testing.expectError(CrdsError.DuplicateValue, result);
-
-    try std.testing.expectEqual(crds_table.failed_inserts_len(), 1);
-
-    try crds_table.trim_failed_inserts_values(130);
-
-    try std.testing.expectEqual(crds_table.failed_inserts_len(), 0);
-}
-
-test "gossip.crds_table: trim pruned values" {
-    const keypair = try KeyPair.create([_]u8{1} ** 32);
-
-    var seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-    var data = CrdsData{
-        .LegacyContactInfo = LegacyContactInfo.random(rng),
-    };
-    var value = try CrdsValue.initSigned(data, keypair);
-
-    var crds_table = try CrdsTable.init(std.testing.allocator);
-    defer crds_table.deinit();
-
-    // timestamp = 100
-    try crds_table.insert(value, 100, null);
+    try crds_table.insert(value, 100);
 
     // should lead to prev being pruned
     var new_data = CrdsData{
@@ -487,14 +456,14 @@ test "gossip.crds_table: trim pruned values" {
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
     value = try CrdsValue.initSigned(new_data, keypair);
-    try crds_table.insert(value, 120, null);
+    try crds_table.insert(value, 120);
 
-    try std.testing.expectEqual(crds_table.purged_len(), 1);
+    try std.testing.expectEqual(crds_table.purged.len(), 1);
 
     // its timestamp should be 120 so, 130 = clear pruned values
-    try crds_table.trim_purged_values(130);
+    crds_table.purged.trim(130);
 
-    try std.testing.expectEqual(crds_table.purged_len(), 0);
+    try std.testing.expectEqual(crds_table.purged.len(), 0);
 }
 
 test "gossip.crds_table: insert and get" {
@@ -508,7 +477,7 @@ test "gossip.crds_table: insert and get" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    try crds_table.insert(value, 0, null);
+    try crds_table.insert(value, 0);
 
     const label = value.label();
     const x = crds_table.get(label).?;
@@ -528,7 +497,7 @@ test "gossip.crds_table: insert and get votes" {
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
-    try crds_table.insert(crds_value, 0, null);
+    try crds_table.insert(crds_value, 0);
 
     var cursor: usize = 0;
     var buf: [100]CrdsVersionedValue = undefined;
@@ -546,7 +515,7 @@ test "gossip.crds_table: insert and get votes" {
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
     }, kp);
-    try crds_table.insert(crds_value, 1, null);
+    try crds_table.insert(crds_value, 1);
 
     votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
@@ -569,7 +538,7 @@ test "gossip.crds_table: insert and get contact_info" {
     defer crds_table.deinit();
 
     // test insertion
-    try crds_table.insert(crds_value, 0, null);
+    try crds_table.insert(crds_value, 0);
 
     // test retrieval
     var buf: [100]CrdsVersionedValue = undefined;
@@ -578,13 +547,13 @@ test "gossip.crds_table: insert and get contact_info" {
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
     // test re-insertion
-    const result = crds_table.insert(crds_value, 0, null);
+    const result = crds_table.insert(crds_value, 0);
     try std.testing.expectError(CrdsError.DuplicateValue, result);
 
     // test re-insertion with greater wallclock
     crds_value.data.LegacyContactInfo.wallclock += 2;
     const v = crds_value.data.LegacyContactInfo.wallclock;
-    try crds_table.insert(crds_value, 0, null);
+    try crds_table.insert(crds_value, 0);
 
     // check retrieval
     nodes = try crds_table.get_contact_infos(&buf);

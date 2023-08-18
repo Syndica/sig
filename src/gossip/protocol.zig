@@ -1,9 +1,7 @@
 const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const bincode = @import("../bincode/bincode.zig");
-const Channel = @import("../sync/channel");
 const SocketAddr = @import("net.zig").SocketAddr;
 
 const crds = @import("crds.zig");
@@ -16,7 +14,6 @@ const LegacyContactInfo = crds.LegacyContactInfo;
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
 
-const Option = @import("../option.zig").Option;
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
@@ -109,7 +106,7 @@ pub fn sanitize_wallclock(wallclock: u64) !void {
     }
 }
 
-const PruneData = struct {
+pub const PruneData = struct {
     /// Pubkey of the node that sent this prune data
     pubkey: Pubkey,
     /// Pubkeys of nodes that should be pruned
@@ -120,6 +117,18 @@ const PruneData = struct {
     destination: Pubkey,
     /// Wallclock of the node that generated this message
     wallclock: u64,
+
+    const Self = @This();
+
+    pub fn init(pubkey: Pubkey, prunes: []Pubkey, destination: Pubkey, now: u64) Self {
+        return Self{
+            .pubkey = pubkey,
+            .prunes = prunes,
+            .destination = destination,
+            .signature = Signature.init(.{0} ** 64),
+            .wallclock = now,
+        };
+    }
 
     const PruneSignableData = struct {
         pubkey: Pubkey,

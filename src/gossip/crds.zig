@@ -9,8 +9,6 @@ const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
-const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
-const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
@@ -30,8 +28,6 @@ pub const CrdsVersionedValue = struct {
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
-    /// Number of times duplicates of this value are recevied from gossip push.
-    num_push_dups: u8,
 };
 
 pub const CrdsValue = struct {

@@ -2,11 +2,7 @@ const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
 
-const bincode = @import("../bincode/bincode.zig");
-
 const Hash = @import("../core/hash.zig").Hash;
-
-const SocketAddr = @import("net.zig").SocketAddr;
 
 const crds = @import("./crds.zig");
 const CrdsValue = crds.CrdsValue;
@@ -15,8 +11,6 @@ const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
-const Transaction = @import("../core/transaction.zig").Transaction;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 
@@ -134,7 +128,7 @@ test "gossip.crds_shards: tests CrdsShards" {
 fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersionedValue {
     const keypair = try KeyPair.create(null);
     var value = try CrdsValue.random(rng, keypair);
-    try crds_table.insert(value, 0, null);
+    try crds_table.insert(value, 0);
     const label = value.label();
     const x = crds_table.get(label).?;
     return x;

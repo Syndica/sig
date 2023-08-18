@@ -1,15 +1,9 @@
 const std = @import("std");
-const SocketAddr = @import("net.zig").SocketAddr;
 const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
-const Signature = @import("../core/signature.zig").Signature;
-const Transaction = @import("../core/transaction.zig").Transaction;
-const Slot = @import("../core/slot.zig").Slot;
-const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
-const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -31,13 +25,14 @@ pub const KEYS: f64 = 8;
 pub fn build_crds_filters(
     alloc: std.mem.Allocator,
     crds_table: *CrdsTable,
+    failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
 ) !ArrayList(CrdsFilter) {
     crds_table.read();
-    defer crds_table.release_read();
+    errdefer crds_table.release_read(); // ensure lock is released even on errors
 
-    const num_items = crds_table.len() + crds_table.purged_len() + crds_table.failed_inserts_len();
+    const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
     var filter_set = CrdsFilterSet.init(alloc, num_items, bloom_size) catch {
         return error.CrdsFilterSetInitFailed;
@@ -51,15 +46,15 @@ pub fn build_crds_filters(
         filter_set.add(&hash);
     }
     // add purged values
-    const purged_values = try crds_table.get_purged_values(alloc);
+    const purged_values = try crds_table.purged.get_values(alloc);
     for (purged_values.items) |hash| {
         filter_set.add(&hash);
     }
     // add failed inserts
-    const failed_inserts = try crds_table.get_failed_inserts_values(alloc);
-    for (failed_inserts.items) |hash| {
+    for (failed_pull_hashes.items) |hash| {
         filter_set.add(&hash);
     }
+    crds_table.release_read();
 
     // note: filter set is deinit() in this fcn
     const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);
@@ -250,14 +245,21 @@ test "gossip.pull: test build_crds_filters" {
             .LegacyContactInfo = legacy_contact_info,
         }, kp);
 
-        try crds_table.insert(crds_value, 0, null);
+        try crds_table.insert(crds_value, 0);
     }
 
     const max_bytes = 2;
     const num_items = crds_table.len();
 
     // build filters
-    var filters = try build_crds_filters(std.testing.allocator, &crds_table, max_bytes, 100);
+    const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
+    var filters = try build_crds_filters(
+        std.testing.allocator,
+        &crds_table,
+        &failed_pull_hashes,
+        max_bytes,
+        100,
+    );
     defer deinit_crds_filters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;
