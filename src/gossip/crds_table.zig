@@ -4,9 +4,9 @@ const AutoHashMap = std.AutoHashMap;
 
 const bincode = @import("../bincode/bincode.zig");
 
-const hash = @import("../core/hash.zig");
-const Hash = hash.Hash;
-const CompareResult = hash.CompareResult;
+const hash_ = @import("../core/hash.zig");
+const Hash = hash_.Hash;
+const CompareResult = hash_.CompareResult;
 
 const CrdsShards = @import("./crds_shards.zig").CrdsShards;
 
@@ -65,8 +65,8 @@ pub const CrdsTable = struct {
     // tracking for cursor to index
     entries: AutoArrayHashMap(u64, usize),
 
-    // Indices of all crds values associated with a node.
-    node_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
+    // Indices of all crds values associated with a node/pubkey.
+    pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
 
     // used to build pull responses efficiently
     shards: CrdsShards,
@@ -93,7 +93,7 @@ pub const CrdsTable = struct {
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
-            .node_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
+            .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
             .shards = try CrdsShards.init(allocator),
             .purged = HashTimeQueue.init(),
             .allocator = allocator,
@@ -110,11 +110,11 @@ pub const CrdsTable = struct {
         self.entries.deinit();
         self.shards.deinit();
 
-        var iter = self.node_to_values.iterator();
+        var iter = self.pubkey_to_values.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
-        self.node_to_values.deinit();
+        self.pubkey_to_values.deinit();
     }
 
     pub fn write(self: *Self) void {
@@ -176,13 +176,13 @@ pub const CrdsTable = struct {
 
             try self.entries.put(self.cursor, entry_index);
 
-            const maybe_node_entry = self.node_to_values.getEntry(origin);
+            const maybe_node_entry = self.pubkey_to_values.getEntry(origin);
             if (maybe_node_entry) |node_entry| {
                 try node_entry.value_ptr.put(entry_index, {});
             } else {
                 var indexs = AutoArrayHashSet(usize).init(self.allocator);
                 try indexs.put(entry_index, {});
-                try self.node_to_values.put(origin, indexs);
+                try self.pubkey_to_values.put(origin, indexs);
             }
 
             result.value_ptr.* = versioned_value;
@@ -401,8 +401,75 @@ pub const CrdsTable = struct {
     }
 
     // ** triming values in the crdstable **
-    pub fn attempt_trim(self: *Self) void {
-        _ = self;
+    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) !void {
+        const n_pubkeys = self.pubkey_to_values.keys().len;
+        // 90% close to capacity
+        const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
+        if (!should_trim) return;
+
+        const drop_size = n_pubkeys -| max_pubkey_capacity;
+        // TODO: drop based on stake weight
+        const drop_pubkeys = self.pubkey_to_values.keys()[0..drop_size];
+
+        const now = crds.get_wallclock();
+        const store_values = self.store.iterator().values;
+        const store_keys = self.store.iterator().keys;
+
+        for (drop_pubkeys) |pubkey| {
+            // remove all entries associated with the pubkey
+            if (self.shred_versions.contains(pubkey)) {
+                const did_remove = self.shred_versions.remove(pubkey);
+                std.debug.assert(did_remove);
+            }
+
+            var entry_indexs = self.pubkey_to_values.get(pubkey).?;
+            defer {
+                var did_remove = self.pubkey_to_values.swapRemove(pubkey);
+                std.debug.assert(did_remove);
+                entry_indexs.deinit();
+            }
+
+            const count = entry_indexs.count();
+            for (entry_indexs.iterator().keys[0..count]) |entry_index| {
+                // add to purged
+                const entry_value = store_values[entry_index];
+                const entry_key = store_keys[entry_index];
+
+                const hash = entry_value.value_hash;
+                self.purged.insert(hash, now);
+                try self.shards.remove(entry_index, &hash);
+                {
+                    var did_remove = self.entries.swapRemove(entry_value.cursor_on_insertion);
+                    std.debug.assert(did_remove);
+                }
+
+                switch (entry_value.value.data) {
+                    .LegacyContactInfo => {
+                        var did_remove = self.contact_infos.swapRemove(entry_value.cursor_on_insertion);
+                        std.debug.assert(did_remove);
+                    },
+                    .Vote => {
+                        var did_remove = self.votes.swapRemove(entry_value.cursor_on_insertion);
+                        std.debug.assert(did_remove);
+                    },
+                    .EpochSlots => {
+                        var did_remove = self.epoch_slots.swapRemove(entry_value.cursor_on_insertion);
+                        std.debug.assert(did_remove);
+                    },
+                    .DuplicateShred => {
+                        var did_remove = self.duplicate_shreds.swapRemove(entry_value.cursor_on_insertion);
+                        std.debug.assert(did_remove);
+                    },
+                    else => {},
+                }
+
+                // remove from store
+                {
+                    const did_remove = self.store.swapRemove(entry_key);
+                    std.debug.assert(did_remove);
+                }
+            }
+        }
     }
 };
 
@@ -466,6 +533,30 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     } else {
         return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
     }
+}
+
+test "gossip.crds_table: trim pruned values" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rng = std.rand.DefaultPrng.init(seed);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    for (0..10) |_| {
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        try crds_table.insert(value, 100);
+    }
+    try std.testing.expectEqual(crds_table.len(), 10);
+    try std.testing.expectEqual(crds_table.purged.len(), 0);
+    try std.testing.expectEqual(crds_table.pubkey_to_values.count(), 10);
+
+    try crds_table.attempt_trim(5);
+
+    try std.testing.expectEqual(crds_table.len(), 5);
+    try std.testing.expectEqual(crds_table.pubkey_to_values.count(), 5);
+    try std.testing.expectEqual(crds_table.purged.len(), 5);
 }
 
 test "gossip.HashTimeQueue: trim pruned values" {
