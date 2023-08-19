@@ -249,6 +249,7 @@ pub fn RwMux(comptime T: type) type {
 /// `Const` type is a const pointer adapter for different types as explained below:
 ///
 /// - T is a non-pointer type (example: bool): `Const` is a `*const bool`
+/// - T is a non-pointer type (example: [100]u8): `Const` is a `*const [100]u8`
 /// - T is a pointer to One type (example: *usize): `Const` is `*const usize`
 /// - T is a pointer to Slice type (example: []Packet): `Const` is a `[]const Packet`
 ///
@@ -265,7 +266,7 @@ pub fn RwMux(comptime T: type) type {
 ///     assert(Const(*[100]u8)  ==  *const [100]u8)
 /// ```
 ///
-/// This is used in conjuction with `createConst` function and is a way to
+/// This is used in conjuction with `toConst` function and is a way to
 /// avoid `@TypeOf()` return type.
 pub fn Const(comptime T: type) type {
     switch (@typeInfo(T)) {
@@ -304,6 +305,28 @@ fn toConst(val: anytype) Const(@TypeOf(val)) {
     }
 }
 
+/// `Mutable` type is a pointer adapter for different types as explained below:
+///
+/// - T is a non-pointer type (example: bool): `Mutable` is a `*bool`
+/// - T is a non-pointer type (example: [100]u8): `Mutable` is a `*[100]u8`
+/// - T is a pointer to One type (example: *usize): `Mutable` is `*usize`
+/// - T is a pointer to Slice type (example: []Packet): `Mutable` is a `[]Packet`
+///
+/// ### Assertions:
+///
+/// ```
+///     assert(Mutable(*usize)      ==  *usize)
+///     assert(Mutable(usize)       ==  *usize)
+///     assert(Mutable(*[]u8)       ==  *[]u8)
+///     assert(Mutable([]u8)        ==  []u8)
+///     assert(Mutable(*Packet)     ==  *Packet)
+///     assert(Mutable(Packet)      ==  *Packet)
+///     assert(Mutable([100]u8)     ==  *[100]u8)
+///     assert(Mutable(*[100]u8)    ==  *[100]u8)
+/// ```
+///
+/// This is used as return type of `mut` function and is a way to
+/// avoid `@TypeOf()` return type or block statements.
 pub fn Mutable(comptime T: type) type {
     switch (@typeInfo(T)) {
         .Pointer => |info| {
@@ -354,6 +377,17 @@ test "sync.mux: Const is correct" {
     assert(@TypeOf(toConst(&arr)) == Const([4]u8));
     var slice_of_arr: []u8 = arr[0..];
     assert(@TypeOf(toConst(slice_of_arr)) == Const([]u8));
+}
+
+test "sync.mux: Mux handles slices properly" {
+    var arr = [3]u8{ 0, 1, 2 };
+    var slice = Mux([]u8).init(&arr);
+
+    var slice_locked = slice.lock();
+    defer slice_locked.unlock();
+
+    slice_locked.mut()[1] = 2;
+    try testing.expectEqualSlices(u8, &[_]u8{ 0, 2, 2 }, slice_locked.get());
 }
 
 test "sync.mux: Mutable is correct" {
