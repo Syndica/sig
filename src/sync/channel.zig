@@ -66,7 +66,7 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            while (self.buffer.items.len == 0 and !self.closed.load(.SeqCst)) {
+            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
                 buffer.condition(&self.hasValue);
             }
 
