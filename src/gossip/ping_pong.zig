@@ -39,7 +39,7 @@ pub const Ping = struct {
         return self;
     }
 
-    pub fn random(keypair: KeyPair) Self {
+    pub fn random(keypair: KeyPair) !Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         rand.fill(&token);

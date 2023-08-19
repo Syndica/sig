@@ -210,7 +210,7 @@ pub const GossipService = struct {
 
             // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
             const msg = ProtocolMessage{ .from_addr = packet.addr, .message = protocol_message };
-            verified_channel.send(msg);
+            try verified_channel.send(msg);
         }
     }
 
@@ -262,7 +262,7 @@ pub const GossipService = struct {
 
                 // send packets
                 for (pull_packets.items) |packet| {
-                    self.responder_channel.send(packet);
+                    try self.responder_channel.send(packet);
                 }
             }
             // every other loop
@@ -288,7 +288,7 @@ pub const GossipService = struct {
             defer push_packets.deinit();
 
             for (push_packets.items) |packet| {
-                self.responder_channel.send(packet);
+                try self.responder_channel.send(packet);
             }
 
             // trim data
@@ -460,12 +460,12 @@ pub const GossipService = struct {
     }
 
     fn send_ping(self: *Self, peer: *const EndPoint, logger: *Logger) !void {
-        var protocol = Protocol{ .PingMessage = Ping.random(self.cluster_info.our_keypair) };
+        var protocol = Protocol{ .PingMessage = try Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
 
         logger.debugf("sending a ping message to: {any}", .{peer});
-        self.responder_channel.send(
+        try self.responder_channel.send(
             Packet.init(peer.*, out, bytes.len),
         );
     }
@@ -642,7 +642,7 @@ pub const GossipService = struct {
             bytes_read = recv_meta.numberOfBytes;
 
             // send packet through channel
-            packet_channel.send(Packet.init(recv_meta.sender, read_buf, bytes_read));
+            try packet_channel.send(Packet.init(recv_meta.sender, read_buf, bytes_read));
 
             // reset buffer
             @memset(&read_buf, 0);
@@ -760,7 +760,7 @@ pub const GossipService = struct {
                     defer prune_packets.deinit();
 
                     for (prune_packets.items) |packet| {
-                        responder_channel.send(packet);
+                        try responder_channel.send(packet);
                     }
                 },
                 .PullResponse => |*pull| {
