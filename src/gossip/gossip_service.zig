@@ -1073,7 +1073,7 @@ test "gossip.gossip_service: test packet verification" {
     var packet = Packet.init(from, buf, out.len);
 
     for (0..3) |_| {
-        packet_channel.send(packet);
+        try packet_channel.send(packet);
     }
 
     // send one which fails sanitization
@@ -1086,7 +1086,7 @@ test "gossip.gossip_service: test packet verification" {
     var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
     var out_v2 = try bincode.writeToSlice(buf_v2[0..], protocol_msg_v2, bincode.Params{});
     var packet_v2 = Packet.init(from, buf_v2, out_v2.len);
-    packet_channel.send(packet_v2);
+    try packet_channel.send(packet_v2);
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
@@ -1098,7 +1098,7 @@ test "gossip.gossip_service: test packet verification" {
     var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
     var out2 = try bincode.writeToSlice(buf2[0..], protocol_msg2, bincode.Params{});
     var packet2 = Packet.init(from, buf2, out2.len);
-    packet_channel.send(packet2);
+    try packet_channel.send(packet2);
 
     for (0..3) |_| {
         var msg = verified_channel.receive().?;
@@ -1106,7 +1106,8 @@ test "gossip.gossip_service: test packet verification" {
     }
 
     var attempt_count: u16 = 0;
-    while (packet_channel.buffer.items.len != 0) {
+
+    while (packet_channel.buffer.private.v.items.len != 0) {
         std.time.sleep(std.time.ns_per_ms * 10);
         attempt_count += 1;
         if (attempt_count > 10) {
@@ -1114,8 +1115,8 @@ test "gossip.gossip_service: test packet verification" {
         }
     }
 
-    try std.testing.expect(packet_channel.buffer.items.len == 0);
-    try std.testing.expect(verified_channel.buffer.items.len == 0);
+    try std.testing.expect(packet_channel.buffer.private.v.items.len == 0);
+    try std.testing.expect(verified_channel.buffer.private.v.items.len == 0);
 
     packet_channel.close();
     verified_channel.close();
@@ -1188,7 +1189,7 @@ test "gossip.gossip_service: process contact_info push packet" {
         .from_addr = peer,
         .message = msg,
     };
-    verified_channel.send(protocol_msg);
+    try verified_channel.send(protocol_msg);
 
     // correct insertion into table
     var buf2: [100]crds.CrdsVersionedValue = undefined;
