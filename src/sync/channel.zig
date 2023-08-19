@@ -4,12 +4,12 @@ const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;
+const Mux = @import("mux.zig").Mux;
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
 pub fn Channel(comptime T: type) type {
     return struct {
-        buffer: std.ArrayList(T),
-        lock: Mutex = .{},
+        buffer: Mux(std.ArrayList(T)),
         hasValue: Condition = .{},
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: std.mem.Allocator,
@@ -19,63 +19,69 @@ pub fn Channel(comptime T: type) type {
         pub fn init(allocator: std.mem.Allocator, init_capacity: usize) *Self {
             var self = allocator.create(Self) catch unreachable;
             self.* = .{
-                .buffer = std.ArrayList(T).initCapacity(allocator, init_capacity) catch unreachable,
+                .buffer = Mux(std.ArrayList(T)).init(std.ArrayList(T).initCapacity(allocator, init_capacity) catch unreachable),
                 .allocator = allocator,
             };
             return self;
         }
 
         pub fn deinit(self: *Self) void {
-            self.buffer.deinit();
+            var buff = self.buffer.lock();
+            buff.mut().deinit();
+            buff.unlock();
+
             self.allocator.destroy(self);
         }
 
-        pub fn send(self: *Self, value: T) void {
-            self.lock.lock();
-            self.buffer.append(value) catch unreachable;
-            self.lock.unlock();
+        pub fn send(self: *Self, value: T) error{ OutOfMemory, Closed }!void {
+            if (self.closed.load(.Monotonic)) {
+                return error.Closed;
+            }
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
+            try buffer.mut().append(value);
             self.hasValue.signal();
         }
 
         pub fn receive(self: *Self) ?T {
-            self.lock.lock();
-            defer self.lock.unlock();
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
 
-            while (self.buffer.items.len == 0 and !self.closed.load(.SeqCst)) {
-                self.hasValue.wait(&self.lock);
+            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
+                buffer.condition(&self.hasValue);
             }
 
             // channel closed so return null to signal no more items
-            if (self.buffer.items.len == 0) {
+            if (buffer.get().items.len == 0) {
                 return null;
             }
 
-            return self.buffer.pop();
+            return buffer.mut().pop();
         }
 
         /// `drain` func will remove all pending items from queue.
         ///
         /// NOTE: Caller is responsible for calling `allocator.free` on the returned slice.
         pub fn drain(self: *Self) ?[]T {
-            self.lock.lock();
-            defer self.lock.unlock();
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
 
-            while (self.buffer.items.len == 0 and !self.closed.load(.SeqCst)) {
-                self.hasValue.wait(&self.lock);
+            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
+                buffer.condition(&self.hasValue);
             }
 
             // channel closed so return null to signal no more items
-            if (self.buffer.items.len == 0) {
+            if (buffer.get().items.len == 0) {
                 return null;
             }
 
-            var num_items_to_drain = self.buffer.items.len;
+            var num_items_to_drain = buffer.get().items.len;
 
             var out = self.allocator.alloc(T, num_items_to_drain) catch @panic("could not alloc");
-            @memcpy(out, self.buffer.items);
+            @memcpy(out, buffer.get().items);
 
-            self.buffer.shrinkRetainingCapacity(0);
-            assert(self.buffer.items.len == 0);
+            buffer.mut().shrinkRetainingCapacity(0);
+            assert(buffer.get().items.len == 0);
             assert(num_items_to_drain == out.len);
 
             return out;
@@ -108,7 +114,7 @@ fn testReceiver(chan: *BlockChannel, recv_count: *Atomic(usize), id: u8) void {
 fn testSender(chan: *BlockChannel, total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
-        chan.send(Block{ .num = @intCast(i) });
+        chan.send(Block{ .num = @intCast(i) }) catch unreachable;
     }
     chan.close();
 }

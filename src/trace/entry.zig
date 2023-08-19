@@ -52,7 +52,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .info;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -61,7 +61,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .debug;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -70,7 +70,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .err;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
@@ -79,7 +79,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .warn;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn info(self: *Self, comptime msg: []const u8) void {
@@ -88,7 +88,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .info;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn debug(self: *Self, comptime msg: []const u8) void {
@@ -97,7 +97,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .debug;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn err(self: *Self, comptime msg: []const u8) void {
@@ -106,7 +106,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .err;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn warn(self: *Self, comptime msg: []const u8) void {
@@ -115,7 +115,7 @@ pub const Entry = struct {
         self.message = message;
         self.time = time.DateTime.now();
         self.level = .warn;
-        self.channel.send(self);
+        self.channel.send(self) catch @panic("could not send to channel");
     }
 
     pub fn format(
