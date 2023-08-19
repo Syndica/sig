@@ -85,6 +85,12 @@ pub fn Mux(comptime T: type) type {
                 if (builtin.mode == .Debug) self.valid = false;
                 self.private.m.unlock();
             }
+
+            /// `condition` will call `wait` on the `cond` that was passed with self
+            pub fn condition(self: *LockGuard, cond: *std.Thread.Condition) void {
+                assert(self.valid == true);
+                cond.wait(&self.private.m);
+            }
         };
 
         /// `lock` returns a `LockGuard` after acquiring `Mutex` lock
