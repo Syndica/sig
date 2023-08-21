@@ -104,7 +104,13 @@ and remove all their values from the table. In the solana-labs implementation, t
 
 To remove values with old timestamps, `remove_old_labels` is called periodically as well. 
 
-*Note:* Since we are using an indexable hashmap struct, when removing values we typically use the `removeSwap` function (defined as: "The entry is removed from the underlying array by swapping it with the last element and pop-ing"). Since we are tracking the index of values across multiple arrays, when we `removeSwap`, the last value is now at a different index then we recorded. So, we need to account for the 'swapping with the last element' and update our indexs on each remove. The full logic can be found in `CrdsTable.remove()`.
+*Note:* Since we are using an indexable hashmap struct, when removing values we
+typically use the `removeSwap` function (defined as: "The entry is removed from the 
+underlying array by swapping it with the last element and pop-ing"). Since we are 
+tracking the index of values across multiple arrays, when we `removeSwap`, the last 
+value is now at a different index then we recorded. So, we need to account for the 
+'swapping with the last element' and update our indexs on each remove. The full logic 
+can be found in `CrdsTable.remove()`.
 
 ## Protocol Messages
 
