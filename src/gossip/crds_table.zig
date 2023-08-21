@@ -43,6 +43,24 @@ pub fn AutoArrayHashSet(comptime T: type) type {
     return AutoArrayHashMap(T, void);
 }
 
+pub const InsertResults = struct {
+    inserted: ?std.ArrayList(usize),
+    timeouts: ?std.ArrayList(usize),
+    failed: ?std.ArrayList(usize),
+
+    pub fn deinit(self: InsertResults) void {
+        if (self.inserted) |inserted| {
+            inserted.deinit();
+        }
+        if (self.timeouts) |timeouts| {
+            timeouts.deinit();
+        }
+        if (self.failed) |failed| {
+            failed.deinit();
+        }
+    }
+};
+
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
 /// indexing values (value = arrayhashmap[0]). This allows us to insert data
@@ -122,8 +140,8 @@ pub const CrdsTable = struct {
             return error.CrdsTableFull;
         }
 
-        // CrdsValue should never be larger than PACKET_DATA_SIZE
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        // CrdsValue should never be larger than PACKET_DATA_SIZE
         const bytes = bincode.writeToSlice(&buf, value, bincode.Params.standard) catch unreachable;
         const value_hash = Hash.generateSha256Hash(bytes);
         const versioned_value = CrdsVersionedValue{
@@ -239,40 +257,65 @@ pub const CrdsTable = struct {
         allocator: std.mem.Allocator,
         values: []crds.CrdsValue,
         timeout: u64,
-        logger: *Logger,
-    ) std.ArrayList(usize) {
+        comptime record_inserts: bool,
+        comptime record_timeouts: bool,
+    ) error{OutOfMemory}!InsertResults {
         var now = crds.get_wallclock();
 
-        var failed_insert_indexs = std.ArrayList(usize).init(allocator);
+        var failed_indexs = std.ArrayList(usize).init(allocator);
+        var inserted_indexs = std.ArrayList(usize).init(allocator);
+        var timeout_indexs = std.ArrayList(usize).init(allocator);
+
         for (values, 0..) |value, index| {
             const value_time = value.wallclock();
             const is_too_new = value_time > now +| timeout;
             const is_too_old = value_time < now -| timeout;
             if (is_too_new or is_too_old) {
+                if (record_timeouts) {
+                    try timeout_indexs.append(index);
+                }
                 continue;
             }
 
-            self.insert(value, now) catch |err| {
-                switch (err) {
-                    CrdsError.OldValue => {
-                        logger.debugf("failed to insert into crds: OldValue", .{});
-                    },
-                    CrdsError.DuplicateValue => {
-                        logger.debugf("failed to insert into crds: DuplicateValue", .{});
-                    },
-                    else => {
-                        logger.debugf("failed to insert into crds with unkown error: {any}", .{err});
-                    },
-                }
-                failed_insert_indexs.append(index) catch unreachable;
+            self.insert(value, now) catch {
+                try failed_indexs.append(index);
+                continue;
             };
+
+            if (record_inserts) {
+                try inserted_indexs.append(index);
+            }
         }
 
-        return failed_insert_indexs;
+        return InsertResults{
+            .inserted = if (record_inserts) inserted_indexs else null,
+            .timeouts = if (record_timeouts) timeout_indexs else null,
+            .failed = failed_indexs,
+        };
     }
 
     pub fn len(self: *const Self) usize {
         return self.store.count();
+    }
+
+    pub fn update_record_timestamp(self: *Self, pubkey: Pubkey, now: u64) void {
+        const contact_info_label = CrdsValueLabel{
+            .LegacyContactInfo = pubkey,
+        };
+
+        // It suffices to only overwrite the origin's timestamp since that is
+        // used when purging old values. If the origin does not exist in the
+        // table, fallback to exhaustive update on all associated records.
+        if (self.store.getEntry(contact_info_label)) |entry| {
+            const value = entry.value_ptr;
+            value.timestamp_on_insertion = now;
+        } else if (self.pubkey_to_values.getEntry(pubkey)) |entry| {
+            const pubkey_indexs = entry.value_ptr;
+            for (pubkey_indexs.keys()) |index| {
+                const value = &self.store.values()[index];
+                value.timestamp_on_insertion = now;
+            }
+        }
     }
 
     // ** getter functions **
@@ -282,6 +325,8 @@ pub const CrdsTable = struct {
 
     pub fn generic_get_with_cursor(hashmap: anytype, store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue), buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {
         const cursor_indexs = hashmap.keys();
+        const store_values = store.values();
+
         var index: usize = 0;
         for (cursor_indexs) |cursor_index| {
             if (cursor_index < caller_cursor.*) {
@@ -289,7 +334,7 @@ pub const CrdsTable = struct {
             }
 
             const entry_index = hashmap.get(cursor_index).?;
-            var entry = store.iterator().values[entry_index];
+            var entry = store_values[entry_index];
             buf[index] = entry;
             index += 1;
 

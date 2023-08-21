@@ -157,7 +157,7 @@ pub const GossipService = struct {
             self.packet_channel,
             self.verified_channel,
         });
-        var packet_handle = try Thread.spawn(.{}, Self.process_protocol_messages, .{
+        var packet_handle = try Thread.spawn(.{}, Self.process_messages, .{
             self.allocator,
             &self.crds_table_rw,
             self.verified_channel,
@@ -677,34 +677,13 @@ pub const GossipService = struct {
         logger.debugf("reading gossip exiting...", .{});
     }
 
-    pub fn handle_push_message(
-        push_from: Pubkey,
-        push_values: []CrdsValue,
+    pub fn build_prune_messages(
         allocator: std.mem.Allocator,
         crds_table_rw: *RwMux(CrdsTable),
+        failed_origins: *const std.AutoArrayHashMap(Pubkey, void),
+        push_from: Pubkey,
         my_keypair: *KeyPair,
-        logger: *Logger,
-    ) !std.ArrayList(Packet) {
-        const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-
-        const failed_insert_indexs = blk: {
-            var crds_table_lg = crds_table_rw.write();
-            defer crds_table_lg.unlock();
-
-            break :blk crds_table_lg.mut().insert_values(
-                allocator,
-                push_values,
-                CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
-                logger,
-            );
-        };
-        defer failed_insert_indexs.deinit();
-
-        // handle prune messages
-        if (failed_insert_indexs.items.len == 0) {
-            return std.ArrayList(Packet).init(allocator);
-        }
-
+    ) error{ CantFindContactInfo, InvalidGossipAddress, OutOfMemory, SignatureError }!std.ArrayList(Packet) {
         const from_contact_info = blk: {
             var crds_table_lg = crds_table_rw.read();
             defer crds_table_lg.unlock();
@@ -713,44 +692,78 @@ pub const GossipService = struct {
                 return error.CantFindContactInfo;
             };
         };
-
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
-        try crds.sanitize_socket(&from_gossip_addr);
+        crds.sanitize_socket(&from_gossip_addr) catch return error.InvalidGossipAddress;
+        const from_gossip_endpoint = from_gossip_addr.toEndpoint();
 
-        var n_packets = failed_insert_indexs.items.len / MAX_PRUNE_DATA_NODES;
+        const failed_origin_len = failed_origins.keys().len;
+        var n_packets = failed_origins.keys().len / MAX_PRUNE_DATA_NODES;
         var prune_packets = try std.ArrayList(Packet).initCapacity(allocator, n_packets);
+        errdefer prune_packets.deinit();
 
-        var failed_origins = try std.ArrayList(Pubkey).initCapacity(allocator, MAX_PRUNE_DATA_NODES);
-        defer failed_origins.deinit();
+        var origin_buf: [MAX_PRUNE_DATA_NODES]Pubkey = undefined;
+        var origin_count: usize = 0;
 
         const now = get_wallclock();
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        for (failed_insert_indexs.items, 0..) |insert_index, i| {
-            const origin = push_values[insert_index].id();
-            // TODO: account for duplicate origin values? (to reduce egress)
-            failed_origins.appendAssumeCapacity(origin);
+        const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
-            const is_last_iter = i == failed_insert_indexs.items.len - 1;
-            if (failed_origins.items.len == MAX_PRUNE_DATA_NODES or is_last_iter) {
+        for (failed_origins.keys(), 0..) |origin, i| {
+            origin_buf[origin_count] = origin;
+            origin_count += 1;
+
+            const is_last_iter = i == failed_origin_len - 1;
+            if (origin_count == MAX_PRUNE_DATA_NODES or is_last_iter) {
                 // create protocol message
-                var prune_data = PruneData.init(my_pubkey, failed_origins.items, push_from, now);
-                try prune_data.sign(my_keypair);
+                var prune_data = PruneData.init(my_pubkey, origin_buf[0..origin_count], push_from, now);
+                prune_data.sign(my_keypair) catch return error.SignatureError;
 
                 // put it into a packet
                 var msg = Protocol{ .PruneMessage = .{ my_pubkey, prune_data } };
-                var msg_slice = try bincode.writeToSlice(&buf, msg, bincode.Params{});
-                var packet = Packet.init(from_gossip_addr.toEndpoint(), buf, msg_slice.len);
+                // msg should never be bigger than the PacketSize and serialization shouldnt fail (unrecoverable)
+                var msg_slice = bincode.writeToSlice(&buf, msg, bincode.Params{}) catch unreachable;
+                var packet = Packet.init(from_gossip_endpoint, buf, msg_slice.len);
                 try prune_packets.append(packet);
 
                 // reset array
-                failed_origins.clearRetainingCapacity();
+                origin_count = 0;
             }
         }
 
         return prune_packets;
     }
 
-    pub fn process_protocol_messages(
+    pub fn handle_push_message(
+        allocator: std.mem.Allocator,
+        push_values: []CrdsValue,
+        crds_table_rw: *RwMux(CrdsTable),
+    ) error{OutOfMemory}!std.AutoArrayHashMap(Pubkey, void) {
+        const failed_insert_indexs = blk: {
+            var crds_table_lg = crds_table_rw.write();
+            defer crds_table_lg.unlock();
+
+            var result = try crds_table_lg.mut().insert_values(allocator, push_values, CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS, false, false);
+            break :blk result.failed.?;
+        };
+        defer failed_insert_indexs.deinit();
+
+        // origins are used to generate prune messages
+        // hashmap to account for duplicates
+        var failed_origins = std.AutoArrayHashMap(Pubkey, void).init(allocator);
+        errdefer failed_origins.deinit();
+
+        if (failed_insert_indexs.items.len == 0) {
+            return failed_origins;
+        }
+
+        for (failed_insert_indexs.items) |index| {
+            const origin = push_values[index].id();
+            try failed_origins.put(origin, {});
+        }
+        return failed_origins;
+    }
+
+    pub fn process_messages(
         allocator: std.mem.Allocator,
         crds_table_rw: *RwMux(CrdsTable),
         verified_channel: *ProtocolChannel,
@@ -775,15 +788,21 @@ pub const GossipService = struct {
 
             switch (message) {
                 .PushMessage => |*push| {
-                    const prune_packets = handle_push_message(
-                        push[0],
-                        push[1],
+                    const push_from = push[0];
+                    const push_values = push[1];
+
+                    var failed_insert_origins = handle_push_message(
                         allocator,
+                        push_values,
                         crds_table_rw,
-                        my_keypair,
-                        logger,
                     ) catch |err| {
                         logger.warnf("error handling push message: {s}", .{@errorName(err)});
+                        continue;
+                    };
+                    defer failed_insert_origins.deinit();
+
+                    var prune_packets = build_prune_messages(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
+                        logger.warnf("error building prune messages: {s}", .{@errorName(err)});
                         continue;
                     };
                     defer prune_packets.deinit();
@@ -795,28 +814,50 @@ pub const GossipService = struct {
                 .PullResponse => |*pull| {
                     const values = pull[1];
 
-                    // TODO: filter the values
-
+                    // TODO: benchmark and compare with labs' preprocessing
+                    const now = get_wallclock();
                     var crds_table_lg = crds_table_rw.write();
-                    const failed_insert_indexs = crds_table_lg.mut().insert_values(
+                    var crds_table: *CrdsTable = crds_table_lg.mut();
+
+                    const insert_results = try crds_table.insert_values(
                         allocator,
                         values,
                         CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
-                        logger,
+                        true,
+                        true,
                     );
+
+                    // silently insert the timeout values
+                    const timeout_indexs = insert_results.timeouts.?;
+                    defer timeout_indexs.deinit();
+                    for (timeout_indexs.items) |index| {
+                        crds_table.insert(
+                            values[index],
+                            now,
+                        ) catch {};
+                    }
+
+                    // update the contactInfo timestamps of the successful inserts
+                    const successful_insert_indexs = insert_results.inserted.?;
+                    defer successful_insert_indexs.deinit();
+                    for (successful_insert_indexs.items) |index| {
+                        const origin = values[index].id();
+                        crds_table.update_record_timestamp(origin, now);
+                    }
                     crds_table_lg.unlock();
+
+                    // track failed inserts - to use when constructing pull requests
+                    var failed_insert_indexs = insert_results.failed.?;
                     defer failed_insert_indexs.deinit();
-
-                    // track failed inserts to use when constructing
-                    // future pull requests
                     {
-                        var buf = [_]u8{0} ** 2048;
-                        const now = get_wallclock();
-
                         var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
                         var failed_pull_hashes = failed_pull_hashes_lg.mut();
                         defer failed_pull_hashes_lg.unlock();
 
+                        const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
+                        failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
+
+                        var buf: [PACKET_DATA_SIZE]u8 = undefined;
                         for (failed_insert_indexs.items) |insert_index| {
                             const value = values[insert_index];
                             var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
@@ -831,27 +872,29 @@ pub const GossipService = struct {
                     var value = pull[1]; // contact info
                     const now = get_wallclock();
 
-                    var caller_wallclock = value.wallclock();
-                    const is_too_old = caller_wallclock < now -| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
-                    const is_too_new = caller_wallclock > now +| CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS;
-                    if (is_too_old or is_too_new) {
-                        continue;
-                    }
+                    var crds_table_lg = crds_table_rw.write();
+                    var crds_table = crds_table_lg.mut();
+                    crds_table.insert(value, now);
+                    crds_table.update_record_timestamp(value.id(), now);
+                    crds_table_lg.unlock();
 
-                    var crds_table_lg = crds_table_rw.read();
-                    defer crds_table_lg.unlock();
+                    // TODO: filter out requests which hasnt responded to a ping request
 
+                    crds_table_lg = crds_table_rw.read();
                     const crds_values = pull_response.filter_crds_values(
                         allocator,
                         crds_table_lg.get(),
                         &filter,
                         100,
-                        caller_wallclock,
+                        value.wallclock(),
                     ) catch |err| {
                         logger.warnf("error filtering crds values: {s}", .{@errorName(err)});
                         continue;
                     };
                     defer crds_values.deinit();
+                    crds_table_lg.unlock();
+
+                    // TODO: use from_addr
 
                     // const protocol_msg = Protocol {
                     //     .PullResponse = .{
@@ -914,17 +957,23 @@ test "gossip.gossip_service: generate prune messages" {
     const allocator = std.testing.allocator;
 
     var kp = try KeyPair.create(null);
-    var rng = std.rand.DefaultPrng.init(get_wallclock());
+    var rng = std.rand.DefaultPrng.init(91);
     var push_from = Pubkey.random(rng.random(), .{});
 
     var values = std.ArrayList(CrdsValue).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        try values.append(try CrdsValue.random(rng.random(), kp));
+        var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
+        value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
+        try values.append(value);
     }
 
     var crds_table = try CrdsTable.init(allocator);
-    // defer crds_table.deinit();
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var crds_lg = crds_table_rw.write();
+        crds_lg.mut().deinit();
+    }
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -940,35 +989,34 @@ test "gossip.gossip_service: generate prune messages" {
     var ci_value = try CrdsValue.initSigned(crds.CrdsData{
         .LegacyContactInfo = contact_info,
     }, kp);
-    try crds_table.insert(ci_value, get_wallclock());
+    var lg = crds_table_rw.write();
+    try lg.mut().insert(ci_value, get_wallclock());
+    lg.unlock();
 
-    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
-    defer {
-        var crds_lg = crds_table_rw.write();
-        crds_lg.mut().deinit();
-    }
-
-    var packets = try GossipService.handle_push_message(
-        push_from,
-        values.items,
+    var forigins = try GossipService.handle_push_message(
         allocator,
+        values.items,
         &crds_table_rw,
-        &kp,
-        logger,
     );
-    defer packets.deinit();
-    try std.testing.expect(packets.items.len == 0);
+    defer forigins.deinit();
+    try std.testing.expect(forigins.keys().len == 0);
 
-    var prune_packets = try GossipService.handle_push_message(
-        push_from,
+    var failed_origins = try GossipService.handle_push_message(
+        allocator,
         values.items,
+        &crds_table_rw,
+    );
+    defer failed_origins.deinit();
+    try std.testing.expect(failed_origins.keys().len > 0);
+
+    var prune_packets = try GossipService.build_prune_messages(
         allocator,
         &crds_table_rw,
+        &failed_origins,
+        push_from,
         &kp,
-        logger,
     );
     defer prune_packets.deinit();
-    try std.testing.expect(prune_packets.items.len > 0);
 
     var packet = prune_packets.items[0];
     var protocol_message = try bincode.readFromSlice(
@@ -982,7 +1030,7 @@ test "gossip.gossip_service: generate prune messages" {
     var msg = protocol_message.PruneMessage;
     var prune_data = msg[1];
     try std.testing.expect(prune_data.destination.equals(&push_from));
-    try std.testing.expect(prune_data.prunes.len == 10);
+    try std.testing.expectEqual(prune_data.prunes.len, 10);
 }
 
 test "gossip.gossip_service: new pull messages" {
@@ -1224,7 +1272,7 @@ test "gossip.gossip_service: process contact_info push packet" {
 
     var packet_handle = try Thread.spawn(
         .{},
-        GossipService.process_protocol_messages,
+        GossipService.process_messages,
         .{
             allocator,
             &crds_table_rw,
