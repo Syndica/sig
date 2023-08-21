@@ -103,7 +103,7 @@ We use the field `CrdsTable.pubkey_to_values` to track all the crds values in th
 and remove all their values from the table. In the solana-labs implementation, the gossip pubkeys with the smallest stake weight are removed first, however we dont have stake weight information yet in Sig, this is future work.
 
 To remove values with old timestamps, `remove_old_labels` is called 
-periodically as well.
+periodically as well. 
 
 *Note:* Since we are using an indexable hashmap struct, when removing values we
 typically use the `removeSwap` function (defined as: "The entry is removed from the 
