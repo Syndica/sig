@@ -409,11 +409,11 @@ pub const CrdsTable = struct {
     }
 
     // ** triming values in the crdstable **
-    pub fn remove(self: *Self, label: CrdsValueLabel) void {
+    pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound}!void {
         const now = crds.get_wallclock();
 
         const maybe_entry = self.store.getEntry(label);
-        if (maybe_entry == null) return;
+        if (maybe_entry == null) return error.LabelNotFound;
 
         const entry = maybe_entry.?;
         const versioned_value = entry.value_ptr;
@@ -539,15 +539,61 @@ pub const CrdsTable = struct {
         }
 
         for (labels_to_remove.items) |label| {
-            self.remove(label);
+            self.remove(label) catch unreachable;
         }
     }
 
-    // pub fn get_old_labels(
-    //     self: *Self,
-    //     now: u64,
-    //     timeout: u64,
-    // )
+    pub fn remove_old_labels(
+        self: *Self,
+        now: u64,
+        timeout: u64,
+    ) std.mem.Allocator.Error!void {
+        const old_labels = try self.get_old_labels(now, timeout);
+        defer old_labels.deinit();
+
+        for (old_labels.items) |old_label| {
+            // unreachable: label should always exist in store
+            self.remove(old_label) catch unreachable;
+        }
+    }
+
+    pub fn get_old_labels(
+        self: *Self,
+        now: u64,
+        timeout: u64,
+    ) std.mem.Allocator.Error!std.ArrayList(CrdsValueLabel) {
+        var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
+
+        const cutoff_timestamp = now -| timeout;
+        const n_pubkeys = self.pubkey_to_values.count();
+        for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
+            const entry = self.pubkey_to_values.getEntry(key).?;
+
+            // if contact info is up to date then we dont need to check the values
+            const pubkey = entry.key_ptr;
+            const label = CrdsValueLabel{ .LegacyContactInfo = pubkey.* };
+            if (self.get(label)) |*contact_info| {
+                const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
+                if (value_timestamp > cutoff_timestamp) {
+                    continue;
+                }
+            }
+
+            // otherwise we iterate over the values
+            var entry_indexs = entry.value_ptr;
+            const count = entry_indexs.count();
+
+            for (entry_indexs.iterator().keys[0..count]) |entry_index| {
+                const versioned_value = self.store.values()[entry_index];
+                const value_timestamp = @min(versioned_value.value.wallclock(), versioned_value.timestamp_on_insertion);
+                if (value_timestamp <= cutoff_timestamp) {
+                    try old_labels.append(versioned_value.value.label());
+                }
+            }
+        }
+
+        return old_labels;
+    }
 };
 
 pub const HashTimeQueue = struct {
@@ -612,6 +658,33 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     }
 }
 
+test "gossip.crds_table: remove old values" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rng = std.rand.DefaultPrng.init(seed);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    for (0..5) |_| {
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        // TS = 100
+        try crds_table.insert(value, 100);
+    }
+    try std.testing.expect(crds_table.len() == 5);
+
+    // cutoff = 150
+    const values = try crds_table.get_old_labels(200, 50);
+    defer values.deinit();
+    // remove all values
+    for (values.items) |value| {
+        try crds_table.remove(value);
+    }
+
+    try std.testing.expectEqual(crds_table.len(), 0);
+}
+
 test "gossip.crds_table: insert and remove value" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
@@ -625,7 +698,7 @@ test "gossip.crds_table: insert and remove value" {
     try crds_table.insert(value, 100);
 
     const label = value.label();
-    crds_table.remove(label);
+    try crds_table.remove(label);
 }
 
 test "gossip.crds_table: trim pruned values" {

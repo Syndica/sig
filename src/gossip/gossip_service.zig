@@ -297,8 +297,9 @@ pub const GossipService = struct {
 
             const purged_cutoff_timestamp = now -| (5 * CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
             self.crds_table.write();
-            self.crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
+            try self.crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
             self.crds_table.purged.trim(purged_cutoff_timestamp);
+            self.crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
             self.crds_table.release_write();
 
             const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
