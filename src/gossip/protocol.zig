@@ -241,7 +241,7 @@ test "gossip.protocol: test prune data sig verify" {
 test "gossip.protocol: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var original = Protocol{ .PingMessage = Ping.random(keypair) };
+    var original = Protocol{ .PingMessage = try Ping.random(keypair) };
     var buf = [_]u8{0} ** 1232;
 
     var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
@@ -256,7 +256,7 @@ test "gossip.protocol: ping message serializes and deserializes correctly" {
 test "gossip.protocol: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var ping = Ping.random(keypair);
+    var ping = try Ping.random(keypair);
     var msg = Protocol{ .PingMessage = ping };
     try msg.verify_signature();
 
