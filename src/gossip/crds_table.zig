@@ -80,9 +80,6 @@ pub const CrdsTable = struct {
     // head of the store
     cursor: usize = 0,
 
-    // thread safe
-    lock: RwLock = .{},
-
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -118,26 +115,6 @@ pub const CrdsTable = struct {
             entry.value_ptr.deinit();
         }
         self.pubkey_to_values.deinit();
-    }
-
-    pub fn write(self: *Self) void {
-        self.lock.lock();
-    }
-
-    pub fn release_write(self: *Self) void {
-        self.lock.unlock();
-    }
-
-    pub fn read(self: *Self) void {
-        self.lock.lockShared();
-    }
-
-    pub fn release_read(self: *Self) void {
-        self.lock.unlockShared();
-    }
-
-    pub fn len(self: *Self) usize {
-        return self.store.count();
     }
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
@@ -294,20 +271,25 @@ pub const CrdsTable = struct {
         return failed_insert_indexs;
     }
 
+    pub fn len(self: *const Self) usize {
+        return self.store.count();
+    }
+
     // ** getter functions **
-    pub fn get(self: *Self, label: CrdsValueLabel) ?CrdsVersionedValue {
+    pub fn get(self: *const Self, label: CrdsValueLabel) ?CrdsVersionedValue {
         return self.store.get(label);
     }
 
-    pub fn get_entries_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        const cursor_indexs = self.entries.keys();
+    pub fn generic_get_with_cursor(hashmap: anytype, store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue), buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {
+        const cursor_indexs = hashmap.keys();
         var index: usize = 0;
         for (cursor_indexs) |cursor_index| {
             if (cursor_index < caller_cursor.*) {
                 continue;
             }
-            const entry_index = self.entries.get(cursor_index).?;
-            var entry = self.store.iterator().values[entry_index];
+
+            const entry_index = hashmap.get(cursor_index).?;
+            var entry = store.iterator().values[entry_index];
             buf[index] = entry;
             index += 1;
 
@@ -318,75 +300,47 @@ pub const CrdsTable = struct {
         // move up the caller_cursor
         caller_cursor.* += index;
         return buf[0..index];
+    }
+
+    pub fn get_entries_with_cursor(self: *const Self, buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {
+        return CrdsTable.generic_get_with_cursor(
+            self.entries,
+            self.store,
+            buf,
+            caller_cursor,
+        );
     }
 
     pub fn get_votes_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        const keys = self.votes.keys();
-        var index: usize = 0;
-        for (keys) |key| {
-            if (key < caller_cursor.*) {
-                continue;
-            }
-            const entry_index = self.votes.get(key).?;
-            var entry = self.store.iterator().values[entry_index];
-            buf[index] = entry;
-            index += 1;
-
-            if (index == buf.len) {
-                break;
-            }
-        }
-        // move up the caller_cursor
-        caller_cursor.* += index;
-        return buf[0..index];
+        return CrdsTable.generic_get_with_cursor(
+            self.votes,
+            self.store,
+            buf,
+            caller_cursor,
+        );
     }
 
     pub fn get_epoch_slots_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        const keys = self.epoch_slots.keys();
-        var index: usize = 0;
-        for (keys) |key| {
-            if (key < caller_cursor.*) {
-                continue;
-            }
-            const entry_index = self.epoch_slots.get(key).?;
-            var entry = self.store.iterator().values[entry_index];
-            buf[index] = entry;
-            index += 1;
-
-            if (index == buf.len) {
-                break;
-            }
-        }
-        // move up the caller_cursor
-        caller_cursor.* += index;
-        return buf[0..index];
+        return CrdsTable.generic_get_with_cursor(
+            self.epoch_slots,
+            self.store,
+            buf,
+            caller_cursor,
+        );
     }
 
     pub fn get_duplicate_shreds_with_cursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        const keys = self.duplicate_shreds.keys();
-        var index: usize = 0;
-        for (keys) |key| {
-            if (key < caller_cursor.*) {
-                continue;
-            }
-            const entry_index = self.duplicate_shreds.get(key).?;
-            var entry = self.store.iterator().values[entry_index];
-            buf[index] = entry;
-            index += 1;
-
-            if (index == buf.len) {
-                break;
-            }
-        }
-        // move up the caller_cursor
-        caller_cursor.* += index;
-        return buf[0..index];
+        return CrdsTable.generic_get_with_cursor(
+            self.duplicate_shreds,
+            self.store,
+            buf,
+            caller_cursor,
+        );
     }
 
     pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) ![]CrdsVersionedValue {
         const store_values = self.store.iterator().values;
         const contact_indexs = self.contact_infos.iterator().keys;
-
         const size = @min(self.contact_infos.count(), buf.len);
 
         for (0..size) |i| {
@@ -514,7 +468,7 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) !void {
+    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) std.mem.Allocator.Error!void {
         const n_pubkeys = self.pubkey_to_values.count();
         // 90% close to capacity
         const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
@@ -608,7 +562,7 @@ pub const HashTimeQueue = struct {
         };
     }
 
-    pub fn len(self: *Self) usize {
+    pub fn len(self: *const Self) usize {
         return self.queue.len;
     }
 
@@ -632,7 +586,7 @@ pub const HashTimeQueue = struct {
         }
     }
 
-    pub fn get_values(self: *Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+    pub fn get_values(self: *const Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
         var hashes = try std.ArrayList(Hash).initCapacity(alloc, self.queue.len);
         var curr_ptr = self.queue.first;
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {

@@ -20,6 +20,7 @@ const pull_request = @import("../gossip/pull_request.zig");
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 
 const Bloom = @import("../bloom/bloom.zig").Bloom;
+const RwMux = @import("../sync/mux.zig").RwMux;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const CRDS_GOSSIP_PUSH_FANOUT: usize = 6;
@@ -38,7 +39,7 @@ pub const ActiveSet = struct {
 
     pub fn rotate(
         alloc: std.mem.Allocator,
-        crds_table: *CrdsTable,
+        crds_table: *RwMux(CrdsTable),
         my_pubkey: Pubkey,
         my_shred_version: u16,
     ) !Self {
@@ -104,15 +105,12 @@ pub const ActiveSet = struct {
         self: *const Self,
         allocator: std.mem.Allocator,
         origin: Pubkey,
-        crds_table: *CrdsTable,
+        crds_table: *const CrdsTable,
     ) !std.ArrayList(EndPoint) {
         var active_set_endpoints = std.ArrayList(EndPoint).init(allocator);
         errdefer active_set_endpoints.deinit();
 
         // change to while loop
-        crds_table.read();
-        errdefer crds_table.release_read();
-
         for (self.peers[0..self.len]) |peer_pubkey| {
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
@@ -132,8 +130,6 @@ pub const ActiveSet = struct {
                 break;
             }
         }
-        crds_table.release_read();
-
         return active_set_endpoints;
     }
 };
@@ -152,11 +148,12 @@ test "gossip.active_set: init/deinit" {
         try crds_table.insert(value, get_wallclock());
     }
 
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
     var kp = try KeyPair.create(null);
     var pk = Pubkey.fromPublicKey(&kp.public_key, true);
     var active_set = try ActiveSet.rotate(
         alloc,
-        &crds_table,
+        &crds_table_rw,
         pk,
         0,
     );
