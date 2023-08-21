@@ -96,13 +96,15 @@ For example, a listener would track their own cursor and periodically call the g
 
 ### Bounding Memory Growth
 
-The crds table is also periodically trimmed to maintian a max number of unique pubkeys so 
+The crds table is also periodically trimmed to maintain a max number of unique pubkeys and remove values with old timestamps, so 
 memory growth is bounded. The max number of pubkeys is set to `8192` in the codebase and the method `attempt_trim` which is periodically called to remove pubkeys when we approach 90% capacity.
 
 We use the field `CrdsTable.pubkey_to_values` to track all the crds values in the table associated with a specific node pubkey. When triming we iterate over the oldest pubkeys
-and remove all their values from the table. 
+and remove all their values from the table. In the solana-labs implementation, the gossip pubkeys with the smallest stake weight are removed first, however we dont have stake weight information yet in Sig, this is future work.
 
-In the solana-labs implementation, the gossip pubkeys with the smallest stake weight are removed first, however we dont have stake weight information yet in Sig, this is future work.
+To remove values with old timestamps, `remove_old_labels` is called periodically as well. 
+
+*Note:* Since we are using an indexable hashmap struct, when removing values we typically use the `removeSwap` function (defined as: "The entry is removed from the underlying array by swapping it with the last element and pop-ing"). Since we are tracking the index of values across multiple arrays, when we `removeSwap`, the last value is now at a different index then we recorded. So, we need to account for the 'swapping with the last element' and update our indexs on each remove. The full logic can be found in `CrdsTable.remove()`.
 
 ## Protocol Messages
 
