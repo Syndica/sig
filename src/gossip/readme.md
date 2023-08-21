@@ -102,7 +102,8 @@ memory growth is bounded. The max number of pubkeys is set to `8192` in the code
 We use the field `CrdsTable.pubkey_to_values` to track all the crds values in the table associated with a specific node pubkey. When triming we iterate over the oldest pubkeys
 and remove all their values from the table. In the solana-labs implementation, the gossip pubkeys with the smallest stake weight are removed first, however we dont have stake weight information yet in Sig, this is future work.
 
-To remove values with old timestamps, `remove_old_labels` is called periodically as well. 
+To remove values with old timestamps, `remove_old_labels` is called 
+periodically as well.
 
 *Note:* Since we are using an indexable hashmap struct, when removing values we
 typically use the `removeSwap` function (defined as: "The entry is removed from the 
