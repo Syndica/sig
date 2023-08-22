@@ -45,7 +45,7 @@ const CRDS_GOSSIP_PUSH_FANOUT = @import("../gossip/active_set.zig").CRDS_GOSSIP_
 const Hash = @import("../core/hash.zig").Hash;
 
 const PacketChannel = Channel(Packet);
-const ProtocolMessage = struct { from_addr: EndPoint, message: Protocol };
+const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
@@ -223,7 +223,7 @@ pub const GossipService = struct {
             };
 
             // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
-            const msg = ProtocolMessage{ .from_addr = packet.addr, .message = protocol_message };
+            const msg = ProtocolMessage{ .from_endpoint = packet.addr, .message = protocol_message };
             try verified_channel.send(msg);
         }
     }
@@ -783,8 +783,7 @@ pub const GossipService = struct {
             // }
 
             var message = protocol_message.message;
-            var from_addr = protocol_message.from_addr;
-            _ = from_addr;
+            var from_endpoint = protocol_message.from_endpoint;
 
             switch (message) {
                 .PushMessage => |*push| {
@@ -828,6 +827,7 @@ pub const GossipService = struct {
                     );
 
                     // silently insert the timeout values
+                    // (without updating all associated origin values)
                     const timeout_indexs = insert_results.timeouts.?;
                     defer timeout_indexs.deinit();
                     for (timeout_indexs.items) |index| {
@@ -838,6 +838,7 @@ pub const GossipService = struct {
                     }
 
                     // update the contactInfo timestamps of the successful inserts
+                    // (and all other origin values)
                     const successful_insert_indexs = insert_results.inserted.?;
                     defer successful_insert_indexs.deinit();
                     for (successful_insert_indexs.items) |index| {
@@ -872,15 +873,18 @@ pub const GossipService = struct {
                     var value = pull[1]; // contact info
                     const now = get_wallclock();
 
-                    var crds_table_lg = crds_table_rw.write();
-                    var crds_table = crds_table_lg.mut();
-                    crds_table.insert(value, now);
-                    crds_table.update_record_timestamp(value.id(), now);
-                    crds_table_lg.unlock();
+                    {
+                        var crds_table_lg = crds_table_rw.write();
+                        defer crds_table_lg.unlock();
+                        var crds_table = crds_table_lg.mut();
+
+                        try crds_table.insert(value, now);
+                        crds_table.update_record_timestamp(value.id(), now);
+                    }
 
                     // TODO: filter out requests which hasnt responded to a ping request
 
-                    crds_table_lg = crds_table_rw.read();
+                    var crds_table_lg = crds_table_rw.read();
                     const crds_values = pull_response.filter_crds_values(
                         allocator,
                         crds_table_lg.get(),
@@ -894,19 +898,49 @@ pub const GossipService = struct {
                     defer crds_values.deinit();
                     crds_table_lg.unlock();
 
-                    // TODO: use from_addr
+                    // send the values as a pull response
+                    var packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH);
+                    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
-                    // const protocol_msg = Protocol {
-                    //     .PullResponse = .{
-                    //         my_pubkey, crds_values.items,
-                    //     }
-                    // };
-                    // var buf: [PACKET_DATA_SIZE]u8 = undefined;
-                    // @memset(&buf, 0);
+                    const max_chunk_size = PUSH_MESSAGE_MAX_PAYLOAD_SIZE;
+                    var buf_byte_size: u64 = 0;
 
-                    // var buf_slice = try bincode.writeToSlice(&buf, protocol_msg, bincode.Params{});
-                    // var packet = Packet.init(from_addr, buf, buf_slice.len);
-                    // responder_channel.send(packet);
+                    var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
+                    defer protocol_msg_values.deinit();
+                    const crds_value_len = crds_values.items.len;
+
+                    for (crds_values.items, 0..) |crds_value, i| {
+                        const data_byte_size = try bincode.get_serialized_size(allocator, crds_value, bincode.Params{});
+                        // should never have a chunk larger than the max
+                        if (data_byte_size > max_chunk_size) {
+                            // std.debug.print("skipping data larger than max chunk size\n", .{});
+                            unreachable;
+                        }
+                        const new_chunk_size = buf_byte_size + data_byte_size;
+                        const is_last_iter = i == crds_value_len - 1;
+
+                        if (new_chunk_size > max_chunk_size or is_last_iter) {
+                            // write to Push to packet
+                            const protocol_msg = Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } };
+                            var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+
+                            var packet = Packet.init(from_endpoint, packet_buf, msg_slice.len);
+                            try packets.append(packet);
+
+                            // reset array
+                            buf_byte_size = data_byte_size;
+                            protocol_msg_values.clearRetainingCapacity();
+                            try protocol_msg_values.append(crds_value);
+                        } else {
+                            // new_chunk_size <= max_chunk_size
+                            buf_byte_size = new_chunk_size;
+                            try protocol_msg_values.append(crds_value);
+                        }
+                    }
+
+                    for (packets.items) |packet| {
+                        try responder_channel.send(packet);
+                    }
                 },
                 .PruneMessage => |*prune| {
                     const prune_msg: PruneData = prune[1];
@@ -1302,7 +1336,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     // packet
     const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
     const protocol_msg = ProtocolMessage{
-        .from_addr = peer,
+        .from_endpoint = peer,
         .message = msg,
     };
     try verified_channel.send(protocol_msg);

@@ -411,6 +411,8 @@ To ensure memory doesnt grow without bounds, the `failed_pull_hashes` array is p
 
 We also do the same thing for values that are pruned in the crds table (ie, values which are overwritten) in `CrdsTable.pruned`.
 
+For each crds value which is successfully inserted in the crds table, we also update the timestamps for all the values from that origin pubkey. We do this so that when we are trimming old crds values in the table, we dont remove values from an active pubkey.
+
 ## Protocol Messages: Push
 
 ### Sending Push Messages 
