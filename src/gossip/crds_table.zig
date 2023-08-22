@@ -382,7 +382,7 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) ![]CrdsVersionedValue {
+    pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) []CrdsVersionedValue {
         const store_values = self.store.iterator().values;
         const contact_indexs = self.contact_infos.iterator().keys;
         const size = @min(self.contact_infos.count(), buf.len);
@@ -401,7 +401,7 @@ pub const CrdsTable = struct {
         alloc: std.mem.Allocator,
         mask: u64,
         mask_bits: u64,
-    ) std.mem.Allocator.Error!std.ArrayList(usize) {
+    ) error{OutOfMemory}!std.ArrayList(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
     }
@@ -512,7 +512,7 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) std.mem.Allocator.Error!void {
+    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
         const n_pubkeys = self.pubkey_to_values.count();
         // 90% close to capacity
         const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
@@ -545,7 +545,7 @@ pub const CrdsTable = struct {
         self: *Self,
         now: u64,
         timeout: u64,
-    ) std.mem.Allocator.Error!void {
+    ) error{OutOfMemory}!void {
         const old_labels = try self.get_old_labels(now, timeout);
         defer old_labels.deinit();
 
@@ -559,7 +559,7 @@ pub const CrdsTable = struct {
         self: *Self,
         now: u64,
         timeout: u64,
-    ) std.mem.Allocator.Error!std.ArrayList(CrdsValueLabel) {
+    ) error{OutOfMemory}!std.ArrayList(CrdsValueLabel) {
         var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
 
         const cutoff_timestamp = now -| timeout;
@@ -849,7 +849,7 @@ test "gossip.crds_table: insert and get contact_info" {
 
     // test retrieval
     var buf: [100]CrdsVersionedValue = undefined;
-    var nodes = try crds_table.get_contact_infos(&buf);
+    var nodes = crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
@@ -863,7 +863,7 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0);
 
     // check retrieval
-    nodes = try crds_table.get_contact_infos(&buf);
+    nodes = crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == v);
 }

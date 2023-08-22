@@ -24,7 +24,7 @@ pub fn filter_crds_values(
     filter: *const CrdsFilter,
     caller_wallclock: u64,
     max_number_values: usize,
-) std.mem.Allocator.Error!ArrayList(CrdsValue) {
+) error{OutOfMemory}!ArrayList(CrdsValue) {
     if (max_number_values == 0) {
         return ArrayList(CrdsValue).init(alloc);
     }

@@ -42,10 +42,10 @@ pub const ActiveSet = struct {
         crds_table: *RwMux(CrdsTable),
         my_pubkey: Pubkey,
         my_shred_version: u16,
-    ) !Self {
+    ) error{OutOfMemory}!Self {
         const now = get_wallclock();
         var buf: [NUM_ACTIVE_SET_ENTRIES]crds.LegacyContactInfo = undefined;
-        var crds_peers = try GossipService.get_gossip_nodes(
+        var crds_peers = GossipService.get_gossip_nodes(
             crds_table,
             &my_pubkey,
             my_shred_version,
