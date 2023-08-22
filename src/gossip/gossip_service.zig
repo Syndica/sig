@@ -391,7 +391,7 @@ pub const GossipService = struct {
                 defer failed_pull_hashes_array.deinit();
                 failed_pull_hashes_lg.unlock();
 
-                var pull_packets = new_pull_requests(
+                var pull_packets = build_pull_requests(
                     self.allocator,
                     &self.crds_table_rw,
                     &failed_pull_hashes_array,
@@ -417,7 +417,7 @@ pub const GossipService = struct {
                 &self.crds_table_rw,
                 &self.push_msg_queue_mux,
             );
-            var push_packets = new_push_messages(
+            var push_packets = build_push_messages(
                 self.allocator,
                 &self.crds_table_rw,
                 &self.active_set_rw,
@@ -494,65 +494,113 @@ pub const GossipService = struct {
         }
     }
 
-    pub fn get_gossip_nodes(
-        crds_table_rw: *RwMux(CrdsTable), // reads to get contact infos
-        my_pubkey: *const Pubkey, // used to filter out ourself
-        my_shred_version: u16, // used to filter matching shredversions
-        nodes: []crds.LegacyContactInfo, // output
-        comptime MAX_SIZE: usize, // max_size == nodes.len but comptime for init of stack array
-        now: u64, // filters old values
-    ) ![]crds.LegacyContactInfo {
-        std.debug.assert(MAX_SIZE == nodes.len);
+    fn build_push_messages(
+        allocator: std.mem.Allocator,
+        crds_table_rw: *RwMux(CrdsTable),
+        active_set_rw: *RwMux(ActiveSet),
+        my_pubkey: Pubkey,
+        push_cursor: *u64,
+    ) !std.ArrayList(Packet) {
+        // TODO: find a better static value?
+        var buf: [512]crds.CrdsVersionedValue = undefined;
 
-        var buf: [MAX_SIZE]crds.CrdsVersionedValue = undefined;
-        const contact_infos = blk: {
+        var crds_entries = blk: {
             var crds_table_lg = crds_table_rw.read();
             defer crds_table_lg.unlock();
 
-            var crds_table: *const CrdsTable = crds_table_lg.get();
-            break :blk try crds_table.get_contact_infos(&buf);
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            break :blk crds_table.get_entries_with_cursor(&buf, push_cursor);
         };
 
-        if (contact_infos.len == 0) {
-            return nodes[0..0];
-        }
+        const now = get_wallclock();
+        var total_byte_size: usize = 0;
 
-        // filter only valid gossip addresses
-        const GOSSIP_ACTIVE_TIMEOUT = 60 * std.time.ms_per_s;
-        const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
+        // find new values in crds table
+        // TODO: benchmark different approach of HashMapping(origin, value) first
+        // then deriving the active set per origin in a batch
+        var push_messages = std.AutoHashMap(EndPoint, std.ArrayList(CrdsValue)).init(allocator);
+        defer push_messages.deinit();
 
-        var node_index: usize = 0;
-        for (contact_infos) |contact_info| {
-            const peer_info = contact_info.value.data.LegacyContactInfo;
-            const peer_gossip_addr = peer_info.gossip;
+        var active_set_lg = active_set_rw.read();
+        var active_set: *const ActiveSet = active_set_lg.get();
+        errdefer active_set_lg.unlock();
 
-            // filter inactive nodes
-            if (contact_info.timestamp_on_insertion < too_old_ts) {
+        var num_values_considered: usize = 0;
+        for (crds_entries) |entry| {
+            const value = entry.value;
+
+            const entry_time = value.wallclock();
+            const too_old = entry_time < now -| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
+            const too_new = entry_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
+            if (too_old or too_new) {
+                num_values_considered += 1;
                 continue;
             }
-            // filter self
-            if (contact_info.value.id().equals(my_pubkey)) {
-                continue;
-            }
-            // filter matching shred version or my_shred_version == 0
-            if (my_shred_version != 0 and my_shred_version != peer_info.shred_version) {
-                continue;
-            }
-            // filter on valid gossip address
-            crds.sanitize_socket(&peer_gossip_addr) catch continue;
 
-            nodes[node_index] = peer_info;
-            node_index += 1;
+            const byte_size = try bincode.get_serialized_size(allocator, value, bincode.Params{});
+            total_byte_size +|= byte_size;
 
-            if (node_index == nodes.len) {
+            if (total_byte_size > MAX_BYTES_PER_PUSH) {
                 break;
             }
+
+            // get the active set for these values *PER ORIGIN* due to prunes
+            const origin = value.id();
+            var crds_table_lg = crds_table_rw.read();
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            const active_set_peers = try active_set.get_fanout_peers(allocator, origin, crds_table);
+            defer active_set_peers.deinit();
+            crds_table_lg.unlock();
+
+            for (active_set_peers.items) |peer| {
+                var maybe_peer_entry = push_messages.getEntry(peer);
+                if (maybe_peer_entry) |peer_entry| {
+                    try peer_entry.value_ptr.append(value);
+                } else {
+                    var peer_entry = try std.ArrayList(CrdsValue).initCapacity(allocator, 1);
+                    peer_entry.appendAssumeCapacity(value);
+                    try push_messages.put(peer, peer_entry);
+                }
+            }
+            num_values_considered += 1;
+        }
+        active_set_lg.unlock();
+
+        // adjust cursor for values not sent this round
+        // NOTE: labs client doesnt do this - bug?
+        const num_values_not_considered = crds_entries.len - num_values_considered;
+        push_cursor.* -= num_values_not_considered;
+
+        // build Push msg packets
+        var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, push_messages.count());
+        var all_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, push_messages.count());
+        defer {
+            for (all_crds_values.items) |all_crds_value| {
+                all_crds_value.deinit();
+            }
+            all_crds_values.deinit();
+            all_endpoints.deinit();
         }
 
-        return nodes[0..node_index];
+        var push_iter = push_messages.iterator();
+        while (push_iter.next()) |push_entry| {
+            all_crds_values.appendAssumeCapacity(push_entry.value_ptr);
+            all_endpoints.appendAssumeCapacity(push_entry.key_ptr);
+        }
+
+        const push_packets = try build_chunked_packets(
+            allocator,
+            my_pubkey,
+            &all_crds_values,
+            &all_endpoints,
+            PUSH_MESSAGE_MAX_PAYLOAD_SIZE,
+            PacketMessageType.PushMessage,
+        );
+
+        return push_packets;
     }
 
-    fn new_pull_requests(
+    fn build_pull_requests(
         allocator: std.mem.Allocator,
         crds_table: *RwMux(CrdsTable),
         failed_pull_hashes: *const std.ArrayList(Hash),
@@ -616,7 +664,7 @@ pub const GossipService = struct {
         return output;
     }
 
-    fn send_ping(self: *Self, peer: *const EndPoint, logger: *Logger) !void {
+    fn build_ping_messages(self: *Self, peer: *const EndPoint, logger: *Logger) !void {
         var protocol = Protocol{ .PingMessage = try Ping.random(self.cluster_info.our_keypair) };
         var out = [_]u8{0} ** PACKET_DATA_SIZE;
         var bytes = try bincode.writeToSlice(out[0..], protocol, bincode.Params.standard);
@@ -640,25 +688,6 @@ pub const GossipService = struct {
         legacy_contact_info.shred_version = 0;
 
         return legacy_contact_info;
-    }
-
-    fn drain_push_queue_to_crds_table(
-        crds_table_rw: *RwMux(CrdsTable),
-        push_msg_queue_mux: *Mux(std.ArrayList(CrdsValue)),
-    ) !void {
-        const now = get_wallclock();
-
-        var push_msg_queue_lg = push_msg_queue_mux.lock();
-        var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lg.mut();
-        defer push_msg_queue_lg.unlock();
-
-        var crds_table_lg = crds_table_rw.write();
-        var crds_table: *CrdsTable = crds_table_lg.mut();
-        defer crds_table_lg.unlock();
-
-        while (push_msg_queue.popOrNull()) |crds_value| {
-            crds_table.insert(crds_value, now) catch {};
-        }
     }
 
     fn handle_pull_request(
@@ -805,112 +834,6 @@ pub const GossipService = struct {
         }
     }
 
-    fn new_push_messages(
-        allocator: std.mem.Allocator,
-        crds_table_rw: *RwMux(CrdsTable),
-        active_set_rw: *RwMux(ActiveSet),
-        my_pubkey: Pubkey,
-        push_cursor: *u64,
-    ) !std.ArrayList(Packet) {
-        // TODO: find a better static value?
-        var buf: [512]crds.CrdsVersionedValue = undefined;
-
-        var crds_entries = blk: {
-            var crds_table_lg = crds_table_rw.read();
-            defer crds_table_lg.unlock();
-
-            const crds_table: *const CrdsTable = crds_table_lg.get();
-            break :blk crds_table.get_entries_with_cursor(&buf, push_cursor);
-        };
-
-        const now = get_wallclock();
-        var total_byte_size: usize = 0;
-
-        // find new values in crds table
-        // TODO: benchmark different approach of HashMapping(origin, value) first
-        // then deriving the active set per origin in a batch
-        var push_messages = std.AutoHashMap(EndPoint, std.ArrayList(CrdsValue)).init(allocator);
-        defer push_messages.deinit();
-
-        var active_set_lg = active_set_rw.read();
-        var active_set: *const ActiveSet = active_set_lg.get();
-        errdefer active_set_lg.unlock();
-
-        var num_values_considered: usize = 0;
-        for (crds_entries) |entry| {
-            const value = entry.value;
-
-            const entry_time = value.wallclock();
-            const too_old = entry_time < now -| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
-            const too_new = entry_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
-            if (too_old or too_new) {
-                num_values_considered += 1;
-                continue;
-            }
-
-            const byte_size = try bincode.get_serialized_size(allocator, value, bincode.Params{});
-            total_byte_size +|= byte_size;
-
-            if (total_byte_size > MAX_BYTES_PER_PUSH) {
-                break;
-            }
-
-            // get the active set for these values *PER ORIGIN* due to prunes
-            const origin = value.id();
-            var crds_table_lg = crds_table_rw.read();
-            const crds_table: *const CrdsTable = crds_table_lg.get();
-            const active_set_peers = try active_set.get_fanout_peers(allocator, origin, crds_table);
-            defer active_set_peers.deinit();
-            crds_table_lg.unlock();
-
-            for (active_set_peers.items) |peer| {
-                var maybe_peer_entry = push_messages.getEntry(peer);
-                if (maybe_peer_entry) |peer_entry| {
-                    try peer_entry.value_ptr.append(value);
-                } else {
-                    var peer_entry = try std.ArrayList(CrdsValue).initCapacity(allocator, 1);
-                    peer_entry.appendAssumeCapacity(value);
-                    try push_messages.put(peer, peer_entry);
-                }
-            }
-            num_values_considered += 1;
-        }
-        active_set_lg.unlock();
-
-        // adjust cursor for values not sent this round
-        // NOTE: labs client doesnt do this - bug?
-        const num_values_not_considered = crds_entries.len - num_values_considered;
-        push_cursor.* -= num_values_not_considered;
-
-        // build Push msg packets
-        var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, push_messages.count());
-        var all_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, push_messages.count());
-        defer {
-            for (all_crds_values.items) |all_crds_value| {
-                all_crds_value.deinit();
-            }
-            all_crds_values.deinit();
-            all_endpoints.deinit();
-        }
-
-        var push_iter = push_messages.iterator();
-        while (push_iter.next()) |push_entry| {
-            all_crds_values.appendAssumeCapacity(push_entry.value_ptr);
-            all_endpoints.appendAssumeCapacity(push_entry.key_ptr);
-        }
-
-        const push_packets = try build_chunked_packets(
-            allocator,
-            my_pubkey,
-            &all_crds_values,
-            &all_endpoints,
-            PUSH_MESSAGE_MAX_PAYLOAD_SIZE,
-            PacketMessageType.PushMessage,
-        );
-
-        return push_packets;
-    }
-
     pub fn build_prune_messages(
         allocator: std.mem.Allocator,
         crds_table_rw: *RwMux(CrdsTable),
@@ -1003,6 +926,83 @@ pub const GossipService = struct {
         }
         return failed_origins;
     }
+
+    fn drain_push_queue_to_crds_table(
+        crds_table_rw: *RwMux(CrdsTable),
+        push_msg_queue_mux: *Mux(std.ArrayList(CrdsValue)),
+    ) !void {
+        const now = get_wallclock();
+
+        var push_msg_queue_lg = push_msg_queue_mux.lock();
+        var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lg.mut();
+        defer push_msg_queue_lg.unlock();
+
+        var crds_table_lg = crds_table_rw.write();
+        var crds_table: *CrdsTable = crds_table_lg.mut();
+        defer crds_table_lg.unlock();
+
+        while (push_msg_queue.popOrNull()) |crds_value| {
+            crds_table.insert(crds_value, now) catch {};
+        }
+    }
+
+    pub fn get_gossip_nodes(
+        crds_table_rw: *RwMux(CrdsTable), // reads to get contact infos
+        my_pubkey: *const Pubkey, // used to filter out ourself
+        my_shred_version: u16, // used to filter matching shredversions
+        nodes: []crds.LegacyContactInfo, // output
+        comptime MAX_SIZE: usize, // max_size == nodes.len but comptime for init of stack array
+        now: u64, // filters old values
+    ) ![]crds.LegacyContactInfo {
+        std.debug.assert(MAX_SIZE == nodes.len);
+
+        var buf: [MAX_SIZE]crds.CrdsVersionedValue = undefined;
+        const contact_infos = blk: {
+            var crds_table_lg = crds_table_rw.read();
+            defer crds_table_lg.unlock();
+
+            var crds_table: *const CrdsTable = crds_table_lg.get();
+            break :blk try crds_table.get_contact_infos(&buf);
+        };
+
+        if (contact_infos.len == 0) {
+            return nodes[0..0];
+        }
+
+        // filter only valid gossip addresses
+        const GOSSIP_ACTIVE_TIMEOUT = 60 * std.time.ms_per_s;
+        const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
+
+        var node_index: usize = 0;
+        for (contact_infos) |contact_info| {
+            const peer_info = contact_info.value.data.LegacyContactInfo;
+            const peer_gossip_addr = peer_info.gossip;
+
+            // filter inactive nodes
+            if (contact_info.timestamp_on_insertion < too_old_ts) {
+                continue;
+            }
+            // filter self
+            if (contact_info.value.id().equals(my_pubkey)) {
+                continue;
+            }
+            // filter matching shred version or my_shred_version == 0
+            if (my_shred_version != 0 and my_shred_version != peer_info.shred_version) {
+                continue;
+            }
+            // filter on valid gossip address
+            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+
+            nodes[node_index] = peer_info;
+            node_index += 1;
+
+            if (node_index == nodes.len) {
+                break;
+            }
+        }
+
+        return nodes[0..node_index];
+    }
 };
 
 const PacketMessageType = enum {
@@ -1069,7 +1069,7 @@ fn build_chunked_packets(
     return packets;
 }
 
-test "gossip.gossip_service: generate prune messages" {
+test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     const allocator = std.testing.allocator;
 
     var kp = try KeyPair.create(null);
@@ -1176,7 +1176,7 @@ test "gossip.gossip_service: new pull messages" {
     var crds_table_rw = RwMux(CrdsTable).init(crds_table);
 
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var packets = try GossipService.new_pull_requests(
+    var packets = try GossipService.build_pull_requests(
         allocator,
         &crds_table_rw,
         &failed_pull_hashes,
@@ -1237,7 +1237,7 @@ test "gossip.gossip_service: new push messages" {
     clg.unlock();
 
     var cursor: usize = 0;
-    var msgs = try GossipService.new_push_messages(
+    var msgs = try GossipService.build_push_messages(
         allocator,
         &crds_table_rw,
         &active_set_rw,
@@ -1249,7 +1249,7 @@ test "gossip.gossip_service: new push messages" {
     try std.testing.expect(msgs.items.len > 0);
     msgs.deinit();
 
-    msgs = try GossipService.new_push_messages(
+    msgs = try GossipService.build_push_messages(
         allocator,
         &crds_table_rw,
         &active_set_rw,
