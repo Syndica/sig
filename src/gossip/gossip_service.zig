@@ -1051,16 +1051,34 @@ test "gossip.gossip_service: tests handle_pull_request" {
     // insert random values
     var crds_table_lg = crds_table_rw.write();
     var crds_table: *CrdsTable = crds_table_lg.mut();
-    for (0..10) |_| {
-        var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
-        value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
-        try crds_table.insert(value, get_wallclock());
+    const N_FILTER_BITS = 1;
+
+    var done = false;
+    var count: usize = 0;
+    while (!done) {
+        count += 1;
+        for (0..5) |_| {
+            var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
+            value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
+            try crds_table.insert(value, get_wallclock());
+
+            // make sure well get a response from the request
+            const vers_value = crds_table.get(value.label()).?;
+            const hash_bits = pull_request.hash_to_u64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
+            if (hash_bits == 0) {
+                done = true;
+            }
+        }
+
+        if (count > 5) {
+            @panic("something went wrong");
+        }
     }
     crds_table_lg.unlock();
 
     const Bloom = @import("../bloom/bloom.zig").Bloom;
-    const n_filter_bits = 1;
-    var bloom = try Bloom.random(alloc, 100, 0.1, n_filter_bits);
+    // only consider the first bit so we know well get matches
+    var bloom = try Bloom.random(alloc, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     var ci_data = crds.CrdsData.random_from_index(rng.random(), 0);
@@ -1069,12 +1087,19 @@ test "gossip.gossip_service: tests handle_pull_request" {
 
     const filter = CrdsFilter{
         .filter = bloom,
-        .mask = (~@as(usize, 0)) >> n_filter_bits,
-        .mask_bits = n_filter_bits,
+        .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
+        .mask_bits = N_FILTER_BITS,
     };
     const addr = SocketAddr.random(rng.random());
 
-    var packets = try GossipService.handle_pull_request(alloc, &crds_table_rw, crds_value, filter, addr.toEndpoint(), pubkey);
+    var packets = try GossipService.handle_pull_request(
+        alloc,
+        &crds_table_rw,
+        crds_value,
+        filter,
+        addr.toEndpoint(),
+        pubkey,
+    );
     defer packets.deinit();
 
     try std.testing.expect(packets.items.len > 0);
