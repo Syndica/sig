@@ -65,7 +65,7 @@ pub const CrdsShards = struct {
     }
 
     /// see filter_crds_values for more readable (but inefficient) version  of what this fcn is doing
-    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) !std.ArrayList(usize) {
+    pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) std.mem.Allocator.Error!std.ArrayList(usize) {
         const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
         const match_mask = mask | ones;
 

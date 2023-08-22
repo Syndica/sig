@@ -21,11 +21,11 @@ pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 pub fn filter_crds_values(
     alloc: std.mem.Allocator,
     crds_table: *const CrdsTable,
-    filter: *CrdsFilter,
-    output_size_limit: usize,
+    filter: *const CrdsFilter,
     caller_wallclock: u64,
-) !ArrayList(CrdsValue) {
-    if (output_size_limit == 0) {
+    max_number_values: usize,
+) std.mem.Allocator.Error!ArrayList(CrdsValue) {
+    if (max_number_values == 0) {
         return ArrayList(CrdsValue).init(alloc);
     }
 
@@ -62,7 +62,7 @@ pub fn filter_crds_values(
 
         // good
         try output.append(entry.value);
-        if (output.items.len == output_size_limit) {
+        if (output.items.len == max_number_values) {
             break;
         }
     }
@@ -127,8 +127,8 @@ test "gossip.pull: test filter_crds_values" {
         std.testing.allocator,
         lg.get(),
         &filter,
-        100,
         crds_value.wallclock(),
+        100,
     );
     defer values.deinit();
     lg.unlock();

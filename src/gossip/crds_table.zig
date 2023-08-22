@@ -402,7 +402,7 @@ pub const CrdsTable = struct {
         alloc: std.mem.Allocator,
         mask: u64,
         mask_bits: u64,
-    ) !std.ArrayList(usize) {
+    ) std.mem.Allocator.Error!std.ArrayList(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
     }
