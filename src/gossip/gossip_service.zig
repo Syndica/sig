@@ -194,20 +194,15 @@ pub const GossipService = struct {
         // we close the chan if no more packet's can ever be produced
         defer packet_channel.close();
 
-        // handle packet reads
         var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        @memset(&read_buf, 0);
-
         var bytes_read: usize = undefined;
+
         while (bytes_read != 0) {
             var recv_meta = try gossip_socket.receiveFrom(&read_buf);
             bytes_read = recv_meta.numberOfBytes;
 
             // send packet through channel
             try packet_channel.send(Packet.init(recv_meta.sender, read_buf, bytes_read));
-
-            // reset buffer
-            @memset(&read_buf, 0);
         }
 
         logger.debugf("reading gossip exiting...", .{});
@@ -699,8 +694,8 @@ pub const GossipService = struct {
         var all_to_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, 1);
         all_crds_values.appendAssumeCapacity(&crds_values);
         all_to_endpoints.appendAssumeCapacity(&pull_from_endpoint);
-        defer {
-            all_crds_values.deinit();
+        defer { 
+            all_crds_values.deinit(); 
             all_to_endpoints.deinit();
         }
 
@@ -714,12 +709,12 @@ pub const GossipService = struct {
         );
     }
 
-    fn handle_pull_response(
+    fn handle_pull_response( 
         allocator: std.mem.Allocator,
         crds_table_rw: *RwMux(CrdsTable),
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         crds_values: []CrdsValue,
-    ) !void {
+    ) !void { 
         // TODO: benchmark and compare with labs' preprocessing
         const now = get_wallclock();
         var crds_table_lg = crds_table_rw.write();
@@ -774,70 +769,6 @@ pub const GossipService = struct {
                 failed_pull_hashes.insert(value_hash, now);
             }
         }
-    }
-
-    const PacketMessageType = enum {
-        PullResponse,
-        PushMessage,
-    };
-
-    fn build_chunked_packets(
-        allocator: std.mem.Allocator,
-        my_pubkey: Pubkey,
-        to_crds_values: *const std.ArrayList(*const std.ArrayList(CrdsValue)),
-        to_endpoints: *const std.ArrayList(*const EndPoint),
-        max_chunk_bytes: usize,
-        packet_message_type: PacketMessageType,
-    ) error{ SerializationError, OutOfMemory }!std.ArrayList(Packet) {
-        var packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH);
-        errdefer packets.deinit();
-
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        var buf_byte_size: u64 = 0;
-
-        var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
-        defer protocol_msg_values.deinit();
-
-        for (to_crds_values.items, to_endpoints.items) |crds_values, to_endpoint| {
-            const crds_value_len = crds_values.items.len;
-
-            for (crds_values.items, 0..) |crds_value, i| {
-                const data_byte_size = bincode.get_serialized_size_with_slice(&packet_buf, crds_value, bincode.Params{}) catch {
-                    return error.SerializationError;
-                };
-
-                // should never have a chunk larger than the max
-                if (data_byte_size > max_chunk_bytes) {
-                    unreachable;
-                }
-                const new_chunk_size = buf_byte_size + data_byte_size;
-                const is_last_iter = i == crds_value_len - 1;
-
-                if (new_chunk_size > max_chunk_bytes or is_last_iter) {
-                    // write message to packet
-                    const protocol_message = switch (packet_message_type) {
-                        .PullResponse => Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } },
-                        .PushMessage => Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } },
-                    };
-                    const packet_slice = bincode.writeToSlice(&packet_buf, protocol_message, bincode.Params{}) catch {
-                        return error.SerializationError;
-                    };
-                    const packet = Packet.init(to_endpoint.*, packet_buf, packet_slice.len);
-                    try packets.append(packet);
-
-                    // reset array
-                    buf_byte_size = data_byte_size;
-                    protocol_msg_values.clearRetainingCapacity();
-                    try protocol_msg_values.append(crds_value);
-                } else {
-                    // new_chunk_size <= max_chunk_size
-                    buf_byte_size = new_chunk_size;
-                    try protocol_msg_values.append(crds_value);
-                }
-            }
-        }
-
-        return packets;
     }
 
     fn handle_prune_message(prune_msg: *const PruneData, active_set_rw: *RwMux(ActiveSet), my_pubkey: *const Pubkey) error{ TooOld, BadDestination }!void {
@@ -945,7 +876,7 @@ pub const GossipService = struct {
         // build Push msg packets
         var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, push_messages.count());
         var all_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, push_messages.count());
-        defer {
+        defer { 
             for (all_crds_values.items) |all_crds_value| {
                 all_crds_value.deinit();
             }
@@ -1057,6 +988,70 @@ pub const GossipService = struct {
         return failed_origins;
     }
 };
+
+const PacketMessageType = enum { 
+    PullResponse, 
+    PushMessage,
+};
+
+fn build_chunked_packets(
+    allocator: std.mem.Allocator,
+    my_pubkey: Pubkey,
+    to_crds_values: *const std.ArrayList(*const std.ArrayList(CrdsValue)),
+    to_endpoints: *const std.ArrayList(*const EndPoint),
+    max_chunk_bytes: usize,
+    packet_message_type: PacketMessageType,
+) error{ SerializationError, OutOfMemory }!std.ArrayList(Packet) {
+    var packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH);
+    errdefer packets.deinit();
+
+    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+    var buf_byte_size: u64 = 0;
+
+    var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
+    defer protocol_msg_values.deinit();
+
+    for (to_crds_values.items, to_endpoints.items) |crds_values, to_endpoint|  { 
+        const crds_value_len = crds_values.items.len;
+
+        for (crds_values.items, 0..) |crds_value, i| {
+            const data_byte_size = bincode.get_serialized_size_with_slice(&packet_buf, crds_value, bincode.Params{}) catch {
+                return error.SerializationError;
+            };
+
+            // should never have a chunk larger than the max
+            if (data_byte_size > max_chunk_bytes) {
+                unreachable;
+            }
+            const new_chunk_size = buf_byte_size + data_byte_size;
+            const is_last_iter = i == crds_value_len - 1;
+
+            if (new_chunk_size > max_chunk_bytes or is_last_iter) {
+                // write message to packet
+                const protocol_message = switch (packet_message_type) {
+                    .PullResponse => Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } }, 
+                    .PushMessage => Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } },
+                };
+                const packet_slice = bincode.writeToSlice(&packet_buf, protocol_message, bincode.Params{}) catch {
+                    return error.SerializationError;
+                };
+                const packet = Packet.init(to_endpoint.*, packet_buf, packet_slice.len);
+                try packets.append(packet);
+
+                // reset array
+                buf_byte_size = data_byte_size;
+                protocol_msg_values.clearRetainingCapacity();
+                try protocol_msg_values.append(crds_value);
+            } else {
+                // new_chunk_size <= max_chunk_size
+                buf_byte_size = new_chunk_size;
+                try protocol_msg_values.append(crds_value);
+            }
+        }
+    }
+
+    return packets;
+}
 
 test "gossip.gossip_service: generate prune messages" {
     const allocator = std.testing.allocator;
