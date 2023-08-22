@@ -700,8 +700,8 @@ pub const GossipService = struct {
         var all_to_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, 1);
         all_crds_values.appendAssumeCapacity(&crds_values);
         all_to_endpoints.appendAssumeCapacity(&pull_from_endpoint);
-        defer { 
-            all_crds_values.deinit(); 
+        defer {
+            all_crds_values.deinit();
             all_to_endpoints.deinit();
         }
 
@@ -715,12 +715,12 @@ pub const GossipService = struct {
         );
     }
 
-    fn handle_pull_response( 
+    fn handle_pull_response(
         allocator: std.mem.Allocator,
         crds_table_rw: *RwMux(CrdsTable),
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         crds_values: []CrdsValue,
-    ) !void { 
+    ) !void {
         // TODO: benchmark and compare with labs' preprocessing
         const now = get_wallclock();
         var crds_table_lg = crds_table_rw.write();
@@ -885,7 +885,7 @@ pub const GossipService = struct {
         // build Push msg packets
         var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, push_messages.count());
         var all_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, push_messages.count());
-        defer { 
+        defer {
             for (all_crds_values.items) |all_crds_value| {
                 all_crds_value.deinit();
             }
@@ -977,7 +977,13 @@ pub const GossipService = struct {
             var crds_table_lg = crds_table_rw.write();
             defer crds_table_lg.unlock();
 
-            var result = try crds_table_lg.mut().insert_values(allocator, push_values, CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS, false, false,);
+            var result = try crds_table_lg.mut().insert_values(
+                allocator,
+                push_values,
+                CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
+                false,
+                false,
+            );
             break :blk result.failed.?;
         };
         defer failed_insert_indexs.deinit();
@@ -999,8 +1005,8 @@ pub const GossipService = struct {
     }
 };
 
-const PacketMessageType = enum { 
-    PullResponse, 
+const PacketMessageType = enum {
+    PullResponse,
     PushMessage,
 };
 
@@ -1021,7 +1027,7 @@ fn build_chunked_packets(
     var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
     defer protocol_msg_values.deinit();
 
-    for (to_crds_values.items, to_endpoints.items) |crds_values, to_endpoint|  { 
+    for (to_crds_values.items, to_endpoints.items) |crds_values, to_endpoint| {
         const crds_value_len = crds_values.items.len;
 
         for (crds_values.items, 0..) |crds_value, i| {
@@ -1039,7 +1045,7 @@ fn build_chunked_packets(
             if (new_chunk_size > max_chunk_bytes or is_last_iter) {
                 // write message to packet
                 const protocol_message = switch (packet_message_type) {
-                    .PullResponse => Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } }, 
+                    .PullResponse => Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } },
                     .PushMessage => Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } },
                 };
                 const packet_slice = bincode.writeToSlice(&packet_buf, protocol_message, bincode.Params{}) catch {
