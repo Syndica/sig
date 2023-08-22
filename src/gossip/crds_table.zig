@@ -141,8 +141,7 @@ pub const CrdsTable = struct {
         }
 
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        // CrdsValue should never be larger than PACKET_DATA_SIZE
-        const bytes = bincode.writeToSlice(&buf, value, bincode.Params.standard) catch unreachable;
+        const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
         const versioned_value = CrdsVersionedValue{
             .value = value,
