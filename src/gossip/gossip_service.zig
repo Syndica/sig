@@ -297,62 +297,19 @@ pub const GossipService = struct {
                     }
                 },
                 .PullResponse => |*pull| {
-                    const values = pull[1];
+                    const from = pull[0];
+                    const crds_values = pull[1];
 
-                    // TODO: benchmark and compare with labs' preprocessing
-                    const now = get_wallclock();
-                    var crds_table_lg = crds_table_rw.write();
-                    var crds_table: *CrdsTable = crds_table_lg.mut();
-
-                    const insert_results = try crds_table.insert_values(
+                    _ = from;
+                    handle_pull_response(
                         allocator,
-                        values,
-                        CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
-                        true,
-                        true,
-                    );
-
-                    // silently insert the timeout values
-                    // (without updating all associated origin values)
-                    const timeout_indexs = insert_results.timeouts.?;
-                    defer timeout_indexs.deinit();
-                    for (timeout_indexs.items) |index| {
-                        crds_table.insert(
-                            values[index],
-                            now,
-                        ) catch {};
-                    }
-
-                    // update the contactInfo timestamps of the successful inserts
-                    // (and all other origin values)
-                    const successful_insert_indexs = insert_results.inserted.?;
-                    defer successful_insert_indexs.deinit();
-                    for (successful_insert_indexs.items) |index| {
-                        const origin = values[index].id();
-                        crds_table.update_record_timestamp(origin, now);
-                    }
-                    crds_table_lg.unlock();
-
-                    // track failed inserts - to use when constructing pull requests
-                    var failed_insert_indexs = insert_results.failed.?;
-                    defer failed_insert_indexs.deinit();
-                    {
-                        var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
-                        var failed_pull_hashes = failed_pull_hashes_lg.mut();
-                        defer failed_pull_hashes_lg.unlock();
-
-                        const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
-                        failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
-
-                        var buf: [PACKET_DATA_SIZE]u8 = undefined;
-                        for (failed_insert_indexs.items) |insert_index| {
-                            const value = values[insert_index];
-                            var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
-                            const value_hash = Hash.generateSha256Hash(bytes);
-
-                            failed_pull_hashes.insert(value_hash, now);
-                        }
-                    }
+                        crds_table_rw,
+                        failed_pull_hashes_mux,
+                        crds_values,
+                    ) catch |err| {
+                        logger.warnf("error handling pull response: {s}", .{@errorName(err)});
+                        continue;
+                    };
                 },
                 .PullRequest => |*pull| {
                     var pull_filter = pull[0];
@@ -738,33 +695,99 @@ pub const GossipService = struct {
         crds_table_lg.unlock();
 
         // send the values as a pull response
+        var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, 1);
+        var all_to_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, 1);
+        all_crds_values.appendAssumeCapacity(&crds_values);
+        all_to_endpoints.appendAssumeCapacity(&pull_from_endpoint);
+        defer {
+            all_crds_values.deinit();
+            all_to_endpoints.deinit();
+        }
+
         return try build_chunked_packets(
             allocator,
-            crds_values.items,
             my_pubkey,
-            pull_from_endpoint,
-            MAX_BYTES_PER_PUSH,
-            GossipService.build_pull_response_packet_fcn,
+            &all_crds_values,
+            &all_to_endpoints,
+            PUSH_MESSAGE_MAX_PAYLOAD_SIZE,
+            PacketMessageType.PullResponse,
         );
     }
 
-    fn build_pull_response_packet_fcn(values: []CrdsValue, buf: *[PACKET_DATA_SIZE]u8, my_pubkey: Pubkey, to_endpoint: EndPoint) error{SerializationError}!Packet {
-        const protocol_message = Protocol{
-            .PullResponse = .{ my_pubkey, values },
-        };
-        const buf_slice = bincode.writeToSlice(&buf.*, protocol_message, bincode.Params{}) catch return error.SerializationError;
-        return Packet.init(to_endpoint, buf.*, buf_slice.len);
+    fn handle_pull_response(
+        allocator: std.mem.Allocator,
+        crds_table_rw: *RwMux(CrdsTable),
+        failed_pull_hashes_mux: *Mux(HashTimeQueue),
+        crds_values: []CrdsValue,
+    ) !void {
+        // TODO: benchmark and compare with labs' preprocessing
+        const now = get_wallclock();
+        var crds_table_lg = crds_table_rw.write();
+        var crds_table: *CrdsTable = crds_table_lg.mut();
+
+        const insert_results = try crds_table.insert_values(
+            allocator,
+            crds_values,
+            CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
+            true,
+            true,
+        );
+
+        // silently insert the timeout values
+        // (without updating all associated origin values)
+        const timeout_indexs = insert_results.timeouts.?;
+        defer timeout_indexs.deinit();
+        for (timeout_indexs.items) |index| {
+            crds_table.insert(
+                crds_values[index],
+                now,
+            ) catch {};
+        }
+
+        // update the contactInfo timestamps of the successful inserts
+        // (and all other origin values)
+        const successful_insert_indexs = insert_results.inserted.?;
+        defer successful_insert_indexs.deinit();
+        for (successful_insert_indexs.items) |index| {
+            const origin = crds_values[index].id();
+            crds_table.update_record_timestamp(origin, now);
+        }
+        crds_table_lg.unlock();
+
+        // track failed inserts - to use when constructing pull requests
+        var failed_insert_indexs = insert_results.failed.?;
+        defer failed_insert_indexs.deinit();
+        {
+            var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
+            var failed_pull_hashes = failed_pull_hashes_lg.mut();
+            defer failed_pull_hashes_lg.unlock();
+
+            const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
+            failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
+
+            var buf: [PACKET_DATA_SIZE]u8 = undefined;
+            for (failed_insert_indexs.items) |insert_index| {
+                const value = crds_values[insert_index];
+                var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
+                const value_hash = Hash.generateSha256Hash(bytes);
+
+                failed_pull_hashes.insert(value_hash, now);
+            }
+        }
     }
 
-    const PacketBuildFcn = fn (values: []CrdsValue, buf: *[PACKET_DATA_SIZE]u8, my_pubkey: Pubkey, to_endpoint: EndPoint) error{SerializationError}!Packet;
+    const PacketMessageType = enum {
+        PullResponse,
+        PushMessage,
+    };
 
     fn build_chunked_packets(
         allocator: std.mem.Allocator,
-        crds_values: []CrdsValue,
         my_pubkey: Pubkey,
-        to_endpoint: EndPoint,
+        to_crds_values: *const std.ArrayList(*const std.ArrayList(CrdsValue)),
+        to_endpoints: *const std.ArrayList(*const EndPoint),
         max_chunk_bytes: usize,
-        comptime packet_build_fcn: PacketBuildFcn,
+        packet_message_type: PacketMessageType,
     ) error{ SerializationError, OutOfMemory }!std.ArrayList(Packet) {
         var packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH);
         errdefer packets.deinit();
@@ -775,32 +798,42 @@ pub const GossipService = struct {
         var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
         defer protocol_msg_values.deinit();
 
-        const crds_value_len = crds_values.len;
-        for (crds_values, 0..) |crds_value, i| {
-            const data_byte_size = bincode.get_serialized_size(allocator, crds_value, bincode.Params{}) catch {
-                return error.SerializationError;
-            };
-            // should never have a chunk larger than the max
-            if (data_byte_size > max_chunk_bytes) {
-                // std.debug.print("skipping data larger than max chunk size\n", .{});
-                unreachable;
-            }
-            const new_chunk_size = buf_byte_size + data_byte_size;
-            const is_last_iter = i == crds_value_len - 1;
+        for (to_crds_values.items, to_endpoints.items) |crds_values, to_endpoint| {
+            const crds_value_len = crds_values.items.len;
 
-            if (new_chunk_size > max_chunk_bytes or is_last_iter) {
-                // write to Push to packet
-                const packet = try packet_build_fcn(protocol_msg_values.items, &packet_buf, my_pubkey, to_endpoint);
-                try packets.append(packet);
+            for (crds_values.items, 0..) |crds_value, i| {
+                const data_byte_size = bincode.get_serialized_size_with_slice(&packet_buf, crds_value, bincode.Params{}) catch {
+                    return error.SerializationError;
+                };
 
-                // reset array
-                buf_byte_size = data_byte_size;
-                protocol_msg_values.clearRetainingCapacity();
-                try protocol_msg_values.append(crds_value);
-            } else {
-                // new_chunk_size <= max_chunk_size
-                buf_byte_size = new_chunk_size;
-                try protocol_msg_values.append(crds_value);
+                // should never have a chunk larger than the max
+                if (data_byte_size > max_chunk_bytes) {
+                    unreachable;
+                }
+                const new_chunk_size = buf_byte_size + data_byte_size;
+                const is_last_iter = i == crds_value_len - 1;
+
+                if (new_chunk_size > max_chunk_bytes or is_last_iter) {
+                    // write message to packet
+                    const protocol_message = switch (packet_message_type) {
+                        .PullResponse => Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } },
+                        .PushMessage => Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } },
+                    };
+                    const packet_slice = bincode.writeToSlice(&packet_buf, protocol_message, bincode.Params{}) catch {
+                        return error.SerializationError;
+                    };
+                    const packet = Packet.init(to_endpoint.*, packet_buf, packet_slice.len);
+                    try packets.append(packet);
+
+                    // reset array
+                    buf_byte_size = data_byte_size;
+                    protocol_msg_values.clearRetainingCapacity();
+                    try protocol_msg_values.append(crds_value);
+                } else {
+                    // new_chunk_size <= max_chunk_size
+                    buf_byte_size = new_chunk_size;
+                    try protocol_msg_values.append(crds_value);
+                }
             }
         }
 
@@ -848,7 +881,6 @@ pub const GossipService = struct {
         var crds_entries = blk: {
             var crds_table_lg = crds_table_rw.read();
             defer crds_table_lg.unlock();
-
             break :blk crds_table_lg.get().get_entries_with_cursor(&buf, push_cursor);
         };
 
@@ -911,52 +943,30 @@ pub const GossipService = struct {
         push_cursor.* -= num_values_not_considered;
 
         // build Push msg packets
-        var push_packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH * CRDS_GOSSIP_PUSH_FANOUT);
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-
-        const max_chunk_size = PUSH_MESSAGE_MAX_PAYLOAD_SIZE;
-        var buf_byte_size: u64 = 0;
-
-        var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
-        defer protocol_msg_values.deinit();
+        var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, push_messages.count());
+        var all_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, push_messages.count());
+        defer {
+            for (all_crds_values.items) |all_crds_value| {
+                all_crds_value.deinit();
+            }
+            all_crds_values.deinit();
+            all_endpoints.deinit();
+        }
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
-            const values = push_entry.value_ptr;
-            defer values.deinit();
-            const to_endpoint = push_entry.key_ptr.*;
-
-            for (values.items, 0..) |crds_value, i| {
-                const data_byte_size = try bincode.get_serialized_size(allocator, crds_value, bincode.Params{});
-
-                // should never have a chunk larger than the max
-                if (data_byte_size > max_chunk_size) {
-                    // std.debug.print("skipping data larger than max chunk size\n", .{});
-                    unreachable;
-                }
-
-                const new_chunk_size = buf_byte_size + data_byte_size;
-                const is_last_iter = i == values.items.len - 1;
-
-                if (new_chunk_size > max_chunk_size or is_last_iter) {
-                    // write to Push to packet
-                    const protocol_msg = Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } };
-                    var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-
-                    var packet = Packet.init(to_endpoint, packet_buf, msg_slice.len);
-                    try push_packets.append(packet);
-
-                    // reset array
-                    buf_byte_size = data_byte_size;
-                    protocol_msg_values.clearRetainingCapacity();
-                    try protocol_msg_values.append(crds_value);
-                } else {
-                    // new_chunk_size <= max_chunk_size
-                    buf_byte_size = new_chunk_size;
-                    try protocol_msg_values.append(crds_value);
-                }
-            }
+            all_crds_values.appendAssumeCapacity(push_entry.value_ptr);
+            all_endpoints.appendAssumeCapacity(push_entry.key_ptr);
         }
+
+        const push_packets = try build_chunked_packets(
+            allocator,
+            my_pubkey,
+            &all_crds_values,
+            &all_endpoints,
+            PUSH_MESSAGE_MAX_PAYLOAD_SIZE,
+            PacketMessageType.PushMessage,
+        );
 
         return push_packets;
     }
