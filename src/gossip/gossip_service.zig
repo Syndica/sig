@@ -770,7 +770,7 @@ pub const GossipService = struct {
         var active_set_lg = active_set_rw.write();
         defer active_set_lg.unlock();
 
-        var active_set = active_set_lg.mut();
+        var active_set: *ActiveSet = active_set_lg.mut();
         for (prune_msg.prunes) |origin| {
             if (origin.equals(my_pubkey)) {
                 continue;
@@ -1036,6 +1036,55 @@ const PacketBuilder = enum {
     }
 };
 
+test "gossip.gossip_service: tests handle_prune_messages" {
+    var allocator = std.testing.allocator;
+    var rng = std.rand.DefaultPrng.init(91);
+
+    var my_keypair = try KeyPair.create(null);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
+
+    var crds_table = try CrdsTable.init(allocator);
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var lg = crds_table_rw.write();
+        lg.mut().deinit();
+    }
+
+    // add some peers
+    var lg = crds_table_rw.write();
+    for (0..10) |_| {
+        var keypair = try KeyPair.create(null);
+        var value = try CrdsValue.random_with_index(rng.random(), keypair, 0); // contact info
+        try lg.mut().insert(value, get_wallclock());
+    }
+    lg.unlock();
+
+    // set the active set
+    var active_set = try ActiveSet.rotate(allocator, &crds_table_rw, my_pubkey, 0);
+    defer active_set.deinit();
+
+    try std.testing.expect(active_set.len > 0);
+
+    var prunes = [_]Pubkey{Pubkey.random(rng.random(), .{})};
+
+    var prune_data = PruneData{
+        .pubkey = active_set.peers[0],
+        .destination = my_pubkey,
+        .prunes = &prunes,
+        .signature = undefined,
+        .wallclock = get_wallclock(),
+    };
+    try prune_data.sign(&my_keypair);
+
+    var active_set_rw = RwMux(ActiveSet).init(active_set);
+    try GossipService.handle_prune_message(&prune_data, &active_set_rw, &my_pubkey);
+
+    var as_lg = active_set_rw.read();
+    var as: *const ActiveSet = as_lg.get();
+    try std.testing.expect(as.pruned_peers.get(active_set.peers[0]).?.contains(&prunes[0].data));
+    as_lg.unlock();
+}
+
 test "gossip.gossip_service: tests handle_pull_response" {
     var alloc = std.testing.allocator;
     var crds_table_rw = RwMux(CrdsTable).init(try CrdsTable.init(alloc));
@@ -1047,7 +1096,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var rng = std.rand.DefaultPrng.init(91);
     var kp = try KeyPair.create(null);
 
-    // get random values 
+    // get random values
     var crds_values: [5]CrdsValue = undefined;
     for (0..5) |i| {
         var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
@@ -1057,14 +1106,9 @@ test "gossip.gossip_service: tests handle_pull_response" {
 
     var failed_pull_hashes_mux = Mux(HashTimeQueue).init(HashTimeQueue.init());
 
-    try GossipService.handle_pull_response(
-        alloc, 
-        &crds_table_rw, 
-        &failed_pull_hashes_mux, 
-        &crds_values
-    );
+    try GossipService.handle_pull_response(alloc, &crds_table_rw, &failed_pull_hashes_mux, &crds_values);
 
-    // make sure values are inserted 
+    // make sure values are inserted
     var crds_table_lg = crds_table_rw.read();
     var crds_table: *const CrdsTable = crds_table_lg.get();
     for (crds_values) |value| {
@@ -1073,12 +1117,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     crds_table_lg.unlock();
 
     // try inserting again with same values (should all fail)
-    try GossipService.handle_pull_response(
-        alloc, 
-        &crds_table_rw, 
-        &failed_pull_hashes_mux, 
-        &crds_values
-    );
+    try GossipService.handle_pull_response(alloc, &crds_table_rw, &failed_pull_hashes_mux, &crds_values);
 
     var lg = failed_pull_hashes_mux.lock();
     var failed_pull_hashes: *HashTimeQueue = lg.mut();
@@ -1105,7 +1144,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
 
     var done = false;
     var count: usize = 0;
-    while (!done) { 
+    while (!done) {
         count += 1;
         for (0..5) |_| {
             var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
@@ -1115,19 +1154,19 @@ test "gossip.gossip_service: tests handle_pull_request" {
             // make sure well get a response from the request
             const vers_value = crds_table.get(value.label()).?;
             const hash_bits = pull_request.hash_to_u64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
-            if (hash_bits == 0) { 
+            if (hash_bits == 0) {
                 done = true;
             }
         }
 
-        if (count > 5) { 
+        if (count > 5) {
             @panic("something went wrong");
         }
     }
     crds_table_lg.unlock();
 
     const Bloom = @import("../bloom/bloom.zig").Bloom;
-    // only consider the first bit so we know well get matches 
+    // only consider the first bit so we know well get matches
     var bloom = try Bloom.random(alloc, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
@@ -1142,7 +1181,14 @@ test "gossip.gossip_service: tests handle_pull_request" {
     };
     const addr = SocketAddr.random(rng.random());
 
-    var packets = try GossipService.handle_pull_request(alloc, &crds_table_rw, crds_value, filter, addr.toEndpoint(), pubkey,);
+    var packets = try GossipService.handle_pull_request(
+        alloc,
+        &crds_table_rw,
+        crds_value,
+        filter,
+        addr.toEndpoint(),
+        pubkey,
+    );
     defer packets.deinit();
 
     try std.testing.expect(packets.items.len > 0);
