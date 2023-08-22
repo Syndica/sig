@@ -32,7 +32,7 @@ pub fn build_crds_filters(
     max_n_filters: usize,
 ) !ArrayList(CrdsFilter) {
     var crds_table_lg = crds_table_rw.read();
-    const crds_table = crds_table_lg.get();
+    const crds_table: *const CrdsTable = crds_table_lg.get();
     errdefer crds_table_lg.unlock(); // ensure lock is released even on errors
 
     const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;

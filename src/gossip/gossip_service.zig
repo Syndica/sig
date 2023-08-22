@@ -256,7 +256,7 @@ pub const GossipService = struct {
                 }, my_keypair);
 
                 var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
-                const failed_pull_hashes_array = try failed_pull_hashes_lg.get().get_values(self.allocator);
+                const failed_pull_hashes_array: std.ArrayList(Hash) = try failed_pull_hashes_lg.get().get_values(self.allocator);
                 defer failed_pull_hashes_array.deinit();
                 failed_pull_hashes_lg.unlock();
 
@@ -309,16 +309,17 @@ pub const GossipService = struct {
             {
                 var crds_table_lg = self.crds_table_rw.write();
                 defer crds_table_lg.unlock();
-                var crds_table = crds_table_lg.mut();
+                var crds_table: *CrdsTable = crds_table_lg.mut();
 
-                try crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
                 crds_table.purged.trim(purged_cutoff_timestamp);
+                try crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
                 try crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
             }
 
             const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
             var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
-            failed_pull_hashes_lg.mut().trim(failed_insert_cutoff_timestamp);
+            var failed_pull_hashes: *HashTimeQueue = failed_pull_hashes_lg.mut();
+            failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
             failed_pull_hashes_lg.unlock();
 
             // periodic things
@@ -331,12 +332,16 @@ pub const GossipService = struct {
 
                 // push contact info
                 var push_msg_queue_lg = self.push_msg_queue_mux.lock();
-                try push_msg_queue_lg.mut().append(my_contact_info_value);
+                var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lg.mut();
+                try push_msg_queue.append(my_contact_info_value);
                 push_msg_queue_lg.unlock();
 
                 // reset push active set
                 var active_set_lg = self.active_set_rw.write();
-                active_set_lg.mut().deinit();
+                // deinit old set
+                var active_set: *ActiveSet = active_set_lg.mut();
+                active_set.deinit();
+                // replace with new set
                 var new_active_set = ActiveSet.rotate(
                     self.allocator,
                     &self.crds_table_rw,
@@ -373,7 +378,8 @@ pub const GossipService = struct {
             var crds_table_lg = crds_table_rw.read();
             defer crds_table_lg.unlock();
 
-            break :blk try crds_table_lg.get().get_contact_infos(&buf);
+            var crds_table: *const CrdsTable = crds_table_lg.get();
+            break :blk try crds_table.get_contact_infos(&buf);
         };
 
         if (contact_infos.len == 0) {
@@ -512,11 +518,11 @@ pub const GossipService = struct {
         const now = get_wallclock();
 
         var push_msg_queue_lg = push_msg_queue_mux.lock();
-        var push_msg_queue = push_msg_queue_lg.mut();
+        var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lg.mut();
         defer push_msg_queue_lg.unlock();
 
         var crds_table_lg = crds_table_rw.write();
-        var crds_table = crds_table_lg.mut();
+        var crds_table: *CrdsTable = crds_table_lg.mut();
         defer crds_table_lg.unlock();
 
         while (push_msg_queue.popOrNull()) |crds_value| {
@@ -538,7 +544,8 @@ pub const GossipService = struct {
             var crds_table_lg = crds_table_rw.read();
             defer crds_table_lg.unlock();
 
-            break :blk crds_table_lg.get().get_entries_with_cursor(&buf, push_cursor);
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            break :blk crds_table.get_entries_with_cursor(&buf, push_cursor);
         };
 
         const now = get_wallclock();
@@ -551,7 +558,7 @@ pub const GossipService = struct {
         defer push_messages.deinit();
 
         var active_set_lg = active_set_rw.read();
-        var active_set = active_set_lg.get();
+        var active_set: *const ActiveSet = active_set_lg.get();
         errdefer active_set_lg.unlock();
 
         var num_values_considered: usize = 0;
@@ -576,7 +583,8 @@ pub const GossipService = struct {
             // get the active set for these values *PER ORIGIN* due to prunes
             const origin = value.id();
             var crds_table_lg = crds_table_rw.read();
-            const active_set_peers = try active_set.get_fanout_peers(allocator, origin, crds_table_lg.get());
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            const active_set_peers = try active_set.get_fanout_peers(allocator, origin, crds_table);
             defer active_set_peers.deinit();
             crds_table_lg.unlock();
 
@@ -691,7 +699,8 @@ pub const GossipService = struct {
             var crds_table_lg = crds_table_rw.write();
             defer crds_table_lg.unlock();
 
-            break :blk crds_table_lg.mut().insert_values(
+            var crds_table: *CrdsTable = crds_table_lg.mut();
+            break :blk crds_table.insert_values(
                 allocator,
                 push_values,
                 CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
@@ -708,8 +717,9 @@ pub const GossipService = struct {
         const from_contact_info = blk: {
             var crds_table_lg = crds_table_rw.read();
             defer crds_table_lg.unlock();
+            const crds_table: *const CrdsTable = crds_table_lg.get();
 
-            break :blk crds_table_lg.get().get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
+            break :blk crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
                 return error.CantFindContactInfo;
             };
         };
@@ -798,7 +808,8 @@ pub const GossipService = struct {
                     // TODO: filter the values
 
                     var crds_table_lg = crds_table_rw.write();
-                    const failed_insert_indexs = crds_table_lg.mut().insert_values(
+                    var crds_table: *CrdsTable = crds_table_lg.mut();
+                    const failed_insert_indexs = crds_table.insert_values(
                         allocator,
                         values,
                         CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
@@ -814,7 +825,7 @@ pub const GossipService = struct {
                         const now = get_wallclock();
 
                         var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
-                        var failed_pull_hashes = failed_pull_hashes_lg.mut();
+                        var failed_pull_hashes: *HashTimeQueue = failed_pull_hashes_lg.mut();
                         defer failed_pull_hashes_lg.unlock();
 
                         for (failed_insert_indexs.items) |insert_index| {
@@ -840,10 +851,11 @@ pub const GossipService = struct {
 
                     var crds_table_lg = crds_table_rw.read();
                     defer crds_table_lg.unlock();
+                    const crds_table: *const CrdsTable = crds_table_lg.get();
 
                     const crds_values = pull_response.filter_crds_values(
                         allocator,
-                        crds_table_lg.get(),
+                        crds_table,
                         &filter,
                         100,
                         caller_wallclock,
@@ -884,7 +896,7 @@ pub const GossipService = struct {
                     const from_pubkey = prune_msg.pubkey;
 
                     var active_set_lg = active_set_rw.write();
-                    var active_set = active_set_lg.mut();
+                    var active_set: *ActiveSet = active_set_lg.mut();
                     for (prune_msg.prunes) |origin| {
                         if (origin.equals(&my_pubkey)) {
                             continue;
@@ -902,7 +914,8 @@ pub const GossipService = struct {
             }
 
             var crds_table_lg = crds_table_rw.write();
-            crds_table_lg.mut().attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+            var crds_table: *CrdsTable = crds_table_lg.mut();
+            crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
                 logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
             };
             crds_table_lg.unlock();
