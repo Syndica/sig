@@ -41,7 +41,6 @@ const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 
 const pull_response = @import("../gossip/pull_response.zig");
 const ActiveSet = @import("../gossip/active_set.zig").ActiveSet;
-const CRDS_GOSSIP_PUSH_FANOUT = @import("../gossip/active_set.zig").CRDS_GOSSIP_PUSH_FANOUT;
 
 const Hash = @import("../core/hash.zig").Hash;
 

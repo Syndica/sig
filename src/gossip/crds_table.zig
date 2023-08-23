@@ -17,7 +17,6 @@ const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
-const Logger = @import("../trace/log.zig").Logger;
 
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
