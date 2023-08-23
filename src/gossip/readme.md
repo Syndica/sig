@@ -520,3 +520,14 @@ When constructing the active set for a crds value:
   - if the origin is contained in the bloom filter, we dont add the peer to the active set 
 
 ## Protocol Message: Ping/Pong
+
+Ping and Pong messages are used to health check nodes in a quick and easy way. The corresponding logic is defined in `gossip/ping_pong.zig`. 
+
+Ping messages are periodically sent to all of the nodes in the network (by parsing the contact infos in the CrdsTable). For each of these Ping messages, a corresponding Pong message is expected within a certain amount of time. If we dont recieve the corresponding Pong message, then we dont send that node any other protocol messages (ie, we dont include them in the `ActiveSet` so we dont send them push messages, nor do we respond to any pull requests sent from them). 
+
+We track the nodes which have responded to Ping messages/which nodes we 
+are waiting for a Pong message for using the `PingCache` structure.
+
+### PingCache
+
+The `PingCache` defines a few important variables including the amount of time a recieved pong is valid for (ie, when the node should send a new ping message) and the rate limit for how often to send Ping messages (do we dont spam nodes).
