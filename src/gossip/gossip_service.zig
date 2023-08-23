@@ -10,9 +10,9 @@ const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
 const SocketAddr = @import("net.zig").SocketAddr;
-const protocol_ = @import("protocol.zig");
-const Protocol = protocol_.Protocol;
-const PruneData = protocol_.PruneData;
+const _protocol = @import("protocol.zig");
+const Protocol = _protocol.Protocol;
+const PruneData = _protocol.PruneData;
 
 const Ping = @import("ping_pong.zig").Ping;
 const bincode = @import("../bincode/bincode.zig");
@@ -26,8 +26,10 @@ const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
 const CrdsError = _crds_table.CrdsError;
+const HashTimeQueue = _crds_table.HashTimeQueue;
+const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
+
 const Logger = @import("../trace/log.zig").Logger;
-const GossipRoute = _crds_table.GossipRoute;
 
 const pull_request = @import("../gossip/pull_request.zig");
 const CrdsFilter = pull_request.CrdsFilter;
@@ -38,7 +40,6 @@ const ActiveSet = @import("../gossip/active_set.zig").ActiveSet;
 const CRDS_GOSSIP_PUSH_FANOUT = @import("../gossip/active_set.zig").CRDS_GOSSIP_PUSH_FANOUT;
 
 const Hash = @import("../core/hash.zig").Hash;
-const HashTimeQueue = _crds_table.HashTimeQueue;
 
 const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_addr: EndPoint, message: Protocol };
@@ -296,7 +297,9 @@ pub const GossipService = struct {
 
             const purged_cutoff_timestamp = now -| (5 * CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
             self.crds_table.write();
+            try self.crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
             self.crds_table.purged.trim(purged_cutoff_timestamp);
+            try self.crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
             self.crds_table.release_write();
 
             const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
@@ -766,6 +769,8 @@ pub const GossipService = struct {
                 .PullResponse => |*pull| {
                     const values = pull[1];
 
+                    // TODO: filter the values
+
                     crds_table.write();
                     const failed_insert_indexs = crds_table.insert_values(
                         allocator,
@@ -860,6 +865,12 @@ pub const GossipService = struct {
                     _ = ping;
                 },
             }
+
+            crds_table.write();
+            crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
+            };
+            crds_table.release_write();
         }
     }
 };
@@ -887,6 +898,10 @@ test "gossip.gossip_service: generate prune messages" {
     // insert contact info to send prunes to
     var contact_info = crds.LegacyContactInfo.random(rng.random());
     contact_info.id = push_from;
+    // valid socket addr
+    var gossip_socket = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 20);
+    contact_info.gossip = gossip_socket;
+
     var ci_value = try CrdsValue.initSigned(crds.CrdsData{
         .LegacyContactInfo = contact_info,
     }, kp);

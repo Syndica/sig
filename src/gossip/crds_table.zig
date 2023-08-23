@@ -4,9 +4,9 @@ const AutoHashMap = std.AutoHashMap;
 
 const bincode = @import("../bincode/bincode.zig");
 
-const hash = @import("../core/hash.zig");
-const Hash = hash.Hash;
-const CompareResult = hash.CompareResult;
+const _hash = @import("../core/hash.zig");
+const Hash = _hash.Hash;
+const CompareResult = _hash.CompareResult;
 
 const CrdsShards = @import("./crds_shards.zig").CrdsShards;
 
@@ -24,6 +24,11 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 
+const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
+
+pub const CRDS_UNIQUE_PUBKEY_CAPACITY: usize = 8192;
+pub const MAX_CRDS_VALUES: usize = 1_000_000; // TODO: better value for this
+
 pub const CrdsError = error{
     OldValue,
     DuplicateValue,
@@ -32,6 +37,11 @@ pub const CrdsError = error{
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 // TODO: benchmark other structs?
 const PurgedQ = std.TailQueue(HashAndTime);
+
+// indexable HashSet
+pub fn AutoArrayHashSet(comptime T: type) type {
+    return AutoArrayHashMap(T, void);
+}
 
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
@@ -49,7 +59,7 @@ pub const CrdsTable = struct {
     store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
 
     // special types tracked with their index
-    contact_infos: AutoArrayHashMap(usize, void), // hashset for O(1) insertion/removal
+    contact_infos: AutoArrayHashSet(usize),
     votes: AutoArrayHashMap(usize, usize),
     epoch_slots: AutoArrayHashMap(usize, usize),
     duplicate_shreds: AutoArrayHashMap(usize, usize),
@@ -57,6 +67,9 @@ pub const CrdsTable = struct {
 
     // tracking for cursor to index
     entries: AutoArrayHashMap(u64, usize),
+
+    // Indices of all crds values associated with a node/pubkey.
+    pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
 
     // used to build pull responses efficiently
     shards: CrdsShards,
@@ -70,19 +83,23 @@ pub const CrdsTable = struct {
     // thread safe
     lock: RwLock = .{},
 
+    allocator: std.mem.Allocator,
+
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
-            .contact_infos = AutoArrayHashMap(usize, void).init(allocator),
+            .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
+            .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
             .shards = try CrdsShards.init(allocator),
             .purged = HashTimeQueue.init(),
+            .allocator = allocator,
         };
     }
 
@@ -93,8 +110,14 @@ pub const CrdsTable = struct {
         self.votes.deinit();
         self.epoch_slots.deinit();
         self.duplicate_shreds.deinit();
-        self.shards.deinit();
         self.entries.deinit();
+        self.shards.deinit();
+
+        var iter = self.pubkey_to_values.iterator();
+        while (iter.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.pubkey_to_values.deinit();
     }
 
     pub fn write(self: *Self) void {
@@ -118,10 +141,13 @@ pub const CrdsTable = struct {
     }
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
-        // TODO: check to make sure this sizing is correct or use heap
+        if (self.store.count() >= MAX_CRDS_VALUES) {
+            return error.CrdsTableFull;
+        }
 
-        var buf = [_]u8{0} ** 2048; // does this break if its called in parallel? / dangle?
-        var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
+        // CrdsValue should never be larger than PACKET_DATA_SIZE
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
         const versioned_value = CrdsVersionedValue{
             .value = value,
@@ -133,6 +159,7 @@ pub const CrdsTable = struct {
         const label = value.label();
         var result = try self.store.getOrPut(label);
         const entry_index = result.index;
+        const origin = value.id();
 
         // entry doesnt exist
         if (!result.found_existing) {
@@ -156,6 +183,15 @@ pub const CrdsTable = struct {
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
             try self.entries.put(self.cursor, entry_index);
+
+            const maybe_node_entry = self.pubkey_to_values.getEntry(origin);
+            if (maybe_node_entry) |node_entry| {
+                try node_entry.value_ptr.put(entry_index, {});
+            } else {
+                var indexs = AutoArrayHashSet(usize).init(self.allocator);
+                try indexs.put(entry_index, {});
+                try self.pubkey_to_values.put(origin, indexs);
+            }
 
             result.value_ptr.* = versioned_value;
 
@@ -189,12 +225,16 @@ pub const CrdsTable = struct {
 
             // remove and insert to make sure the shard ordering is oldest-to-newest
             // NOTE: do we need the ordering to be oldest-to-newest?
-            try self.shards.remove(entry_index, &old_entry.value_hash);
+            self.shards.remove(entry_index, &old_entry.value_hash);
             try self.shards.insert(entry_index, &versioned_value.value_hash);
 
             const did_remove = self.entries.swapRemove(old_entry.cursor_on_insertion);
             std.debug.assert(did_remove);
             try self.entries.put(self.cursor, entry_index);
+
+            // As long as the pubkey does not change, self.records
+            // does not need to be updated.
+            std.debug.assert(old_entry.value.id().equals(&origin));
 
             self.purged.insert(old_entry.value_hash, now);
 
@@ -367,6 +407,193 @@ pub const CrdsTable = struct {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
     }
+
+    // ** triming values in the crdstable **
+    pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound}!void {
+        const now = crds.get_wallclock();
+
+        const maybe_entry = self.store.getEntry(label);
+        if (maybe_entry == null) return error.LabelNotFound;
+
+        const entry = maybe_entry.?;
+        const versioned_value = entry.value_ptr;
+        const entry_index = self.entries.get(versioned_value.cursor_on_insertion).?;
+        const hash = versioned_value.value_hash;
+        const origin = versioned_value.value.id();
+
+        const entry_indexs = self.pubkey_to_values.getEntry(origin).?.value_ptr;
+        {
+            var did_remove = entry_indexs.swapRemove(entry_index);
+            std.debug.assert(did_remove);
+        }
+
+        // no more values associated with the pubkey
+        if (entry_indexs.count() == 0) {
+            {
+                entry_indexs.deinit();
+                var did_remove = self.pubkey_to_values.swapRemove(origin);
+                std.debug.assert(did_remove);
+            }
+
+            if (self.shred_versions.contains(origin)) {
+                const did_remove = self.shred_versions.remove(origin);
+                std.debug.assert(did_remove);
+            }
+        }
+
+        self.purged.insert(hash, now);
+        self.shards.remove(entry_index, &hash);
+
+        switch (versioned_value.value.data) {
+            .LegacyContactInfo => {
+                var did_remove = self.contact_infos.swapRemove(entry_index);
+                std.debug.assert(did_remove);
+            },
+            .Vote => {
+                var did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
+                std.debug.assert(did_remove);
+            },
+            .EpochSlots => {
+                var did_remove = self.epoch_slots.swapRemove(versioned_value.cursor_on_insertion);
+                std.debug.assert(did_remove);
+            },
+            .DuplicateShred => {
+                var did_remove = self.duplicate_shreds.swapRemove(versioned_value.cursor_on_insertion);
+                std.debug.assert(did_remove);
+            },
+            else => {},
+        }
+
+        {
+            var did_remove = self.entries.swapRemove(versioned_value.cursor_on_insertion);
+            std.debug.assert(did_remove);
+        }
+        {
+            const did_remove = self.store.swapRemove(label);
+            std.debug.assert(did_remove);
+        }
+
+        // account for the swap with the last element
+        const table_len = self.len();
+        // if (index == table_len) then it was already the last
+        // element so we dont need to do anything
+        if (entry_index < table_len) {
+            const new_index_value = self.store.iterator().values[entry_index];
+            const new_index_cursor = new_index_value.cursor_on_insertion;
+            const new_index_origin = new_index_value.value.id();
+
+            // update shards
+            self.shards.remove(table_len, &new_index_value.value_hash);
+            // wont fail because we just removed a value in line above
+            self.shards.insert(entry_index, &new_index_value.value_hash) catch unreachable;
+
+            // these also should not fail since there are no allocations - just changing the value
+            switch (versioned_value.value.data) {
+                .LegacyContactInfo => {
+                    var did_remove = self.contact_infos.swapRemove(table_len);
+                    std.debug.assert(did_remove);
+                    self.contact_infos.put(entry_index, {}) catch unreachable;
+                },
+                .Vote => {
+                    self.votes.put(new_index_cursor, entry_index) catch unreachable;
+                },
+                .EpochSlots => {
+                    self.epoch_slots.put(new_index_cursor, entry_index) catch unreachable;
+                },
+                .DuplicateShred => {
+                    self.duplicate_shreds.put(new_index_cursor, entry_index) catch unreachable;
+                },
+                else => {},
+            }
+            self.entries.put(new_index_cursor, entry_index) catch unreachable;
+
+            const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
+            var did_remove = new_entry_indexs.swapRemove(table_len);
+            std.debug.assert(did_remove);
+            new_entry_indexs.put(entry_index, {}) catch unreachable;
+        }
+    }
+
+    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) !void {
+        const n_pubkeys = self.pubkey_to_values.count();
+        // 90% close to capacity
+        const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
+        if (!should_trim) return;
+
+        const drop_size = n_pubkeys -| max_pubkey_capacity;
+        // TODO: drop based on stake weight
+        const drop_pubkeys = self.pubkey_to_values.keys()[0..drop_size];
+        const labels = self.store.iterator().keys;
+
+        // allocate here so SwapRemove doesnt mess with us
+        var labels_to_remove = std.ArrayList(CrdsValueLabel).init(self.allocator);
+        defer labels_to_remove.deinit();
+
+        for (drop_pubkeys) |pubkey| {
+            // remove all entries associated with the pubkey
+            const entry_indexs = self.pubkey_to_values.getEntry(pubkey).?.value_ptr;
+            const count = entry_indexs.count();
+            for (entry_indexs.keys()[0..count]) |entry_index| {
+                try labels_to_remove.append(labels[entry_index]);
+            }
+        }
+
+        for (labels_to_remove.items) |label| {
+            self.remove(label) catch unreachable;
+        }
+    }
+
+    pub fn remove_old_labels(
+        self: *Self,
+        now: u64,
+        timeout: u64,
+    ) std.mem.Allocator.Error!void {
+        const old_labels = try self.get_old_labels(now, timeout);
+        defer old_labels.deinit();
+
+        for (old_labels.items) |old_label| {
+            // unreachable: label should always exist in store
+            self.remove(old_label) catch unreachable;
+        }
+    }
+
+    pub fn get_old_labels(
+        self: *Self,
+        now: u64,
+        timeout: u64,
+    ) std.mem.Allocator.Error!std.ArrayList(CrdsValueLabel) {
+        var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
+
+        const cutoff_timestamp = now -| timeout;
+        const n_pubkeys = self.pubkey_to_values.count();
+        for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
+            const entry = self.pubkey_to_values.getEntry(key).?;
+
+            // if contact info is up to date then we dont need to check the values
+            const pubkey = entry.key_ptr;
+            const label = CrdsValueLabel{ .LegacyContactInfo = pubkey.* };
+            if (self.get(label)) |*contact_info| {
+                const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
+                if (value_timestamp > cutoff_timestamp) {
+                    continue;
+                }
+            }
+
+            // otherwise we iterate over the values
+            var entry_indexs = entry.value_ptr;
+            const count = entry_indexs.count();
+
+            for (entry_indexs.iterator().keys[0..count]) |entry_index| {
+                const versioned_value = self.store.values()[entry_index];
+                const value_timestamp = @min(versioned_value.value.wallclock(), versioned_value.timestamp_on_insertion);
+                if (value_timestamp <= cutoff_timestamp) {
+                    try old_labels.append(versioned_value.value.label());
+                }
+            }
+        }
+
+        return old_labels;
+    }
 };
 
 pub const HashTimeQueue = struct {
@@ -429,6 +656,88 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     } else {
         return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
     }
+}
+
+test "gossip.crds_table: remove old values" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rng = std.rand.DefaultPrng.init(seed);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    for (0..5) |_| {
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        // TS = 100
+        try crds_table.insert(value, 100);
+    }
+    try std.testing.expect(crds_table.len() == 5);
+
+    // cutoff = 150
+    const values = try crds_table.get_old_labels(200, 50);
+    defer values.deinit();
+    // remove all values
+    for (values.items) |value| {
+        try crds_table.remove(value);
+    }
+
+    try std.testing.expectEqual(crds_table.len(), 0);
+}
+
+test "gossip.crds_table: insert and remove value" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rng = std.rand.DefaultPrng.init(seed);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    const value = try CrdsValue.initSigned(CrdsData.random_from_index(rng.random(), 0), keypair);
+    try crds_table.insert(value, 100);
+
+    const label = value.label();
+    try crds_table.remove(label);
+}
+
+test "gossip.crds_table: trim pruned values" {
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rng = std.rand.DefaultPrng.init(seed);
+
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    defer crds_table.deinit();
+
+    const N_VALUES = 10;
+    const N_TRIM_VALUES = 5;
+
+    var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
+    defer values.deinit();
+
+    for (0..N_VALUES) |_| {
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        try crds_table.insert(value, 100);
+        try values.append(value);
+    }
+    try std.testing.expectEqual(crds_table.len(), N_VALUES);
+    try std.testing.expectEqual(crds_table.purged.len(), 0);
+    try std.testing.expectEqual(crds_table.pubkey_to_values.count(), N_VALUES);
+
+    for (0..values.items.len) |i| {
+        const origin = values.items[i].id();
+        _ = crds_table.pubkey_to_values.get(origin).?;
+    }
+
+    try crds_table.attempt_trim(N_TRIM_VALUES);
+
+    try std.testing.expectEqual(crds_table.len(), N_VALUES - N_TRIM_VALUES);
+    try std.testing.expectEqual(crds_table.pubkey_to_values.count(), N_VALUES - N_TRIM_VALUES);
+    try std.testing.expectEqual(crds_table.purged.len(), N_TRIM_VALUES);
+
+    try crds_table.attempt_trim(0);
+    try std.testing.expectEqual(crds_table.len(), 0);
 }
 
 test "gossip.HashTimeQueue: trim pruned values" {

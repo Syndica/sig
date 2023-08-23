@@ -30,7 +30,6 @@ pub const SocketAddr = union(enum(u8)) {
         } else {
             var octets: [16]u8 = undefined;
             rng.bytes(&octets);
-
             return Self{
                 .V6 = .{ .ip = Ipv6Addr.init(octets), .port = pport, .flowinfo = 0, .scope_id = 0 },
             };

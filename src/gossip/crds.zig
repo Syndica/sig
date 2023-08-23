@@ -251,7 +251,7 @@ pub const LegacyContactInfo = struct {
 
     pub fn random(rng: std.rand.Random) LegacyContactInfo {
         return LegacyContactInfo{
-            .id = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .id = Pubkey.random(rng, .{ .skip_encoding = false }),
             .gossip = SocketAddr.random(rng),
             .tvu = SocketAddr.random(rng),
             .tvu_forwards = SocketAddr.random(rng),

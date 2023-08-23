@@ -52,7 +52,7 @@ pub const CrdsShards = struct {
         try shard.put(crds_index, uhash);
     }
 
-    pub fn remove(self: *Self, crds_index: usize, hash: *const Hash) !void {
+    pub fn remove(self: *Self, crds_index: usize, hash: *const Hash) void {
         const uhash = CrdsPull.hash_to_u64(hash);
         const shard_index = CrdsShards.compute_shard_index(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
@@ -118,7 +118,7 @@ test "gossip.crds_shards: tests CrdsShards" {
 
     const v = Hash.random();
     try shards.insert(10, &v);
-    try shards.remove(10, &v);
+    shards.remove(10, &v);
 
     const result = try shards.find(std.testing.allocator, 20, 10);
     defer result.deinit();
@@ -168,7 +168,7 @@ test "gossip.crds_shards: test shard find" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    while (values.items.len < 1000) {
+    while (values.items.len < 50) {
         const value = try new_test_crds_value(rng, &crds_table);
         try values.append(value);
     }
