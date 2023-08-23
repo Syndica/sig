@@ -66,7 +66,7 @@ pub const Pong = struct {
 
     const Self = @This();
 
-    pub fn init(ping: *Ping, keypair: *KeyPair) !Self {
+    pub fn init(ping: *const Ping, keypair: *KeyPair) !Self {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         const sig = try keypair.sign(&hash.data, null);

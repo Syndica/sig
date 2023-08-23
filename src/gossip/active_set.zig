@@ -95,6 +95,7 @@ pub const ActiveSet = struct {
     }
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
+        // we only prune peers which we are sending push messages to
         if (self.pruned_peers.getEntry(from)) |entry| {
             const origin_bytes = origin.data;
             entry.value_ptr.add(&origin_bytes);

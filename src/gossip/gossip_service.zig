@@ -18,6 +18,7 @@ const Mux = @import("../sync/mux.zig").Mux;
 const RwMux = @import("../sync/mux.zig").RwMux;
 
 const Ping = @import("ping_pong.zig").Ping;
+const Pong = @import("ping_pong.zig").Pong;
 const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const CrdsValue = crds.CrdsValue;
@@ -316,11 +317,12 @@ pub const GossipService = struct {
                         logger.warnf("error handling prune message: {s}", .{@errorName(err)});
                     };
                 },
+                .PingMessage => |*ping| {
+                    const packet = handle_ping_message(ping, my_keypair, from_endpoint);
+                    try responder_channel.send(packet);
+                },
                 .PongMessage => |*pong| {
                     _ = pong;
-                },
-                .PingMessage => |*ping| {
-                    _ = ping;
                 },
             }
 
@@ -689,7 +691,7 @@ pub const GossipService = struct {
         crds_table_rw: *RwMux(CrdsTable),
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         crds_values: []CrdsValue,
-    ) error{ OutOfMemory }!void {
+    ) error{OutOfMemory}!void {
         // TODO: benchmark and compare with labs' preprocessing
         const now = get_wallclock();
         var crds_table_lg = crds_table_rw.write();
@@ -872,6 +874,24 @@ pub const GossipService = struct {
             try failed_origins.put(origin, {});
         }
         return failed_origins;
+    }
+
+    fn handle_ping_message(
+        ping: Ping,
+        my_keypair: KeyPair,
+        from_endpoint: EndPoint,
+    ) error{SerializationError}!Packet {
+        const pong = Pong.init(ping, my_keypair);
+        const pong_message = Protocol{
+            .PongMessage = pong,
+        };
+
+        // write to packet
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        const msg = bincode.writeToSlice(&buf, pong_message, bincode.Params.standard) catch return error.SerializationError;
+        const packet = Packet.init(from_endpoint, buf, msg.len);
+
+        return packet;
     }
 
     fn trim_memory(
