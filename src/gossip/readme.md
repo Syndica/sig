@@ -532,12 +532,12 @@ are waiting for a Pong message for using the `PingCache` structure.
 ### PingCache
 
 The `PingCache` defines a few important variables including the amount of time a recieved pong is valid for (ie, when the node should send a new ping message) and the rate limit for how often to send Ping messages (do we dont spam nodes).
-****
+
 ## `GossipService` implementation at a high level
 
 The following diagram shows the overall design of the `GossipService` which handles 
 receiving, processing, and sending gossip messages.
 
 <div align="center">
-<img src="imgs/2023-08-23-13-43-48.png" width="550" height="950">
+<img src="imgs/2023-08-23-13-43-48.png" width="950" height="750">
 </div>
