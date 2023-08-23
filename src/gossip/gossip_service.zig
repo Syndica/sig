@@ -142,7 +142,7 @@ pub const GossipService = struct {
     }
 
     /// spawns required threads for the gossip serivce.
-    /// including: 1) socket reciever 2) packet verifier 3) packet processor 
+    /// including: 1) socket reciever 2) packet verifier 3) packet processor
     /// 4) build message loop (to send outgoing message)
     /// and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self, logger: *Logger) !void {
