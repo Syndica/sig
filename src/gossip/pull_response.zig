@@ -7,6 +7,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;
 
+const RwMux = @import("../sync/mux.zig").RwMux;
 const CrdsTable = @import("crds_table.zig").CrdsTable;
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
@@ -19,14 +20,11 @@ pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 // TODO: make it batch
 pub fn filter_crds_values(
     alloc: std.mem.Allocator,
-    crds_table: *CrdsTable,
+    crds_table: *const CrdsTable,
     filter: *CrdsFilter,
     output_size_limit: usize,
     caller_wallclock: u64,
 ) !ArrayList(CrdsValue) {
-    crds_table.read();
-    defer crds_table.release_read();
-
     if (output_size_limit == 0) {
         return ArrayList(CrdsValue).init(alloc);
     }
@@ -74,7 +72,11 @@ pub fn filter_crds_values(
 
 test "gossip.pull: test filter_crds_values" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
-    defer crds_table.deinit();
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var lg = crds_table_rw.write();
+        lg.mut().deinit();
+    }
 
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
@@ -83,10 +85,12 @@ test "gossip.pull: test filter_crds_values" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
+    var lg = crds_table_rw.write();
     for (0..100) |_| {
         var crds_value = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(crds_value, 0);
+        try lg.mut().insert(crds_value, 0);
     }
+    lg.unlock();
 
     const max_bytes = 10;
 
@@ -94,7 +98,7 @@ test "gossip.pull: test filter_crds_values" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try crds_pull_req.build_crds_filters(
         std.testing.allocator,
-        &crds_table,
+        &crds_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
@@ -113,19 +117,21 @@ test "gossip.pull: test filter_crds_values" {
     }, kp);
 
     // insert more values which the filters should be missing
+    lg = crds_table_rw.write();
     for (0..64) |_| {
         var v2 = try crds.CrdsValue.random(rng, kp);
-        try crds_table.insert(v2, 0);
+        try lg.mut().insert(v2, 0);
     }
 
     var values = try filter_crds_values(
         std.testing.allocator,
-        &crds_table,
+        lg.get(),
         &filter,
         100,
         crds_value.wallclock(),
     );
     defer values.deinit();
+    lg.unlock();
 
     try std.testing.expect(values.items.len > 0);
 }

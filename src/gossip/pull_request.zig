@@ -13,6 +13,8 @@ const CrdsTable = @import("crds_table.zig").CrdsTable;
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;
 
+const RwMux = @import("../sync/mux.zig").RwMux;
+
 pub const MAX_CRDS_OBJECT_SIZE: usize = 928;
 pub const MAX_BLOOM_SIZE: usize = MAX_CRDS_OBJECT_SIZE;
 
@@ -24,13 +26,14 @@ pub const KEYS: f64 = 8;
 /// corresponding filters. Note: make sure to call deinit_crds_filters.
 pub fn build_crds_filters(
     alloc: std.mem.Allocator,
-    crds_table: *CrdsTable,
+    crds_table_rw: *RwMux(CrdsTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
 ) !ArrayList(CrdsFilter) {
-    crds_table.read();
-    errdefer crds_table.release_read(); // ensure lock is released even on errors
+    var crds_table_lg = crds_table_rw.read();
+    const crds_table: *const CrdsTable = crds_table_lg.get();
+    errdefer crds_table_lg.unlock(); // ensure lock is released even on errors
 
     const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
@@ -54,7 +57,7 @@ pub fn build_crds_filters(
     for (failed_pull_hashes.items) |hash| {
         filter_set.add(&hash);
     }
-    crds_table.release_read();
+    crds_table_lg.unlock();
 
     // note: filter set is deinit() in this fcn
     const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);
@@ -252,10 +255,12 @@ test "gossip.pull: test build_crds_filters" {
     const num_items = crds_table.len();
 
     // build filters
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try build_crds_filters(
         std.testing.allocator,
-        &crds_table,
+        &crds_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,

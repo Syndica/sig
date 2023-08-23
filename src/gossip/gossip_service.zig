@@ -14,6 +14,9 @@ const _protocol = @import("protocol.zig");
 const Protocol = _protocol.Protocol;
 const PruneData = _protocol.PruneData;
 
+const Mux = @import("../sync/mux.zig").Mux;
+const RwMux = @import("../sync/mux.zig").RwMux;
+
 const Ping = @import("ping_pong.zig").Ping;
 const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
@@ -69,20 +72,17 @@ pub const GossipService = struct {
     exit_sig: AtomicBool,
     packet_channel: *PacketChannel,
     responder_channel: *PacketChannel,
-    crds_table: CrdsTable,
+    crds_table_rw: RwMux(CrdsTable),
     allocator: std.mem.Allocator,
     verified_channel: *ProtocolChannel,
 
     // push message things
-    active_set: ActiveSet,
-    active_set_lock: std.Thread.RwLock = .{},
-    push_msg_queue: std.ArrayList(CrdsValue),
-    push_msg_queue_lock: std.Thread.Mutex = .{},
+    active_set_rw: RwMux(ActiveSet),
+    push_msg_queue_mux: Mux(std.ArrayList(CrdsValue)),
     push_cursor: u64 = 0,
 
     // pull message things
-    failed_pull_hashes: HashTimeQueue,
-    failed_pull_hashes_lock: std.Thread.Mutex = .{},
+    failed_pull_hashes_mux: Mux(HashTimeQueue),
 
     const Self = @This();
 
@@ -97,10 +97,14 @@ pub const GossipService = struct {
         var responder_channel = PacketChannel.init(allocator, 10000);
 
         var crds_table = try CrdsTable.init(allocator);
+        var crds_table_rw = RwMux(CrdsTable).init(crds_table);
 
         var my_pubkey = cluster_info.our_contact_info.pubkey;
         var my_shred_version = cluster_info.our_contact_info.shred_version;
-        var active_set = try ActiveSet.rotate(allocator, &crds_table, my_pubkey, my_shred_version);
+        var active_set = try ActiveSet.rotate(allocator, &crds_table_rw, my_pubkey, my_shred_version);
+
+        var failed_pull_hashes = HashTimeQueue.init();
+        var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
 
         return Self{
             .cluster_info = cluster_info,
@@ -109,21 +113,32 @@ pub const GossipService = struct {
             .packet_channel = packet_channel,
             .responder_channel = responder_channel,
             .verified_channel = verified_channel,
-            .crds_table = crds_table,
+            .crds_table_rw = crds_table_rw,
             .allocator = allocator,
-            .push_msg_queue = std.ArrayList(CrdsValue).init(allocator),
-            .active_set = active_set,
-            .failed_pull_hashes = HashTimeQueue.init(),
+            .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
+            .active_set_rw = RwMux(ActiveSet).init(active_set),
+            .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        // TODO: join and exit threads
+
         self.packet_channel.deinit();
         self.responder_channel.deinit();
         self.verified_channel.deinit();
 
-        self.crds_table.deinit();
-        self.push_msg_queue.deinit();
+        {
+            var lg = self.crds_table_rw.write();
+            lg.mut().deinit();
+            lg.unlock();
+        }
+
+        {
+            var lg = self.push_msg_queue_mux.lock();
+            lg.mut().deinit();
+            lg.unlock();
+        }
     }
 
     pub fn run(self: *Self, logger: *Logger) !void {
@@ -144,13 +159,11 @@ pub const GossipService = struct {
         });
         var packet_handle = try Thread.spawn(.{}, Self.process_protocol_messages, .{
             self.allocator,
-            &self.crds_table,
+            &self.crds_table_rw,
             self.verified_channel,
             self.responder_channel,
-            &self.failed_pull_hashes,
-            &self.failed_pull_hashes_lock,
-            &self.active_set,
-            &self.active_set_lock,
+            &self.failed_pull_hashes_mux,
+            &self.active_set_rw,
             &self.cluster_info.our_keypair,
             logger,
         });
@@ -226,8 +239,7 @@ pub const GossipService = struct {
         const my_pubkey = my_contact_info.id;
         const my_shred_version = my_contact_info.shred_version;
 
-        var failed_pull_hashes = self.failed_pull_hashes;
-        var failed_pull_hashes_lock = self.failed_pull_hashes_lock;
+        var failed_pull_hashes_mux = self.failed_pull_hashes_mux;
 
         while (true) {
             const top_of_loop_ts = get_wallclock();
@@ -243,14 +255,14 @@ pub const GossipService = struct {
                     .LegacyContactInfo = my_contact_info,
                 }, my_keypair);
 
-                failed_pull_hashes_lock.lock();
-                const failed_pull_hashes_array = try failed_pull_hashes.get_values(self.allocator);
+                var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
+                const failed_pull_hashes_array: std.ArrayList(Hash) = try failed_pull_hashes_lg.get().get_values(self.allocator);
                 defer failed_pull_hashes_array.deinit();
-                failed_pull_hashes_lock.unlock();
+                failed_pull_hashes_lg.unlock();
 
                 var pull_packets = new_pull_requests(
                     self.allocator,
-                    &self.crds_table,
+                    &self.crds_table_rw,
                     &failed_pull_hashes_array,
                     pull_request.MAX_BLOOM_SIZE,
                     my_contact_info_value,
@@ -271,15 +283,13 @@ pub const GossipService = struct {
 
             // new push msgs
             try drain_push_queue_to_crds_table(
-                &self.crds_table,
-                &self.push_msg_queue,
-                &self.push_msg_queue_lock,
+                &self.crds_table_rw,
+                &self.push_msg_queue_mux,
             );
             var push_packets = new_push_messages(
                 self.allocator,
-                &self.crds_table,
-                &self.active_set,
-                &self.active_set_lock,
+                &self.crds_table_rw,
+                &self.active_set_rw,
                 my_pubkey,
                 &self.push_cursor,
             ) catch |e| blk: {
@@ -296,16 +306,21 @@ pub const GossipService = struct {
             const now = get_wallclock();
 
             const purged_cutoff_timestamp = now -| (5 * CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
-            self.crds_table.write();
-            try self.crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
-            self.crds_table.purged.trim(purged_cutoff_timestamp);
-            try self.crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
-            self.crds_table.release_write();
+            {
+                var crds_table_lg = self.crds_table_rw.write();
+                defer crds_table_lg.unlock();
+                var crds_table: *CrdsTable = crds_table_lg.mut();
+
+                crds_table.purged.trim(purged_cutoff_timestamp);
+                try crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
+                try crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+            }
 
             const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
-            failed_pull_hashes_lock.lock();
+            var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
+            var failed_pull_hashes: *HashTimeQueue = failed_pull_hashes_lg.mut();
             failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
-            failed_pull_hashes_lock.unlock();
+            failed_pull_hashes_lg.unlock();
 
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
@@ -316,20 +331,25 @@ pub const GossipService = struct {
                 }, my_keypair);
 
                 // push contact info
-                self.push_msg_queue_lock.lock();
-                try self.push_msg_queue.append(my_contact_info_value);
-                self.push_msg_queue_lock.unlock();
+                var push_msg_queue_lg = self.push_msg_queue_mux.lock();
+                var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lg.mut();
+                try push_msg_queue.append(my_contact_info_value);
+                push_msg_queue_lg.unlock();
 
                 // reset push active set
-                self.active_set_lock.lock();
-                self.active_set.deinit();
-                self.active_set = ActiveSet.rotate(
+                var active_set_lg = self.active_set_rw.write();
+                // deinit old set
+                var active_set: *ActiveSet = active_set_lg.mut();
+                active_set.deinit();
+                // replace with new set
+                var new_active_set = ActiveSet.rotate(
                     self.allocator,
-                    &self.crds_table,
+                    &self.crds_table_rw,
                     my_pubkey,
                     my_shred_version,
                 ) catch unreachable;
-                self.active_set_lock.unlock();
+                active_set_lg.replace(new_active_set);
+                active_set_lg.unlock();
 
                 last_push_ts = get_wallclock();
             }
@@ -344,7 +364,7 @@ pub const GossipService = struct {
     }
 
     pub fn get_gossip_nodes(
-        crds_table: *CrdsTable, // reads to get contact infos
+        crds_table_rw: *RwMux(CrdsTable), // reads to get contact infos
         my_pubkey: *const Pubkey, // used to filter out ourself
         my_shred_version: u16, // used to filter matching shredversions
         nodes: []crds.LegacyContactInfo, // output
@@ -353,11 +373,14 @@ pub const GossipService = struct {
     ) ![]crds.LegacyContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
-        crds_table.read();
-        errdefer crds_table.release_read();
         var buf: [MAX_SIZE]crds.CrdsVersionedValue = undefined;
-        const contact_infos = try crds_table.get_contact_infos(&buf);
-        crds_table.release_read();
+        const contact_infos = blk: {
+            var crds_table_lg = crds_table_rw.read();
+            defer crds_table_lg.unlock();
+
+            var crds_table: *const CrdsTable = crds_table_lg.get();
+            break :blk try crds_table.get_contact_infos(&buf);
+        };
 
         if (contact_infos.len == 0) {
             return nodes[0..0];
@@ -400,7 +423,7 @@ pub const GossipService = struct {
 
     fn new_pull_requests(
         allocator: std.mem.Allocator,
-        crds_table: *CrdsTable,
+        crds_table: *RwMux(CrdsTable),
         failed_pull_hashes: *const std.ArrayList(Hash),
         bloom_size: usize,
         my_contact_info: CrdsValue,
@@ -489,17 +512,18 @@ pub const GossipService = struct {
     }
 
     fn drain_push_queue_to_crds_table(
-        crds_table: *CrdsTable,
-        push_msg_queue: *std.ArrayList(CrdsValue),
-        push_msg_queue_lock: *std.Thread.Mutex,
+        crds_table_rw: *RwMux(CrdsTable),
+        push_msg_queue_mux: *Mux(std.ArrayList(CrdsValue)),
     ) !void {
         const now = get_wallclock();
 
-        push_msg_queue_lock.lock();
-        defer push_msg_queue_lock.unlock();
+        var push_msg_queue_lg = push_msg_queue_mux.lock();
+        var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lg.mut();
+        defer push_msg_queue_lg.unlock();
 
-        crds_table.write();
-        defer crds_table.release_write();
+        var crds_table_lg = crds_table_rw.write();
+        var crds_table: *CrdsTable = crds_table_lg.mut();
+        defer crds_table_lg.unlock();
 
         while (push_msg_queue.popOrNull()) |crds_value| {
             crds_table.insert(crds_value, now) catch {};
@@ -508,18 +532,21 @@ pub const GossipService = struct {
 
     fn new_push_messages(
         allocator: std.mem.Allocator,
-        crds_table: *CrdsTable,
-        active_set: *const ActiveSet,
-        active_set_lock: *std.Thread.RwLock,
+        crds_table_rw: *RwMux(CrdsTable),
+        active_set_rw: *RwMux(ActiveSet),
         my_pubkey: Pubkey,
         push_cursor: *u64,
     ) !std.ArrayList(Packet) {
         // TODO: find a better static value?
         var buf: [512]crds.CrdsVersionedValue = undefined;
-        crds_table.read();
-        errdefer crds_table.release_read();
-        var crds_entries = try crds_table.get_entries_with_cursor(&buf, push_cursor);
-        crds_table.release_read();
+
+        var crds_entries = blk: {
+            var crds_table_lg = crds_table_rw.read();
+            defer crds_table_lg.unlock();
+
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            break :blk crds_table.get_entries_with_cursor(&buf, push_cursor);
+        };
 
         const now = get_wallclock();
         var total_byte_size: usize = 0;
@@ -530,8 +557,9 @@ pub const GossipService = struct {
         var push_messages = std.AutoHashMap(EndPoint, std.ArrayList(CrdsValue)).init(allocator);
         defer push_messages.deinit();
 
-        active_set_lock.lockShared();
-        errdefer active_set_lock.unlockShared();
+        var active_set_lg = active_set_rw.read();
+        var active_set: *const ActiveSet = active_set_lg.get();
+        errdefer active_set_lg.unlock();
 
         var num_values_considered: usize = 0;
         for (crds_entries) |entry| {
@@ -554,8 +582,11 @@ pub const GossipService = struct {
 
             // get the active set for these values *PER ORIGIN* due to prunes
             const origin = value.id();
+            var crds_table_lg = crds_table_rw.read();
+            const crds_table: *const CrdsTable = crds_table_lg.get();
             const active_set_peers = try active_set.get_fanout_peers(allocator, origin, crds_table);
             defer active_set_peers.deinit();
+            crds_table_lg.unlock();
 
             for (active_set_peers.items) |peer| {
                 var maybe_peer_entry = push_messages.getEntry(peer);
@@ -569,7 +600,7 @@ pub const GossipService = struct {
             }
             num_values_considered += 1;
         }
-        active_set_lock.unlockShared();
+        active_set_lg.unlock();
 
         // adjust cursor for values not sent this round
         // NOTE: labs client doesnt do this - bug?
@@ -658,20 +689,24 @@ pub const GossipService = struct {
         push_from: Pubkey,
         push_values: []CrdsValue,
         allocator: std.mem.Allocator,
-        crds_table: *CrdsTable,
+        crds_table_rw: *RwMux(CrdsTable),
         my_keypair: *KeyPair,
         logger: *Logger,
     ) !std.ArrayList(Packet) {
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
 
-        crds_table.write();
-        const failed_insert_indexs = crds_table.insert_values(
-            allocator,
-            push_values,
-            CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
-            logger,
-        );
-        crds_table.release_write();
+        const failed_insert_indexs = blk: {
+            var crds_table_lg = crds_table_rw.write();
+            defer crds_table_lg.unlock();
+
+            var crds_table: *CrdsTable = crds_table_lg.mut();
+            break :blk crds_table.insert_values(
+                allocator,
+                push_values,
+                CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
+                logger,
+            );
+        };
         defer failed_insert_indexs.deinit();
 
         // handle prune messages
@@ -679,12 +714,15 @@ pub const GossipService = struct {
             return std.ArrayList(Packet).init(allocator);
         }
 
-        crds_table.read();
-        const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
-            crds_table.release_read();
-            return error.CantFindContactInfo;
+        const from_contact_info = blk: {
+            var crds_table_lg = crds_table_rw.read();
+            defer crds_table_lg.unlock();
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+
+            break :blk crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_from }) orelse {
+                return error.CantFindContactInfo;
+            };
         };
-        crds_table.release_read();
 
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
         try crds.sanitize_socket(&from_gossip_addr);
@@ -724,13 +762,11 @@ pub const GossipService = struct {
 
     pub fn process_protocol_messages(
         allocator: std.mem.Allocator,
-        crds_table: *CrdsTable,
+        crds_table_rw: *RwMux(CrdsTable),
         verified_channel: *ProtocolChannel,
         responder_channel: *PacketChannel,
-        failed_pull_hashes: *HashTimeQueue,
-        failed_pull_hashes_lock: *std.Thread.Mutex,
-        active_set: *ActiveSet,
-        active_set_lock: *std.Thread.RwLock,
+        failed_pull_hashes_mux: *Mux(HashTimeQueue),
+        active_set_rw: *RwMux(ActiveSet),
         my_keypair: *KeyPair,
         logger: *Logger,
     ) !void {
@@ -753,7 +789,7 @@ pub const GossipService = struct {
                         push[0],
                         push[1],
                         allocator,
-                        crds_table,
+                        crds_table_rw,
                         my_keypair,
                         logger,
                     ) catch |err| {
@@ -771,14 +807,15 @@ pub const GossipService = struct {
 
                     // TODO: filter the values
 
-                    crds_table.write();
+                    var crds_table_lg = crds_table_rw.write();
+                    var crds_table: *CrdsTable = crds_table_lg.mut();
                     const failed_insert_indexs = crds_table.insert_values(
                         allocator,
                         values,
                         CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
                         logger,
                     );
-                    crds_table.release_write();
+                    crds_table_lg.unlock();
                     defer failed_insert_indexs.deinit();
 
                     // track failed inserts to use when constructing
@@ -787,8 +824,9 @@ pub const GossipService = struct {
                         var buf = [_]u8{0} ** 2048;
                         const now = get_wallclock();
 
-                        failed_pull_hashes_lock.lock();
-                        defer failed_pull_hashes_lock.unlock();
+                        var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
+                        var failed_pull_hashes: *HashTimeQueue = failed_pull_hashes_lg.mut();
+                        defer failed_pull_hashes_lg.unlock();
 
                         for (failed_insert_indexs.items) |insert_index| {
                             const value = values[insert_index];
@@ -811,13 +849,20 @@ pub const GossipService = struct {
                         continue;
                     }
 
-                    const crds_values = try pull_response.filter_crds_values(
+                    var crds_table_lg = crds_table_rw.read();
+                    defer crds_table_lg.unlock();
+                    const crds_table: *const CrdsTable = crds_table_lg.get();
+
+                    const crds_values = pull_response.filter_crds_values(
                         allocator,
                         crds_table,
                         &filter,
                         100,
                         caller_wallclock,
-                    );
+                    ) catch |err| {
+                        logger.warnf("error filtering crds values: {s}", .{@errorName(err)});
+                        continue;
+                    };
                     defer crds_values.deinit();
 
                     // const protocol_msg = Protocol {
@@ -849,14 +894,16 @@ pub const GossipService = struct {
 
                     // update active set
                     const from_pubkey = prune_msg.pubkey;
-                    active_set_lock.lock();
+
+                    var active_set_lg = active_set_rw.write();
+                    var active_set: *ActiveSet = active_set_lg.mut();
                     for (prune_msg.prunes) |origin| {
                         if (origin.equals(&my_pubkey)) {
                             continue;
                         }
                         active_set.prune(from_pubkey, origin);
                     }
-                    active_set_lock.unlock();
+                    active_set_lg.unlock();
                 },
                 .PongMessage => |*pong| {
                     _ = pong;
@@ -866,11 +913,12 @@ pub const GossipService = struct {
                 },
             }
 
-            crds_table.write();
+            var crds_table_lg = crds_table_rw.write();
+            var crds_table: *CrdsTable = crds_table_lg.mut();
             crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
                 logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
             };
-            crds_table.release_write();
+            crds_table_lg.unlock();
         }
     }
 };
@@ -889,7 +937,7 @@ test "gossip.gossip_service: generate prune messages" {
     }
 
     var crds_table = try CrdsTable.init(allocator);
-    defer crds_table.deinit();
+    // defer crds_table.deinit();
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -907,11 +955,17 @@ test "gossip.gossip_service: generate prune messages" {
     }, kp);
     try crds_table.insert(ci_value, get_wallclock());
 
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var crds_lg = crds_table_rw.write();
+        crds_lg.mut().deinit();
+    }
+
     var packets = try GossipService.handle_push_message(
         push_from,
         values.items,
         allocator,
-        &crds_table,
+        &crds_table_rw,
         &kp,
         logger,
     );
@@ -922,7 +976,7 @@ test "gossip.gossip_service: generate prune messages" {
         push_from,
         values.items,
         allocator,
-        &crds_table,
+        &crds_table_rw,
         &kp,
         logger,
     );
@@ -968,10 +1022,12 @@ test "gossip.gossip_service: new pull messages" {
         .LegacyContactInfo = contact_info,
     }, keypair);
 
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var packets = try GossipService.new_pull_requests(
         allocator,
-        &crds_table,
+        &crds_table_rw,
         &failed_pull_hashes,
         2,
         value,
@@ -987,46 +1043,53 @@ test "gossip.gossip_service: new push messages" {
     const allocator = std.testing.allocator;
 
     var crds_table = try CrdsTable.init(allocator);
-    defer crds_table.deinit();
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var lg = crds_table_rw.write();
+        lg.mut().deinit();
+    }
 
     // add some peers
     var rng = std.rand.DefaultPrng.init(get_wallclock());
 
+    var lg = crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
         var value = try CrdsValue.random_with_index(rng.random(), keypair, 0); // contact info
-        try crds_table.insert(value, get_wallclock());
+        try lg.mut().insert(value, get_wallclock());
     }
+    lg.unlock();
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&keypair.public_key, false);
     var value = try CrdsValue.random(rng.random(), keypair);
 
     // set the active set
-    var active_set = try ActiveSet.rotate(allocator, &crds_table, id, 0);
+    var active_set = try ActiveSet.rotate(allocator, &crds_table_rw, id, 0);
     defer active_set.deinit();
+
+    var active_set_rw = RwMux(ActiveSet).init(active_set);
     std.debug.print("active set len: {d}\n", .{active_set.len});
 
     var push_queue = std.ArrayList(CrdsValue).init(allocator);
     defer push_queue.deinit();
-    var mutex = std.Thread.Mutex{};
-
     try push_queue.append(value);
-    try GossipService.drain_push_queue_to_crds_table(
-        &crds_table,
-        &push_queue,
-        &mutex,
-    );
-    try std.testing.expect(crds_table.len() == 11);
+    var push_queue_m = Mux(std.ArrayList(CrdsValue)).init(push_queue);
 
-    var active_set_lock: std.Thread.RwLock = .{};
+    try GossipService.drain_push_queue_to_crds_table(
+        &crds_table_rw,
+        &push_queue_m,
+    );
+
+    var clg = crds_table_rw.read();
+    try std.testing.expect(clg.get().len() == 11);
+    clg.unlock();
 
     var cursor: usize = 0;
     var msgs = try GossipService.new_push_messages(
         allocator,
-        &crds_table,
-        &active_set,
-        &active_set_lock,
+        &crds_table_rw,
+        &active_set_rw,
         id,
         &cursor,
     );
@@ -1037,9 +1100,8 @@ test "gossip.gossip_service: new push messages" {
 
     msgs = try GossipService.new_push_messages(
         allocator,
-        &crds_table,
-        &active_set,
-        &active_set_lock,
+        &crds_table_rw,
+        &active_set_rw,
         id,
         &cursor,
     );
@@ -1141,7 +1203,11 @@ test "gossip.gossip_service: test packet verification" {
 test "gossip.gossip_service: process contact_info push packet" {
     const allocator = std.testing.allocator;
     var crds_table = try CrdsTable.init(allocator);
-    defer crds_table.deinit();
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var lg = crds_table_rw.write();
+        lg.mut().deinit();
+    }
 
     var verified_channel = ProtocolChannel.init(allocator, 100);
     defer verified_channel.deinit();
@@ -1154,31 +1220,31 @@ test "gossip.gossip_service: process contact_info push packet" {
     logger.spawn();
 
     var failed_pull = HashTimeQueue.init();
-    var failed_pull_lock = std.Thread.Mutex{};
     var kp = try KeyPair.create(null);
     var pk = Pubkey.fromPublicKey(&kp.public_key, false);
 
     var active_set = try ActiveSet.rotate(
         allocator,
-        &crds_table,
+        &crds_table_rw,
         pk,
         0,
     );
     defer active_set.deinit();
-    var active_set_lock = std.Thread.RwLock{};
+
+    var active_set_rw = RwMux(ActiveSet).init(active_set);
+
+    var mfph = Mux(HashTimeQueue).init(failed_pull);
 
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.process_protocol_messages,
         .{
             allocator,
-            &crds_table,
+            &crds_table_rw,
             verified_channel,
             responder_channel,
-            &failed_pull,
-            &failed_pull_lock,
-            &active_set,
-            &active_set_lock,
+            &mfph,
+            &active_set_rw,
             &kp,
             logger,
         },
@@ -1209,8 +1275,11 @@ test "gossip.gossip_service: process contact_info push packet" {
     // correct insertion into table
     var buf2: [100]crds.CrdsVersionedValue = undefined;
     std.time.sleep(std.time.ns_per_s);
-    var res = try crds_table.get_contact_infos(&buf2);
+
+    var lg = crds_table_rw.read();
+    var res = try lg.get().get_contact_infos(&buf2);
     try std.testing.expect(res.len == 1);
+    lg.unlock();
 
     verified_channel.close();
     packet_handle.join();
