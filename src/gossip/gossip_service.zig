@@ -259,6 +259,8 @@ pub const GossipService = struct {
                     };
                     defer failed_insert_origins.deinit();
 
+                    if (failed_insert_origins.count() == 0) continue;
+
                     var prune_packets = build_prune_messages(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
                         logger.warnf("error building prune messages: {s}", .{@errorName(err)});
                         continue;
@@ -281,7 +283,6 @@ pub const GossipService = struct {
                         crds_values,
                     ) catch |err| {
                         logger.warnf("error handling pull response: {s}", .{@errorName(err)});
-                        continue;
                     };
                 },
                 .PullRequest => |*pull| {
@@ -664,8 +665,6 @@ pub const GossipService = struct {
         defer crds_values.deinit();
         crds_table_lg.unlock();
 
-        std.debug.print("pull response: {any}\n", .{crds_values.items.len});
-
         // send the values as a pull response
         var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(allocator, 1);
         var all_to_endpoints = try std.ArrayList(*const EndPoint).initCapacity(allocator, 1);
@@ -690,7 +689,7 @@ pub const GossipService = struct {
         crds_table_rw: *RwMux(CrdsTable),
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         crds_values: []CrdsValue,
-    ) !void {
+    ) error{ OutOfMemory }!void {
         // TODO: benchmark and compare with labs' preprocessing
         const now = get_wallclock();
         var crds_table_lg = crds_table_rw.write();
@@ -739,7 +738,10 @@ pub const GossipService = struct {
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             for (failed_insert_indexs.items) |insert_index| {
                 const value = crds_values[insert_index];
-                var bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
+                var bytes = bincode.writeToSlice(&buf, value, bincode.Params.standard) catch {
+                    std.debug.print("handle_pull_response: failed to serialize crds value: {any}\n", .{value});
+                    continue;
+                };
                 const value_hash = Hash.generateSha256Hash(bytes);
 
                 failed_pull_hashes.insert(value_hash, now);
@@ -1025,7 +1027,7 @@ const PacketBuilder = enum {
                     protocol_msg_values.clearRetainingCapacity();
                     try protocol_msg_values.append(crds_value);
                 } else {
-                    // new_chunk_size <= max_chunk_size
+                    // add it to the current chunk
                     buf_byte_size = new_chunk_size;
                     try protocol_msg_values.append(crds_value);
                 }
