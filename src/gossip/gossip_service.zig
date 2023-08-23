@@ -62,7 +62,7 @@ const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH
 
 const PUSH_MESSAGE_MAX_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
-const GOSSIP_SLEEP_MILLIS: u64 = 100;
+const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
 
 /// Maximum number of origin nodes that a PruneData may contain, such that the
 /// serialized size of the PruneMessage stays below PACKET_DATA_SIZE.
@@ -402,9 +402,8 @@ pub const GossipService = struct {
                     &failed_pull_hashes_array,
                     pull_request.MAX_BLOOM_SIZE,
                     my_contact_info_value,
-                    logger,
                 ) catch |e| blk: {
-                    logger.debugf("failed to generate pull requests: {any}\n", .{e});
+                    logger.debugf("failed to generate pull requests: {any}", .{e});
                     break :blk std.ArrayList(Packet).init(allocator);
                 };
                 defer pull_packets.deinit();
@@ -611,22 +610,17 @@ pub const GossipService = struct {
         bloom_size: usize,
         /// crds value used to construct the pull request message
         my_contact_info: CrdsValue,
-        /// the logger to use for debuggin
-        logger: *Logger,
     ) !std.ArrayList(Packet) {
         // NOTE: these filters need to be de-init at some point
         // should serialize them into packets and de-init asap imo
         // ie, PacketBatch them
-        var filters = pull_request.build_crds_filters(
+        var filters = try pull_request.build_crds_filters(
             allocator,
             crds_table,
             failed_pull_hashes,
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
-        ) catch |err| {
-            logger.debugf("failed to build crds filters: {any}\n", .{err});
-            return error.FailedToBuildFilters;
-        };
+        );
         // we serialize at the end of this function so this is ok
         defer pull_request.deinit_crds_filters(&filters);
 
@@ -1425,7 +1419,6 @@ test "gossip.gossip_service: test build_pull_requests" {
         &failed_pull_hashes,
         2,
         value,
-        logger,
     );
     defer packets.deinit();
 

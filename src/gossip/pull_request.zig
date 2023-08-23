@@ -30,16 +30,14 @@ pub fn build_crds_filters(
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
-) !ArrayList(CrdsFilter) {
+) error{ NotEnoughCrdsValues, OutOfMemory }!ArrayList(CrdsFilter) {
     var crds_table_lg = crds_table_rw.read();
     const crds_table: *const CrdsTable = crds_table_lg.get();
     errdefer crds_table_lg.unlock(); // ensure lock is released even on errors
 
     const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
-    var filter_set = CrdsFilterSet.init(alloc, num_items, bloom_size) catch {
-        return error.CrdsFilterSetInitFailed;
-    };
+    var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
     errdefer filter_set.deinit();
 
     // add all crds values
@@ -87,14 +85,13 @@ pub const CrdsFilterSet = struct {
 
     const Self = @This();
 
-    pub fn init(alloc: std.mem.Allocator, num_items: usize, bloom_size_bytes: usize) !Self {
+    pub fn init(alloc: std.mem.Allocator, num_items: usize, bloom_size_bytes: usize) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
         var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
         var mask_bits = CrdsFilter.compute_mask_bits(@floatFromInt(num_items), bloom_size_bits);
-        std.debug.assert(mask_bits > 0);
+        if (mask_bits == 0) return error.NotEnoughCrdsValues;
 
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
-        std.debug.assert(n_filters > 0);
 
         // TODO; add errdefer handling here
         var max_items = CrdsFilter.compute_max_items(bloom_size_bits, FALSE_RATE, KEYS);
@@ -135,7 +132,7 @@ pub const CrdsFilterSet = struct {
     }
 
     /// returns a list of CrdsFilters and consumes Self by calling deinit.
-    pub fn consume_for_crds_filters(self: *Self, alloc: std.mem.Allocator, max_size: usize) !ArrayList(CrdsFilter) {
+    pub fn consume_for_crds_filters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();

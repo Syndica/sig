@@ -630,7 +630,7 @@ pub const HashTimeQueue = struct {
         }
     }
 
-    pub fn get_values(self: *const Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+    pub fn get_values(self: *const Self, alloc: std.mem.Allocator) error{OutOfMemory}!std.ArrayList(Hash) {
         var hashes = try std.ArrayList(Hash).initCapacity(alloc, self.queue.len);
         var curr_ptr = self.queue.first;
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {
