@@ -318,7 +318,10 @@ pub const GossipService = struct {
                     };
                 },
                 .PingMessage => |*ping| {
-                    const packet = handle_ping_message(ping, my_keypair, from_endpoint);
+                    const packet = handle_ping_message(ping, my_keypair, from_endpoint) catch |err| {
+                        logger.warnf("error handling ping message: {s}", .{@errorName(err)});
+                        continue;
+                    };
                     try responder_channel.send(packet);
                 },
                 .PongMessage => |*pong| {
@@ -877,11 +880,11 @@ pub const GossipService = struct {
     }
 
     fn handle_ping_message(
-        ping: Ping,
-        my_keypair: KeyPair,
+        ping: *const Ping,
+        my_keypair: *KeyPair,
         from_endpoint: EndPoint,
-    ) error{SerializationError}!Packet {
-        const pong = Pong.init(ping, my_keypair);
+    ) error{ SignatureError, SerializationError }!Packet {
+        const pong = try Pong.init(ping, my_keypair);
         const pong_message = Protocol{
             .PongMessage = pong,
         };

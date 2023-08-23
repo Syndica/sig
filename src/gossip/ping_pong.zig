@@ -66,10 +66,10 @@ pub const Pong = struct {
 
     const Self = @This();
 
-    pub fn init(ping: *const Ping, keypair: *KeyPair) !Self {
+    pub fn init(ping: *const Ping, keypair: *KeyPair) error{SignatureError}!Self {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        const sig = try keypair.sign(&hash.data, null);
+        const sig = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key, true),
