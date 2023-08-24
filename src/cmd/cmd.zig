@@ -62,6 +62,7 @@ fn identity(_: []const []const u8) !void {
 fn gossip(_: []const []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(gpa_allocator);
     var logger = Logger.init(arena.allocator(), .debug);
+    defer logger.deinit();
     logger.spawn();
 
     var exit = std.atomic.Atomic(bool).init(false);
@@ -87,6 +88,8 @@ fn gossip(_: []const []const u8) !void {
         gossip_address,
         &exit,
     );
+    defer gossip_service.deinit();
+
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
@@ -94,9 +97,6 @@ fn gossip(_: []const []const u8) !void {
     );
 
     handle.join();
-    gossip_service.deinit();
-
-    logger.deinit();
 }
 
 pub fn run() !void {

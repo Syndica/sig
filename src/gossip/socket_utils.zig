@@ -8,17 +8,22 @@ pub fn read_socket(
     socket: *UdpSocket,
     send_channel: *NonBlockingChannel(Packet),
     exit: *const std.atomic.Atomic(bool),
-) error{ SocketReadError, OutOfMemory, ChannelClosed }!void {
+) error{ SocketClosed, SocketRecvError, OutOfMemory, ChannelClosed }!void {
     var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
     while (!exit.load(std.atomic.Ordering.Unordered)) {
-        const recv_meta = socket.receiveFrom(&read_buf) catch return error.SocketReadError;
-        const bytes_read = recv_meta.numberOfBytes;
+        const recv_meta = socket.receiveFrom(&read_buf) catch |err| {
+            if (err == error.WouldBlock) {
+                std.time.sleep(std.time.ns_per_ms * 1);
+                continue;
+            } else {
+                return error.SocketRecvError;
+            }
+        };
 
-        // timeout
+        const bytes_read = recv_meta.numberOfBytes;
         if (bytes_read == 0) {
-            std.time.sleep(std.time.ns_per_ms);
-            continue;
+            return error.SocketClosed;
         }
 
         // send packet through channel
@@ -32,7 +37,7 @@ pub fn send_socket(
     socket: *UdpSocket,
     recv_channel: *NonBlockingChannel(Packet),
     exit: *const std.atomic.Atomic(bool),
-) !void {
+) error{ SocketSendError, ChannelClosed }!void {
     while (!exit.load(std.atomic.Ordering.Unordered)) {
         const maybe_packets = try recv_channel.drain();
         if (maybe_packets == null) {
@@ -44,7 +49,7 @@ pub fn send_socket(
         defer recv_channel.allocator.free(packets);
 
         for (packets) |p| {
-            const bytes_sent = try socket.sendTo(p.addr, p.data[0..p.size]);
+            const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch return error.SocketSendError;
             std.debug.assert(bytes_sent == p.size);
         }
     }

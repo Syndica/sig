@@ -14,37 +14,53 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const get_wallclock = @import("crds.zig").get_wallclock;
 
 pub fn main() !void {
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // var allocator = gpa.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
-    // var logger = Logger.init(gpa.allocator(), .debug);
-    // defer logger.deinit();
-    // logger.spawn();
+    var logger = Logger.init(gpa.allocator(), .debug);
+    defer logger.deinit();
+    logger.spawn();
 
-    // // setup the gossip service
-    // var gossip_port: u16 = 9999;
-    // var my_keypair = try Keypair.create(null);
-    // var exit = AtomicBool.init(false);
+    // setup the gossip service
+    var gossip_port: u16 = 9999;
+    var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
 
-    // // start running gossip
-    // var handle = try gossipCmd.runGossipService(
-    //     allocator,
-    //     my_keypair,
-    //     gossip_port,
-    //     std.ArrayList(LegacyContactInfo).init(allocator),
-    //     logger,
-    //     &exit,
-    // );
-    // std.debug.print("gossip service started on port {d}\n", .{gossip_port});
+    var my_keypair = try Keypair.create(null);
+    var exit = AtomicBool.init(false);
 
-    // // blast it
-    // // TODO
-    // std.time.sleep(1 * std.time.ns_per_s);
+    // setup contact info
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var contact_info = LegacyContactInfo.default(my_pubkey);
+    contact_info.shred_version = 0;
+    contact_info.gossip = gossip_address;
 
-    // // cleanup
-    // std.debug.print("gossip service exiting\n", .{});
-    // exit.store(true, std.atomic.Ordering.Unordered);
-    // handle.join();
+    // start running gossip
+    var gossip_service = try GossipService.init(
+        allocator,
+        contact_info,
+        my_keypair,
+        gossip_address,
+        &exit,
+    );
+    defer gossip_service.deinit();
 
-    // std.debug.print("fuzzing done\n", .{});
+    var handle = try std.Thread.spawn(
+        .{},
+        GossipService.run,
+        .{ &gossip_service, logger },
+    );
+    std.debug.print("gossip service started on port {d}\n", .{gossip_port});
+
+    // setup sending socket
+
+    // blast it
+    // TODO
+    std.time.sleep(1 * std.time.ns_per_s);
+
+    // cleanup
+    std.debug.print("gossip service exiting\n", .{});
+    exit.store(true, std.atomic.Ordering.Unordered);
+    handle.join();
+
+    std.debug.print("fuzzing done\n", .{});
 }
