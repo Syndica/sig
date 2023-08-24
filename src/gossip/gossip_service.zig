@@ -1,10 +1,10 @@
 const std = @import("std");
-const ClusterInfo = @import("cluster_info.zig").ClusterInfo;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
-const Channel = @import("../sync/channel.zig").Channel;
+const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
+
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
@@ -46,9 +46,9 @@ const Hash = @import("../core/hash.zig").Hash;
 
 const socket_utils = @import("socket_utils.zig");
 
-const PacketChannel = Channel(Packet);
+const PacketChannel = NonBlockingChannel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
-const ProtocolChannel = Channel(ProtocolMessage);
+const ProtocolChannel = NonBlockingChannel(ProtocolMessage);
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -69,12 +69,15 @@ const MAX_PRUNE_DATA_NODES: usize = 32;
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
 pub const GossipService = struct {
-    my_contact_info: crds.LegacyContactInfo,
-    my_keypair: KeyPair,
-    gossip_socket: UdpSocket,
-    exit_sig: AtomicBool,
     allocator: std.mem.Allocator,
 
+    // note: this contact info should not change
+    gossip_socket: UdpSocket,
+    my_contact_info: crds.LegacyContactInfo,
+    my_keypair: KeyPair,
+    exit: *AtomicBool,
+
+    // communication between threads
     packet_channel: *PacketChannel,
     responder_channel: *PacketChannel,
     verified_channel: *ProtocolChannel,
@@ -92,9 +95,9 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_contact_info: crds.LegacyContactInfo,
         my_keypair: KeyPair,
-        gossip_socket: UdpSocket,
-        exit: AtomicBool,
-    ) error{OutOfMemory}!Self {
+        gossip_address: SocketAddr,
+        exit: *AtomicBool,
+    ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
         var verified_channel = ProtocolChannel.init(allocator, 10000);
         var responder_channel = PacketChannel.init(allocator, 10000);
@@ -111,6 +114,11 @@ pub const GossipService = struct {
             my_shred_version,
         );
 
+        // bind the socket
+        var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
+        gossip_socket.bind(gossip_address.toEndpoint()) catch return error.SocketBindFailed;
+        gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
+
         var failed_pull_hashes = HashTimeQueue.init();
         var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
 
@@ -118,7 +126,7 @@ pub const GossipService = struct {
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
             .gossip_socket = gossip_socket,
-            .exit_sig = exit,
+            .exit = exit,
             .packet_channel = packet_channel,
             .responder_channel = responder_channel,
             .verified_channel = verified_channel,
@@ -150,24 +158,28 @@ pub const GossipService = struct {
     }
 
     /// spawns required threads for the gossip serivce.
-    /// including: 1) socket reciever 2) packet verifier 3) packet processor
-    /// 4) build message loop (to send outgoing message)
-    /// and 5) a socket responder (to send outgoing packets)
+    /// including:
+    ///     1) socket reciever
+    ///     2) packet verifier
+    ///     3) packet processor
+    ///     4) build message loop (to send outgoing message)
+    ///     and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self, logger: *Logger) !void {
-        defer self.deinit();
-
-        // process input threads
         var receiver_handle = try Thread.spawn(.{}, socket_utils.read_socket, .{
             &self.gossip_socket,
             self.packet_channel,
-            &self.exit_sig,
+            self.exit,
         });
+        defer receiver_handle.join();
 
         var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
             self.allocator,
             self.packet_channel,
             self.verified_channel,
+            self.exit,
         });
+        defer packet_verifier_handle.join();
+
         var packet_handle = try Thread.spawn(.{}, Self.process_messages, .{
             self.allocator,
             self.verified_channel,
@@ -176,8 +188,10 @@ pub const GossipService = struct {
             &self.active_set_rw,
             &self.failed_pull_hashes_mux,
             &self.my_keypair,
+            self.exit,
             logger,
         });
+        defer packet_handle.join();
 
         // periodically send output thread
         var build_message_loop_handle = try Thread.spawn(.{}, Self.build_message_loop, .{
@@ -189,20 +203,18 @@ pub const GossipService = struct {
             &self.push_msg_queue_mux,
             &self.my_contact_info,
             &self.my_keypair,
+            self.exit,
             logger,
         });
+        defer build_message_loop_handle.join();
 
         // outputer thread
         var responder_handle = try Thread.spawn(.{}, socket_utils.send_socket, .{
             &self.gossip_socket,
             self.responder_channel,
+            self.exit,
         });
-
-        packet_verifier_handle.join();
-        responder_handle.join();
-        receiver_handle.join();
-        packet_handle.join();
-        build_message_loop_handle.join();
+        defer responder_handle.join();
     }
 
     /// main logic for deserializing Packets into Protocol messages
@@ -212,36 +224,51 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         packet_channel: *PacketChannel,
         verified_channel: *ProtocolChannel,
+        exit: *const AtomicBool,
     ) !void {
         var failed_protocol_msgs: usize = 0;
 
-        while (packet_channel.receive()) |packet| {
-            var protocol_message = bincode.readFromSlice(
-                allocator,
-                Protocol,
-                packet.data[0..packet.size],
-                bincode.Params.standard,
-            ) catch {
-                failed_protocol_msgs += 1;
-                std.debug.print("failed to deserialize protocol message\n", .{});
+        while (!exit.load(std.atomic.Ordering.Unordered)) {
+            const maybe_packets = try packet_channel.drain();
+            if (maybe_packets == null) {
+                // sleep for 1ms
+                std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
-            };
-            defer bincode.free(allocator, protocol_message);
+            }
 
-            protocol_message.sanitize() catch {
-                std.debug.print("failed to sanitize protocol message\n", .{});
-                continue;
-            };
+            const packets = maybe_packets.?;
+            defer packet_channel.allocator.free(packets);
 
-            protocol_message.verify_signature() catch {
-                std.debug.print("failed to verify protocol message signature\n", .{});
-                continue;
-            };
+            for (packets) |packet| {
+                var protocol_message = bincode.readFromSlice(
+                    allocator,
+                    Protocol,
+                    packet.data[0..packet.size],
+                    bincode.Params.standard,
+                ) catch {
+                    failed_protocol_msgs += 1;
+                    std.debug.print("failed to deserialize protocol message\n", .{});
+                    continue;
+                };
+                defer bincode.free(allocator, protocol_message);
 
-            // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
-            const msg = ProtocolMessage{ .from_endpoint = packet.addr, .message = protocol_message };
-            try verified_channel.send(msg);
+                protocol_message.sanitize() catch {
+                    std.debug.print("failed to sanitize protocol message\n", .{});
+                    continue;
+                };
+
+                protocol_message.verify_signature() catch {
+                    std.debug.print("failed to verify protocol message signature\n", .{});
+                    continue;
+                };
+
+                // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
+                const msg = ProtocolMessage{ .from_endpoint = packet.addr, .message = protocol_message };
+                try verified_channel.send(msg);
+            }
         }
+
+        std.debug.print("verify_packets loop closed\n", .{});
     }
 
     /// main logic for recieving and processing `Protocol` messages.
@@ -256,104 +283,119 @@ pub const GossipService = struct {
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         /// the localnode's keypair to sign messages
         my_keypair: *const KeyPair,
+        exit: *const AtomicBool,
         logger: *Logger,
     ) !void {
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
 
-        while (verified_channel.receive()) |protocol_message| {
-            var message = protocol_message.message;
-            var from_endpoint = protocol_message.from_endpoint;
-
-            switch (message) {
-                .PushMessage => |*push| {
-                    const push_from = push[0];
-                    const push_values = push[1];
-
-                    var failed_insert_origins = handle_push_message(
-                        allocator,
-                        push_values,
-                        crds_table_rw,
-                    ) catch |err| {
-                        logger.warnf("error handling push message: {s}", .{@errorName(err)});
-                        continue;
-                    };
-                    defer failed_insert_origins.deinit();
-
-                    if (failed_insert_origins.count() == 0) continue;
-
-                    var prune_packets = build_prune_message(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
-                        logger.warnf("error building prune messages: {s}", .{@errorName(err)});
-                        continue;
-                    };
-                    defer prune_packets.deinit();
-
-                    for (prune_packets.items) |packet| {
-                        try responder_channel.send(packet);
-                    }
-                },
-                .PullResponse => |*pull| {
-                    const from = pull[0];
-                    const crds_values = pull[1];
-
-                    _ = from;
-                    handle_pull_response(
-                        allocator,
-                        crds_table_rw,
-                        failed_pull_hashes_mux,
-                        crds_values,
-                    ) catch |err| {
-                        logger.warnf("error handling pull response: {s}", .{@errorName(err)});
-                    };
-                },
-                .PullRequest => |*pull| {
-                    var pull_filter = pull[0];
-                    var pull_value = pull[1]; // contact info
-
-                    var packets = handle_pull_request(
-                        allocator,
-                        crds_table_rw,
-                        pull_value,
-                        pull_filter,
-                        from_endpoint,
-                        my_pubkey,
-                    ) catch |err| {
-                        logger.warnf("error handling pull request: {s}", .{@errorName(err)});
-                        continue;
-                    };
-                    defer packets.deinit();
-
-                    for (packets.items) |packet| {
-                        try responder_channel.send(packet);
-                    }
-                },
-                .PruneMessage => |*prune| {
-                    const prune_msg: PruneData = prune[1];
-                    handle_prune_message(
-                        &prune_msg,
-                        active_set_rw,
-                        &my_pubkey,
-                    ) catch |err| {
-                        logger.warnf("error handling prune message: {s}", .{@errorName(err)});
-                    };
-                },
-                .PingMessage => |*ping| {
-                    const packet = handle_ping_message(ping, my_keypair, from_endpoint) catch |err| {
-                        logger.warnf("error handling ping message: {s}", .{@errorName(err)});
-                        continue;
-                    };
-                    try responder_channel.send(packet);
-                },
-                .PongMessage => |*pong| {
-                    _ = pong;
-                },
+        while (!exit.load(std.atomic.Ordering.Unordered)) {
+            const maybe_protocol_messages = try verified_channel.drain();
+            if (maybe_protocol_messages == null) {
+                // sleep for 1ms
+                std.time.sleep(std.time.ns_per_ms * 1);
+                continue;
             }
 
-            var crds_table_lg = crds_table_rw.write();
-            crds_table_lg.mut().attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
-                logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
-            };
-            crds_table_lg.unlock();
+            const protocol_messages = maybe_protocol_messages.?;
+            defer verified_channel.allocator.free(protocol_messages);
+
+            for (protocol_messages) |protocol_message| {
+                var message = protocol_message.message;
+                var from_endpoint = protocol_message.from_endpoint;
+
+                switch (message) {
+                    .PushMessage => |*push| {
+                        const push_from = push[0];
+                        const push_values = push[1];
+
+                        var failed_insert_origins = handle_push_message(
+                            allocator,
+                            push_values,
+                            crds_table_rw,
+                        ) catch |err| {
+                            logger.warnf("error handling push message: {s}", .{@errorName(err)});
+                            continue;
+                        };
+                        defer failed_insert_origins.deinit();
+
+                        if (failed_insert_origins.count() == 0) continue;
+
+                        var prune_packets = build_prune_message(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
+                            logger.warnf("error building prune messages: {s}", .{@errorName(err)});
+                            continue;
+                        };
+                        defer prune_packets.deinit();
+
+                        for (prune_packets.items) |packet| {
+                            try responder_channel.send(packet);
+                        }
+                    },
+                    .PullResponse => |*pull| {
+                        const from = pull[0];
+                        const crds_values = pull[1];
+
+                        _ = from;
+                        handle_pull_response(
+                            allocator,
+                            crds_table_rw,
+                            failed_pull_hashes_mux,
+                            crds_values,
+                        ) catch |err| {
+                            logger.warnf("error handling pull response: {s}", .{@errorName(err)});
+                        };
+                    },
+                    .PullRequest => |*pull| {
+                        var pull_filter = pull[0];
+                        var pull_value = pull[1]; // contact info
+
+                        var packets = handle_pull_request(
+                            allocator,
+                            crds_table_rw,
+                            pull_value,
+                            pull_filter,
+                            from_endpoint,
+                            my_pubkey,
+                        ) catch |err| {
+                            logger.warnf("error handling pull request: {s}", .{@errorName(err)});
+                            continue;
+                        };
+                        defer packets.deinit();
+
+                        for (packets.items) |packet| {
+                            try responder_channel.send(packet);
+                        }
+                    },
+                    .PruneMessage => |*prune| {
+                        const prune_msg: PruneData = prune[1];
+                        handle_prune_message(
+                            &prune_msg,
+                            active_set_rw,
+                            &my_pubkey,
+                        ) catch |err| {
+                            logger.warnf("error handling prune message: {s}", .{@errorName(err)});
+                        };
+                    },
+                    .PingMessage => |*ping| {
+                        const packet = handle_ping_message(ping, my_keypair, from_endpoint) catch |err| {
+                            logger.warnf("error handling ping message: {s}", .{@errorName(err)});
+                            continue;
+                        };
+                        try responder_channel.send(packet);
+                    },
+                    .PongMessage => |*pong| {
+                        _ = pong;
+                    },
+                }
+
+                var crds_table_lg = crds_table_rw.write();
+                crds_table_lg.mut().attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                    logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
+                };
+                crds_table_lg.unlock();
+            }
         }
+
+        std.debug.print("process_messages loop closed\n", .{});
     }
 
     /// main gossip loop for periodically sending new protocol messages.
@@ -375,18 +417,21 @@ pub const GossipService = struct {
         const_my_contact_info: *const crds.LegacyContactInfo,
         /// local node's keypair used to sign outgoing messages
         my_keypair: *const KeyPair,
+        /// exit signal
+        exit: *const AtomicBool,
         /// logger used for debugging
         logger: *Logger,
     ) !void {
         var last_push_ts: u64 = 0;
-        var should_send_pull_requests = true;
         var push_cursor: u64 = 0;
+        var should_send_pull_requests = true;
+
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
         const my_shred_version = const_my_contact_info.shred_version;
+        // local copy to change wallclock time
+        var my_contact_info = const_my_contact_info.*;
 
-        var my_contact_info = const_my_contact_info.*; // local copy
-
-        while (true) {
+        while (!exit.load(std.atomic.Ordering.Unordered)) {
             const top_of_loop_ts = get_wallclock();
 
             // TODO: send ping messages based on PingCache
@@ -493,6 +538,7 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
+        std.debug.print("build_message_loop loop closed\n", .{});
     }
 
     /// logic for building new push messages which are sent to peers from the
@@ -1517,10 +1563,13 @@ test "gossip.gossip_service: test packet verification" {
     var verified_channel = ProtocolChannel.init(allocator, 100);
     defer verified_channel.deinit();
 
+    var exit = AtomicBool.init(false);
+
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{
         allocator,
         packet_channel,
         verified_channel,
+        &exit,
     });
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -1574,9 +1623,16 @@ test "gossip.gossip_service: test packet verification" {
     var packet2 = Packet.init(from, buf2, out2.len);
     try packet_channel.send(packet2);
 
-    for (0..3) |_| {
-        var msg = verified_channel.receive().?;
-        try std.testing.expect(msg.message.PushMessage[0].equals(&id));
+    var msg_count: usize = 0;
+    while (msg_count < 3) {
+        if (try verified_channel.drain()) |msgs| {
+            defer verified_channel.allocator.free(msgs);
+            for (msgs) |msg| {
+                try std.testing.expect(msg.message.PushMessage[0].equals(&id));
+                msg_count += 1;
+            }
+        }
+        std.time.sleep(10);
     }
 
     var attempt_count: u16 = 0;
@@ -1592,8 +1648,7 @@ test "gossip.gossip_service: test packet verification" {
     try std.testing.expect(packet_channel.buffer.private.v.items.len == 0);
     try std.testing.expect(verified_channel.buffer.private.v.items.len == 0);
 
-    packet_channel.close();
-    verified_channel.close();
+    exit.store(true, std.atomic.Ordering.Unordered);
     packet_verifier_handle.join();
 }
 
@@ -1631,6 +1686,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var active_set_rw = RwMux(ActiveSet).init(active_set);
 
     var mfph = Mux(HashTimeQueue).init(failed_pull);
+    var exit = AtomicBool.init(false);
 
     var packet_handle = try Thread.spawn(
         .{},
@@ -1643,6 +1699,7 @@ test "gossip.gossip_service: process contact_info push packet" {
             &active_set_rw,
             &mfph,
             &kp,
+            &exit,
             logger,
         },
     );
@@ -1678,6 +1735,35 @@ test "gossip.gossip_service: process contact_info push packet" {
     try std.testing.expect(res.len == 1);
     lg.unlock();
 
-    verified_channel.close();
+    exit.store(true, std.atomic.Ordering.Unordered);
     packet_handle.join();
+}
+
+test "gossip.gossip_service: init, exit, and deinit" {
+    var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    var my_keypair = try KeyPair.create(null);
+    var rng = std.rand.DefaultPrng.init(get_wallclock());
+    var contact_info = crds.LegacyContactInfo.random(rng.random());
+    var exit = AtomicBool.init(false);
+    var gossip_service = try GossipService.init(
+        std.testing.allocator,
+        contact_info,
+        my_keypair,
+        gossip_address,
+        &exit,
+    );
+
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
+    var handle = try std.Thread.spawn(
+        .{},
+        GossipService.run,
+        .{ &gossip_service, logger },
+    );
+
+    exit.store(true, std.atomic.Ordering.Unordered);
+    handle.join();
+    gossip_service.deinit();
 }

@@ -1,8 +1,8 @@
 const std = @import("std");
-const GossipService = @import("./gossip_service.zig").GossipService;
+const GossipService = @import("gossip_service.zig").GossipService;
 const Logger = @import("../trace/log.zig").Logger;
 
-const crds = @import("../gossip/crds.zig");
+const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
 
@@ -11,47 +11,40 @@ const UdpSocket = @import("zig-network").Socket;
 
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
+const get_wallclock = @import("crds.zig").get_wallclock;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // var allocator = gpa.allocator();
 
-    var logger = Logger.init(gpa.allocator(), .debug);
-    defer logger.deinit();
-    logger.spawn();
+    // var logger = Logger.init(gpa.allocator(), .debug);
+    // defer logger.deinit();
+    // logger.spawn();
 
-    // setup the gossip service
-    var gossip_port: u16 = 9999;
+    // // setup the gossip service
+    // var gossip_port: u16 = 9999;
+    // var my_keypair = try Keypair.create(null);
+    // var exit = AtomicBool.init(false);
 
-    // bind the gossip socket
-    var gossip_socket_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
-    var gossip_socket = try UdpSocket.create(.ipv4, .udp);
-    try gossip_socket.bind(gossip_socket_addr.toEndpoint());
+    // // start running gossip
+    // var handle = try gossipCmd.runGossipService(
+    //     allocator,
+    //     my_keypair,
+    //     gossip_port,
+    //     std.ArrayList(LegacyContactInfo).init(allocator),
+    //     logger,
+    //     &exit,
+    // );
+    // std.debug.print("gossip service started on port {d}\n", .{gossip_port});
 
-    // create cluster info
-    var my_keypair = try Keypair.create(null);
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-    var legacy_contact_info = LegacyContactInfo.default(my_pubkey);
-    legacy_contact_info.gossip = gossip_socket_addr;
+    // // blast it
+    // // TODO
+    // std.time.sleep(1 * std.time.ns_per_s);
 
-    var exit = AtomicBool.init(false);
+    // // cleanup
+    // std.debug.print("gossip service exiting\n", .{});
+    // exit.store(true, std.atomic.Ordering.Unordered);
+    // handle.join();
 
-    var gossip_service = try GossipService.init(
-        allocator,
-        legacy_contact_info,
-        my_keypair,
-        gossip_socket,
-        exit,
-    );
-
-    // start running gossip
-    try gossip_service.run(logger);
-
-    // blast it
-    // TODO
-    std.time.sleep(1 * std.time.ns_per_s);
-
-    // cleanup
-    gossip_service.deinit();
+    // std.debug.print("fuzzing done\n", .{});
 }

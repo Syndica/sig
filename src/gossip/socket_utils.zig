@@ -1,40 +1,52 @@
 const UdpSocket = @import("zig-network").Socket;
 const Packet = @import("../gossip/packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("../gossip/packet.zig").PACKET_DATA_SIZE;
-const Channel = @import("../sync/channel.zig").Channel;
+const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 const std = @import("std");
 
 pub fn read_socket(
     socket: *UdpSocket,
-    send_channel: *Channel(Packet),
-    exit: *std.atomic.Atomic(bool),
+    send_channel: *NonBlockingChannel(Packet),
+    exit: *const std.atomic.Atomic(bool),
 ) error{ SocketReadError, OutOfMemory, ChannelClosed }!void {
-    defer send_channel.close();
-
     var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var bytes_read: usize = undefined;
 
-    while (bytes_read != 0) {
-        if (exit.load(std.atomic.Ordering.Unordered)) {
-            break;
+    while (!exit.load(std.atomic.Ordering.Unordered)) {
+        const recv_meta = socket.receiveFrom(&read_buf) catch return error.SocketReadError;
+        const bytes_read = recv_meta.numberOfBytes;
+
+        // timeout
+        if (bytes_read == 0) {
+            std.time.sleep(std.time.ns_per_ms);
+            continue;
         }
-
-        var recv_meta = socket.receiveFrom(&read_buf) catch return error.SocketReadError;
-        bytes_read = recv_meta.numberOfBytes;
 
         // send packet through channel
         const packet = Packet.init(recv_meta.sender, read_buf, bytes_read);
         try send_channel.send(packet);
     }
+    std.debug.print("read_socket loop closed\n", .{});
 }
 
 pub fn send_socket(
     socket: *UdpSocket,
-    recv_channel: *Channel(Packet),
+    recv_channel: *NonBlockingChannel(Packet),
+    exit: *const std.atomic.Atomic(bool),
 ) !void {
-    defer recv_channel.close();
+    while (!exit.load(std.atomic.Ordering.Unordered)) {
+        const maybe_packets = try recv_channel.drain();
+        if (maybe_packets == null) {
+            // sleep for 1ms
+            std.time.sleep(std.time.ns_per_ms * 1);
+            continue;
+        }
+        const packets = maybe_packets.?;
+        defer recv_channel.allocator.free(packets);
 
-    while (recv_channel.receive()) |p| {
-        _ = try socket.sendTo(p.addr, p.data[0..p.size]);
+        for (packets) |p| {
+            const bytes_sent = try socket.sendTo(p.addr, p.data[0..p.size]);
+            std.debug.assert(bytes_sent == p.size);
+        }
     }
+    std.debug.print("send_socket loop closed\n", .{});
 }

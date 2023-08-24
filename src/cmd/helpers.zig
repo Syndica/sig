@@ -1,14 +1,16 @@
 const std = @import("std");
-const GossipService = @import("gossip_service.zig").GossipService;
+const UdpSocket = @import("zig-network").Socket;
+
+const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const SocketAddr = @import("../gossip/net.zig").SocketAddr;
+const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
+const Logger = @import("../trace/log.zig").Logger;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 const AtomicBool = std.atomic.Atomic(bool);
-const SocketAddr = @import("net.zig").SocketAddr;
 const ArrayList = std.ArrayList;
-const LegacyContactInfo = @import("crds.zig").LegacyContactInfo;
-const Logger = @import("../trace/log.zig").Logger;
-const UdpSocket = @import("zig-network").Socket;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
 
 const IDENTITY_KEYPAIR_DIR = "/.sig";
 const IDENTITY_KEYPAIR_PATH = "/identity.key";
@@ -50,43 +52,4 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: *Logger) !Keypair
             },
         }
     }
-}
-
-pub fn runGossipService(
-    allocator: std.mem.Allocator,
-    my_keypair: *Keypair,
-    gossip_port: u16,
-    entrypoints: ArrayList(LegacyContactInfo),
-    logger: *Logger,
-) !void {
-    var exit = AtomicBool.init(false);
-
-    // bind the gossip socket
-    var gossip_socket_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
-    var gossip_socket = try UdpSocket.create(.ipv4, .udp);
-    try gossip_socket.bind(gossip_socket_addr.toEndpoint());
-
-    // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.shred_version = 0;
-    contact_info.gossip = gossip_socket_addr;
-
-    _ = entrypoints; // TODO
-
-    // start gossip
-    var gossip_service = try GossipService.init(
-        allocator,
-        contact_info,
-        my_keypair.*,
-        gossip_socket,
-        exit,
-    );
-
-    var handle = try std.Thread.spawn(.{}, GossipService.run, .{
-        &gossip_service,
-        logger,
-    });
-
-    handle.join();
 }
