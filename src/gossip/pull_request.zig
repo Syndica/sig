@@ -243,7 +243,7 @@ test "gossip.pull: test build_crds_filters" {
         legacy_contact_info.id = id;
         var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
             .LegacyContactInfo = legacy_contact_info,
-        }, kp);
+        }, &kp);
 
         try crds_table.insert(crds_value, 0);
     }

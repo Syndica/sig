@@ -69,19 +69,20 @@ const MAX_PRUNE_DATA_NODES: usize = 32;
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
 pub const GossipService = struct {
-    cluster_info: *ClusterInfo,
+    my_contact_info: crds.LegacyContactInfo,
+    my_keypair: KeyPair,
     gossip_socket: UdpSocket,
     exit_sig: AtomicBool,
+    allocator: std.mem.Allocator,
+
     packet_channel: *PacketChannel,
     responder_channel: *PacketChannel,
-    crds_table_rw: RwMux(CrdsTable),
-    allocator: std.mem.Allocator,
     verified_channel: *ProtocolChannel,
 
+    crds_table_rw: RwMux(CrdsTable),
     // push message things
     active_set_rw: RwMux(ActiveSet),
     push_msg_queue_mux: Mux(std.ArrayList(CrdsValue)),
-
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
@@ -89,10 +90,11 @@ pub const GossipService = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        cluster_info: *ClusterInfo,
+        my_contact_info: crds.LegacyContactInfo,
+        my_keypair: KeyPair,
         gossip_socket: UdpSocket,
         exit: AtomicBool,
-    ) !Self {
+    ) error{OutOfMemory}!Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
         var verified_channel = ProtocolChannel.init(allocator, 10000);
         var responder_channel = PacketChannel.init(allocator, 10000);
@@ -100,15 +102,21 @@ pub const GossipService = struct {
         var crds_table = try CrdsTable.init(allocator);
         var crds_table_rw = RwMux(CrdsTable).init(crds_table);
 
-        var my_pubkey = cluster_info.our_contact_info.pubkey;
-        var my_shred_version = cluster_info.our_contact_info.shred_version;
-        var active_set = try ActiveSet.rotate(allocator, &crds_table_rw, my_pubkey, my_shred_version);
+        var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+        var my_shred_version = my_contact_info.shred_version;
+        var active_set = try ActiveSet.rotate(
+            allocator,
+            &crds_table_rw,
+            my_pubkey,
+            my_shred_version,
+        );
 
         var failed_pull_hashes = HashTimeQueue.init();
         var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
 
         return Self{
-            .cluster_info = cluster_info,
+            .my_contact_info = my_contact_info,
+            .my_keypair = my_keypair,
             .gossip_socket = gossip_socket,
             .exit_sig = exit,
             .packet_channel = packet_channel,
@@ -146,15 +154,15 @@ pub const GossipService = struct {
     /// 4) build message loop (to send outgoing message)
     /// and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self, logger: *Logger) !void {
-        const id = self.cluster_info.our_contact_info.pubkey;
-        logger.infof("running gossip service at {any} with pubkey {s}", .{ self.gossip_socket.getLocalEndPoint(), id.cached_str.? });
         defer self.deinit();
 
         // process input threads
         var receiver_handle = try Thread.spawn(.{}, socket_utils.read_socket, .{
             &self.gossip_socket,
             self.packet_channel,
+            &self.exit_sig,
         });
+
         var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
             self.allocator,
             self.packet_channel,
@@ -167,7 +175,7 @@ pub const GossipService = struct {
             &self.crds_table_rw,
             &self.active_set_rw,
             &self.failed_pull_hashes_mux,
-            &self.cluster_info.our_keypair,
+            &self.my_keypair,
             logger,
         });
 
@@ -179,7 +187,8 @@ pub const GossipService = struct {
             &self.active_set_rw,
             &self.failed_pull_hashes_mux,
             &self.push_msg_queue_mux,
-            &self.cluster_info.our_keypair,
+            &self.my_contact_info,
+            &self.my_keypair,
             logger,
         });
 
@@ -246,7 +255,7 @@ pub const GossipService = struct {
         active_set_rw: *RwMux(ActiveSet),
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         /// the localnode's keypair to sign messages
-        my_keypair: *KeyPair,
+        my_keypair: *const KeyPair,
         logger: *Logger,
     ) !void {
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
@@ -362,20 +371,20 @@ pub const GossipService = struct {
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         /// the queue of crds values which should be periodically pushed out
         push_msg_queue_mux: *Mux(std.ArrayList(CrdsValue)),
+        /// local node's contact info to periodically push (should not be modified)
+        const_my_contact_info: *const crds.LegacyContactInfo,
         /// local node's keypair used to sign outgoing messages
-        my_keypair: *KeyPair,
+        my_keypair: *const KeyPair,
         /// logger used for debugging
         logger: *Logger,
     ) !void {
         var last_push_ts: u64 = 0;
         var should_send_pull_requests = true;
         var push_cursor: u64 = 0;
-
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-        const my_shred_version = 0;
-        // TODO: read contact info from clusterInfo
-        var my_contact_info = crds.LegacyContactInfo.default(my_pubkey);
-        my_contact_info.shred_version = my_shred_version;
+        const my_shred_version = const_my_contact_info.shred_version;
+
+        var my_contact_info = const_my_contact_info.*; // local copy
 
         while (true) {
             const top_of_loop_ts = get_wallclock();
@@ -388,7 +397,7 @@ pub const GossipService = struct {
                 my_contact_info.wallclock = get_wallclock();
                 const my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
                     .LegacyContactInfo = my_contact_info,
-                }, my_keypair.*); // is this deref ok?
+                }, my_keypair); // is this deref ok?
 
                 var failed_pull_hashes_lg = failed_pull_hashes_mux.lock();
                 const failed_pull_hashes: *const HashTimeQueue = failed_pull_hashes_lg.get();
@@ -451,7 +460,7 @@ pub const GossipService = struct {
                 my_contact_info.wallclock = get_wallclock();
                 var my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
                     .LegacyContactInfo = my_contact_info,
-                }, my_keypair.*);
+                }, my_keypair);
 
                 // push contact info
                 var push_msg_queue_lg = push_msg_queue_mux.lock();
@@ -846,7 +855,7 @@ pub const GossipService = struct {
         /// the pubkey of the node which we will send the prune message to
         prune_destination: Pubkey,
         /// our keypair to sign the prune message
-        my_keypair: *KeyPair,
+        my_keypair: *const KeyPair,
     ) error{ CantFindContactInfo, InvalidGossipAddress, OutOfMemory, SignatureError }!std.ArrayList(Packet) {
         const from_contact_info = blk: {
             var crds_table_lg = crds_table_rw.read();
@@ -945,7 +954,7 @@ pub const GossipService = struct {
         /// the ping message to build a Pong message for
         ping: *const Ping,
         /// the keypair used to sign the Pong message
-        my_keypair: *KeyPair,
+        my_keypair: *const KeyPair,
         /// the endpoint to send the Pong message
         from_endpoint: EndPoint,
     ) error{ SignatureError, SerializationError }!Packet {
@@ -1166,7 +1175,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     var lg = crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), keypair, 0); // contact info
+        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock());
     }
     lg.unlock();
@@ -1211,7 +1220,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     // get random values
     var crds_values: [5]CrdsValue = undefined;
     for (0..5) |i| {
-        var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
+        var value = try CrdsValue.random_with_index(rng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         crds_values[i] = value;
     }
@@ -1259,7 +1268,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     while (!done) {
         count += 1;
         for (0..5) |_| {
-            var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
+            var value = try CrdsValue.random_with_index(rng.random(), &kp, 0);
             value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
             try crds_table.insert(value, get_wallclock());
 
@@ -1284,7 +1293,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
 
     var ci_data = crds.CrdsData.random_from_index(rng.random(), 0);
     ci_data.LegacyContactInfo.id = pubkey;
-    const crds_value = try CrdsValue.initSigned(ci_data, kp);
+    const crds_value = try CrdsValue.initSigned(ci_data, &kp);
 
     const filter = CrdsFilter{
         .filter = bloom,
@@ -1316,7 +1325,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var values = std.ArrayList(CrdsValue).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        var value = try CrdsValue.random_with_index(rng.random(), kp, 0);
+        var value = try CrdsValue.random_with_index(rng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         try values.append(value);
     }
@@ -1341,7 +1350,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
 
     var ci_value = try CrdsValue.initSigned(crds.CrdsData{
         .LegacyContactInfo = contact_info,
-    }, kp);
+    }, &kp);
     var lg = crds_table_rw.write();
     try lg.mut().insert(ci_value, get_wallclock());
     lg.unlock();
@@ -1400,7 +1409,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var rng = std.rand.DefaultPrng.init(get_wallclock());
 
     for (0..20) |_| {
-        var value = try CrdsValue.random(rng.random(), keypair);
+        var value = try CrdsValue.random(rng.random(), &keypair);
         try crds_table.insert(value, get_wallclock());
     }
 
@@ -1408,7 +1417,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var contact_info = crds.LegacyContactInfo.default(id);
     var value = try CrdsValue.initSigned(crds.CrdsData{
         .LegacyContactInfo = contact_info,
-    }, keypair);
+    }, &keypair);
 
     var crds_table_rw = RwMux(CrdsTable).init(crds_table);
 
@@ -1442,14 +1451,14 @@ test "gossip.gossip_service: test build_push_messages" {
     var lg = crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), keypair, 0); // contact info
+        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock());
     }
     lg.unlock();
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var value = try CrdsValue.random(rng.random(), keypair);
+    var value = try CrdsValue.random(rng.random(), &keypair);
 
     // set the active set
     var active_set = try ActiveSet.rotate(allocator, &crds_table_rw, id, 0);
@@ -1521,7 +1530,7 @@ test "gossip.gossip_service: test packet verification" {
     var data = crds.CrdsData.random_from_index(rng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
-    var value = try CrdsValue.initSigned(data, keypair);
+    var value = try CrdsValue.initSigned(data, &keypair);
 
     try std.testing.expect(try value.verify(id));
 
@@ -1542,7 +1551,7 @@ test "gossip.gossip_service: test packet verification" {
     }
 
     // send one which fails sanitization
-    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 1), keypair);
+    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 1), &keypair);
     value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
     var values_v2 = [_]crds.CrdsValue{value_v2};
     const protocol_msg_v2 = Protocol{
@@ -1555,7 +1564,7 @@ test "gossip.gossip_service: test packet verification" {
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
-    var value2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), rand_keypair);
+    var value2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), &rand_keypair);
     var values2 = [_]crds.CrdsValue{value2};
     const protocol_msg2 = Protocol{
         .PushMessage = .{ id, &values2 },
@@ -1646,7 +1655,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var crds_data = crds.CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var crds_value = try crds.CrdsValue.initSigned(crds_data, kp);
+    var crds_value = try crds.CrdsValue.initSigned(crds_data, &kp);
     var values = [_]crds.CrdsValue{crds_value};
     const msg = Protocol{
         .PushMessage = .{ id, &values },

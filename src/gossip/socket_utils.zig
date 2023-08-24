@@ -2,18 +2,24 @@ const UdpSocket = @import("zig-network").Socket;
 const Packet = @import("../gossip/packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("../gossip/packet.zig").PACKET_DATA_SIZE;
 const Channel = @import("../sync/channel.zig").Channel;
+const std = @import("std");
 
 pub fn read_socket(
     socket: *UdpSocket,
     send_channel: *Channel(Packet),
-) !void {
+    exit: *std.atomic.Atomic(bool),
+) error{ SocketReadError, OutOfMemory, ChannelClosed }!void {
     defer send_channel.close();
 
     var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var bytes_read: usize = undefined;
 
     while (bytes_read != 0) {
-        var recv_meta = try socket.receiveFrom(&read_buf);
+        if (exit.load(std.atomic.Ordering.Unordered)) {
+            break;
+        }
+
+        var recv_meta = socket.receiveFrom(&read_buf) catch return error.SocketReadError;
         bytes_read = recv_meta.numberOfBytes;
 
         // send packet through channel

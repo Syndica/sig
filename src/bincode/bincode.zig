@@ -519,6 +519,7 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
 }
 
 // ** Writer/Reader functions ** //
+/// note: will fail if the slice is too small to hold the serialized data
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
     var writer = stream.writer();

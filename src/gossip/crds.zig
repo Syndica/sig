@@ -12,6 +12,7 @@ const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
+const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
 pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
@@ -43,7 +44,7 @@ pub const CrdsValue = struct {
         };
     }
 
-    pub fn initSigned(data: CrdsData, keypair: KeyPair) !Self {
+    pub fn initSigned(data: CrdsData, keypair: *const KeyPair) !Self {
         var self = Self{
             .signature = Signature{},
             .data = data,
@@ -52,24 +53,26 @@ pub const CrdsValue = struct {
         return self;
     }
 
-    pub fn random(rng: std.rand.Random, keypair: KeyPair) !Self {
+    pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
-    pub fn random_with_index(rng: std.rand.Random, keypair: KeyPair, index: usize) !Self {
+    pub fn random_with_index(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
         return try Self.initSigned(CrdsData.random_from_index(rng, index), keypair);
     }
 
-    pub fn sign(self: *Self, keypair: KeyPair) !void {
-        var buf = [_]u8{0} ** 2048;
+    pub fn sign(self: *Self, keypair: *const KeyPair) !void {
+        // should always be enough space or is invalid msg
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
         var bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         var sig = try keypair.sign(bytes, null);
         self.signature.data = sig.toBytes();
     }
 
     pub fn verify(self: *Self, pubkey: Pubkey) !bool {
-        var buf = [_]u8{0} ** 2048;
-        var msg = try bincode.writeToSlice(buf[0..], self.data, bincode.Params.standard);
+        // should always be enough space or is invalid msg
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        var msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         return self.signature.verify(pubkey, msg);
     }
 
@@ -692,7 +695,7 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
 
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+    }, &kp);
 
     try std.testing.expect(crds_value.id().equals(&id));
     try std.testing.expect(crds_value.label().LegacyContactInfo.equals(&id));

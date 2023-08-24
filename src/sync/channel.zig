@@ -33,9 +33,9 @@ pub fn Channel(comptime T: type) type {
             self.allocator.destroy(self);
         }
 
-        pub fn send(self: *Self, value: T) error{ OutOfMemory, Closed }!void {
+        pub fn send(self: *Self, value: T) error{ OutOfMemory, ChannelClosed }!void {
             if (self.closed.load(.Monotonic)) {
-                return error.Closed;
+                return error.ChannelClosed;
             }
             var buffer = self.buffer.lock();
             defer buffer.unlock();
