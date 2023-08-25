@@ -34,6 +34,7 @@ const HashTimeQueue = _crds_table.HashTimeQueue;
 const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
 
 const Logger = @import("../trace/log.zig").Logger;
+const Entry = @import("../trace/entry.zig").Entry;
 
 const pull_request = @import("../gossip/pull_request.zig");
 const CrdsFilter = pull_request.CrdsFilter;
@@ -300,53 +301,68 @@ pub const GossipService = struct {
             defer verified_channel.allocator.free(protocol_messages);
 
             for (protocol_messages) |protocol_message| {
-                var message = protocol_message.message;
-                var from_endpoint = protocol_message.from_endpoint;
+                var message: Protocol = protocol_message.message;
+                var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
                 switch (message) {
                     .PushMessage => |*push| {
-                        const push_from = push[0];
-                        const push_values = push[1];
+                        const push_from: Pubkey = push[0];
+                        const push_values: []CrdsValue = push[1];
+
+                        var push_log_entry = logger
+                            .field("num_crds_values", push_values.len)
+                            .field("from_address", &push_from.string());
 
                         var failed_insert_origins = handle_push_message(
                             allocator,
                             push_values,
                             crds_table_rw,
                         ) catch |err| {
-                            logger.warnf("error handling push message: {s}", .{@errorName(err)});
+                            push_log_entry.field("error", @errorName(err))
+                                .info("received push message");
                             continue;
                         };
                         defer failed_insert_origins.deinit();
+                        _ = push_log_entry.field("num_failed_insert_origins", failed_insert_origins.count());
 
-                        if (failed_insert_origins.count() == 0) continue;
+                        if (failed_insert_origins.count() != 0) {
+                            var prune_packets = build_prune_message(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
+                                logger.warnf("error building prune messages: {s}", .{@errorName(err)});
+                                continue;
+                            };
+                            defer prune_packets.deinit();
 
-                        var prune_packets = build_prune_message(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
-                            logger.warnf("error building prune messages: {s}", .{@errorName(err)});
-                            continue;
-                        };
-                        defer prune_packets.deinit();
-
-                        for (prune_packets.items) |packet| {
-                            try responder_channel.send(packet);
+                            _ = push_log_entry.field("num_prune_msgs", prune_packets.items.len);
+                            for (prune_packets.items) |packet| {
+                                try responder_channel.send(packet);
+                            }
                         }
+
+                        push_log_entry.info("received push message");
                     },
                     .PullResponse => |*pull| {
-                        const from = pull[0];
-                        const crds_values = pull[1];
+                        const from: Pubkey = pull[0];
+                        const crds_values: []CrdsValue = pull[1];
 
-                        _ = from;
+                        var pull_log_entry = logger
+                            .field("num_crds_values", crds_values.len)
+                            .field("from_address", &from.string());
+
                         handle_pull_response(
                             allocator,
                             crds_table_rw,
                             failed_pull_hashes_mux,
                             crds_values,
+                            pull_log_entry,
                         ) catch |err| {
-                            logger.warnf("error handling pull response: {s}", .{@errorName(err)});
+                            _ = pull_log_entry.field("error", @errorName(err));
                         };
+
+                        pull_log_entry.info("received pull response");
                     },
                     .PullRequest => |*pull| {
-                        var pull_filter = pull[0];
-                        var pull_value = pull[1]; // contact info
+                        var pull_filter: CrdsFilter = pull[0];
+                        var pull_value: CrdsValue = pull[1]; // contact info
 
                         var packets = handle_pull_request(
                             allocator,
@@ -376,14 +392,33 @@ pub const GossipService = struct {
                         };
                     },
                     .PingMessage => |*ping| {
+                        var endpoint_buf = std.ArrayList(u8).init(allocator);
+                        try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
+                        defer endpoint_buf.deinit();
+
+                        var ping_log_entry = logger
+                            .field("from_endpoint", endpoint_buf.items)
+                            .field("from_pubkey", &ping.from.string());
+
                         const packet = handle_ping_message(ping, my_keypair, from_endpoint) catch |err| {
-                            logger.warnf("error handling ping message: {s}", .{@errorName(err)});
+                            ping_log_entry
+                                .field("error", @errorName(err))
+                                .info("received ping message");
                             continue;
                         };
+
                         try responder_channel.send(packet);
+                        ping_log_entry.info("received ping message");
                     },
                     .PongMessage => |*pong| {
-                        _ = pong;
+                        var endpoint_buf = std.ArrayList(u8).init(allocator);
+                        try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
+                        defer endpoint_buf.deinit();
+
+                        logger
+                            .field("from_endpoint", endpoint_buf.items)
+                            .field("from_pubkey", &pong.from.string())
+                            .info("received pong message");
                     },
                 }
 
@@ -792,6 +827,8 @@ pub const GossipService = struct {
         failed_pull_hashes_mux: *Mux(HashTimeQueue),
         /// the array of values to insert into the crds table
         crds_values: []CrdsValue,
+        // logging info
+        maybe_pull_log_entry: ?*Entry,
     ) error{OutOfMemory}!void {
         // TODO: benchmark and compare with labs' preprocessing
         const now = get_wallclock();
@@ -849,6 +886,14 @@ pub const GossipService = struct {
 
                 failed_pull_hashes.insert(value_hash, now);
             }
+        }
+
+        // update logs
+        if (maybe_pull_log_entry) |pull_log_entry| {
+            _ = pull_log_entry
+                .field("num_timeout_values", timeout_indexs.items.len)
+                .field("num_success_insert_values", successful_insert_indexs.items.len)
+                .field("num_failed_insert_values", failed_insert_indexs.items.len);
         }
     }
 
@@ -1273,7 +1318,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
 
     var failed_pull_hashes_mux = Mux(HashTimeQueue).init(HashTimeQueue.init());
 
-    try GossipService.handle_pull_response(alloc, &crds_table_rw, &failed_pull_hashes_mux, &crds_values);
+    try GossipService.handle_pull_response(alloc, &crds_table_rw, &failed_pull_hashes_mux, &crds_values, null);
 
     // make sure values are inserted
     var crds_table_lg = crds_table_rw.read();
@@ -1284,7 +1329,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     crds_table_lg.unlock();
 
     // try inserting again with same values (should all fail)
-    try GossipService.handle_pull_response(alloc, &crds_table_rw, &failed_pull_hashes_mux, &crds_values);
+    try GossipService.handle_pull_response(alloc, &crds_table_rw, &failed_pull_hashes_mux, &crds_values, null);
 
     var lg = failed_pull_hashes_mux.lock();
     var failed_pull_hashes: *HashTimeQueue = lg.mut();
@@ -1726,6 +1771,15 @@ test "gossip.gossip_service: process contact_info push packet" {
     };
     try verified_channel.send(protocol_msg);
 
+    // ping
+    const ping_msg = ProtocolMessage{
+        .message = Protocol{
+            .PingMessage = try Ping.init(.{0} ** 32, kp),
+        },
+        .from_endpoint = peer,
+    };
+    try verified_channel.send(ping_msg);
+
     // correct insertion into table
     var buf2: [100]crds.CrdsVersionedValue = undefined;
     std.time.sleep(std.time.ns_per_s);
@@ -1734,6 +1788,10 @@ test "gossip.gossip_service: process contact_info push packet" {
     var res = lg.get().get_contact_infos(&buf2);
     try std.testing.expect(res.len == 1);
     lg.unlock();
+
+    const resp = (try responder_channel.drain()).?;
+    defer responder_channel.allocator.free(resp);
+    try std.testing.expect(resp.len == 1);
 
     exit.store(true, std.atomic.Ordering.Unordered);
     packet_handle.join();
