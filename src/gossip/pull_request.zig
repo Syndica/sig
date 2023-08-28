@@ -32,9 +32,7 @@ pub fn build_crds_filters(
     max_n_filters: usize,
 ) error{ NotEnoughCrdsValues, OutOfMemory }!ArrayList(CrdsFilter) {
     var filter_set = blk: {
-        std.debug.print("getting read guard: {*}\n", .{crds_table_rw});
         var crds_table_lg = crds_table_rw.read();
-        std.debug.print("got read guard\n", .{});
         const crds_table: *const CrdsTable = crds_table_lg.get();
         defer crds_table_lg.unlock();
 
