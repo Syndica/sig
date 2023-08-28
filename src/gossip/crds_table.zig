@@ -259,8 +259,8 @@ pub const CrdsTable = struct {
     ) error{OutOfMemory}!InsertResults {
         var now = crds.get_wallclock();
 
-        // TODO: change to record duplicate and old values seperately + handle when 
-        // crds table is full 
+        // TODO: change to record duplicate and old values seperately + handle when
+        // crds table is full
         var failed_indexs = std.ArrayList(usize).init(allocator);
         var inserted_indexs = std.ArrayList(usize).init(allocator);
         var timeout_indexs = std.ArrayList(usize).init(allocator);
@@ -647,7 +647,7 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     const new_ts = new_value.value.wallclock();
     const old_ts = old_value.value.wallclock();
 
-    // TODO: improve the return type here 
+    // TODO: improve the return type here
     if (new_ts > old_ts) {
         return true;
     } else if (new_ts < old_ts) {

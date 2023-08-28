@@ -1684,7 +1684,7 @@ test "gossip.gossip_service: test packet verification" {
     }
 
     // send one which fails sanitization
-    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 1), &keypair);
+    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 2), &keypair);
     value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
     var values_v2 = [_]crds.CrdsValue{value_v2};
     const protocol_msg_v2 = Protocol{
