@@ -14,6 +14,7 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
+/// returns current timestamp in milliseconds
 pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
 }

@@ -70,6 +70,7 @@ fn gossip(_: []const []const u8) !void {
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
+    std.debug.print("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);

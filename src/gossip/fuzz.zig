@@ -64,34 +64,34 @@ pub fn main() !void {
     logger.spawn();
 
     // setup the gossip service
-    var gossip_port: u16 = 9999;
+    var gossip_port: u16 = 8001;
     var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
 
-    var my_keypair = try KeyPair.create(null);
-    var exit = AtomicBool.init(false);
+    // var my_keypair = try KeyPair.create(null);
+    // var exit = AtomicBool.init(false);
 
-    // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.shred_version = 0;
-    contact_info.gossip = gossip_address;
+    // // setup contact info
+    // var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    // var contact_info = LegacyContactInfo.default(my_pubkey);
+    // contact_info.shred_version = 0;
+    // contact_info.gossip = gossip_address;
 
-    // start running gossip
-    var gossip_service = try GossipService.init(
-        allocator,
-        contact_info,
-        my_keypair,
-        gossip_address,
-        &exit,
-    );
-    defer gossip_service.deinit();
+    // // start running gossip
+    // var gossip_service = try GossipService.init(
+    //     allocator,
+    //     contact_info,
+    //     my_keypair,
+    //     gossip_address,
+    //     &exit,
+    // );
+    // defer gossip_service.deinit();
 
-    var handle = try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{ &gossip_service, logger },
-    );
-    std.debug.print("gossip service started on port {d}\n", .{gossip_port});
+    // var handle = try std.Thread.spawn(
+    //     .{},
+    //     GossipService.run,
+    //     .{ &gossip_service, logger },
+    // );
+    // std.debug.print("gossip service started on port {d}\n", .{gossip_port});
 
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
@@ -99,17 +99,17 @@ pub fn main() !void {
 
     var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
     var fuzz_contact_info = LegacyContactInfo.default(fuzz_pubkey);
-    fuzz_contact_info.shred_version = 0;
+    fuzz_contact_info.shred_version = 19;
     fuzz_contact_info.gossip = fuzz_address;
 
+    var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(
         allocator,
         fuzz_contact_info,
         fuzz_keypair,
         fuzz_address,
-        &exit,
+        &fuzz_exit,
     );
-    defer gossip_service_fuzzer.deinit();
     var fuzz_handle = try std.Thread.spawn(
         .{},
         GossipService.run,
@@ -117,23 +117,32 @@ pub fn main() !void {
     );
 
     // blast it
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
-    // send ping
-    const ping = Protocol{
-        .PingMessage = try Ping.init(.{0} ** 32, fuzz_keypair),
-    };
-    var msg_slice = try bincode.writeToSlice(&packet_buf, ping, bincode.Params{});
-    var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
-    try gossip_service_fuzzer.responder_channel.send(packet);
+    // // send ping
+    // var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+    // const ping = Protocol{
+    //     .PingMessage = try Ping.init(.{0} ** 32, fuzz_keypair),
+    // };
+    // var msg_slice = try bincode.writeToSlice(&packet_buf, ping, bincode.Params{});
+    // var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
+    // try gossip_service_fuzzer.responder_channel.send(packet);
+    _ = gossip_address;
 
-    // wait for cancel keyboard input
+    // TODO: wait for cancel keyboard input
+    const reader = std.io.getStdOut().reader();
+    var buf: [1]u8 = undefined;
+    _ = reader.read(&buf) catch unreachable;
 
     // cleanup
-    std.debug.print("gossip service exiting\n", .{});
-    handle.join();
+    // std.debug.print("\t=> shutting down...\n", .{});
+    // exit.store(true, std.atomic.Ordering.Unordered);
+    // handle.join();
+    // std.debug.print("\t=> gossip service shutdown\n", .{});
+
+    fuzz_exit.store(true, std.atomic.Ordering.Unordered);
     fuzz_handle.join();
-    exit.store(true, std.atomic.Ordering.Unordered);
+    gossip_service_fuzzer.deinit();
+    std.debug.print("\t=>fuzzy gossip service shutdown\n", .{});
 
     std.debug.print("fuzzing done\n", .{});
 }

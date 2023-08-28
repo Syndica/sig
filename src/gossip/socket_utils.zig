@@ -26,16 +26,12 @@ pub fn read_socket(
         if (bytes_read == 0) {
             return error.SocketClosed;
         }
-
-        std.debug.print("read {} bytes\n", .{bytes_read});
         packets_read +|= 1;
 
         // send packet through channel
         const packet = Packet.init(recv_meta.sender, read_buf, bytes_read);
         try send_channel.send(packet);
     }
-
-    std.debug.print("packets read: {d}\n", .{packets_read});
     std.debug.print("read_socket loop closed\n", .{});
 }
 
@@ -59,7 +55,6 @@ pub fn send_socket(
         for (packets) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch return error.SocketSendError;
             packets_sent +|= 1;
-            std.debug.print("sent {} bytes\n", .{bytes_sent});
             std.debug.assert(bytes_sent == p.size);
         }
     }
