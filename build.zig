@@ -138,4 +138,21 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `run` step rather than the default, which is "install".
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    // gossip fuzz testing
+    const fuzz_exe = b.addExecutable(.{
+        .name = "fuzz",
+        .root_source_file = .{ .path = "src/gossip/fuzz.zig" },
+        .target = target,
+        .optimize = optimize,
+        .main_pkg_path = .{ .path = "src" },
+    });
+    fuzz_exe.addModule("base58-zig", base58_module);
+    fuzz_exe.addModule("zig-network", zig_network_module);
+    fuzz_exe.addModule("zig-cli", zig_cli_module);
+    fuzz_exe.addModule("getty", getty_mod);
+
+    b.installArtifact(fuzz_exe);
+    const fuzz_cmd = b.addRunArtifact(fuzz_exe);
+    b.step("fuzz_gossip", "fuzz gossip").dependOn(&fuzz_cmd.step);
 }
