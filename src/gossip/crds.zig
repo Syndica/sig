@@ -367,6 +367,27 @@ pub const CrdsData = union(enum(u32)) {
         }
     }
 
+    pub fn set_id(self: *CrdsData, id: Pubkey) void {
+        switch (self.*) {
+            .LegacyContactInfo => |*v| {
+                v.id = id;
+            },
+            .Vote => |*v| {
+                v[1].from = id;
+            },
+            .EpochSlots => |*v| {
+                v[1].from = id;
+            },
+            .DuplicateShred => |*v| {
+                v[1].from = id;
+            },
+            else => {
+                // tmp
+                @panic("set_id not implemented for the given type\n");
+            },
+        }
+    }
+
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 3);
         return CrdsData.random_from_index(rng, v);
@@ -378,13 +399,13 @@ pub const CrdsData = union(enum(u32)) {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
             1 => {
-                return CrdsData{ .EpochSlots = .{ rng.int(u8), EpochSlots.random(rng) } };
+                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES), Vote.random(rng) } };
             },
             2 => {
-                return CrdsData{ .Vote = .{ rng.int(u8), Vote.random(rng) } };
+                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS), EpochSlots.random(rng) } };
             },
             else => {
-                return CrdsData{ .DuplicateShred = .{ rng.int(u16), DuplicateShred.random(rng) } };
+                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS), DuplicateShred.random(rng) } };
             },
         }
     }

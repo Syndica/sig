@@ -194,10 +194,6 @@ pub const GossipService = struct {
         });
         defer packet_handle.join();
 
-        // periodically send output thread
-        // var lg = self.crds_table_rw.read();
-        // lg.unlock();
-
         var build_messages_handle = try Thread.spawn(.{}, Self.build_messages, .{
             self.allocator,
             self.responder_channel,
@@ -256,13 +252,13 @@ pub const GossipService = struct {
                 };
                 defer bincode.free(allocator, protocol_message);
 
-                protocol_message.sanitize() catch {
-                    std.debug.print("failed to sanitize protocol message\n", .{});
+                protocol_message.sanitize() catch |err| {
+                    std.debug.print("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
                     continue;
                 };
 
-                protocol_message.verify_signature() catch {
-                    std.debug.print("failed to verify protocol message signature\n", .{});
+                protocol_message.verify_signature() catch |err| {
+                    std.debug.print("failed to verify protocol message signature {s}\n", .{@errorName(err)});
                     continue;
                 };
 
@@ -1050,7 +1046,8 @@ pub const GossipService = struct {
             var crds_table_lg = crds_table_rw.write();
             defer crds_table_lg.unlock();
 
-            var result = try crds_table_lg.mut().insert_values(
+            var crds_table: *CrdsTable = crds_table_lg.mut();
+            var result = try crds_table.insert_values(
                 allocator,
                 push_values,
                 CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,

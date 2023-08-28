@@ -83,7 +83,7 @@ pub const Protocol = union(enum(u32)) {
             .PushMessage => |*msg| {
                 const crds_values = msg[1];
                 for (crds_values) |value| {
-                    const data = value.data;
+                    const data: CrdsData = value.data;
                     try data.sanitize();
                 }
             },
