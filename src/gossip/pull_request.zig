@@ -31,31 +31,35 @@ pub fn build_crds_filters(
     bloom_size: usize,
     max_n_filters: usize,
 ) error{ NotEnoughCrdsValues, OutOfMemory }!ArrayList(CrdsFilter) {
-    var crds_table_lg = crds_table_rw.read();
-    const crds_table: *const CrdsTable = crds_table_lg.get();
-    errdefer crds_table_lg.unlock(); // ensure lock is released even on errors
+    var filter_set = blk: {
+        var crds_table_lg = crds_table_rw.read();
+        const crds_table: *const CrdsTable = crds_table_lg.get();
+        defer crds_table_lg.unlock();
 
-    const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
+        const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
-    var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
+        var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
+        errdefer filter_set.deinit();
+
+        // add all crds values
+        const crds_values = crds_table.store.iterator().values;
+        for (0..crds_table.len()) |i| {
+            const hash = crds_values[i].value_hash;
+            filter_set.add(&hash);
+        }
+        // add purged values
+        const purged_values = try crds_table.purged.get_values(alloc);
+        for (purged_values.items) |hash| {
+            filter_set.add(&hash);
+        }
+        // add failed inserts
+        for (failed_pull_hashes.items) |hash| {
+            filter_set.add(&hash);
+        }
+
+        break :blk filter_set;
+    };
     errdefer filter_set.deinit();
-
-    // add all crds values
-    const crds_values = crds_table.store.iterator().values;
-    for (0..crds_table.len()) |i| {
-        const hash = crds_values[i].value_hash;
-        filter_set.add(&hash);
-    }
-    // add purged values
-    const purged_values = try crds_table.purged.get_values(alloc);
-    for (purged_values.items) |hash| {
-        filter_set.add(&hash);
-    }
-    // add failed inserts
-    for (failed_pull_hashes.items) |hash| {
-        filter_set.add(&hash);
-    }
-    crds_table_lg.unlock();
 
     // note: filter set is deinit() in this fcn
     const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);
@@ -243,7 +247,7 @@ test "gossip.pull: test build_crds_filters" {
         legacy_contact_info.id = id;
         var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
             .LegacyContactInfo = legacy_contact_info,
-        }, kp);
+        }, &kp);
 
         try crds_table.insert(crds_value, 0);
     }

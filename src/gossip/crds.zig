@@ -12,7 +12,9 @@ const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
+const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
+/// returns current timestamp in milliseconds
 pub fn get_wallclock() u64 {
     return @intCast(std.time.milliTimestamp());
 }
@@ -43,7 +45,7 @@ pub const CrdsValue = struct {
         };
     }
 
-    pub fn initSigned(data: CrdsData, keypair: KeyPair) !Self {
+    pub fn initSigned(data: CrdsData, keypair: *const KeyPair) !Self {
         var self = Self{
             .signature = Signature{},
             .data = data,
@@ -52,24 +54,26 @@ pub const CrdsValue = struct {
         return self;
     }
 
-    pub fn random(rng: std.rand.Random, keypair: KeyPair) !Self {
+    pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
-    pub fn random_with_index(rng: std.rand.Random, keypair: KeyPair, index: usize) !Self {
+    pub fn random_with_index(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
         return try Self.initSigned(CrdsData.random_from_index(rng, index), keypair);
     }
 
-    pub fn sign(self: *Self, keypair: KeyPair) !void {
-        var buf = [_]u8{0} ** 2048;
+    pub fn sign(self: *Self, keypair: *const KeyPair) !void {
+        // should always be enough space or is invalid msg
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
         var bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         var sig = try keypair.sign(bytes, null);
         self.signature.data = sig.toBytes();
     }
 
     pub fn verify(self: *Self, pubkey: Pubkey) !bool {
-        var buf = [_]u8{0} ** 2048;
-        var msg = try bincode.writeToSlice(buf[0..], self.data, bincode.Params.standard);
+        // should always be enough space or is invalid msg
+        var buf: [PACKET_DATA_SIZE]u8 = undefined;
+        var msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         return self.signature.verify(pubkey, msg);
     }
 
@@ -363,6 +367,27 @@ pub const CrdsData = union(enum(u32)) {
         }
     }
 
+    pub fn set_id(self: *CrdsData, id: Pubkey) void {
+        switch (self.*) {
+            .LegacyContactInfo => |*v| {
+                v.id = id;
+            },
+            .Vote => |*v| {
+                v[1].from = id;
+            },
+            .EpochSlots => |*v| {
+                v[1].from = id;
+            },
+            .DuplicateShred => |*v| {
+                v[1].from = id;
+            },
+            else => {
+                // tmp
+                @panic("set_id not implemented for the given type\n");
+            },
+        }
+    }
+
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 3);
         return CrdsData.random_from_index(rng, v);
@@ -374,13 +399,13 @@ pub const CrdsData = union(enum(u32)) {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
             1 => {
-                return CrdsData{ .EpochSlots = .{ rng.int(u8), EpochSlots.random(rng) } };
+                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES), Vote.random(rng) } };
             },
             2 => {
-                return CrdsData{ .Vote = .{ rng.int(u8), Vote.random(rng) } };
+                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS), EpochSlots.random(rng) } };
             },
             else => {
-                return CrdsData{ .DuplicateShred = .{ rng.int(u16), DuplicateShred.random(rng) } };
+                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS), DuplicateShred.random(rng) } };
             },
         }
     }
@@ -692,7 +717,7 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
 
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+    }, &kp);
 
     try std.testing.expect(crds_value.id().equals(&id));
     try std.testing.expect(crds_value.label().LegacyContactInfo.equals(&id));

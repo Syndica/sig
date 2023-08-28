@@ -667,7 +667,7 @@ test "gossip.crds_table: remove old values" {
     defer crds_table.deinit();
 
     for (0..5) |_| {
-        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), &keypair);
         // TS = 100
         try crds_table.insert(value, 100);
     }
@@ -693,7 +693,7 @@ test "gossip.crds_table: insert and remove value" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    const value = try CrdsValue.initSigned(CrdsData.random_from_index(rng.random(), 0), keypair);
+    const value = try CrdsValue.initSigned(CrdsData.random_from_index(rng.random(), 0), &keypair);
     try crds_table.insert(value, 100);
 
     const label = value.label();
@@ -716,7 +716,7 @@ test "gossip.crds_table: trim pruned values" {
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
-        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), &keypair);
         try crds_table.insert(value, 100);
         try values.append(value);
     }
@@ -748,7 +748,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     var data = CrdsData{
         .LegacyContactInfo = LegacyContactInfo.random(rng),
     };
-    var value = try CrdsValue.initSigned(data, keypair);
+    var value = try CrdsValue.initSigned(data, &keypair);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -763,7 +763,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
-    value = try CrdsValue.initSigned(new_data, keypair);
+    value = try CrdsValue.initSigned(new_data, &keypair);
     try crds_table.insert(value, 120);
 
     try std.testing.expectEqual(crds_table.purged.len(), 1);
@@ -780,7 +780,7 @@ test "gossip.crds_table: insert and get" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    var value = try CrdsValue.random(rng, keypair);
+    var value = try CrdsValue.random(rng, &keypair);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -801,7 +801,7 @@ test "gossip.crds_table: insert and get votes" {
     var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
-    }, kp);
+    }, &kp);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -822,7 +822,7 @@ test "gossip.crds_table: insert and get votes" {
     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
-    }, kp);
+    }, &kp);
     try crds_table.insert(crds_value, 1);
 
     votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
@@ -840,7 +840,7 @@ test "gossip.crds_table: insert and get contact_info" {
     var legacy_contact_info = crds.LegacyContactInfo.default(id);
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+    }, &kp);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();

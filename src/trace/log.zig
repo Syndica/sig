@@ -133,6 +133,7 @@ const BasicStdErrSink = struct {
 
 test "trace.logger: works" {
     var logger = Logger.init(testing.allocator, .info);
+    logger.spawn();
     defer logger.deinit();
 
     logger.field("elapsed", 4245).debugf("request with id {s} succeeded", .{"abcd1234"});
@@ -147,6 +148,13 @@ test "trace.logger: works" {
     logger.field("kind", .some_enum_kind).info("operation was done");
     logger.field("authorized", false).warn("api call received at not authorized");
     logger.field("error", "IOError").err("api call received broke the system!");
+
+    const s: []const u8 = "t12312";
+    logger
+        .field("tmp1", 123)
+        .field("tmp2", 456)
+        .field("tmp2", s)
+        .info("new push message");
 
     std.time.sleep(std.time.ns_per_ms * 100);
 }

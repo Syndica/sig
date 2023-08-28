@@ -1,16 +1,16 @@
 const std = @import("std");
-const GossipService = @import("gossip_service.zig").GossipService;
-const ClusterInfo = @import("cluster_info.zig").ClusterInfo;
+const UdpSocket = @import("zig-network").Socket;
+
+const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const SocketAddr = @import("../gossip/net.zig").SocketAddr;
+const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
+const Logger = @import("../trace/log.zig").Logger;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 const AtomicBool = std.atomic.Atomic(bool);
-const SocketAddr = @import("net.zig").SocketAddr;
 const ArrayList = std.ArrayList;
-const LegacyContactInfo = @import("crds.zig").LegacyContactInfo;
-const Logger = @import("../trace/log.zig").Logger;
-
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa_allocator = gpa.allocator();
 
 const IDENTITY_KEYPAIR_DIR = "/.sig";
 const IDENTITY_KEYPAIR_PATH = "/identity.key";
@@ -52,17 +52,4 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: *Logger) !Keypair
             },
         }
     }
-}
-
-pub fn runGossipService(gossip_port: u16, entrypoints: ArrayList(LegacyContactInfo), logger: *Logger) !void {
-    var exit = AtomicBool.init(false);
-    var gossip_socket_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
-
-    var spy = try ClusterInfo.initSpy(gpa_allocator, gossip_socket_addr, entrypoints, logger);
-
-    var gossip_service = try GossipService.init(gpa_allocator, &spy.cluster_info, spy.gossip_socket, exit);
-
-    var handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service, logger });
-
-    handle.join();
 }

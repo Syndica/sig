@@ -127,7 +127,7 @@ test "gossip.crds_shards: tests CrdsShards" {
 // test helper fcns
 fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersionedValue {
     const keypair = try KeyPair.create(null);
-    var value = try CrdsValue.random(rng, keypair);
+    var value = try CrdsValue.random(rng, &keypair);
     try crds_table.insert(value, 0);
     const label = value.label();
     const x = crds_table.get(label).?;

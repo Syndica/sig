@@ -15,8 +15,6 @@ pub const core = struct {
 };
 
 pub const gossip = struct {
-    pub usingnamespace @import("gossip/cluster_info.zig");
-    pub usingnamespace @import("gossip/cmd.zig");
     pub usingnamespace @import("gossip/crds.zig");
     pub usingnamespace @import("gossip/crds_table.zig");
     pub usingnamespace @import("gossip/gossip_service.zig");
@@ -64,4 +62,8 @@ pub const common = struct {
 
 pub const bincode = struct {
     pub usingnamespace @import("bincode/bincode.zig");
+};
+
+pub const cmd = struct {
+    pub usingnamespace @import("cmd/helpers.zig");
 };

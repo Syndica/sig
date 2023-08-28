@@ -102,31 +102,35 @@ pub const ActiveSet = struct {
         }
     }
 
+    /// get a set of CRDS_GOSSIP_PUSH_FANOUT peers to send push messages to
+    /// while accounting for peers that have been pruned from
+    /// the given origin Pubkey
     pub fn get_fanout_peers(
         self: *const Self,
         allocator: std.mem.Allocator,
         origin: Pubkey,
         crds_table: *const CrdsTable,
-    ) !std.ArrayList(EndPoint) {
-        var active_set_endpoints = std.ArrayList(EndPoint).init(allocator);
+    ) error{OutOfMemory}!std.ArrayList(EndPoint) {
+        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, CRDS_GOSSIP_PUSH_FANOUT);
         errdefer active_set_endpoints.deinit();
 
         // change to while loop
         for (self.peers[0..self.len]) |peer_pubkey| {
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
-            }).?;
+            }) orelse @panic("crds lookup error: peer contactInfo not found");
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
             crds.sanitize_socket(&peer_gossip_addr) catch continue;
 
-            const entry = self.pruned_peers.getEntry(peer_pubkey).?;
+            // check if peer has been pruned
+            const entry = self.pruned_peers.getEntry(peer_pubkey) orelse unreachable;
             const origin_bytes = origin.data;
             if (entry.value_ptr.contains(&origin_bytes)) {
                 continue;
             }
 
-            try active_set_endpoints.append(peer_gossip_addr.toEndpoint());
+            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
             if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
                 break;
             }
@@ -145,7 +149,7 @@ test "gossip.active_set: init/deinit" {
     var rng = std.rand.DefaultPrng.init(100);
     for (0..CRDS_GOSSIP_PUSH_FANOUT) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), keypair, 0);
+        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0);
         try crds_table.insert(value, get_wallclock());
     }
 

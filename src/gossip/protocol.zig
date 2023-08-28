@@ -14,6 +14,8 @@ const LegacyContactInfo = crds.LegacyContactInfo;
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
 
+const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
+
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
@@ -81,7 +83,7 @@ pub const Protocol = union(enum(u32)) {
             .PushMessage => |*msg| {
                 const crds_values = msg[1];
                 for (crds_values) |value| {
-                    const data = value.data;
+                    const data: CrdsData = value.data;
                     try data.sanitize();
                 }
             },
@@ -150,8 +152,9 @@ pub const PruneData = struct {
         return self;
     }
 
-    pub fn sign(self: *PruneData, keypair: *KeyPair) !void {
-        var slice: [1024]u8 = undefined; // TODO: fix sizing
+    pub fn sign(self: *PruneData, keypair: *const KeyPair) !void {
+        // should always be enough space of is invalid msg
+        var slice: [PACKET_DATA_SIZE]u8 = undefined;
         var signable_data = PruneSignableData{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
@@ -164,7 +167,8 @@ pub const PruneData = struct {
     }
 
     pub fn verify(self: *const PruneData) !void {
-        var slice: [1024]u8 = undefined; // TODO: fix sizing
+        // should always be enough space of is invalid msg
+        var slice: [PACKET_DATA_SIZE]u8 = undefined;
         var signable_data = PruneSignableData{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
@@ -191,7 +195,7 @@ test "gossip.protocol: push message serialization is predictable" {
         bincode.Params{},
     );
 
-    var value = try CrdsValue.random(rng.random(), try KeyPair.create(null));
+    var value = try CrdsValue.random(rng.random(), &(try KeyPair.create(null)));
     const value_size = try bincode.get_serialized_size(
         std.testing.allocator,
         value,
@@ -295,7 +299,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     var crds_data = crds.CrdsData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var crds_value = try crds.CrdsValue.initSigned(crds_data, keypair);
+    var crds_value = try crds.CrdsValue.initSigned(crds_data, &keypair);
 
     var filter = CrdsFilter.init(testing.allocator);
     defer filter.deinit();
@@ -345,7 +349,7 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
     };
 
     var rust_bytes = [_]u8{ 2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    var crds_value = try crds.CrdsValue.initSigned(crds_data, kp);
+    var crds_value = try crds.CrdsValue.initSigned(crds_data, &kp);
     var values = [_]crds.CrdsValue{crds_value};
     var pushmsg = Protocol{ .PushMessage = .{ id, &values } };
     var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);

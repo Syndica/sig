@@ -118,8 +118,8 @@ fn valToValue(allocator: Allocator, val: anytype) Value {
                     }
                 },
                 .Slice => {
-                    if (@TypeOf(info.child) == u8) {
-                        var str = allocator.alloc(u8, info.size) catch unreachable;
+                    if (@typeInfo(info.child).Int.bits == 8) {
+                        var str = allocator.alloc(u8, val.len) catch unreachable;
                         @memcpy(str, val[0..]);
                         return .{ .string = str };
                     } else {

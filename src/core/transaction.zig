@@ -57,7 +57,7 @@ pub const Message = struct {
 
     pub fn sanitize(self: *const Message) !void {
         // TODO:
-        std.debug.print("sanitize not implemented for type: Message\n", .{});
+        std.debug.print("NOTE: sanitize not implemented for type: Message\n", .{});
         _ = self;
     }
 };
