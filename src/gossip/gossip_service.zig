@@ -214,7 +214,6 @@ pub const GossipService = struct {
     /// Verified Protocol messages are then sent to the verified_channel.
     fn verify_packets(self: *Self, logger: *Logger) !void {
         var failed_protocol_msgs: usize = 0;
-        _ = logger; // TODO:
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_packets = try self.packet_channel.drain();
@@ -235,18 +234,18 @@ pub const GossipService = struct {
                     bincode.Params.standard,
                 ) catch {
                     failed_protocol_msgs += 1;
-                    std.debug.print("failed to deserialize protocol message\n", .{});
+                    logger.debugf("failed to deserialize protocol message\n", .{});
                     continue;
                 };
                 defer bincode.free(self.allocator, protocol_message);
 
                 protocol_message.sanitize() catch |err| {
-                    std.debug.print("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
+                    logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
                     continue;
                 };
 
                 protocol_message.verify_signature() catch |err| {
-                    std.debug.print("failed to verify protocol message signature {s}\n", .{@errorName(err)});
+                    logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
                     continue;
                 };
 
@@ -256,7 +255,7 @@ pub const GossipService = struct {
             }
         }
 
-        std.debug.print("verify_packets loop closed\n", .{});
+        logger.debugf("verify_packets loop closed\n", .{});
     }
 
     /// main logic for recieving and processing `Protocol` messages.
@@ -407,7 +406,7 @@ pub const GossipService = struct {
             }
         }
 
-        std.debug.print("process_messages loop closed\n", .{});
+        logger.debugf("process_messages loop closed\n", .{});
     }
 
     /// main gossip loop for periodically sending new protocol messages.
@@ -490,7 +489,7 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        std.debug.print("build_messages loop closed\n", .{});
+        logger.infof("build_messages loop closed\n", .{});
     }
 
     pub fn rotate_active_set(
