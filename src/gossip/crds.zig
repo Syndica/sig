@@ -367,7 +367,7 @@ pub const CrdsData = union(enum(u32)) {
         }
     }
 
-    // only used in tests 
+    // only used in tests
     pub fn set_id(self: *CrdsData, id: Pubkey) void {
         switch (self.*) {
             .LegacyContactInfo => |*v| {
