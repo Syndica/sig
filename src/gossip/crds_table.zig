@@ -251,7 +251,6 @@ pub const CrdsTable = struct {
 
     pub fn insert_values(
         self: *Self,
-        allocator: std.mem.Allocator,
         values: []crds.CrdsValue,
         timeout: u64,
         comptime record_inserts: bool,
@@ -261,9 +260,9 @@ pub const CrdsTable = struct {
 
         // TODO: change to record duplicate and old values seperately + handle when
         // crds table is full
-        var failed_indexs = std.ArrayList(usize).init(allocator);
-        var inserted_indexs = std.ArrayList(usize).init(allocator);
-        var timeout_indexs = std.ArrayList(usize).init(allocator);
+        var failed_indexs = std.ArrayList(usize).init(self.allocator);
+        var inserted_indexs = std.ArrayList(usize).init(self.allocator);
+        var timeout_indexs = std.ArrayList(usize).init(self.allocator);
 
         for (values, 0..) |value, index| {
             const value_time = value.wallclock();
