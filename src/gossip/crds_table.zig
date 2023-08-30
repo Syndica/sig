@@ -33,8 +33,6 @@ pub const CrdsError = error{
 };
 
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
-// TODO: benchmark other structs?
-const PurgedQ = std.TailQueue(HashAndTime);
 
 // indexable HashSet
 pub fn AutoArrayHashSet(comptime T: type) type {
@@ -593,16 +591,28 @@ pub const CrdsTable = struct {
     }
 };
 
+
+// TODO: benchmark other structs?
 pub const HashTimeQueue = struct {
     const QueueT = std.TailQueue(HashAndTime);
     queue: QueueT,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init() Self {
+    pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
             .queue = std.TailQueue(HashAndTime){},
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(self: *Self) void { 
+        var curr_ptr = self.queue.first;
+        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
+            self.allocator.destroy(curr);
+            self.queue.remove(curr);
+        }
     }
 
     pub fn len(self: *const Self) usize {
@@ -610,11 +620,14 @@ pub const HashTimeQueue = struct {
     }
 
     pub fn insert(self: *Self, v: Hash, now: u64) void {
-        var node = PurgedQ.Node{ .data = HashAndTime{
+        var node = QueueT.Node{ .data = HashAndTime{
             .hash = v,
             .timestamp = now,
-        } };
-        self.queue.append(&node);
+        }};
+        // put it on the heap 
+        var heap_node = self.allocator.create(QueueT.Node) catch @panic("OOM");
+        heap_node.* = node; 
+        self.queue.append(heap_node);
     }
 
     pub fn trim(self: *Self, oldest_timestamp: u64) void {
@@ -623,6 +636,7 @@ pub const HashTimeQueue = struct {
             const data_timestamp = curr.data.timestamp;
             if (data_timestamp < oldest_timestamp) {
                 self.queue.remove(curr);
+                self.allocator.destroy(curr);
             } else {
                 break;
             }
@@ -736,6 +750,24 @@ test "gossip.crds_table: trim pruned values" {
 
     try crds_table.attempt_trim(0);
     try std.testing.expectEqual(crds_table.len(), 0);
+}
+
+test "gossip.HashTimeQueue: insert multiple values" {
+    var htq = HashTimeQueue.init(std.testing.allocator);
+    defer htq.deinit();
+
+    htq.insert(Hash.random(), 100);
+    // htq.insert(Hash.random(), 102);
+    // htq.insert(Hash.random(), 103);
+
+    htq.trim(102);
+
+    // htq.insert(Hash.random(), 101);
+    // htq.insert(Hash.random(), 120);
+
+    // htq.trim(150);
+
+    std.debug.print("{d}\n", .{htq.len()});
 }
 
 test "gossip.HashTimeQueue: trim pruned values" {

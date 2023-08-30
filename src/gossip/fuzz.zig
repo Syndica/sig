@@ -81,7 +81,6 @@ pub fn main() !void {
         allocator,
         contact_info,
         my_keypair,
-        gossip_address,
         &exit,
     );
     defer gossip_service.deinit();
@@ -107,7 +106,6 @@ pub fn main() !void {
         allocator,
         fuzz_contact_info,
         fuzz_keypair,
-        fuzz_address,
         &fuzz_exit,
     );
     var fuzz_handle = try std.Thread.spawn(
@@ -120,18 +118,18 @@ pub fn main() !void {
     var rng = std.rand.DefaultPrng.init(0);
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
-    // // send ping
-    // {
-    //     var ping_buf: [32]u8 = undefined;
-    //     rng.fill(&ping_buf);
+    // send ping
+    {
+        var ping_buf: [32]u8 = undefined;
+        rng.fill(&ping_buf);
 
-    //     const ping = Protocol{
-    //         .PingMessage = try Ping.init(ping_buf, fuzz_keypair),
-    //     };
-    //     var msg_slice = try bincode.writeToSlice(&packet_buf, ping, bincode.Params{});
-    //     var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
-    //     try gossip_service_fuzzer.responder_channel.send(packet);
-    // }
+        const ping = Protocol{
+            .PingMessage = try Ping.init(ping_buf, fuzz_keypair),
+        };
+        var msg_slice = try bincode.writeToSlice(&packet_buf, ping, bincode.Params{});
+        var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
+        try gossip_service_fuzzer.responder_channel.send(packet);
+    }
 
     // send push message
     {
@@ -151,12 +149,19 @@ pub fn main() !void {
         var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
         var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
         try gossip_service_fuzzer.responder_channel.send(packet);
+
+        // send twice to generate some prunes
+        try gossip_service_fuzzer.responder_channel.send(packet);
     }
 
-    // TODO: wait for cancel keyboard input
-    const reader = std.io.getStdOut().reader();
-    var buf: [1]u8 = undefined;
-    _ = reader.read(&buf) catch unreachable;
+    while (true) { 
+
+    }
+
+    // // TODO: wait for cancel keyboard input
+    // const reader = std.io.getStdOut().reader();
+    // var buf: [1]u8 = undefined;
+    // _ = reader.read(&buf) catch unreachable;
 
     // cleanup
     std.debug.print("\t=> shutting down...\n", .{});
