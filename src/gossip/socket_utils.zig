@@ -53,7 +53,10 @@ pub fn send_socket(
         defer recv_channel.allocator.free(packets);
 
         for (packets) |p| {
-            const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch return error.SocketSendError;
+            const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
+                std.debug.print("send_socket error: {s}\n", .{@errorName(e)});
+                continue;
+            } ;
             packets_sent +|= 1;
             std.debug.assert(bytes_sent == p.size);
         }

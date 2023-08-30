@@ -237,15 +237,16 @@ pub const GossipService = struct {
                     logger.debugf("failed to deserialize protocol message\n", .{});
                     continue;
                 };
-                defer bincode.free(self.allocator, protocol_message);
 
                 protocol_message.sanitize() catch |err| {
                     logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
+                    bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
                 protocol_message.verify_signature() catch |err| {
                     logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
+                    bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
@@ -272,6 +273,8 @@ pub const GossipService = struct {
             defer self.verified_channel.allocator.free(protocol_messages);
 
             for (protocol_messages) |protocol_message| {
+                defer bincode.free(self.allocator, protocol_message);
+
                 var message: Protocol = protocol_message.message;
                 var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
@@ -1575,6 +1578,7 @@ test "gossip.gossip_service: test packet verification" {
         if (try verified_channel.drain()) |msgs| {
             defer verified_channel.allocator.free(msgs);
             for (msgs) |msg| {
+                defer bincode.free(gossip_service.allocator, msg);
                 try std.testing.expect(msg.message.PushMessage[0].equals(&id));
                 msg_count += 1;
             }
