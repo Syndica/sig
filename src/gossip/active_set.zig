@@ -113,7 +113,7 @@ pub const ActiveSet = struct {
             // lookup peer contact info
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
-            }) orelse @panic("crds lookup error: peer contactInfo not found");
+            }) orelse continue; // peer pubkey could have been removed from the crds table 
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
             crds.sanitize_socket(&peer_gossip_addr) catch continue;
