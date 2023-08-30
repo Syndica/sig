@@ -109,7 +109,7 @@ pub const CrdsTable = struct {
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
             .shards = try CrdsShards.init(allocator),
-            .purged = HashTimeQueue.init(),
+            .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
         };
     }
@@ -123,6 +123,7 @@ pub const CrdsTable = struct {
         self.duplicate_shreds.deinit();
         self.entries.deinit();
         self.shards.deinit();
+        self.purged.deinit();
 
         var iter = self.pubkey_to_values.iterator();
         while (iter.next()) |entry| {
@@ -226,7 +227,7 @@ pub const CrdsTable = struct {
             // does not need to be updated.
             std.debug.assert(old_entry.value.id().equals(&origin));
 
-            self.purged.insert(old_entry.value_hash, now);
+            try self.purged.insert(old_entry.value_hash, now);
 
             result.value_ptr.* = versioned_value;
 
@@ -238,7 +239,7 @@ pub const CrdsTable = struct {
 
             if (old_entry.value_hash.cmp(&versioned_value.value_hash) != CompareResult.Equal) {
                 // if hash isnt the same and override() is false then msg is old
-                self.purged.insert(old_entry.value_hash, now);
+                try self.purged.insert(old_entry.value_hash, now);
                 return CrdsError.OldValue;
             } else {
                 // hash is the same then its a duplicate
@@ -404,7 +405,7 @@ pub const CrdsTable = struct {
     }
 
     // ** triming values in the crdstable **
-    pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound}!void {
+    pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound, OutOfMemory}!void {
         const now = crds.get_wallclock();
 
         const maybe_entry = self.store.getEntry(label);
@@ -436,7 +437,7 @@ pub const CrdsTable = struct {
             }
         }
 
-        self.purged.insert(hash, now);
+        try self.purged.insert(hash, now);
         self.shards.remove(entry_index, &hash);
 
         switch (versioned_value.value.data) {
@@ -592,62 +593,61 @@ pub const CrdsTable = struct {
 };
 
 
-// TODO: benchmark other structs?
 pub const HashTimeQueue = struct {
-    const QueueT = std.TailQueue(HashAndTime);
-    queue: QueueT,
+    // TODO: benchmark other structs?
+    queue: std.ArrayList(HashAndTime),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .queue = std.TailQueue(HashAndTime){},
+            .queue = std.ArrayList(HashAndTime).init(allocator),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void { 
-        var curr_ptr = self.queue.first;
-        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
-            self.allocator.destroy(curr);
-            self.queue.remove(curr);
-        }
+        self.queue.deinit();
     }
 
     pub fn len(self: *const Self) usize {
-        return self.queue.len;
+        return self.queue.items.len;
     }
 
-    pub fn insert(self: *Self, v: Hash, now: u64) void {
-        var node = QueueT.Node{ .data = HashAndTime{
+    pub fn insert(self: *Self, v: Hash, now: u64) error{OutOfMemory}!void {
+        var node = HashAndTime{
             .hash = v,
             .timestamp = now,
-        }};
-        // put it on the heap 
-        var heap_node = self.allocator.create(QueueT.Node) catch @panic("OOM");
-        heap_node.* = node; 
-        self.queue.append(heap_node);
+        };
+        try self.queue.append(node);
     }
 
-    pub fn trim(self: *Self, oldest_timestamp: u64) void {
-        var curr_ptr = self.queue.first;
-        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
-            const data_timestamp = curr.data.timestamp;
-            if (data_timestamp < oldest_timestamp) {
-                self.queue.remove(curr);
-                self.allocator.destroy(curr);
-            } else {
+    pub fn trim(self: *Self, oldest_timestamp: u64) error{OutOfMemory}!void {
+        var i: usize  = 0;
+        const length = self.len(); 
+        while (i < length) { 
+            const data_timestamp = self.queue.items[i].timestamp;
+            if (data_timestamp >= oldest_timestamp) {
                 break;
             }
+            i += 1; 
+        }
+
+        // remove values up to i 
+        if (i > 0) { 
+            var new_queue = try std.ArrayList(HashAndTime).initCapacity(self.allocator, length - i);
+            new_queue.appendSliceAssumeCapacity(self.queue.items[i..length]);
+
+            self.queue.deinit(); 
+            self.queue = new_queue;
         }
     }
 
-    pub fn get_values(self: *const Self, alloc: std.mem.Allocator) error{OutOfMemory}!std.ArrayList(Hash) {
-        var hashes = try std.ArrayList(Hash).initCapacity(alloc, self.queue.len);
-        var curr_ptr = self.queue.first;
-        while (curr_ptr) |curr| : (curr_ptr = curr.next) {
-            hashes.appendAssumeCapacity(curr.data.hash);
+    pub fn get_values(self: *const Self) error{OutOfMemory}!std.ArrayList(Hash) {
+        var hashes = try std.ArrayList(Hash).initCapacity(self.allocator, self.len());
+        for (self.queue.items) |data| {
+            hashes.appendAssumeCapacity(data.hash);
         }
         return hashes;
     }
@@ -756,18 +756,16 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var htq = HashTimeQueue.init(std.testing.allocator);
     defer htq.deinit();
 
-    htq.insert(Hash.random(), 100);
-    // htq.insert(Hash.random(), 102);
-    // htq.insert(Hash.random(), 103);
+    try htq.insert(Hash.random(), 100);
+    try htq.insert(Hash.random(), 102);
+    try htq.insert(Hash.random(), 103);
 
-    htq.trim(102);
+    try htq.trim(102);
 
-    // htq.insert(Hash.random(), 101);
-    // htq.insert(Hash.random(), 120);
+    try htq.insert(Hash.random(), 101);
+    try htq.insert(Hash.random(), 120);
 
-    // htq.trim(150);
-
-    std.debug.print("{d}\n", .{htq.len()});
+    try htq.trim(150);
 }
 
 test "gossip.HashTimeQueue: trim pruned values" {
@@ -800,7 +798,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     try std.testing.expectEqual(crds_table.purged.len(), 1);
 
     // its timestamp should be 120 so, 130 = clear pruned values
-    crds_table.purged.trim(130);
+    try crds_table.purged.trim(130);
 
     try std.testing.expectEqual(crds_table.purged.len(), 0);
 }
