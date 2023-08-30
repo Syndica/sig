@@ -58,13 +58,13 @@ pub fn send_socket(
             //  MAC: 49 EADDRNOTAVAIL Cannot assign requested address.  Normally results from
             //          an attempt to create a socket with an address not on this
             //          machine.
-            
-            std.debug.print("socket endpoint: {any}\n", .{ socket.getLocalEndPoint() });
+
+            std.debug.print("socket endpoint: {any}\n", .{socket.getLocalEndPoint()});
             std.debug.print("sending to {s}: {any}\n", .{ p.addr, p.size });
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 std.debug.print("send_socket error: {s}\n", .{@errorName(e)});
                 continue;
-            } ;
+            };
             packets_sent +|= 1;
             std.debug.assert(bytes_sent == p.size);
         }
@@ -72,8 +72,8 @@ pub fn send_socket(
     std.debug.print("send_socket loop closed\n", .{});
 }
 
-test "gossip.socket_utils: sending a packet" { 
-    var allocator = std.testing.allocator; 
+test "gossip.socket_utils: sending a packet" {
+    var allocator = std.testing.allocator;
     var addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 9999);
 
     var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;

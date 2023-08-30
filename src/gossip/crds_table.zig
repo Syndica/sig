@@ -405,7 +405,7 @@ pub const CrdsTable = struct {
     }
 
     // ** triming values in the crdstable **
-    pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound, OutOfMemory}!void {
+    pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
         const now = crds.get_wallclock();
 
         const maybe_entry = self.store.getEntry(label);
@@ -592,7 +592,6 @@ pub const CrdsTable = struct {
     }
 };
 
-
 pub const HashTimeQueue = struct {
     // TODO: benchmark other structs?
     queue: std.ArrayList(HashAndTime),
@@ -607,7 +606,7 @@ pub const HashTimeQueue = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void { 
+    pub fn deinit(self: *Self) void {
         self.queue.deinit();
     }
 
@@ -624,22 +623,22 @@ pub const HashTimeQueue = struct {
     }
 
     pub fn trim(self: *Self, oldest_timestamp: u64) error{OutOfMemory}!void {
-        var i: usize  = 0;
-        const length = self.len(); 
-        while (i < length) { 
+        var i: usize = 0;
+        const length = self.len();
+        while (i < length) {
             const data_timestamp = self.queue.items[i].timestamp;
             if (data_timestamp >= oldest_timestamp) {
                 break;
             }
-            i += 1; 
+            i += 1;
         }
 
-        // remove values up to i 
-        if (i > 0) { 
+        // remove values up to i
+        if (i > 0) {
             var new_queue = try std.ArrayList(HashAndTime).initCapacity(self.allocator, length - i);
             new_queue.appendSliceAssumeCapacity(self.queue.items[i..length]);
 
-            self.queue.deinit(); 
+            self.queue.deinit();
             self.queue = new_queue;
         }
     }

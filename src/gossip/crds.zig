@@ -672,7 +672,7 @@ pub const DuplicateShred = struct {
 
     pub fn random(rng: std.rand.Random) DuplicateShred {
         // TODO: cant pass around a slice (since the stack data will get cleared)
-        var slice = [0]u8{}; // empty slice 
+        var slice = [0]u8{}; // empty slice
         var num_chunks = rng.int(u8);
         var chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
 
@@ -683,7 +683,7 @@ pub const DuplicateShred = struct {
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
             .num_chunks = num_chunks,
-            .chunk_index = chunk_index, 
+            .chunk_index = chunk_index,
             .chunk = &slice,
         };
     }
@@ -703,16 +703,14 @@ pub const SnapshotHashes = struct {
     wallclock: u64,
 };
 
-test "gossip.crds: test sig verify duplicateShreds" { 
+test "gossip.crds: test sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
     var rng = std.rand.DefaultPrng.init(0);
     var data = DuplicateShred.random(rng.random());
-    data.from = pubkey; 
+    data.from = pubkey;
 
-    var value = try CrdsValue.initSigned(CrdsData { 
-        .DuplicateShred = .{0, data}
-    }, &keypair);
+    var value = try CrdsValue.initSigned(CrdsData{ .DuplicateShred = .{ 0, data } }, &keypair);
 
     try std.testing.expect(try value.verify(pubkey));
 }

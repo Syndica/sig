@@ -131,13 +131,13 @@ pub fn main() !void {
         try gossip_service_fuzzer.responder_channel.send(packet);
     }
 
-    // send pong message 
-    { 
+    // send pong message
+    {
         var ping_buf: [32]u8 = undefined;
         rng.fill(&ping_buf);
         const ping = try Ping.init(ping_buf, fuzz_keypair);
 
-        const pong = Protocol { 
+        const pong = Protocol{
             .PongMessage = try Pong.init(&ping, &fuzz_keypair),
         };
         var msg_slice = try bincode.writeToSlice(&packet_buf, pong, bincode.Params{});
@@ -156,10 +156,10 @@ pub fn main() !void {
                 var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
 
                 var value = try CrdsValue.random(rng.random(), &keypair);
-                switch (value.data) { 
+                switch (value.data) {
                     .LegacyContactInfo => {
                         value.data.LegacyContactInfo = fuzz_contact_info;
-                    }, 
+                    },
                     else => {},
                 }
 
@@ -176,26 +176,26 @@ pub fn main() !void {
                 try crds_values.append(value);
             }
 
-            // serialize and send as packet 
-            { 
+            // serialize and send as packet
+            {
                 var msg = Protocol{ .PushMessage = .{ fuzz_pubkey, crds_values.items } };
                 var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
                 var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
                 try gossip_service_fuzzer.responder_channel.send(packet);
                 // send twice to generate some prunes
-                if (i % 3 == 0) { 
+                if (i % 3 == 0) {
                     try gossip_service_fuzzer.responder_channel.send(packet);
                 }
             }
 
-            // send as pull response 
-            { 
+            // send as pull response
+            {
                 var msg = Protocol{ .PullResponse = .{ fuzz_pubkey, crds_values.items } };
                 var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
                 var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
                 try gossip_service_fuzzer.responder_channel.send(packet);
                 // send twice to generate some prunes
-                if (i % 3 == 0) { 
+                if (i % 3 == 0) {
                     try gossip_service_fuzzer.responder_channel.send(packet);
                 }
             }
@@ -204,17 +204,17 @@ pub fn main() !void {
         }
     }
 
-    // send pull request 
-    { 
+    // send pull request
+    {
         const Bloom = @import("../bloom/bloom.zig").Bloom;
         for (0..5) |_| {
-            const N_FILTER_BITS = rng.random().intRangeAtMost(u6, 1, 10); 
+            const N_FILTER_BITS = rng.random().intRangeAtMost(u6, 1, 10);
 
             // only consider the first bit so we know well get matches
             var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
             defer bloom.deinit();
 
-            const crds_value = try CrdsValue.initSigned(crds.CrdsData { 
+            const crds_value = try CrdsValue.initSigned(crds.CrdsData{
                 .LegacyContactInfo = fuzz_contact_info,
             }, &fuzz_keypair);
 
@@ -224,7 +224,7 @@ pub fn main() !void {
                 .mask_bits = N_FILTER_BITS,
             };
 
-            // serialize and send as packet 
+            // serialize and send as packet
             var msg = Protocol{ .PullRequest = .{ filter, crds_value } };
             var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
             var packet = Packet.init(gossip_address.toEndpoint(), packet_buf, msg_slice.len);
@@ -232,10 +232,7 @@ pub fn main() !void {
         }
     }
 
-
-    while (true) { 
-
-    }
+    while (true) {}
 
     // // TODO: wait for cancel keyboard input
     // const reader = std.io.getStdOut().reader();
