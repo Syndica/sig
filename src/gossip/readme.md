@@ -1,8 +1,8 @@
 # Solana's Gossip Specification
 
-This post will describe how Solana's gossip protocol works indepth, as well as implementation details of Sig's gossip.
+This post will describe how Solana's gossip protocol works in-depth, as well as implementation details of Sig's gossip.
 
-For an introduction to Solana's gossip protocol, checkout the technical sections of our [Sig announcement blogpost](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/).
+For an introduction to Solana's gossip protocol, check out the technical sections of our [Sig announcement blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/).
 
 ## Repository File Outline 
 
@@ -12,7 +12,7 @@ For an introduction to Solana's gossip protocol, checkout the technical sections
 - `pull_request.zig`: logic for sending pull *requests* 
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
 - `crds_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `crds_table` and constructing pull responses
-- `active_set.zig`: logic for deriving list of peers to send push messages to
+- `active_set.zig`: logic for deriving a list of peers to send push messages to
 - `ping_pong.zig`: logic for sending ping/pong messages as a heartbeat check
 
 A gossip spy is, in essence, software written to do two things: store data and send/receive requests.
@@ -39,7 +39,7 @@ For each `CrdsValue` type we store, there is a corresponding `CrdsValueLabel` wh
 
 To understand how the `CrdsValueLabel` defines how data is stored, we start with an example.
 
-One important data type we care about is the `LegacyContactInfo` struct which includes the publickey of the node and socket address fields which are used to communicate with the node. However, its corresponding `CrdsValueLabel` is only its pubkey. This means we'll only store one `LegacyContactInfo` per `Pubkey` in the CrdsTable (i.e., if we assume that each validator corresponds to one `Pubkey`, then this means we'll only store one contact info struct per validator).
+One important data type we care about is the `LegacyContactInfo` struct which includes the publickey of the node and socket address fields that are used to communicate with the node. However, its corresponding `CrdsValueLabel` is only its pubkey. This means we'll only store one `LegacyContactInfo` per `Pubkey` in the CrdsTable (i.e., if we assume that each validator corresponds to one `Pubkey`, then this means we'll only store one contact info struct per validator).
 
 ```zig=
 // the full contact info struct (including pubkeys, sockets, and more)
@@ -92,7 +92,7 @@ We follow this approach for the `ContactInfos`, `Votes`, `EpochSlots`, and `Dupl
 
 To efficiently retrieve *new* data from the CrdsTable, we also track a `cursor` variable which is monotonically incremented on each insert/update (which is stored on the `CrdsVersionedValue` structure using the `cursor_on_insertion` variable).
 
-For example, a listener would track their own cursor and periodically call the getter functions (such as, `get_votes_with_cursor`, which allows you to retrieve vote `CrdsVersionedValue`s which are past a certain cursor index) to retrieve new values.
+For example, a listener would track their cursor and periodically call the getter functions (such as, `get_votes_with_cursor`, which allows you to retrieve vote `CrdsVersionedValue`s which are past a certain cursor index) to retrieve new values.
 
 Note: this is how we produce new push messages - talked about in a later section.
 
@@ -109,7 +109,7 @@ In the solana-labs implementation, the gossip pubkeys with the smallest stake we
 typically use the `removeSwap` function (defined as: "The entry is removed from the
 underlying array by swapping it with the last element and pop-ing"). Since we are
 tracking the index of values across multiple arrays, when we `removeSwap`, the last
-value is now at a different index then we recorded. So, we need to account for the
+value is now at a different index than how we recorded it. So, we need to account for the
 'swapping with the last element' and update our indexes. The full logic
 can be found in `CrdsTable.remove()`.
 
@@ -138,25 +138,25 @@ Pull messages are used to retrieve new data from other nodes in the network. The
 
 Pull requests are requests for new data. A pull request contains a representation of the CrdsValues a node currently has, which the receiving node parses and uses to find data which it currently has but is not included in the request.
 
-To represent values which a node currently has, we construct a bloom filter over the values stored in its CrdsTable.
+To represent values that a node currently has, we construct a bloom filter over the values stored in its CrdsTable.
 
 Note: The majority of pull request code can be found in `pull_requests.zig` and `bloom.zig`.
 
 Since the CrdsTable can store a large amount of values, instead of constructing one large bloom filter, we partition the data in the CrdsTable across multiple bloom filters based on the hash value's first `N` bits.
 
-*Note:* When constructing pull requests, in addition to all the values in the CrdsTable, we also include values which were recently overwritten (which is tracked in the `crds_table.pruned` variable), and values which were invalid in a previous pull response (discussed more in the 'Handling Pull Responses' section).
+*Note:* When constructing pull requests, in addition to all the values in the CrdsTable, we also include values that were recently overwritten (which is tracked in the `crds_table.pruned` variable), and values that were invalid in a previous pull response (discussed more in the 'Handling Pull Responses' section).
 
-For example, if we are paritioning on the first 3 bits we would use, 2^3 = 8 `Bloom` filters:
-  - the first bloom filter would contain hash values whos first 3 bits are equal to 000
-  - the second bloom filter would contain hash values whos first 3 bits are equal to 001
+For example, if we are partitioning on the first 3 bits we would use, 2^3 = 8 `Bloom` filters:
+  - the first bloom filter would contain hash values whose first 3 bits are equal to 000
+  - the second bloom filter would contain hash values whose first 3 bits are equal to 001
   - ...
-  - and lastly, the eight bloom filter would contain hash values whos first 3 bits are equal to 111
+  - and lastly, the eighth bloom filter would contain hash values whose first 3 bits are equal to 111
 
 If we are tracking a `Hash` with bits `00101110101`, we would only consider its first 3 bits, `001`, and so we would add the hash to the first bloom filter (`@cast(usize, 001) = 1`). 
 
 To implement this we use the `CrdsFilterSet` struct which is a list of `CrdsFilters`. Throughout the codebase, the first bits:
 `N`, is called `mask_bits`.
-`mask_bits` is a variable which depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the CrdsTable, and more. It
+`mask_bits` is a variable that depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the CrdsTable, and more. It
 will likely be different for each pull request.
 
 After we construct this filter set (i.e., compute the `mask_bits` and init `2^mask_bits` bloom filters), we add all of the `CrdsValues` in the CrdsTable into the set, and construct a list of `CrdsFilter`s to send to other random nodes.
@@ -201,13 +201,13 @@ class CrdsFilterSet():
 	    self.filters[index].add(hash)
 ```
 
-To build a vector of `CrdsFilters` from a `CrdsFilterSet`, each `CrdsFilter` will need a bloom filter to represent a subset of the CrdsValues, and a corresponding identifier mask which identifies the hash bits which each filter contains (using a variable called `mask`).
+To build a vector of `CrdsFilters` from a `CrdsFilterSet`, each `CrdsFilter` will need a bloom filter to represent a subset of the CrdsValues, and a corresponding identifier mask which identifies the hash bits that each filter contains (using a variable called `mask`).
 
 For example, the mask of the first filter would be `000`, the mask of the second filter would be `001`, the third filter would be `010`, ...
 
 When a node receives a pull request, the `mask` is used to efficiently look up all the matching CrdsValues.
 
-For example, if you received the `010` mask, you would look up all hash values whose first 3 bits are `010` and then find values which are not included in the bloom filter. These values would then be used to construct a pull response.
+For example, if you received the `010` mask, you would look up all hash values whose first 3 bits are `010` and then find values that are not included in the bloom filter. These values would then be used to construct a pull response.
 
 ```python
     def consumeForCrdsFilters(self: CrdsFilterSet) Vec<CrdsFilters>:
@@ -247,7 +247,7 @@ Notice how the result will be ones everywhere except for the first `mask_bits` b
 
 Pull responses are responses to pull requests and include missing data which was not included in the pull request.
 
-To build a pull response, we find values to match the `CrdsFilter`'s `mask`, and filter to only include values which are not included in the request's `Bloom` filter. To find values which match the filter's `mask`, we use the `CrdsShards` struct which is located in `crds_shards.zig`.
+To build a pull response, we find values to match the `CrdsFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `CrdsShards` struct which is located in `crds_shards.zig`.
 
 
 <div align="center">
@@ -261,9 +261,9 @@ the `CrdsTable`, we insert its hash into the `CrdsShard` structure.
 
 To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes CrdsValues which the first `shard_bits` of their hash value is equal to `k`.
 - The keys in the hash map are of type `usize` which is the CrdsTable index of the hash.
-- And the values of the hash map are of type `u64` which represent the hash value represented as a `u64`.
+- And the values of the hash map are of type `u64` which represents the hash value represented as a `u64`.
 
-The struct allows us to quickly look up all the CrdsValues whos hash matches a pull requests `mask` (compared to iterating over all the CrdsValues).
+The struct allows us to quickly look up all the CrdsValues whose hash matches a pull request's `mask` (compared to iterating over all the CrdsValues).
 
 *Note:* `shard_bits` is a hardcoded constant in the program equal to `12`, so we will have 2^12 = 4096 shard indexes.
 
@@ -286,7 +286,7 @@ def insert(self: *CrdsShards, crds_index: usize, hash: *const Hash):
 
 #### `CrdsShards`: Finding hash matches
 
-To build a Pull Response, we need to retrieve values in the CrdsTable who’s hash match a `mask` (ie, their first `mask_bit` bits are equal to `mask`).
+To build a Pull Response, we need to retrieve values in the CrdsTable whose hash matches a `mask` (i.e., their first `mask_bit` bits are equal to `mask`).
 To find these matches there are three cases we need to consider:
 - `shard_bits == mask_bits`
 - `shard_bits < mask_bits`
@@ -294,7 +294,7 @@ To find these matches there are three cases we need to consider:
 
 ---
 
-When `shard_bits == mask_bits`, we lookup the shard corresponding to the first `shard_bits` of `mask` and return its values.
+When `shard_bits == mask_bits`, we look at the shard corresponding to the first `shard_bits` of `mask` and return its values.
 
 For example, if shard_bits = 3 and mask_bits = 3 and our mask is 001, we can find all the
 CrdsTable values whose first 3 bits of their hash value is 001 by looking up shards[1].
@@ -318,7 +318,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
 
 When `shard_bits < mask_bits`, the mask is tracking more bits than the shards are, so we can find the shard corresponding to the first `shard_bits` of the `mask`, and iterate over those values to look for exact matches.
 
-I.e., truncating `mask` and looking up the shard gives us hashes which have a matching first `shard_bits`. We then need to check to make sure the last `shard_bits - mask_bits` match the mask, which we do through iteration.
+I.e., truncating `mask` and looking up the shard gives us hashes that have a matching first `shard_bits`. We then need to check to make sure the last `shard_bits - mask_bits` match the mask, which we do through iteration.
 
 For example, if shard_bits = 3 and mask_bits = 5 and our mask is 00101, we would first find all the CrdsTable values whose first 3 bits of their hash value is 001 by looking up shard[1]. We would then iterate over those values and make sure the fourth and fifth bits of the hash are 01.
 
@@ -352,11 +352,11 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
 
 --- 
 
-When `shard_bits > mask_bits`, the shards is tracking more information than the mask, so we'll need to lookup multiple shards to find all the values which match `mask`.
+When `shard_bits > mask_bits`, the shards is tracking more information than the mask, so we'll need to look at multiple shards to find all the values that match `mask`.
 
 For example,
   - if shard_bits = 4 and mask_bits = 2 and our mask is 01
-  - the possible shards well need to lookup are: 0100, 0101, 0110, 0111
+  - the possible shards we'll need to lookup are: 0100, 0101, 0110, 0111
   - i.e., there will be 4 shards that match the mask represented by the difference in bits
   - so, we know we'll have to look up `2^(shard_bits - mask_bits)` number of shards which can be computed using `count = 1 << (shard_bits - mask_bits)`
   - the largest shard value would be the mask followed by all ones (ie, 0111 in the example above) at the end which can be computed as `end = (mask | mask_ones) >> shard_bits`
@@ -391,7 +391,7 @@ def find_matches(self: *CrdsShards, mask: u64, mask_bits: u64) Vec<usize>:
     }
 ```
 
-After we have all the CrdsValue indexes which match the `mask`, we then check which values are not included in the request's bloom filter (i.e., values which the node is missing).
+After we have all the CrdsValue indexes that match the `mask`, we then check which values are not included in the request's bloom filter (i.e., values that the node is missing).
 
 ```python
 
@@ -399,10 +399,10 @@ def filter_crds_values(
     crds_table: *CrdsTable
     filter: *CrdsFilter
 ) Vec<CrdsValues>:
-    # find crds values whos hash matches the mask 
+    # find crds values whose hash matches the mask 
     var match_indexs = crds_table.get_bitmask_matches(filter.mask, filter.mask_bits);
 	
-    # find the values which arent included in the requests bloom filter
+    # find the values that arent included in the requests bloom filter
     values = []
     for index in match_indexs:
 	    entry = crds_table[index]       
@@ -414,11 +414,11 @@ def filter_crds_values(
 
 ### Handling Pull Responses
 
-When recieving a pull response, we insert all the values recieved in the CrdsTable. If any values fail to be inserted (due to having an old wallclock time, or being duplicate data), we track their hash in an array `failed_pull_hashes`. These failed hash values are then used when constructing the next Pull Request so that the values are not sent again. To ensure memory doesn’t grow without bounds, the `failed_pull_hashes` array is periodically trimmed to remove old values.
+When receiving a pull response, we insert all the values received in the CrdsTable. If any values fail to be inserted (due to having an old wallclock time, or being duplicate data), we track their hash in an array `failed_pull_hashes`. These failed hash values are then used when constructing the next Pull Request so that the values are not sent again. To ensure memory doesn’t grow without bounds, the `failed_pull_hashes` array is periodically trimmed to remove old values.
 
-We also do the same thing for values that are pruned in the CrdsTable (i.e., values which are overwritten) in `CrdsTable.pruned`.
+We also do the same thing for values that are pruned in the CrdsTable (i.e., values that are overwritten) in `CrdsTable.pruned`.
 
-For each CrdsValue which is successfully inserted in the CrdsTable, we also update the timestamps for all the values from that origin pubkey. We do this so that when we are trimming old CrdsValues in the table, we dont remove values from an active pubkey.
+For each CrdsValue that is successfully inserted in the CrdsTable, we also update the timestamps for all the values from that origin pubkey. We do this so that when we are trimming old CrdsValues in the table, we don't remove values from an active pubkey.
 
 ## Protocol Messages: Push
 
@@ -427,7 +427,7 @@ For each CrdsValue which is successfully inserted in the CrdsTable, we also upda
 Push messages are periodically generated to send out new data to a subset of the network’s nodes. To implement this, we track a `push_cursor` variable which represents the
 cursor value of the last pushed value, and use the getter function `crds_table.get_entries_with_cursor(...)` to get newCrdsValues which have been inserted past this value (i.e., are new CrdsValues).
 
-In Sig, a `PushMessage` is defined as `struct { Pubkey, []CrdsValue }`: a source pubkey, and an array of `CrdsValue`s. The source pubkey will the same pubkey on the local node's contact information. And the array of values will be all the new CrdsValues.
+In Sig, a `PushMessage` is defined as `struct { Pubkey, []CrdsValue }`: a source pubkey, and an array of `CrdsValue`s. The source pubkey will be the same pubkey on the local node's contact information. And the array of values will be all the new CrdsValues.
 
 An important note is that all messages sent through gossip should be less than or equal to a [maximum transmission unit (MTU)](https://en.wikipedia.org/wiki/Maximum_transmission_unit) of 1280 bytes (which is referred to as the `Packet` struct throughout the codebase).
 
@@ -451,13 +451,13 @@ Note: The solana-labs rust implementation uses stake weight information to build
 
 #### Solana-Labs' Active Set
 
-For completness, the solana-labs client's `ActiveSet` implementation is also worth discussing. Their `PushActiveSet` contains multiple `PushActiveSetEntry` structs where each `Entry` corresponds to a different probability distribution over possible nodes to be included in the active set. 
+For completeness, the solana-labs client's `ActiveSet` implementation is also worth discussing. Their `PushActiveSet` contains multiple `PushActiveSetEntry` structs where each `Entry` corresponds to a different probability distribution over possible nodes to be included in the active set. 
 
-The entries distribution is ordered by decreasing entropy over stake weight. Meaning, entries at the start of the list (with a low index - eg, 0, 1) are a uniform distribution over the possible nodes (with high entropy) and entries at the end of the list (with a large index - eg, 24, 25) have a the distribution weighted strongly by a node's stake amount (with low entropy).
+The entries distribution is ordered by decreasing entropy over stake weight. Meaning, entries at the start of the list (with a low index - eg, 0, 1) are a uniform distribution over the possible nodes (with high entropy) and entries at the end of the list (with a large index - eg, 24, 25) have a distribution weighted strongly by a node's stake amount (with low entropy).
 
-When building the active set, the local node's stake weight decides which entry to sample the nodes from. For example, if the local node has a large stake, its index will be large which corresponds to an distribution which has a higher probability of selecting other high-staked node to be included in the active set. 
+When building the active set, the local node's stake weight decides which entry to sample the nodes from. For example, if the local node has a large stake, its index will be large which corresponds to a distribution that has a higher probability of selecting another high-staked node to be included in the active set. 
 
-This means, **high stake nodes are more likely to send push messages to other high stake nodes, while low stake nodes send push messages to random nodes**.
+This means, **high-stake nodes are more likely to send push messages to other high-stake nodes, while low-stake nodes send push messages to random nodes**.
 
 <div align="center">
 <img src="imgs/2023-08-16-15-55-21.png" width="650" height="450">
@@ -465,7 +465,7 @@ This means, **high stake nodes are more likely to send push messages to other hi
 
 ### Receiving Push Messages
 
-When receiving a new `PushMessage`, the values are inserted into the CrdsTable and values which failed the insertion (due to be being a duplicate) are tracked. The nodes who sent those failed values are then sent prune messages to say, 'stop sending me this data, I’ve already received it from another node’.
+When receiving a new `PushMessage`, the values are inserted into the CrdsTable and values that failed the insertion (due to being a duplicate) are tracked. The nodes who sent those failed values are then sent prune messages to say, 'stop sending me this data, I’ve already received it from another node’.
 
 ## Protocol Message: Prune Messages
 
@@ -488,7 +488,7 @@ pub const PruneData = struct {
 }
 ```
 
-The comments explain most of the variables in the struct. The `prunes` field a list of `origin` pubkeys (pubkeys of the node which create a corresponding CrdsValue). When inserting the received values from a new push message, if a CrdsValue fails to be inserted into the CrdsTable, the `origin` of the value (i.e., the pubkey of the node which created the value) is added to the prunes list. And lastly, the destination field is set to the node which sent the push message.
+The comments explain most of the variables in the struct. The `prunes` field a list of `origin` pubkeys (pubkeys of the node which create a corresponding CrdsValue). When inserting the received values from a new push message, if a CrdsValue fails to be inserted into the CrdsTable, the `origin` of the value (i.e., the pubkey of the node that created the value) is added to the prunes list. And lastly, the destination field is set to the node which sent the push message.
 
 ```python
 def handle_push_message(
@@ -517,7 +517,7 @@ def handle_push_message(
 <img src="imgs/2023-08-17-11-46-12.png" width="550" height="950">
 </div>
 
-*Note:* in the solana-labs client, to compute what nodes to send a prune message to, the client  uses the number of duplicates sent, along with the nodes stake weight and a minimum number of nodes to keep. Since Sig doesnt have stake weight information, we follow a simpler approach and prune any values which fail insertion.
+*Note:* in the solana-labs client, to compute what nodes to send a prune message to, the client uses the number of duplicates sent, along with the nodes stake weight and a minimum number of nodes to keep. Since Sig doesn't have stake weight information, we follow a simpler approach and prune any values that fail insertion.
 
 ### Receiving Prune Messages
 
@@ -533,11 +533,11 @@ When constructing the active set for a CrdsValue:
 
 ## Protocol Message: Ping/Pong
 
-Ping and Pong messages are used to health check nodes in a quick and easy way. The corresponding logic is defined in `gossip/ping_pong.zig`.
+Ping and Pong messages are used to health check nodes quickly and easily. The corresponding logic is defined in `gossip/ping_pong.zig`.
 
 Ping messages are periodically sent to all of the nodes in the network (by parsing the contact information in the CrdsTable). For each of these Ping messages, a corresponding Pong message is expected within a certain amount of time. If we fail to receive the corresponding Pong message, then we don’t send that node any other protocol messages (i.e., we don’t include them in the `ActiveSet` so we don’t send them push messages, nor do we respond to any pull requests received from them).
 
-We track the nodes which have responded to Ping messages with a corresponding Pong message as well as which nodes we are still waiting for a corresponding Pong message for using the `PingCache` structure.
+We track the nodes that have responded to Ping messages with a corresponding Pong message as well as which nodes we are still waiting for a corresponding Pong message for using the `PingCache` structure.
 
 ### PingCache
 
