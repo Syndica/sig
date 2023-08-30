@@ -42,7 +42,7 @@ pub const Protocol = union(enum(u32)) {
                 var value = pull[1];
                 const is_verified = try value.verify(value.id());
                 if (!is_verified) {
-                    return error.InvalidValue;
+                    return error.InvalidPullRequest;
                 }
             },
             .PullResponse => |*pull| {
@@ -50,7 +50,7 @@ pub const Protocol = union(enum(u32)) {
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
                     if (!is_verified) {
-                        return error.InvalidValue;
+                        return error.InvalidPullResponse;
                     }
                 }
             },
@@ -59,19 +59,19 @@ pub const Protocol = union(enum(u32)) {
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
                     if (!is_verified) {
-                        return error.InvalidValue;
+                        return error.InvalidPushMessage;
                     }
                 }
             },
             .PruneMessage => |*prune| {
-                var data = prune[1];
-                try data.verify();
+                var data: PruneData = prune[1];
+                data.verify() catch return error.InvalidPruneMessage;
             },
             .PingMessage => |*ping| {
-                try ping.verify();
+                ping.verify() catch return error.InvalidPingMessage;
             },
             .PongMessage => |*pong| {
-                try pong.verify();
+                pong.verify() catch return error.InvalidPongMessage;
             },
         }
     }

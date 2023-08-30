@@ -54,10 +54,12 @@ pub const CrdsValue = struct {
         return self;
     }
 
+    /// only used in tests
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
+    /// only used in tests
     pub fn random_with_index(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
         return try Self.initSigned(CrdsData.random_from_index(rng, index), keypair);
     }
@@ -400,13 +402,13 @@ pub const CrdsData = union(enum(u32)) {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
             1 => {
-                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES), Vote.random(rng) } };
+                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.random(rng) } };
             },
             2 => {
-                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS), EpochSlots.random(rng) } };
+                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.random(rng) } };
             },
             else => {
-                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS), DuplicateShred.random(rng) } };
+                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
             },
         }
     }
@@ -669,15 +671,19 @@ pub const DuplicateShred = struct {
     chunk: []u8,
 
     pub fn random(rng: std.rand.Random) DuplicateShred {
-        var slice = [_]u8{0} ** 32;
+        // TODO: cant pass around a slice (since the stack data will get cleared)
+        var slice = [0]u8{}; // empty slice 
+        var num_chunks = rng.int(u8);
+        var chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
+
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .wallclock = get_wallclock(),
             .slot = Slot.init(rng.int(u64)),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
-            .num_chunks = rng.int(u8),
-            .chunk_index = rng.int(u8),
+            .num_chunks = num_chunks,
+            .chunk_index = chunk_index, 
             .chunk = &slice,
         };
     }
@@ -696,6 +702,20 @@ pub const SnapshotHashes = struct {
     incremental: []struct { Slot, Hash },
     wallclock: u64,
 };
+
+test "gossip.crds: test sig verify duplicateShreds" { 
+    var keypair = try KeyPair.create([_]u8{1} ** 32);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
+    var rng = std.rand.DefaultPrng.init(0);
+    var data = DuplicateShred.random(rng.random());
+    data.from = pubkey; 
+
+    var value = try CrdsValue.initSigned(CrdsData { 
+        .DuplicateShred = .{0, data}
+    }, &keypair);
+
+    try std.testing.expect(try value.verify(pubkey));
+}
 
 test "gossip.crds: test sanitize CrdsData" {
     var rng = std.rand.DefaultPrng.init(0);

@@ -125,7 +125,7 @@ pub const GossipService = struct {
         gossip_socket.bind(gossip_address.toEndpoint()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
 
-        var failed_pull_hashes = HashTimeQueue.init();
+        var failed_pull_hashes = HashTimeQueue.init(allocator);
         var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
 
         return Self{
@@ -167,6 +167,14 @@ pub const GossipService = struct {
         deinit_rw_mux(&self.crds_table_rw);
         deinit_rw_mux(&self.active_set_rw);
         deinit_mux(&self.push_msg_queue_mux);
+        deinit_mux(&self.failed_pull_hashes_mux);
+    }
+
+    /// these threads should run forever - so if they join - somethings wrong
+    /// and we should shutdown
+    fn join_and_exit(self: *Self, handle: *std.Thread) void {
+        handle.join();
+        self.exit.store(true, std.atomic.Ordering.Unordered);
     }
 
     /// spawns required threads for the gossip serivce.
@@ -182,23 +190,23 @@ pub const GossipService = struct {
             self.packet_channel,
             self.exit,
         });
-        defer receiver_handle.join();
+        defer self.join_and_exit(&receiver_handle);
 
         var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
             self, logger,
         });
-        defer packet_verifier_handle.join();
+        defer self.join_and_exit(&packet_verifier_handle);
 
         var packet_handle = try Thread.spawn(.{}, Self.process_messages, .{
             self, logger,
         });
-        defer packet_handle.join();
+        defer self.join_and_exit(&packet_handle);
 
         var build_messages_handle = try Thread.spawn(.{}, Self.build_messages, .{
             self,
             logger,
         });
-        defer build_messages_handle.join();
+        defer self.join_and_exit(&build_messages_handle);
 
         // outputer thread
         var responder_handle = try Thread.spawn(.{}, socket_utils.send_socket, .{
@@ -206,7 +214,7 @@ pub const GossipService = struct {
             self.responder_channel,
             self.exit,
         });
-        defer responder_handle.join();
+        defer self.join_and_exit(&responder_handle);
     }
 
     /// main logic for deserializing Packets into Protocol messages
@@ -240,13 +248,11 @@ pub const GossipService = struct {
 
                 protocol_message.sanitize() catch |err| {
                     logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
-                    bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
                 protocol_message.verify_signature() catch |err| {
                     logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
-                    bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
@@ -273,8 +279,6 @@ pub const GossipService = struct {
             defer self.verified_channel.allocator.free(protocol_messages);
 
             for (protocol_messages) |protocol_message| {
-                defer bincode.free(self.allocator, protocol_message);
-
                 var message: Protocol = protocol_message.message;
                 var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
@@ -630,7 +634,7 @@ pub const GossipService = struct {
             defer failed_pull_hashes_lg.unlock();
 
             const failed_pull_hashes: *const HashTimeQueue = failed_pull_hashes_lg.get();
-            break :blk try failed_pull_hashes.get_values(self.allocator);
+            break :blk try failed_pull_hashes.get_values();
         };
         defer failed_pull_hashes_array.deinit();
 
@@ -797,11 +801,11 @@ pub const GossipService = struct {
         defer failed_insert_indexs.deinit();
         {
             var failed_pull_hashes_lg = self.failed_pull_hashes_mux.lock();
-            var failed_pull_hashes = failed_pull_hashes_lg.mut();
+            var failed_pull_hashes: *HashTimeQueue = failed_pull_hashes_lg.mut();
             defer failed_pull_hashes_lg.unlock();
 
             const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
-            failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
+            try failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
 
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             for (failed_insert_indexs.items) |insert_index| {
@@ -812,7 +816,7 @@ pub const GossipService = struct {
                 };
                 const value_hash = Hash.generateSha256Hash(bytes);
 
-                failed_pull_hashes.insert(value_hash, now);
+                try failed_pull_hashes.insert(value_hash, now);
             }
         }
 
@@ -931,6 +935,8 @@ pub const GossipService = struct {
             defer crds_table_lg.unlock();
 
             var crds_table: *CrdsTable = crds_table_lg.mut();
+            std.debug.print("crds table len: {d}\n", .{crds_table.len()});
+
             var result = try crds_table.insert_values(
                 push_values,
                 CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
@@ -994,7 +1000,7 @@ pub const GossipService = struct {
             defer crds_table_lg.unlock();
             var crds_table: *CrdsTable = crds_table_lg.mut();
 
-            crds_table.purged.trim(purged_cutoff_timestamp);
+            try crds_table.purged.trim(purged_cutoff_timestamp);
             try crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
             try crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
         }
@@ -1005,7 +1011,7 @@ pub const GossipService = struct {
             defer failed_pull_hashes_lg.unlock();
             var failed_pull_hashes: *HashTimeQueue = failed_pull_hashes_lg.mut();
 
-            failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
+            try failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
         }
     }
 

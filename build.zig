@@ -140,6 +140,8 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // gossip fuzz testing
+    // find ./zig-cache/o/* | grep fuzz 
+    // lldb $(above path)
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
         .root_source_file = .{ .path = "src/gossip/fuzz.zig" },
@@ -153,6 +155,7 @@ pub fn build(b: *std.Build) void {
     fuzz_exe.addModule("getty", getty_mod);
 
     b.installArtifact(fuzz_exe);
+
     const fuzz_cmd = b.addRunArtifact(fuzz_exe);
     b.step("fuzz_gossip", "fuzz gossip").dependOn(&fuzz_cmd.step);
 }
