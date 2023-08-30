@@ -72,6 +72,7 @@ pub fn send_socket(
     std.debug.print("send_socket loop closed\n", .{});
 }
 
+// TODO: fix
 // test "gossip.socket_utils: sending a packet" {
 //     var allocator = std.testing.allocator;
 //     var addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 9999);
