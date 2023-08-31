@@ -88,12 +88,12 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn try_drain(self: *Self) error{ ChannelClosed, OutOfMemory }!?[]T {
-            var buffer = self.buffer.lock();
-            defer buffer.unlock();
-
             if (self.closed.load(.SeqCst)) {
                 return error.ChannelClosed;
             }
+
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
 
             var num_items_to_drain = buffer.get().items.len;
             if (num_items_to_drain == 0) {

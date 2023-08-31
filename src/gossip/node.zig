@@ -348,7 +348,7 @@ test "contact info bincode serialize matches rust bincode" {
 
     var stream = std.io.fixedBufferStream(buf.items);
     var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-    defer ci2.deinit();
+    defer bincode.free(testing.allocator, ci2);
 
     try testing.expect(ci2.addrs.items.len == 4);
     try testing.expect(ci2.sockets.items.len == 6);

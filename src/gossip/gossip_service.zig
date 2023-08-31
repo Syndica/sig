@@ -234,7 +234,7 @@ pub const GossipService = struct {
             const packets = maybe_packets.?;
             defer self.packet_channel.allocator.free(packets);
 
-            for (packets) |packet| {
+            for (packets) |*packet| {
                 var protocol_message = bincode.readFromSlice(
                     self.allocator,
                     Protocol,

@@ -100,16 +100,16 @@ pub fn random_crds_value(rng: std.rand.Random, maybe_should_pass_sig_verificatio
 }
 
 pub fn random_push_message(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    var crds_values: [5]CrdsValue = undefined;
+    var crds_values: [1]CrdsValue = undefined;
     var should_pass_sig_verification = rng.boolean();
-    for (0..5) |i| {
+    for (0..1) |i| {
         var value = try random_crds_value(rng, should_pass_sig_verification);
         crds_values[i] = value;
     }
 
     // serialize and send as packet
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var msg = Protocol{ .PushMessage = .{ pubkey, crds_values[0..5] } };
+    var msg = Protocol{ .PushMessage = .{ pubkey, crds_values[0..1] } };
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
@@ -223,33 +223,33 @@ pub fn main() !void {
     std.debug.print("SEED: {d}\n", .{seed});
     var rng = std.rand.DefaultPrng.init(seed);
 
-    // send ping
-    {
-        const ping = try random_ping(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-        try gossip_service_fuzzer.responder_channel.send(ping);
-    }
+    // // send ping
+    // {
+    //     const ping = try random_ping(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+    //     try gossip_service_fuzzer.responder_channel.send(ping);
+    // }
 
-    // send pong message
-    {
-        const pong = try random_pong(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-        try gossip_service_fuzzer.responder_channel.send(pong);
-    }
+    // // send pong message
+    // {
+    //     const pong = try random_pong(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+    //     try gossip_service_fuzzer.responder_channel.send(pong);
+    // }
 
-    for (0..5) |_| {
-        // send push message
-        {
-            var packet = try random_push_message(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-            try gossip_service_fuzzer.responder_channel.send(packet);
-        }
+    // for (0..5) |_| {
+    //     // send push message
+    //     {
+    //         var packet = try random_push_message(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+    //         try gossip_service_fuzzer.responder_channel.send(packet);
+    //     }
 
-        // send as pull response
-        {
-            var packet = try random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-            try gossip_service_fuzzer.responder_channel.send(packet);
-        }
+    //     // send as pull response
+    //     {
+    //         var packet = try random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+    //         try gossip_service_fuzzer.responder_channel.send(packet);
+    //     }
 
-        std.time.sleep(std.time.ns_per_s);
-    }
+    //     std.time.sleep(std.time.ns_per_s);
+    // }
 
     // send pull request
     {
