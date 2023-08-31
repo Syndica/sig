@@ -1599,8 +1599,29 @@ test "gossip.gossip_service: test packet verification" {
     var packet2 = Packet.init(from, buf2, out2.len);
     try packet_channel.send(packet2);
 
+    // send it with a CrdsValue which hash a slice
+    {
+        var rand_pubkey = Pubkey.fromPublicKey(&rand_keypair.public_key, true);
+        var dshred = crds.DuplicateShred.random(rng.random());
+        var chunk: [32]u8 = .{1} ** 32;
+        dshred.chunk = &chunk;
+        dshred.from = rand_pubkey;
+        var dshred_data = crds.CrdsData{
+            .DuplicateShred = .{ 1, dshred },
+        };
+        var dshred_value = try CrdsValue.initSigned(dshred_data, &rand_keypair);
+        var values3 = [_]crds.CrdsValue{dshred_value};
+        const protocol_msg3 = Protocol{
+            .PushMessage = .{ id, &values3 },
+        };
+        var buf3 = [_]u8{0} ** PACKET_DATA_SIZE;
+        var out3 = try bincode.writeToSlice(buf3[0..], protocol_msg3, bincode.Params{});
+        var packet3 = Packet.init(from, buf3, out3.len);
+        try packet_channel.send(packet3);
+    }
+
     var msg_count: usize = 0;
-    while (msg_count < 3) {
+    while (msg_count < 4) {
         if (try verified_channel.try_drain()) |msgs| {
             defer verified_channel.allocator.free(msgs);
             for (msgs) |msg| {

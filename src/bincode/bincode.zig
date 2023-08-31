@@ -193,7 +193,6 @@ pub fn Deserializer(comptime Reader: type) type {
                         if (info.size == .Many) {
                             unreachable;
                         }
-
                         std.debug.assert(info.size == .Slice);
                         for (value) |item| {
                             getty.de.free(allocator, d, item);
