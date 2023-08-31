@@ -92,12 +92,15 @@ pub const GossipService = struct {
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
+    entrypoints: std.ArrayList(SocketAddr),
+
     const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,
         my_contact_info: crds.LegacyContactInfo,
         my_keypair: KeyPair,
+        entrypoints: ?std.ArrayList(SocketAddr),
         exit: *AtomicBool,
     ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_channel = PacketChannel.init(allocator, 10000);
@@ -143,6 +146,7 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
+            .entrypoints = entrypoints orelse std.ArrayList(SocketAddr).init(allocator),
         };
     }
 
@@ -163,6 +167,8 @@ pub const GossipService = struct {
         self.packet_channel.deinit();
         self.responder_channel.deinit();
         self.verified_channel.deinit();
+
+        self.entrypoints.deinit();
 
         deinit_rw_mux(&self.crds_table_rw);
         deinit_rw_mux(&self.active_set_rw);
@@ -1198,6 +1204,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1253,6 +1260,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1300,6 +1308,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1373,6 +1382,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1444,6 +1454,7 @@ test "gossip.gossip_service: test build_pull_requests" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1482,6 +1493,7 @@ test "gossip.gossip_service: test build_push_messages" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1539,7 +1551,7 @@ test "gossip.gossip_service: test packet verification" {
     var contact_info = crds.LegacyContactInfo.default(id);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
-    var gossip_service = try GossipService.init(allocator, contact_info, keypair, &exit);
+    var gossip_service = try GossipService.init(allocator, contact_info, keypair, null, &exit);
     defer gossip_service.deinit();
 
     var packet_channel = gossip_service.packet_channel;
@@ -1642,6 +1654,7 @@ test "gossip.gossip_service: process contact_info push packet" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1726,6 +1739,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
         std.testing.allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
 
