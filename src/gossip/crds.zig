@@ -673,7 +673,7 @@ pub const DuplicateShred = struct {
     pub fn random(rng: std.rand.Random) DuplicateShred {
         // TODO: cant pass around a slice (since the stack data will get cleared)
         var slice = [0]u8{}; // empty slice
-        var num_chunks = rng.int(u8);
+        var num_chunks = rng.intRangeAtMost(u8, 5, 100);
         var chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
 
         return DuplicateShred{
