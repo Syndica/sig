@@ -684,8 +684,32 @@ pub const GossipService = struct {
             now,
         );
 
+        // randomly include an entrypoint in the pull if we dont have their contact info
+        var rng = std.rand.DefaultPrng.init(now);
+        var entrypoint_index: i16 = -1;
+        if (self.entrypoints.items.len != 0) blk: { 
+            var crds_table_lg = self.crds_table_rw.read(); 
+            defer crds_table_lg.unlock();
+
+            var maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
+            const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
+
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            const contact_infos = try crds_table.get_all_contact_infos();
+            defer contact_infos.deinit();
+
+            for (contact_infos.items) |contact_info| {
+                if (contact_info.gossip.eql(&entrypoint)) { 
+                    // early exit - we already have the peers in our contact info
+                    break :blk;
+                }
+            }
+            // we dont have them so well add them to the peer list (as default contact info)
+            entrypoint_index = @intCast(maybe_entrypoint_index);
+        }
+        const should_send_to_entrypoint = entrypoint_index != -1;
         const num_peers = peers.len;
-        if (num_peers == 0) {
+        if (num_peers == 0 and !should_send_to_entrypoint) {
             return error.NoPeers;
         }
 
@@ -699,18 +723,30 @@ pub const GossipService = struct {
             .LegacyContactInfo = self.my_contact_info,
         }, &self.my_keypair);
 
-        var rng = std.rand.DefaultPrng.init(now);
-        for (filters.items) |filter_i| {
-            // TODO: incorperate stake weight in random sampling
-            const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
-            const peer_contact_info = peers[peer_index];
-            const peer_addr = peer_contact_info.gossip.toEndpoint();
+        if (num_peers != 0) { 
+            for (filters.items) |filter_i| {
+                // TODO: incorperate stake weight in random sampling
+                const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
+                const peer_contact_info = peers[peer_index];
+                const peer_addr = peer_contact_info.gossip.toEndpoint();
 
-            const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
+                const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
-            var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-            var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
-            output.appendAssumeCapacity(packet);
+                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+                var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
+                output.appendAssumeCapacity(packet);
+            }
+        }
+
+        // append entrypoint msgs 
+        if (should_send_to_entrypoint) {
+            const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+            for (filters.items) |filter| {
+                const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
+                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+                var packet = Packet.init(entrypoint_addr.toEndpoint(), packet_buf, msg_slice.len);
+                output.appendAssumeCapacity(packet);
+            }
         }
 
         return output;
@@ -1076,7 +1112,8 @@ pub const GossipService = struct {
     ) []crds.LegacyContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
-        var buf: [MAX_SIZE]crds.CrdsVersionedValue = undefined;
+        // * 2 bc we might filter out some 
+        var buf: [MAX_SIZE * 2]crds.CrdsVersionedValue = undefined;
         const contact_infos = blk: {
             var crds_table_lg = self.crds_table_rw.read();
             defer crds_table_lg.unlock();
