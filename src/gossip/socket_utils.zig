@@ -1,13 +1,12 @@
 const UdpSocket = @import("zig-network").Socket;
 const Packet = @import("../gossip/packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("../gossip/packet.zig").PACKET_DATA_SIZE;
-const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
-const SocketAddr = @import("net.zig").SocketAddr;
+const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
 
 pub fn read_socket(
     socket: *UdpSocket,
-    send_channel: *NonBlockingChannel(Packet),
+    send_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
 ) error{ SocketClosed, SocketRecvError, OutOfMemory, ChannelClosed }!void {
     var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -38,13 +37,13 @@ pub fn read_socket(
 
 pub fn send_socket(
     socket: *UdpSocket,
-    recv_channel: *NonBlockingChannel(Packet),
+    recv_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
-) error{ SocketSendError, ChannelClosed }!void {
+) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
     while (!exit.load(std.atomic.Ordering.Unordered)) {
-        const maybe_packets = try recv_channel.drain();
+        const maybe_packets = try recv_channel.try_drain();
         if (maybe_packets == null) {
             // sleep for 1ms
             std.time.sleep(std.time.ns_per_ms * 1);
