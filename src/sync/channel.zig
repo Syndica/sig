@@ -87,50 +87,7 @@ pub fn Channel(comptime T: type) type {
             return out;
         }
 
-        pub fn close(self: *Self) void {
-            self.closed.store(true, .SeqCst);
-            self.hasValue.broadcast();
-        }
-    };
-}
-
-/// A very non-blocking version of a channel
-pub fn NonBlockingChannel(comptime T: type) type {
-    return struct {
-        buffer: Mux(std.ArrayList(T)),
-        closed: Atomic(bool) = Atomic(bool).init(false),
-        allocator: std.mem.Allocator,
-
-        const Self = @This();
-
-        pub fn init(allocator: std.mem.Allocator, init_capacity: usize) *Self {
-            var self = allocator.create(Self) catch unreachable;
-            self.* = .{
-                .buffer = Mux(std.ArrayList(T)).init(std.ArrayList(T).initCapacity(allocator, init_capacity) catch unreachable),
-                .allocator = allocator,
-            };
-            return self;
-        }
-
-        pub fn deinit(self: *Self) void {
-            var buff = self.buffer.lock();
-            buff.mut().deinit();
-            buff.unlock();
-            self.allocator.destroy(self);
-        }
-
-        pub fn send(self: *Self, value: T) error{ OutOfMemory, ChannelClosed }!void {
-            if (self.closed.load(.Monotonic)) {
-                return error.ChannelClosed;
-            }
-            var buffer = self.buffer.lock();
-            defer buffer.unlock();
-            try buffer.mut().append(value);
-        }
-
-        /// `drain` func will remove all pending items from queue.
-        /// NOTE: Caller is responsible for calling `allocator.free` on the returned slice.
-        pub fn drain(self: *Self) error{ChannelClosed}!?[]T {
+        pub fn try_drain(self: *Self) error{ ChannelClosed, OutOfMemory }!?[]T {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
@@ -143,7 +100,7 @@ pub fn NonBlockingChannel(comptime T: type) type {
                 return null;
             }
 
-            var out = self.allocator.alloc(T, num_items_to_drain) catch @panic("could not alloc");
+            var out = try self.allocator.alloc(T, num_items_to_drain);
             @memcpy(out, buffer.get().items);
             buffer.mut().clearRetainingCapacity();
 
@@ -152,6 +109,7 @@ pub fn NonBlockingChannel(comptime T: type) type {
 
         pub fn close(self: *Self) void {
             self.closed.store(true, .SeqCst);
+            self.hasValue.broadcast();
         }
     };
 }

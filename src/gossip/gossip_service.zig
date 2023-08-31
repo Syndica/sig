@@ -3,7 +3,6 @@ const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
-const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -47,9 +46,10 @@ const Hash = @import("../core/hash.zig").Hash;
 
 const socket_utils = @import("socket_utils.zig");
 
-const PacketChannel = NonBlockingChannel(Packet);
+const Channel = @import("../sync/channel.zig").Channel;
+const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
-const ProtocolChannel = NonBlockingChannel(ProtocolMessage);
+const ProtocolChannel = Channel(ProtocolMessage);
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -229,7 +229,7 @@ pub const GossipService = struct {
         var failed_protocol_msgs: usize = 0;
 
         while (!exit.load(std.atomic.Ordering.Unordered)) {
-            const maybe_packets = try packet_channel.drain();
+            const maybe_packets = try packet_channel.try_drain();
             if (maybe_packets == null) {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
@@ -289,7 +289,7 @@ pub const GossipService = struct {
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
 
         while (!exit.load(std.atomic.Ordering.Unordered)) {
-            const maybe_protocol_messages = try verified_channel.drain();
+            const maybe_protocol_messages = try verified_channel.try_drain();
             if (maybe_protocol_messages == null) {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
@@ -1709,7 +1709,7 @@ test "gossip.gossip_service: test packet verification" {
 
     var msg_count: usize = 0;
     while (msg_count < 3) {
-        if (try verified_channel.drain()) |msgs| {
+        if (try verified_channel.try_drain()) |msgs| {
             defer verified_channel.allocator.free(msgs);
             for (msgs) |msg| {
                 try std.testing.expect(msg.message.PushMessage[0].equals(&id));
@@ -1828,7 +1828,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     try std.testing.expect(res.len == 1);
     lg.unlock();
 
-    const resp = (try responder_channel.drain()).?;
+    const resp = (try responder_channel.try_drain()).?;
     defer responder_channel.allocator.free(resp);
     try std.testing.expect(resp.len == 1);
 
