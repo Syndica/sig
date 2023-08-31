@@ -3,7 +3,6 @@ const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
-const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -47,9 +46,10 @@ const Hash = @import("../core/hash.zig").Hash;
 
 const socket_utils = @import("socket_utils.zig");
 
-const PacketChannel = NonBlockingChannel(Packet);
+const Channel = @import("../sync/channel.zig").Channel;
+const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
-const ProtocolChannel = NonBlockingChannel(ProtocolMessage);
+const ProtocolChannel = Channel(ProtocolMessage);
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -216,7 +216,7 @@ pub const GossipService = struct {
         var failed_protocol_msgs: usize = 0;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
-            const maybe_packets = try self.packet_channel.drain();
+            const maybe_packets = try self.packet_channel.try_drain();
             if (maybe_packets == null) {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
@@ -261,7 +261,7 @@ pub const GossipService = struct {
     /// main logic for recieving and processing `Protocol` messages.
     pub fn process_messages(self: *Self, logger: *Logger) !void {
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
-            const maybe_protocol_messages = try self.verified_channel.drain();
+            const maybe_protocol_messages = try self.verified_channel.try_drain();
             if (maybe_protocol_messages == null) {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
@@ -288,7 +288,7 @@ pub const GossipService = struct {
                             push_values,
                         ) catch |err| {
                             push_log_entry.field("error", @errorName(err))
-                                .info("received push message");
+                                .err("error handling push message");
                             continue;
                         };
                         defer failed_insert_origins.deinit();
@@ -296,7 +296,8 @@ pub const GossipService = struct {
 
                         if (failed_insert_origins.count() != 0) {
                             var prune_packets = self.build_prune_message(&failed_insert_origins, push_from) catch |err| {
-                                logger.warnf("error building prune messages: {s}", .{@errorName(err)});
+                                push_log_entry.field("error", @errorName(err))
+                                    .err("error building prune messages");
                                 continue;
                             };
                             defer prune_packets.deinit();
@@ -321,7 +322,9 @@ pub const GossipService = struct {
                             crds_values,
                             pull_log_entry,
                         ) catch |err| {
-                            _ = pull_log_entry.field("error", @errorName(err));
+                            pull_log_entry.field("error", @errorName(err))
+                                .err("error handling pull response");
+                            continue;
                         };
 
                         pull_log_entry.info("received pull response");
@@ -345,7 +348,7 @@ pub const GossipService = struct {
                             pull_log_entry,
                         ) catch |err| {
                             pull_log_entry.field("error", @errorName(err))
-                                .info("received pull request");
+                                .err("error handling pull request");
                             continue;
                         };
                         defer packets.deinit();
@@ -358,10 +361,26 @@ pub const GossipService = struct {
                         }
                     },
                     .PruneMessage => |*prune| {
-                        const prune_data: PruneData = prune[1];
-                        self.handle_prune_message(&prune_data) catch |err| {
-                            logger.warnf("error handling prune message: {s}", .{@errorName(err)});
+                        const prune_msg: PruneData = prune[1];
+
+                        var endpoint_buf = std.ArrayList(u8).init(self.allocator);
+                        try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
+                        defer endpoint_buf.deinit();
+
+                        var prune_log_entry = logger
+                            .field("from_endpoint", endpoint_buf.items)
+                            .field("from_pubkey", &prune_msg.pubkey.string())
+                            .field("num_prunes", prune_msg.prunes.len);
+
+                        self.handle_prune_message(
+                            &prune_msg,
+                        ) catch |err| {
+                            prune_log_entry.field("error", @errorName(err))
+                                .err("error handling prune message");
+                            continue;
                         };
+
+                        prune_log_entry.info("received prune message");
                     },
                     .PingMessage => |*ping| {
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
@@ -375,7 +394,7 @@ pub const GossipService = struct {
                         const packet = self.handle_ping_message(ping, from_endpoint) catch |err| {
                             ping_log_entry
                                 .field("error", @errorName(err))
-                                .info("received ping message");
+                                .err("error handling ping message");
                             continue;
                         };
 
@@ -1572,7 +1591,7 @@ test "gossip.gossip_service: test packet verification" {
 
     var msg_count: usize = 0;
     while (msg_count < 3) {
-        if (try verified_channel.drain()) |msgs| {
+        if (try verified_channel.try_drain()) |msgs| {
             defer verified_channel.allocator.free(msgs);
             for (msgs) |msg| {
                 try std.testing.expect(msg.message.PushMessage[0].equals(&id));
@@ -1677,7 +1696,7 @@ test "gossip.gossip_service: process contact_info push packet" {
         lg.unlock();
     }
 
-    const resp = (try responder_channel.drain()).?;
+    const resp = (try responder_channel.try_drain()).?;
     defer responder_channel.allocator.free(resp);
     try std.testing.expect(resp.len == 1);
 
