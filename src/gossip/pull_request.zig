@@ -111,6 +111,20 @@ pub const CrdsFilterSet = struct {
         };
     }
 
+    pub fn init_test(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+        const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
+
+        var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
+        for (0..n_filters) |_| {
+            var filter = try Bloom.random(alloc, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
+            filters.appendAssumeCapacity(filter);
+        }
+        return Self{
+            .filters = filters,
+            .mask_bits = mask_bits,
+        };
+    }
+
     /// note: does not free filter values bc we take ownership of them in
     /// getCrdsFilters
     pub fn deinit(self: *Self) void {
