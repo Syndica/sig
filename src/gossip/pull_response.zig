@@ -21,11 +21,11 @@ pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 pub fn filter_crds_values(
     alloc: std.mem.Allocator,
     crds_table: *const CrdsTable,
-    filter: *CrdsFilter,
-    output_size_limit: usize,
+    filter: *const CrdsFilter,
     caller_wallclock: u64,
-) !ArrayList(CrdsValue) {
-    if (output_size_limit == 0) {
+    max_number_values: usize,
+) error{OutOfMemory}!ArrayList(CrdsValue) {
+    if (max_number_values == 0) {
         return ArrayList(CrdsValue).init(alloc);
     }
 
@@ -62,7 +62,7 @@ pub fn filter_crds_values(
 
         // good
         try output.append(entry.value);
-        if (output.items.len == output_size_limit) {
+        if (output.items.len == max_number_values) {
             break;
         }
     }
@@ -87,7 +87,7 @@ test "gossip.pull: test filter_crds_values" {
 
     var lg = crds_table_rw.write();
     for (0..100) |_| {
-        var crds_value = try crds.CrdsValue.random(rng, kp);
+        var crds_value = try crds.CrdsValue.random(rng, &kp);
         try lg.mut().insert(crds_value, 0);
     }
     lg.unlock();
@@ -114,12 +114,12 @@ test "gossip.pull: test filter_crds_values" {
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
     var crds_value = try CrdsValue.initSigned(crds.CrdsData{
         .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+    }, &kp);
 
     // insert more values which the filters should be missing
     lg = crds_table_rw.write();
     for (0..64) |_| {
-        var v2 = try crds.CrdsValue.random(rng, kp);
+        var v2 = try crds.CrdsValue.random(rng, &kp);
         try lg.mut().insert(v2, 0);
     }
 
@@ -127,8 +127,8 @@ test "gossip.pull: test filter_crds_values" {
         std.testing.allocator,
         lg.get(),
         &filter,
-        100,
         crds_value.wallclock(),
+        100,
     );
     defer values.deinit();
     lg.unlock();

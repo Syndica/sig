@@ -52,7 +52,7 @@ pub fn Rc(comptime T: type) type {
         };
 
         /// Creates a new reference-counted value.
-        pub fn init(alloc: std.mem.Allocator, t: T) std.mem.Allocator.Error!Self {
+        pub fn init(alloc: std.mem.Allocator, t: T) error{OutOfMemory}!Self {
             const inner = try alloc.create(Inner);
             inner.* = Inner{ .strong = 1, .weak = 1, .value = t };
             return Self{ .value = &inner.value, .alloc = alloc };
@@ -60,7 +60,7 @@ pub fn Rc(comptime T: type) type {
 
         /// Constructs a new `Rc` while giving you a `Weak` to the allocation,
         /// to allow you to construct a `T` which holds a weak pointer to itself.
-        pub fn initCyclic(alloc: std.mem.Allocator, comptime data_fn: fn (*Weak) T) std.mem.Allocator.Error!Self {
+        pub fn initCyclic(alloc: std.mem.Allocator, comptime data_fn: fn (*Weak) T) error{OutOfMemory}!Self {
             const inner = try alloc.create(Inner);
             inner.* = Inner{ .strong = 0, .weak = 1, .value = undefined };
 
@@ -293,7 +293,7 @@ pub fn Arc(comptime T: type) type {
         };
 
         /// Creates a new reference-counted value.
-        pub fn init(alloc: std.mem.Allocator, t: T) std.mem.Allocator.Error!Self {
+        pub fn init(alloc: std.mem.Allocator, t: T) error{OutOfMemory}!Self {
             const inner = try alloc.create(Inner);
             inner.* = Inner{ .strong = 1, .weak = 1, .value = t };
             return Self{ .value = &inner.value, .alloc = alloc };
@@ -301,7 +301,7 @@ pub fn Arc(comptime T: type) type {
 
         /// Constructs a new `Arc` while giving you a `weak` to the allocation,
         /// to allow you to construct a `T` which holds a weak pointer to itself.
-        pub fn initCyclic(alloc: std.mem.Allocator, comptime data_fn: fn (*Weak) T) std.mem.Allocator.Error!Self {
+        pub fn initCyclic(alloc: std.mem.Allocator, comptime data_fn: fn (*Weak) T) error{OutOfMemory}!Self {
             const inner = try alloc.create(Inner);
             inner.* = Inner{ .strong = 0, .weak = 1, .value = undefined };
 

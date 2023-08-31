@@ -44,25 +44,28 @@ pub const Pubkey = struct {
         }
         if (opts.skip_encoding) {
             return Self{ .data = bytes[0..32].*, .cached_str = null };
+        } else {
+            var dest = base58_encode(bytes) catch @panic("could not encode pubkey");
+            return Self{ .data = bytes[0..32].*, .cached_str = dest };
         }
-        var dest: [44]u8 = .{
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        };
+    }
 
-        var written = encoder.encode(bytes, &dest) catch @panic("could not encode pubkey");
+    pub fn base58_encode(bytes: []const u8) error{EncodingError}![44]u8 {
+        var dest: [44]u8 = undefined;
+        @memset(&dest, 0);
+        var written = encoder.encode(bytes, &dest) catch return error.EncodingError;
         if (written > 44) {
             std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
         }
-        return Self{ .data = bytes[0..32].*, .cached_str = dest[0..44].* };
+        return dest;
     }
 
-    pub fn string(self: *const Self) []const u8 {
-        if (self.cached_str) |_| {
-            return &self.cached_str.?[0..].*;
+    pub fn string(self: *const Self) [44]u8 {
+        if (self.cached_str) |str| {
+            return str;
+        } else {
+            return base58_encode(&self.data) catch @panic("could not encode pubkey");
         }
-        @panic("call to Pubkey.string() after opt `skip_encoding` asserted");
     }
 
     /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
@@ -94,12 +97,6 @@ pub const Pubkey = struct {
     }
 
     pub const @"!bincode-config:cached_str" = bincode.FieldConfig(?[44]u8){ .skip = true };
-
-    pub const @"getty.sb" = struct {
-        pub const attributes = .{
-            .cached_str = .{ .skip = true },
-        };
-    };
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

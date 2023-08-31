@@ -519,6 +519,7 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
 }
 
 // ** Writer/Reader functions ** //
+/// note: will fail if the slice is too small to hold the serialized data
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
     var writer = stream.writer();
@@ -546,6 +547,11 @@ pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: 
     var s = serializer(writer, params);
     const ss = s.serializer();
     try getty.serialize(alloc, data, ss);
+}
+
+pub fn get_serialized_size_with_slice(slice: []u8, data: anytype, params: Params) !usize {
+    var ser_slice = try writeToSlice(slice, data, params);
+    return ser_slice.len;
 }
 
 pub fn get_serialized_size(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {

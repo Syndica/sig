@@ -33,9 +33,9 @@ pub fn Channel(comptime T: type) type {
             self.allocator.destroy(self);
         }
 
-        pub fn send(self: *Self, value: T) error{ OutOfMemory, Closed }!void {
+        pub fn send(self: *Self, value: T) error{ OutOfMemory, ChannelClosed }!void {
             if (self.closed.load(.Monotonic)) {
-                return error.Closed;
+                return error.ChannelClosed;
             }
             var buffer = self.buffer.lock();
             defer buffer.unlock();
@@ -83,6 +83,26 @@ pub fn Channel(comptime T: type) type {
             buffer.mut().shrinkRetainingCapacity(0);
             assert(buffer.get().items.len == 0);
             assert(num_items_to_drain == out.len);
+
+            return out;
+        }
+
+        pub fn try_drain(self: *Self) error{ ChannelClosed, OutOfMemory }!?[]T {
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
+
+            if (self.closed.load(.SeqCst)) {
+                return error.ChannelClosed;
+            }
+
+            var num_items_to_drain = buffer.get().items.len;
+            if (num_items_to_drain == 0) {
+                return null;
+            }
+
+            var out = try self.allocator.alloc(T, num_items_to_drain);
+            @memcpy(out, buffer.get().items);
+            buffer.mut().clearRetainingCapacity();
 
             return out;
         }

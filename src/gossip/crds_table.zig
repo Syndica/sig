@@ -17,8 +17,6 @@ const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
-const Logger = @import("../trace/log.zig").Logger;
-
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -42,6 +40,24 @@ const PurgedQ = std.TailQueue(HashAndTime);
 pub fn AutoArrayHashSet(comptime T: type) type {
     return AutoArrayHashMap(T, void);
 }
+
+pub const InsertResults = struct {
+    inserted: ?std.ArrayList(usize),
+    timeouts: ?std.ArrayList(usize),
+    failed: ?std.ArrayList(usize),
+
+    pub fn deinit(self: InsertResults) void {
+        if (self.inserted) |inserted| {
+            inserted.deinit();
+        }
+        if (self.timeouts) |timeouts| {
+            timeouts.deinit();
+        }
+        if (self.failed) |failed| {
+            failed.deinit();
+        }
+    }
+};
 
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
@@ -122,7 +138,6 @@ pub const CrdsTable = struct {
             return error.CrdsTableFull;
         }
 
-        // CrdsValue should never be larger than PACKET_DATA_SIZE
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
@@ -239,40 +254,67 @@ pub const CrdsTable = struct {
         allocator: std.mem.Allocator,
         values: []crds.CrdsValue,
         timeout: u64,
-        logger: *Logger,
-    ) std.ArrayList(usize) {
+        comptime record_inserts: bool,
+        comptime record_timeouts: bool,
+    ) error{OutOfMemory}!InsertResults {
         var now = crds.get_wallclock();
 
-        var failed_insert_indexs = std.ArrayList(usize).init(allocator);
+        // TODO: change to record duplicate and old values seperately + handle when
+        // crds table is full
+        var failed_indexs = std.ArrayList(usize).init(allocator);
+        var inserted_indexs = std.ArrayList(usize).init(allocator);
+        var timeout_indexs = std.ArrayList(usize).init(allocator);
+
         for (values, 0..) |value, index| {
             const value_time = value.wallclock();
             const is_too_new = value_time > now +| timeout;
             const is_too_old = value_time < now -| timeout;
             if (is_too_new or is_too_old) {
+                if (record_timeouts) {
+                    try timeout_indexs.append(index);
+                }
                 continue;
             }
 
-            self.insert(value, now) catch |err| {
-                switch (err) {
-                    CrdsError.OldValue => {
-                        logger.debugf("failed to insert into crds: OldValue", .{});
-                    },
-                    CrdsError.DuplicateValue => {
-                        logger.debugf("failed to insert into crds: DuplicateValue", .{});
-                    },
-                    else => {
-                        logger.debugf("failed to insert into crds with unkown error: {any}", .{err});
-                    },
-                }
-                failed_insert_indexs.append(index) catch unreachable;
+            self.insert(value, now) catch {
+                try failed_indexs.append(index);
+                continue;
             };
+
+            if (record_inserts) {
+                try inserted_indexs.append(index);
+            }
         }
 
-        return failed_insert_indexs;
+        return InsertResults{
+            .inserted = if (record_inserts) inserted_indexs else null,
+            .timeouts = if (record_timeouts) timeout_indexs else null,
+            .failed = failed_indexs,
+        };
     }
 
     pub fn len(self: *const Self) usize {
         return self.store.count();
+    }
+
+    pub fn update_record_timestamp(self: *Self, pubkey: Pubkey, now: u64) void {
+        const contact_info_label = CrdsValueLabel{
+            .LegacyContactInfo = pubkey,
+        };
+
+        // It suffices to only overwrite the origin's timestamp since that is
+        // used when purging old values. If the origin does not exist in the
+        // table, fallback to exhaustive update on all associated records.
+        if (self.store.getEntry(contact_info_label)) |entry| {
+            const value = entry.value_ptr;
+            value.timestamp_on_insertion = now;
+        } else if (self.pubkey_to_values.getEntry(pubkey)) |entry| {
+            const pubkey_indexs = entry.value_ptr;
+            for (pubkey_indexs.keys()) |index| {
+                const value = &self.store.values()[index];
+                value.timestamp_on_insertion = now;
+            }
+        }
     }
 
     // ** getter functions **
@@ -282,6 +324,8 @@ pub const CrdsTable = struct {
 
     pub fn generic_get_with_cursor(hashmap: anytype, store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue), buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {
         const cursor_indexs = hashmap.keys();
+        const store_values = store.values();
+
         var index: usize = 0;
         for (cursor_indexs) |cursor_index| {
             if (cursor_index < caller_cursor.*) {
@@ -289,7 +333,7 @@ pub const CrdsTable = struct {
             }
 
             const entry_index = hashmap.get(cursor_index).?;
-            var entry = store.iterator().values[entry_index];
+            var entry = store_values[entry_index];
             buf[index] = entry;
             index += 1;
 
@@ -338,7 +382,7 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) ![]CrdsVersionedValue {
+    pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) []CrdsVersionedValue {
         const store_values = self.store.iterator().values;
         const contact_indexs = self.contact_infos.iterator().keys;
         const size = @min(self.contact_infos.count(), buf.len);
@@ -357,7 +401,7 @@ pub const CrdsTable = struct {
         alloc: std.mem.Allocator,
         mask: u64,
         mask_bits: u64,
-    ) !std.ArrayList(usize) {
+    ) error{OutOfMemory}!std.ArrayList(usize) {
         const indexs = try self.shards.find(alloc, mask, @intCast(mask_bits));
         return indexs;
     }
@@ -468,7 +512,7 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) std.mem.Allocator.Error!void {
+    pub fn attempt_trim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
         const n_pubkeys = self.pubkey_to_values.count();
         // 90% close to capacity
         const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
@@ -501,7 +545,7 @@ pub const CrdsTable = struct {
         self: *Self,
         now: u64,
         timeout: u64,
-    ) std.mem.Allocator.Error!void {
+    ) error{OutOfMemory}!void {
         const old_labels = try self.get_old_labels(now, timeout);
         defer old_labels.deinit();
 
@@ -515,7 +559,7 @@ pub const CrdsTable = struct {
         self: *Self,
         now: u64,
         timeout: u64,
-    ) std.mem.Allocator.Error!std.ArrayList(CrdsValueLabel) {
+    ) error{OutOfMemory}!std.ArrayList(CrdsValueLabel) {
         var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
 
         const cutoff_timestamp = now -| timeout;
@@ -586,7 +630,7 @@ pub const HashTimeQueue = struct {
         }
     }
 
-    pub fn get_values(self: *const Self, alloc: std.mem.Allocator) !std.ArrayList(Hash) {
+    pub fn get_values(self: *const Self, alloc: std.mem.Allocator) error{OutOfMemory}!std.ArrayList(Hash) {
         var hashes = try std.ArrayList(Hash).initCapacity(alloc, self.queue.len);
         var curr_ptr = self.queue.first;
         while (curr_ptr) |curr| : (curr_ptr = curr.next) {
@@ -603,6 +647,7 @@ pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const C
     const new_ts = new_value.value.wallclock();
     const old_ts = old_value.value.wallclock();
 
+    // TODO: improve the return type here
     if (new_ts > old_ts) {
         return true;
     } else if (new_ts < old_ts) {
@@ -622,7 +667,7 @@ test "gossip.crds_table: remove old values" {
     defer crds_table.deinit();
 
     for (0..5) |_| {
-        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), &keypair);
         // TS = 100
         try crds_table.insert(value, 100);
     }
@@ -648,7 +693,7 @@ test "gossip.crds_table: insert and remove value" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    const value = try CrdsValue.initSigned(CrdsData.random_from_index(rng.random(), 0), keypair);
+    const value = try CrdsValue.initSigned(CrdsData.random_from_index(rng.random(), 0), &keypair);
     try crds_table.insert(value, 100);
 
     const label = value.label();
@@ -671,7 +716,7 @@ test "gossip.crds_table: trim pruned values" {
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
-        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), keypair);
+        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), &keypair);
         try crds_table.insert(value, 100);
         try values.append(value);
     }
@@ -703,7 +748,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     var data = CrdsData{
         .LegacyContactInfo = LegacyContactInfo.random(rng),
     };
-    var value = try CrdsValue.initSigned(data, keypair);
+    var value = try CrdsValue.initSigned(data, &keypair);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -718,7 +763,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
-    value = try CrdsValue.initSigned(new_data, keypair);
+    value = try CrdsValue.initSigned(new_data, &keypair);
     try crds_table.insert(value, 120);
 
     try std.testing.expectEqual(crds_table.purged.len(), 1);
@@ -735,7 +780,7 @@ test "gossip.crds_table: insert and get" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    var value = try CrdsValue.random(rng, keypair);
+    var value = try CrdsValue.random(rng, &keypair);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -756,7 +801,7 @@ test "gossip.crds_table: insert and get votes" {
     var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
-    }, kp);
+    }, &kp);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -777,7 +822,7 @@ test "gossip.crds_table: insert and get votes" {
     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
-    }, kp);
+    }, &kp);
     try crds_table.insert(crds_value, 1);
 
     votes = try crds_table.get_votes_with_cursor(&buf, &cursor);
@@ -795,7 +840,7 @@ test "gossip.crds_table: insert and get contact_info" {
     var legacy_contact_info = crds.LegacyContactInfo.default(id);
     var crds_value = try CrdsValue.initSigned(CrdsData{
         .LegacyContactInfo = legacy_contact_info,
-    }, kp);
+    }, &kp);
 
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
@@ -805,7 +850,7 @@ test "gossip.crds_table: insert and get contact_info" {
 
     // test retrieval
     var buf: [100]CrdsVersionedValue = undefined;
-    var nodes = try crds_table.get_contact_infos(&buf);
+    var nodes = crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
@@ -819,7 +864,7 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0);
 
     // check retrieval
-    nodes = try crds_table.get_contact_infos(&buf);
+    nodes = crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == v);
 }

@@ -82,7 +82,7 @@ pub const Bloom = struct {
         return hasher.final();
     }
 
-    pub fn random(alloc: std.mem.Allocator, num_items: usize, false_rate: f64, max_bits: usize) !Self {
+    pub fn random(alloc: std.mem.Allocator, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
         const n_items_f: f64 = @floatFromInt(num_items);
         const m = Bloom.num_bits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
