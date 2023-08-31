@@ -248,11 +248,13 @@ pub const GossipService = struct {
 
                 protocol_message.sanitize() catch |err| {
                     logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
+                    bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
                 protocol_message.verify_signature() catch |err| {
                     logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
+                    bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
@@ -1670,7 +1672,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     // ping
     const ping_msg = ProtocolMessage{
         .message = Protocol{
-            .PingMessage = try Ping.init(.{0} ** 32, kp),
+            .PingMessage = try Ping.init(.{0} ** 32, &kp),
         },
         .from_endpoint = peer,
     };
