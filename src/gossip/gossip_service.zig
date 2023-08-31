@@ -405,7 +405,7 @@ pub const GossipService = struct {
 
                         var prune_log_entry = logger
                             .field("from_endpoint", endpoint_buf.items)
-                            .field("from_pubkey", prune_msg.pubkey.string())
+                            .field("from_pubkey", &prune_msg.pubkey.string())
                             .field("num_prunes", prune_msg.prunes.len);
 
                         handle_prune_message(
