@@ -318,7 +318,7 @@ pub const GossipService = struct {
                             crds_table_rw,
                         ) catch |err| {
                             push_log_entry.field("error", @errorName(err))
-                                .info("received push message");
+                                .err("error handling push message");
                             continue;
                         };
                         defer failed_insert_origins.deinit();
@@ -326,7 +326,8 @@ pub const GossipService = struct {
 
                         if (failed_insert_origins.count() != 0) {
                             var prune_packets = build_prune_message(allocator, crds_table_rw, &failed_insert_origins, push_from, my_keypair) catch |err| {
-                                logger.warnf("error building prune messages: {s}", .{@errorName(err)});
+                                push_log_entry.field("error", @errorName(err))
+                                    .err("error building prune messages");
                                 continue;
                             };
                             defer prune_packets.deinit();
@@ -354,7 +355,9 @@ pub const GossipService = struct {
                             crds_values,
                             pull_log_entry,
                         ) catch |err| {
-                            _ = pull_log_entry.field("error", @errorName(err));
+                            pull_log_entry.field("error", @errorName(err))
+                                .err("error handling pull response");
+                            continue;
                         };
 
                         pull_log_entry.info("received pull response");
@@ -381,7 +384,7 @@ pub const GossipService = struct {
                             pull_log_entry,
                         ) catch |err| {
                             pull_log_entry.field("error", @errorName(err))
-                                .info("received pull request");
+                                .err("error handling pull request");
                             continue;
                         };
                         defer packets.deinit();
@@ -395,13 +398,27 @@ pub const GossipService = struct {
                     },
                     .PruneMessage => |*prune| {
                         const prune_msg: PruneData = prune[1];
+
+                        var endpoint_buf = std.ArrayList(u8).init(allocator);
+                        try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
+                        defer endpoint_buf.deinit();
+
+                        var prune_log_entry = logger
+                            .field("from_endpoint", endpoint_buf.items)
+                            .field("from_pubkey", prune_msg.pubkey.string())
+                            .field("num_prunes", prune_msg.prunes.len);
+
                         handle_prune_message(
                             &prune_msg,
                             active_set_rw,
                             &my_pubkey,
                         ) catch |err| {
-                            logger.warnf("error handling prune message: {s}", .{@errorName(err)});
+                            prune_log_entry.field("error", @errorName(err))
+                                .err("error handling prune message");
+                            continue;
                         };
+
+                        prune_log_entry.info("received prune message");
                     },
                     .PingMessage => |*ping| {
                         var endpoint_buf = std.ArrayList(u8).init(allocator);
@@ -415,7 +432,7 @@ pub const GossipService = struct {
                         const packet = handle_ping_message(ping, my_keypair, from_endpoint) catch |err| {
                             ping_log_entry
                                 .field("error", @errorName(err))
-                                .info("received ping message");
+                                .err("error handling ping message");
                             continue;
                         };
 
