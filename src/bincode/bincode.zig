@@ -170,6 +170,15 @@ pub fn Deserializer(comptime Reader: type) type {
                                 if (config.free) |free_fcn| {
                                     // std.debug.print("found free fcn...\n", .{});
                                     var field_value = @field(value, field.name);
+                                    switch (@typeInfo(field.type)) {
+                                        .Pointer => |*field_info| {
+                                            if (field_info.size == .Slice) {
+                                                free_fcn(allocator, field_value);
+                                                continue;
+                                            }
+                                        },
+                                        else => {},
+                                    }
                                     free_fcn(allocator, &field_value);
                                     continue;
                                 }

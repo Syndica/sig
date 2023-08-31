@@ -223,33 +223,32 @@ pub fn main() !void {
     std.debug.print("SEED: {d}\n", .{seed});
     var rng = std.rand.DefaultPrng.init(seed);
 
-    // // send ping
-    // {
-    //     const ping = try random_ping(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-    //     try gossip_service_fuzzer.responder_channel.send(ping);
-    // }
+    // send ping
+    {
+        const ping = try random_ping(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+        try gossip_service_fuzzer.responder_channel.send(ping);
+    }
 
-    // // send pong message
-    // {
-    //     const pong = try random_pong(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-    //     try gossip_service_fuzzer.responder_channel.send(pong);
-    // }
+    // send pong message
+    {
+        const pong = try random_pong(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+        try gossip_service_fuzzer.responder_channel.send(pong);
+    }
 
-    // for (0..5) |_| {
-    //     // send push message
-    //     {
-    //         var packet = try random_push_message(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-    //         try gossip_service_fuzzer.responder_channel.send(packet);
-    //     }
+    for (0..5) |_| {
+        // send push message
+        {
+            var packet = try random_push_message(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+            try gossip_service_fuzzer.responder_channel.send(packet);
+        }
 
-    //     // send as pull response
-    //     {
-    //         var packet = try random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-    //         try gossip_service_fuzzer.responder_channel.send(packet);
-    //     }
-
-    //     std.time.sleep(std.time.ns_per_s);
-    // }
+        // send as pull response
+        {
+            var packet = try random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+            try gossip_service_fuzzer.responder_channel.send(packet);
+        }
+        std.time.sleep(std.time.ns_per_s);
+    }
 
     // send pull request
     {
