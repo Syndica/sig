@@ -956,7 +956,6 @@ pub const GossipService = struct {
             defer crds_table_lg.unlock();
 
             var crds_table: *CrdsTable = crds_table_lg.mut();
-            std.debug.print("crds table len: {d}\n", .{crds_table.len()});
 
             var result = try crds_table.insert_values(
                 push_values,
