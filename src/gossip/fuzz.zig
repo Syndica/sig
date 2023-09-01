@@ -295,7 +295,7 @@ pub fn main() !void {
     var exit_handle = try std.Thread.spawn(.{}, wait_for_exit, .{&loop_exit});
 
     while (!loop_exit.load(std.atomic.Ordering.Unordered)) {
-        var command = rng.random().intRangeAtMost(u8, 0, 5);
+        var command = rng.random().intRangeAtMost(u8, 0, 4);
         var packet = switch (command) {
             0 => blk: {
                 // send ping message
@@ -313,16 +313,11 @@ pub fn main() !void {
                 break :blk packet;
             },
             3 => blk: {
-                // send push message
-                const packet = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
-                break :blk packet;
-            },
-            4 => blk: {
                 // send pull response
                 const packet = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
                 break :blk packet;
             },
-            5 => blk: {
+            4 => blk: {
                 // send pull request
                 var packet = random_pull_request(
                     allocator,

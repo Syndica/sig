@@ -760,11 +760,14 @@ test "gossip.HashTimeQueue: insert multiple values" {
     try htq.insert(Hash.random(), 103);
 
     try htq.trim(102);
+    try std.testing.expect(htq.len() == 2);
 
     try htq.insert(Hash.random(), 101);
     try htq.insert(Hash.random(), 120);
+    try std.testing.expect(htq.len() == 4);
 
     try htq.trim(150);
+    try std.testing.expect(htq.len() == 0);
 }
 
 test "gossip.HashTimeQueue: trim pruned values" {
