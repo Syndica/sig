@@ -34,56 +34,14 @@ pub const ActiveSet = struct {
     peers: [NUM_ACTIVE_SET_ENTRIES]Pubkey,
     pruned_peers: std.AutoHashMap(Pubkey, Bloom),
     len: u8 = 0,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn rotate(
-        alloc: std.mem.Allocator,
-        crds_table: *RwMux(CrdsTable),
-        my_pubkey: Pubkey,
-        my_shred_version: u16,
-    ) error{OutOfMemory}!Self {
-        const now = get_wallclock();
-        var buf: [NUM_ACTIVE_SET_ENTRIES]crds.LegacyContactInfo = undefined;
-        var crds_peers = GossipService.get_gossip_nodes(
-            crds_table,
-            &my_pubkey,
-            my_shred_version,
-            &buf,
-            NUM_ACTIVE_SET_ENTRIES,
-            now,
-        );
-
-        var peers: [NUM_ACTIVE_SET_ENTRIES]Pubkey = undefined;
-        var pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(alloc);
-
-        if (crds_peers.len == 0) {
-            return Self{ .peers = peers, .len = 0, .pruned_peers = pruned_peers };
-        }
-
-        const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(get_wallclock());
-        pull_request.shuffle_first_n(rng.random(), crds.LegacyContactInfo, crds_peers, size);
-
-        const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
-        for (0..size) |i| {
-            peers[i] = crds_peers[i].id;
-
-            // *full* hard restart on blooms -- labs doesnt do this - bug?
-            var bloom = try Bloom.random(
-                alloc,
-                bloom_num_items,
-                BLOOM_FALSE_RATE,
-                BLOOM_MAX_BITS,
-            );
-            try pruned_peers.put(peers[i], bloom);
-        }
-
-        return Self{
-            .peers = peers,
-            .len = size,
-            .pruned_peers = pruned_peers,
-        };
+    pub fn init(
+        allocator: std.mem.Allocator,
+    ) Self {
+        return Self{ .peers = undefined, .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator), .len = 0, .allocator = allocator };
     }
 
     pub fn deinit(self: *Self) void {
@@ -92,6 +50,42 @@ pub const ActiveSet = struct {
             entry.value_ptr.deinit();
         }
         self.pruned_peers.deinit();
+        self.len = 0;
+    }
+
+    pub fn rotate(
+        self: *Self,
+        crds_peers: []crds.LegacyContactInfo,
+    ) error{OutOfMemory}!void {
+        // clear the existing
+        for (self.peers[0..self.len]) |peer| {
+            var entry = self.pruned_peers.getEntry(peer).?;
+            entry.value_ptr.deinit();
+        }
+        self.len = 0;
+        self.pruned_peers.clearRetainingCapacity();
+
+        if (crds_peers.len == 0) {
+            return;
+        }
+        const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
+        var rng = std.rand.DefaultPrng.init(get_wallclock());
+        pull_request.shuffle_first_n(rng.random(), crds.LegacyContactInfo, crds_peers, size);
+
+        const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
+        for (0..size) |i| {
+            self.peers[i] = crds_peers[i].id;
+
+            // *full* hard restart on blooms -- labs doesnt do this - bug?
+            var bloom = try Bloom.random(
+                self.allocator,
+                bloom_num_items,
+                BLOOM_FALSE_RATE,
+                BLOOM_MAX_BITS,
+            );
+            try self.pruned_peers.put(self.peers[i], bloom);
+        }
+        self.len = size;
     }
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
@@ -116,6 +110,7 @@ pub const ActiveSet = struct {
 
         // change to while loop
         for (self.peers[0..self.len]) |peer_pubkey| {
+            // lookup peer contact info
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
             }) orelse @panic("crds lookup error: peer contactInfo not found");
@@ -135,6 +130,7 @@ pub const ActiveSet = struct {
                 break;
             }
         }
+
         return active_set_endpoints;
     }
 };
@@ -147,22 +143,23 @@ test "gossip.active_set: init/deinit" {
 
     // insert some contacts
     var rng = std.rand.DefaultPrng.init(100);
+    var gossip_peers = try std.ArrayList(crds.LegacyContactInfo).initCapacity(alloc, 10);
+    defer gossip_peers.deinit();
+
     for (0..CRDS_GOSSIP_PUSH_FANOUT) |_| {
+        var data = crds.LegacyContactInfo.random(rng.random());
+        try gossip_peers.append(data);
+
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0);
+        var value = try CrdsValue.initSigned(crds.CrdsData{
+            .LegacyContactInfo = data,
+        }, &keypair);
         try crds_table.insert(value, get_wallclock());
     }
 
-    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
-    var kp = try KeyPair.create(null);
-    var pk = Pubkey.fromPublicKey(&kp.public_key, true);
-    var active_set = try ActiveSet.rotate(
-        alloc,
-        &crds_table_rw,
-        pk,
-        0,
-    );
+    var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
+    try active_set.rotate(gossip_peers.items);
 
     try std.testing.expect(active_set.len == CRDS_GOSSIP_PUSH_FANOUT);
 

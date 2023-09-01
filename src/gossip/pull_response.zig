@@ -81,7 +81,7 @@ test "gossip.pull: test filter_crds_values" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var seed: u64 = 18;
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 

@@ -86,7 +86,6 @@ fn gossip(_: []const []const u8) !void {
         gpa_allocator,
         contact_info,
         my_keypair,
-        gossip_address,
         &exit,
     );
     defer gossip_service.deinit();
