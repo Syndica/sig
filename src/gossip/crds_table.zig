@@ -380,7 +380,7 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn get_all_contact_infos(self: *const Self) error { OutOfMemory }!std.ArrayList(LegacyContactInfo) { 
+    pub fn get_all_contact_infos(self: *const Self) error{OutOfMemory}!std.ArrayList(LegacyContactInfo) {
         const n_contact_infos = self.contact_infos.count();
         var contact_infos = try std.ArrayList(LegacyContactInfo).initCapacity(self.allocator, n_contact_infos);
         var contact_indexs = self.contact_infos.keys();

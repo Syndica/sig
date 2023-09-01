@@ -687,8 +687,8 @@ pub const GossipService = struct {
         // randomly include an entrypoint in the pull if we dont have their contact info
         var rng = std.rand.DefaultPrng.init(now);
         var entrypoint_index: i16 = -1;
-        if (self.entrypoints.items.len != 0) blk: { 
-            var crds_table_lg = self.crds_table_rw.read(); 
+        if (self.entrypoints.items.len != 0) blk: {
+            var crds_table_lg = self.crds_table_rw.read();
             defer crds_table_lg.unlock();
 
             var maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
@@ -699,7 +699,7 @@ pub const GossipService = struct {
             defer contact_infos.deinit();
 
             for (contact_infos.items) |contact_info| {
-                if (contact_info.gossip.eql(&entrypoint)) { 
+                if (contact_info.gossip.eql(&entrypoint)) {
                     // early exit - we already have the peers in our contact info
                     break :blk;
                 }
@@ -723,7 +723,7 @@ pub const GossipService = struct {
             .LegacyContactInfo = self.my_contact_info,
         }, &self.my_keypair);
 
-        if (num_peers != 0) { 
+        if (num_peers != 0) {
             for (filters.items) |filter_i| {
                 // TODO: incorperate stake weight in random sampling
                 const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
@@ -738,7 +738,7 @@ pub const GossipService = struct {
             }
         }
 
-        // append entrypoint msgs 
+        // append entrypoint msgs
         if (should_send_to_entrypoint) {
             const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
@@ -1112,7 +1112,7 @@ pub const GossipService = struct {
     ) []crds.LegacyContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
-        // * 2 bc we might filter out some 
+        // * 2 bc we might filter out some
         var buf: [MAX_SIZE * 2]crds.CrdsVersionedValue = undefined;
         const contact_infos = blk: {
             var crds_table_lg = self.crds_table_rw.read();
