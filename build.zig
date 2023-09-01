@@ -140,7 +140,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     // gossip fuzz testing
-    // find ./zig-cache/o/* | grep fuzz 
+    // find ./zig-cache/o/* | grep fuzz
     // lldb $(above path)
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
