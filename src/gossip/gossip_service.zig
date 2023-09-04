@@ -50,6 +50,8 @@ const Channel = @import("../sync/channel.zig").Channel;
 const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
+const Mutable = @import("../sync/mux.zig").Mutable;
+const PingCache = @import("./ping_pong.zig").PingCache;
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -63,6 +65,9 @@ const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH
 const PUSH_MESSAGE_MAX_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
 const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
+const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
+const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
+const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
 
 /// Maximum number of origin nodes that a PruneData may contain, such that the
 /// serialized size of the PruneMessage stays below PACKET_DATA_SIZE.
@@ -91,6 +96,8 @@ pub const GossipService = struct {
     push_msg_queue_mux: Mux(std.ArrayList(CrdsValue)),
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
+
+    ping_cache: RwMux(PingCache),
 
     const Self = @This();
 
@@ -143,6 +150,15 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
+            .failed_pull_hashes = HashTimeQueue.init(),
+            .ping_cache = RwMux(PingCache).init(
+                try PingCache.init(
+                    allocator,
+                    GOSSIP_PING_CACHE_TTL_NS,
+                    GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS,
+                    GOSSIP_PING_CACHE_CAPACITY,
+                ),
+            ),
         };
     }
 
@@ -167,6 +183,10 @@ pub const GossipService = struct {
         deinit_rw_mux(&self.crds_table_rw);
         deinit_rw_mux(&self.active_set_rw);
         deinit_mux(&self.push_msg_queue_mux);
+
+        var pc_lock = self.ping_cache.write();
+        defer pc_lock.unlock();
+        pc_lock.mut().deinit();
     }
 
     /// spawns required threads for the gossip serivce.
