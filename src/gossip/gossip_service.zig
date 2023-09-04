@@ -150,7 +150,6 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
-            .failed_pull_hashes = HashTimeQueue.init(),
             .ping_cache = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
