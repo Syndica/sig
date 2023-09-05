@@ -10,7 +10,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
+const get_wallclock = @import("../gossip/crds.zig").get_wallclock_ms;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -125,7 +125,7 @@ pub const ActiveSet = struct {
                 continue;
             }
 
-            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
+            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.to_endpoint());
             if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
                 break;
             }

@@ -24,7 +24,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
+const get_wallclock = @import("../gossip/crds.zig").get_wallclock_ms;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -86,9 +86,9 @@ pub const GossipService = struct {
     exit: *AtomicBool,
 
     // communication between threads
-    packet_channel: *PacketChannel,
-    responder_channel: *PacketChannel,
-    verified_channel: *ProtocolChannel,
+    packet_incoming_channel: *PacketChannel,
+    packet_outgoing_channel: *PacketChannel,
+    verified_incoming_channel: *ProtocolChannel,
 
     crds_table_rw: RwMux(CrdsTable),
     // push message things
@@ -107,13 +107,14 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         exit: *AtomicBool,
     ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
-        var packet_channel = PacketChannel.init(allocator, 10000);
-        var verified_channel = ProtocolChannel.init(allocator, 10000);
-        var responder_channel = PacketChannel.init(allocator, 10000);
+        var packet_incoming_channel = PacketChannel.init(allocator, 10000);
+        var packet_outgoing_channel = PacketChannel.init(allocator, 10000);
+        var verified_incoming_channel = ProtocolChannel.init(allocator, 10000);
+
         errdefer {
-            packet_channel.deinit();
-            verified_channel.deinit();
-            responder_channel.deinit();
+            packet_incoming_channel.deinit();
+            packet_outgoing_channel.deinit();
+            verified_incoming_channel.deinit();
         }
 
         var crds_table = try CrdsTable.init(allocator);
@@ -129,7 +130,7 @@ pub const GossipService = struct {
             return error.SocketBindFailed;
         }
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
-        gossip_socket.bind(gossip_address.toEndpoint()) catch return error.SocketBindFailed;
+        gossip_socket.bind(gossip_address.to_endpoint()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
 
         var failed_pull_hashes = HashTimeQueue.init();
@@ -142,9 +143,9 @@ pub const GossipService = struct {
             .my_shred_version = my_shred_version,
             .gossip_socket = gossip_socket,
             .exit = exit,
-            .packet_channel = packet_channel,
-            .responder_channel = responder_channel,
-            .verified_channel = verified_channel,
+            .packet_incoming_channel = packet_incoming_channel,
+            .packet_outgoing_channel = packet_outgoing_channel,
+            .verified_incoming_channel = verified_incoming_channel,
             .crds_table_rw = crds_table_rw,
             .allocator = allocator,
             .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
@@ -175,9 +176,9 @@ pub const GossipService = struct {
 
     pub fn deinit(self: *Self) void {
         // TODO: join and exit threads
-        self.packet_channel.deinit();
-        self.responder_channel.deinit();
-        self.verified_channel.deinit();
+        self.packet_incoming_channel.deinit();
+        self.packet_outgoing_channel.deinit();
+        self.verified_incoming_channel.deinit();
 
         deinit_rw_mux(&self.crds_table_rw);
         deinit_rw_mux(&self.active_set_rw);
@@ -198,7 +199,7 @@ pub const GossipService = struct {
     pub fn run(self: *Self, logger: *Logger) !void {
         var receiver_handle = try Thread.spawn(.{}, socket_utils.read_socket, .{
             &self.gossip_socket,
-            self.packet_channel,
+            self.packet_incoming_channel,
             self.exit,
         });
         defer receiver_handle.join();
@@ -222,7 +223,7 @@ pub const GossipService = struct {
         // outputer thread
         var responder_handle = try Thread.spawn(.{}, socket_utils.send_socket, .{
             &self.gossip_socket,
-            self.responder_channel,
+            self.packet_outgoing_channel,
             self.exit,
         });
         defer responder_handle.join();
@@ -235,7 +236,7 @@ pub const GossipService = struct {
         var failed_protocol_msgs: usize = 0;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
-            const maybe_packets = try self.packet_channel.try_drain();
+            const maybe_packets = try self.packet_incoming_channel.try_drain();
             if (maybe_packets == null) {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
@@ -243,7 +244,7 @@ pub const GossipService = struct {
             }
 
             const packets = maybe_packets.?;
-            defer self.packet_channel.allocator.free(packets);
+            defer self.packet_incoming_channel.allocator.free(packets);
 
             for (packets) |packet| {
                 var protocol_message = bincode.readFromSlice(
@@ -270,7 +271,7 @@ pub const GossipService = struct {
 
                 // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
                 const msg = ProtocolMessage{ .from_endpoint = packet.addr, .message = protocol_message };
-                try self.verified_channel.send(msg);
+                try self.verified_incoming_channel.send(msg);
             }
         }
 
@@ -280,7 +281,7 @@ pub const GossipService = struct {
     /// main logic for recieving and processing `Protocol` messages.
     pub fn process_messages(self: *Self, logger: *Logger) !void {
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
-            const maybe_protocol_messages = try self.verified_channel.try_drain();
+            const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
             if (maybe_protocol_messages == null) {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
@@ -288,7 +289,7 @@ pub const GossipService = struct {
             }
 
             const protocol_messages = maybe_protocol_messages.?;
-            defer self.verified_channel.allocator.free(protocol_messages);
+            defer self.verified_incoming_channel.allocator.free(protocol_messages);
 
             for (protocol_messages) |protocol_message| {
                 var message: Protocol = protocol_message.message;
@@ -323,7 +324,7 @@ pub const GossipService = struct {
 
                             _ = push_log_entry.field("num_prune_msgs", prune_packets.items.len);
                             for (prune_packets.items) |packet| {
-                                try self.responder_channel.send(packet);
+                                try self.packet_outgoing_channel.send(packet);
                             }
                         }
 
@@ -360,7 +361,7 @@ pub const GossipService = struct {
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &pull_value.id().string());
 
-                        var packets = self.handle_pull_request(
+                        var maybe_packets = self.handle_pull_request(
                             pull_value,
                             pull_filter,
                             from_endpoint,
@@ -370,13 +371,20 @@ pub const GossipService = struct {
                                 .err("error handling pull request");
                             continue;
                         };
+                        if (maybe_packets == null) {
+                            pull_log_entry.field("num_packets_resp", 0)
+                                .info("received pull request");
+                            continue;
+                        }
+
+                        var packets = maybe_packets.?;
                         defer packets.deinit();
 
                         pull_log_entry.field("num_packets_resp", packets.items.len)
                             .info("received pull request");
 
                         for (packets.items) |packet| {
-                            try self.responder_channel.send(packet);
+                            try self.packet_outgoing_channel.send(packet);
                         }
                     },
                     .PruneMessage => |*prune| {
@@ -417,7 +425,7 @@ pub const GossipService = struct {
                             continue;
                         };
 
-                        try self.responder_channel.send(packet);
+                        try self.packet_outgoing_channel.send(packet);
                         ping_log_entry.info("received ping message");
                     },
                     .PongMessage => |*pong| {
@@ -476,7 +484,7 @@ pub const GossipService = struct {
 
                 // send packets
                 for (pull_packets.items) |packet| {
-                    try self.responder_channel.send(packet);
+                    try self.packet_outgoing_channel.send(packet);
                 }
             }
             // every other loop
@@ -491,7 +499,7 @@ pub const GossipService = struct {
             if (maybe_push_packets) |push_packets| {
                 defer push_packets.deinit();
                 for (push_packets.items) |packet| {
-                    try self.responder_channel.send(packet);
+                    try self.packet_outgoing_channel.send(packet);
                 }
             }
 
@@ -532,16 +540,33 @@ pub const GossipService = struct {
 
     pub fn rotate_active_set(
         self: *Self,
-    ) error{OutOfMemory}!void {
+    ) error{ OutOfMemory, SerializationError, ChannelClosed }!void {
         const now = get_wallclock();
         var buf: [NUM_ACTIVE_SET_ENTRIES]crds.LegacyContactInfo = undefined;
         var gossip_peers = self.get_gossip_nodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
+
+        // filter out valid peers and send ping messages to peers
+        var ping_cache_lock = self.ping_cache.write();
+        var ping_cache: *PingCache = ping_cache_lock.mut();
+        var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, gossip_peers);
+        var valid_gossip_peers = result.valid_peers;
+        var pings_to_send_out = result.pings;
+
+        for (pings_to_send_out.items) |ping_and_socket_addr| {
+            var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
+            var ping = ping_and_socket_addr.ping;
+            var socket_addr = ping_and_socket_addr.socket;
+            var serialized_ping = bincode.writeToSlice(&ping_buff, ping, .{}) catch return error.SerializationError;
+            var packet = Packet.init(socket_addr.to_endpoint(), ping_buff, serialized_ping.len);
+            try self.packet_outgoing_channel.send(packet);
+        }
+        ping_cache_lock.unlock();
 
         // reset push active set
         var active_set_lg = self.active_set_rw.write();
         defer active_set_lg.unlock();
         var active_set: *ActiveSet = active_set_lg.mut();
-        try active_set.rotate(gossip_peers);
+        try active_set.rotate(valid_gossip_peers.items);
     }
 
     /// logic for building new push messages which are sent to peers from the
@@ -688,7 +713,24 @@ pub const GossipService = struct {
             now,
         );
 
-        const num_peers = peers.len;
+        // TODO: filter out nodes along with generate pings (possibly)
+        // filter out valid peers and send ping messages to peers
+        var ping_cache_lock = self.ping_cache.write();
+        var ping_cache: *PingCache = ping_cache_lock.mut();
+        var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, peers);
+        var valid_gossip_peers = result.valid_peers;
+
+        for (result.pings.items) |ping_and_socket_addr| {
+            var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
+            var ping = ping_and_socket_addr.ping;
+            var socket_addr = ping_and_socket_addr.socket;
+            var serialized_ping = try bincode.writeToSlice(&ping_buff, ping, .{});
+            var packet = Packet.init(socket_addr.to_endpoint(), ping_buff, serialized_ping.len);
+            try self.packet_outgoing_channel.send(packet);
+        }
+        ping_cache_lock.unlock();
+
+        const num_peers = valid_gossip_peers.items.len;
         if (num_peers == 0) {
             return error.NoPeers;
         }
@@ -707,8 +749,8 @@ pub const GossipService = struct {
         for (filters.items) |filter_i| {
             // TODO: incorperate stake weight in random sampling
             const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
-            const peer_contact_info = peers[peer_index];
-            const peer_addr = peer_contact_info.gossip.toEndpoint();
+            const peer_contact_info = valid_gossip_peers.items[peer_index];
+            const peer_addr = peer_contact_info.gossip.to_endpoint();
 
             const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
@@ -733,7 +775,7 @@ pub const GossipService = struct {
         pull_from_endpoint: EndPoint,
         // logging
         maybe_log_entry: ?*Entry,
-    ) error{ SerializationError, OutOfMemory }!std.ArrayList(Packet) {
+    ) error{ SerializationError, OutOfMemory, ChannelClosed }!?std.ArrayList(Packet) {
         const now = get_wallclock();
 
         {
@@ -745,7 +787,27 @@ pub const GossipService = struct {
             crds_table.update_record_timestamp(pull_value.id(), now);
         }
 
-        // TODO: filter out requests which hasnt responded to a ping request
+        // filter out valid peers and send ping messages to peers
+        var ping_cache_lock = self.ping_cache.write();
+        var ping_cache: *PingCache = ping_cache_lock.mut();
+        var now_instant = std.time.Instant.now() catch @panic("time is not supported on this OS!");
+        var puller_socket_addr = SocketAddr.from_endpoint(pull_from_endpoint);
+        var result = ping_cache.check(
+            now_instant,
+            .{ pull_value.id(), puller_socket_addr },
+            self.my_keypair,
+        );
+        ping_cache_lock.unlock();
+
+        if (!result.check) {
+            if (result.maybe_ping) |ping| {
+                var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
+                var serialized_ping = bincode.writeToSlice(&ping_buff, ping, .{}) catch return error.SerializationError;
+                var packet = Packet.init(pull_from_endpoint, ping_buff, serialized_ping.len);
+                try self.packet_outgoing_channel.send(packet);
+            }
+            return null;
+        }
 
         const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 100; // TODO: tune
         var crds_table_lg = self.crds_table_rw.read();
@@ -915,7 +977,7 @@ pub const GossipService = struct {
         };
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
         crds.sanitize_socket(&from_gossip_addr) catch return error.InvalidGossipAddress;
-        const from_gossip_endpoint = from_gossip_addr.toEndpoint();
+        const from_gossip_endpoint = from_gossip_addr.to_endpoint();
 
         const failed_origin_len = failed_origins.keys().len;
         var n_packets = failed_origins.keys().len / MAX_PRUNE_DATA_NODES;
@@ -1360,12 +1422,12 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var packets = try gossip_service.handle_pull_request(
         crds_value,
         filter,
-        addr.toEndpoint(),
+        addr.to_endpoint(),
         null,
     );
-    defer packets.deinit();
+    defer packets.?.deinit();
 
-    try std.testing.expect(packets.items.len > 0);
+    try std.testing.expect(packets.?.items.len > 0);
 }
 
 test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
@@ -1551,8 +1613,8 @@ test "gossip.gossip_service: test packet verification" {
     var gossip_service = try GossipService.init(allocator, contact_info, keypair, &exit);
     defer gossip_service.deinit();
 
-    var packet_channel = gossip_service.packet_channel;
-    var verified_channel = gossip_service.verified_channel;
+    var packet_channel = gossip_service.packet_incoming_channel;
+    var verified_channel = gossip_service.verified_incoming_channel;
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1574,7 +1636,7 @@ test "gossip.gossip_service: test packet verification" {
     };
 
     var peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
-    var from = peer.toEndpoint();
+    var from = peer.to_endpoint();
 
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
@@ -1654,8 +1716,8 @@ test "gossip.gossip_service: process contact_info push packet" {
     );
     defer gossip_service.deinit();
 
-    var verified_channel = gossip_service.verified_channel;
-    var responder_channel = gossip_service.responder_channel;
+    var verified_channel = gossip_service.verified_incoming_channel;
+    var responder_channel = gossip_service.packet_outgoing_channel;
 
     var logger = Logger.init(allocator, .debug);
     defer logger.deinit();
@@ -1688,7 +1750,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     };
 
     // packet
-    const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
+    const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).to_endpoint();
     const protocol_msg = ProtocolMessage{
         .from_endpoint = peer,
         .message = msg,

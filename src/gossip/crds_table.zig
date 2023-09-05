@@ -256,7 +256,7 @@ pub const CrdsTable = struct {
         comptime record_inserts: bool,
         comptime record_timeouts: bool,
     ) error{OutOfMemory}!InsertResults {
-        var now = crds.get_wallclock();
+        var now = crds.get_wallclock_ms();
 
         // TODO: change to record duplicate and old values seperately + handle when
         // crds table is full
@@ -407,7 +407,7 @@ pub const CrdsTable = struct {
 
     // ** triming values in the crdstable **
     pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound}!void {
-        const now = crds.get_wallclock();
+        const now = crds.get_wallclock_ms();
 
         const maybe_entry = self.store.getEntry(label);
         if (maybe_entry == null) return error.LabelNotFound;

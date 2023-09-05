@@ -15,8 +15,13 @@ const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
 /// returns current timestamp in milliseconds
-pub fn get_wallclock() u64 {
+pub fn get_wallclock_ms() u64 {
     return @intCast(std.time.milliTimestamp());
+}
+
+fn camelCase() void {
+    var some_var = 3;
+    _ = some_var;
 }
 
 pub const MAX_EPOCH_SLOTS: u8 = 255;
@@ -234,7 +239,7 @@ pub const LegacyContactInfo = struct {
 
     pub fn default(id: Pubkey) LegacyContactInfo {
         const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
-        const wallclock = get_wallclock();
+        const wallclock = get_wallclock_ms();
 
         return LegacyContactInfo{
             .id = id,
@@ -266,7 +271,7 @@ pub const LegacyContactInfo = struct {
             .rpc = SocketAddr.random(rng),
             .rpc_pubsub = SocketAddr.random(rng),
             .serve_repair = SocketAddr.random(rng),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .shred_version = rng.int(u16),
         };
     }
@@ -424,7 +429,7 @@ pub const Vote = struct {
         return Vote{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .transaction = Transaction.default(),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .slot = Slot.init(rng.int(u64)),
         };
     }
@@ -500,7 +505,7 @@ pub const EpochSlots = struct {
         return EpochSlots{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .slots = &slice,
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
         };
     }
 
@@ -596,7 +601,7 @@ pub const Version = struct {
     pub fn default(from: Pubkey) Self {
         return Self{
             .from = from,
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .version = LegacyVersion2.CURRENT,
         };
     }
@@ -672,7 +677,7 @@ pub const DuplicateShred = struct {
         var slice = [_]u8{0} ** 32;
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .slot = Slot.init(rng.int(u64)),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,

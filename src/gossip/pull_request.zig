@@ -152,7 +152,7 @@ pub const CrdsFilterSet = struct {
         if (!can_consume_all) {
 
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(crds.get_wallclock());
+            var rng = std.rand.DefaultPrng.init(crds.get_wallclock_ms());
             shuffle_first_n(rng.random(), usize, indexs.items, output_size);
 
             // release others

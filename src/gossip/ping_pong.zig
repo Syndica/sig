@@ -28,6 +28,8 @@ const PING_PONG_HASH_PREFIX: [16]u8 = .{
     'S', 'O', 'L', 'A', 'N', 'A', '_', 'P', 'I', 'N', 'G', '_', 'P', 'O', 'N', 'G',
 };
 
+const U256 = struct { inner: struct { u128, u128 } };
+
 pub const Ping = struct {
     from: Pubkey,
     token: [PING_TOKEN_SIZE]u8,
@@ -159,7 +161,7 @@ pub const PingCache = struct {
         self: *Self,
         now: std.time.Instant,
         node: PubkeyAndSocketAddr,
-        pingGenerator: anytype,
+        keypair: KeyPair,
     ) ?Ping {
         if (self.pings.peek(node)) |earlier| {
             // to prevent integer overflow
@@ -170,7 +172,7 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var ping = pingGenerator.ping() orelse return null;
+        var ping = Ping.random(keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, node);
@@ -182,8 +184,8 @@ pub const PingCache = struct {
         self: *Self,
         now: std.time.Instant,
         node: PubkeyAndSocketAddr,
-        pingGenerator: anytype,
-    ) struct { bool, ?Ping } {
+        keypair: KeyPair,
+    ) struct { check: bool, maybe_ping: ?Ping } {
         if (self.pongs.get(node)) |last_pong_time| {
             // to prevent integer overflow
             assert(now.order(last_pong_time) != .lt);
@@ -196,56 +198,40 @@ pub const PingCache = struct {
             }
 
             // if age is greater than time-to-live divided by 8, we maybe ping again
-            return .{ true, if (age > self.ttl_ns / 8) self.maybe_ping(now, node, pingGenerator) else null };
+            return .{ .check = true, .maybe_ping = if (age > self.ttl_ns / 8) self.maybe_ping(now, node, keypair) else null };
         }
-        return .{ false, self.maybe_ping(now, node, pingGenerator) };
+        return .{ .check = false, .maybe_ping = self.maybe_ping(now, node, keypair) };
     }
 
-    /// Filters valid nodes according to `PingCache` state and returns them along with any possible pings that need to be sent out.
+    /// Filters valid peers according to `PingCache` state and returns them along with any possible pings that need to be sent out.
     ///
     /// *Note*: caller is responsible for deinit `ArrayList`(s) returned!
-    pub fn filter_valid_nodes(self: *Self, allocator: std.mem.Allocator, our_keypair: KeyPair, nodes: []ContactInfo) !struct { std.ArrayList(ContactInfo), std.ArrayList(Ping) } {
-        var now = try std.time.Instant.now();
-        var filtered_nodes = std.ArrayList(ContactInfo).init(allocator);
-        var pings = std.ArrayList(Ping).init(allocator);
-        const generator = Generator{ .keypair = our_keypair };
+    pub fn filter_valid_peers(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        our_keypair: KeyPair,
+        peers: []LegacyContactInfo,
+    ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(LegacyContactInfo), pings: std.ArrayList(PingAndSocketAddr) } {
+        var now = std.time.Instant.now() catch @panic("time not supported by OS!");
+        var filtered_nodes = std.ArrayList(LegacyContactInfo).init(allocator);
+        var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
-        for (nodes) |node| {
-            if (node.getSocket(SOCKET_TAG_GOSSIP)) |node_gossip_socket_addr| {
-                var result = self.check(now, PubkeyAndSocketAddr{ node.pubkey, node_gossip_socket_addr }, generator);
-                var valid = result[0];
-                var possible_ping = result[1];
-                if (valid) {
-                    try filtered_nodes.append(node);
+        for (peers) |peer| {
+            if (!peer.gossip.is_unspecified()) {
+                var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, our_keypair);
+                if (result.check) {
+                    try filtered_nodes.append(peer);
                 }
-                if (possible_ping) |ping| {
-                    try pings.append(ping);
+                if (result.maybe_ping) |ping| {
+                    try pings.append(.{ .ping = ping, .socket = peer.gossip });
                 }
             }
         }
 
-        return .{ filtered_nodes, pings };
+        return .{ .valid_peers = filtered_nodes, .pings = pings };
     }
 };
-
-const Generator = struct {
-    keypair: KeyPair,
-
-    const Self = @This();
-
-    pub fn ping(self: *const Self) ?Ping {
-        // TODO: Think about handling error properly
-        return Ping.random(self.keypair) catch @panic("could not generate random Ping in Generator!");
-    }
-};
-
-const GenerateRandom = struct {
-    const Self = @This();
-    fn ping() ?Ping {
-        var kp = KeyPair.create(null) catch @panic("could not generate keypair");
-        return Ping.random(kp) catch @panic("could not generate random Ping");
-    }
-};
+pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
 
 test "gossip.ping_pong: PingCache works" {
     // used to generate a random ping for tests
@@ -259,19 +245,19 @@ test "gossip.ping_pong: PingCache works" {
 
     var node = PubkeyAndSocketAddr{ Pubkey.random(rng, .{}), SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
+    var our_kp = try KeyPair.create(null);
+
     var ping = ping_cache.maybe_ping(
         now1,
         node,
-        GenerateRandom,
+        our_kp,
     );
 
     var now2 = try std.time.Instant.now();
-    var resp = ping_cache.check(now2, node, GenerateRandom);
+    var resp = ping_cache.check(now2, node, our_kp);
     _ = resp;
 
-    var our_kp = try KeyPair.create(null);
-
-    _ = try ping_cache.filter_valid_nodes(testing.allocator, our_kp, &[_]ContactInfo{});
+    _ = try ping_cache.filter_valid_peers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
 
     try testing.expect(ping != null);
 }

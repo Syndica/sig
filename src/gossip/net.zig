@@ -100,7 +100,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn toEndpoint(self: *const Self) network.EndPoint {
+    pub fn to_endpoint(self: *const Self) network.EndPoint {
         switch (self.*) {
             .V4 => |addr| {
                 return network.EndPoint{
@@ -112,6 +112,29 @@ pub const SocketAddr = union(enum(u8)) {
                 return network.EndPoint{
                     .address = .{ .ipv6 = network.Address.IPv6{ .value = addr.ip.octets, .scope_id = addr.scope_id } },
                     .port = self.port(),
+                };
+            },
+        }
+    }
+
+    pub fn from_endpoint(endpoint: network.EndPoint) Self {
+        switch (endpoint.address) {
+            .ipv4 => |v4| {
+                return Self{
+                    .V4 = SocketAddrV4{
+                        .ip = Ipv4Addr.init(v4.value[0], v4.value[1], v4.value[2], v4.value[3]),
+                        .port = endpoint.port,
+                    },
+                };
+            },
+            .ipv6 => |v6| {
+                return Self{
+                    .V6 = SocketAddrV6{
+                        .ip = Ipv6Addr.init(v6.value),
+                        .port = endpoint.port,
+                        .flowinfo = 0,
+                        .scope_id = v6.scope_id,
+                    },
                 };
             },
         }
