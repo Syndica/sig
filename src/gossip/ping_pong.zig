@@ -8,6 +8,8 @@ const CrdsData = crds.CrdsData;
 const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
 const LegacyContactInfo = crds.LegacyContactInfo;
+const ContactInfo = @import("node.zig").ContactInfo;
+const SOCKET_TAG_GOSSIP = @import("node.zig").SOCKET_TAG_GOSSIP;
 
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
@@ -157,7 +159,7 @@ pub const PingCache = struct {
         self: *Self,
         now: std.time.Instant,
         node: PubkeyAndSocketAddr,
-        comptime pingGeneratorFn: fn () ?Ping,
+        pingGenerator: anytype,
     ) ?Ping {
         if (self.pings.peek(node)) |earlier| {
             // to prevent integer overflow
@@ -168,7 +170,7 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var ping = pingGeneratorFn() orelse return null;
+        var ping = pingGenerator.ping() orelse return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, node);
@@ -180,7 +182,7 @@ pub const PingCache = struct {
         self: *Self,
         now: std.time.Instant,
         node: PubkeyAndSocketAddr,
-        comptime pingGeneratorFn: fn () ?Ping,
+        pingGenerator: anytype,
     ) struct { bool, ?Ping } {
         if (self.pongs.get(node)) |last_pong_time| {
             // to prevent integer overflow
@@ -194,20 +196,59 @@ pub const PingCache = struct {
             }
 
             // if age is greater than time-to-live divided by 8, we maybe ping again
-            return .{ true, if (age > self.ttl_ns / 8) self.maybe_ping(now, node, pingGeneratorFn) else null };
+            return .{ true, if (age > self.ttl_ns / 8) self.maybe_ping(now, node, pingGenerator) else null };
         }
-        return .{ false, self.maybe_ping(now, node, pingGeneratorFn) };
+        return .{ false, self.maybe_ping(now, node, pingGenerator) };
+    }
+
+    /// Filters valid nodes according to `PingCache` state and returns them along with any possible pings that need to be sent out.
+    ///
+    /// *Note*: caller is responsible for deinit `ArrayList`(s) returned!
+    pub fn filter_valid_nodes(self: *Self, allocator: std.mem.Allocator, our_keypair: KeyPair, nodes: []ContactInfo) !struct { std.ArrayList(ContactInfo), std.ArrayList(Ping) } {
+        var now = try std.time.Instant.now();
+        var filtered_nodes = std.ArrayList(ContactInfo).init(allocator);
+        var pings = std.ArrayList(Ping).init(allocator);
+        const generator = Generator{ .keypair = our_keypair };
+
+        for (nodes) |node| {
+            if (node.getSocket(SOCKET_TAG_GOSSIP)) |node_gossip_socket_addr| {
+                var result = self.check(now, PubkeyAndSocketAddr{ node.pubkey, node_gossip_socket_addr }, generator);
+                var valid = result[0];
+                var possible_ping = result[1];
+                if (valid) {
+                    try filtered_nodes.append(node);
+                }
+                if (possible_ping) |ping| {
+                    try pings.append(ping);
+                }
+            }
+        }
+
+        return .{ filtered_nodes, pings };
+    }
+};
+
+const Generator = struct {
+    keypair: KeyPair,
+
+    const Self = @This();
+
+    pub fn ping(self: *const Self) ?Ping {
+        // TODO: Think about handling error properly
+        return Ping.random(self.keypair) catch @panic("could not generate random Ping in Generator!");
+    }
+};
+
+const GenerateRandom = struct {
+    const Self = @This();
+    fn ping() ?Ping {
+        var kp = KeyPair.create(null) catch @panic("could not generate keypair");
+        return Ping.random(kp) catch @panic("could not generate random Ping");
     }
 };
 
 test "gossip.ping_pong: PingCache works" {
     // used to generate a random ping for tests
-    const GenerateRandom = struct {
-        fn ping() ?Ping {
-            var kp = KeyPair.create(null) catch @panic("could not generate keypair");
-            return Ping.random(kp) catch @panic("could not generate random Ping");
-        }
-    };
 
     var ping_cache = try PingCache.init(testing.allocator, 10_000, 1000, 1024);
     defer ping_cache.deinit();
@@ -221,12 +262,16 @@ test "gossip.ping_pong: PingCache works" {
     var ping = ping_cache.maybe_ping(
         now1,
         node,
-        GenerateRandom.ping,
+        GenerateRandom,
     );
 
     var now2 = try std.time.Instant.now();
-    var resp = ping_cache.check(now2, node, GenerateRandom.ping);
+    var resp = ping_cache.check(now2, node, GenerateRandom);
     _ = resp;
+
+    var our_kp = try KeyPair.create(null);
+
+    _ = try ping_cache.filter_valid_nodes(testing.allocator, our_kp, &[_]ContactInfo{});
 
     try testing.expect(ping != null);
 }
