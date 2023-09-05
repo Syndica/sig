@@ -348,6 +348,17 @@ pub const GossipService = struct {
                         var pull_filter: CrdsFilter = pull[0];
                         var pull_value: CrdsValue = pull[1]; // contact info
 
+                        switch (pull_value.data) {
+                            .LegacyContactInfo => |*info| {
+                                if (info.id.equals(&self.my_pubkey)) {
+                                    // talking to myself == ignore
+                                    continue;
+                                }
+                            },
+                            // only contact info supported
+                            else => continue,
+                        }
+
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
@@ -655,26 +666,6 @@ pub const GossipService = struct {
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
     ) !std.ArrayList(Packet) {
-        // compute failed pull crds hash values
-        const failed_pull_hashes_array = blk: {
-            var failed_pull_hashes_lg = self.failed_pull_hashes_mux.lock();
-            defer failed_pull_hashes_lg.unlock();
-
-            const failed_pull_hashes: *const HashTimeQueue = failed_pull_hashes_lg.get();
-            break :blk try failed_pull_hashes.get_values();
-        };
-        defer failed_pull_hashes_array.deinit();
-
-        // build crds filters
-        var filters = try pull_request.build_crds_filters(
-            self.allocator,
-            &self.crds_table_rw,
-            &failed_pull_hashes_array,
-            bloom_size,
-            MAX_NUM_PULL_REQUESTS,
-        );
-        defer pull_request.deinit_crds_filters(&filters);
-
         // get nodes from crds table
         var buf: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
         const now = get_wallclock();
@@ -712,6 +703,26 @@ pub const GossipService = struct {
         if (num_peers == 0 and !should_send_to_entrypoint) {
             return error.NoPeers;
         }
+
+        // compute failed pull crds hash values
+        const failed_pull_hashes_array = blk: {
+            var failed_pull_hashes_lg = self.failed_pull_hashes_mux.lock();
+            defer failed_pull_hashes_lg.unlock();
+
+            const failed_pull_hashes: *const HashTimeQueue = failed_pull_hashes_lg.get();
+            break :blk try failed_pull_hashes.get_values();
+        };
+        defer failed_pull_hashes_array.deinit();
+
+        // build crds filters
+        var filters = try pull_request.build_crds_filters(
+            self.allocator,
+            &self.crds_table_rw,
+            &failed_pull_hashes_array,
+            bloom_size,
+            MAX_NUM_PULL_REQUESTS,
+        );
+        defer pull_request.deinit_crds_filters(&filters);
 
         // build packet responses
         var output = try std.ArrayList(Packet).initCapacity(self.allocator, filters.items.len);

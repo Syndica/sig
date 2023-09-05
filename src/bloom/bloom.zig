@@ -23,20 +23,25 @@ pub const Bloom = struct {
     const Self = @This();
 
     pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) Self {
-        // need to be power of 2 for serialization to match rust
-        var bits = n_bits;
-        if (n_bits != 0) {
-            if (n_bits & (n_bits - 1) != 0) {
-                // nearest power of two
-                const _n_bits = std.math.pow(u64, 2, std.math.log2(n_bits) + 1);
-                std.debug.print("rounding n_bits of bloom from {any} to {any}\n", .{ n_bits, _n_bits });
-                bits = _n_bits;
+        // note: we do this to match the rust deserialization
+        // needs to be power of 2 < 64
+        const bitset_bits = blk: {
+            if (n_bits == 0) {
+                break :blk 0;
+            } else if (n_bits < 64) {
+                break :blk 64;
+            } else {
+                // smallest power of 2 >= 64
+                break :blk std.math.pow(u64, 2, std.math.log2(n_bits));
             }
+        };
+        if (bitset_bits != n_bits) {
+            std.debug.print("rounding n_bits from {d} to {d}...\n", .{ n_bits, bitset_bits });
         }
 
         return Self{
             .keys = keys orelse ArrayList(u64).init(alloc),
-            .bits = DynamicBitSet.initEmpty(alloc, n_bits) catch unreachable,
+            .bits = DynamicBitSet.initEmpty(alloc, bitset_bits) catch unreachable,
             .num_bits_set = 0,
         };
     }
@@ -194,7 +199,7 @@ test "bloom: serializes/deserializes correctly with set bits" {
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
-test "bloom: rust: serialized bytes equal rust (no keys)" {
+test "bloom: rust: serialized bytes equal rust (one key)" {
     // note: need to init with len 2^i
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();

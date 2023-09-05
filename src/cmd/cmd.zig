@@ -98,6 +98,7 @@ fn gossip(_: []const []const u8) !void {
             try entrypoints.append(value);
         }
     }
+    std.debug.print("entrypoints: {any}\n", .{entrypoints.items});
 
     var exit = std.atomic.Atomic(bool).init(false);
     var gossip_service = try GossipService.init(
