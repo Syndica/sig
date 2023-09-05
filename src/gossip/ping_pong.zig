@@ -234,8 +234,6 @@ pub const PingCache = struct {
 pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
 
 test "gossip.ping_pong: PingCache works" {
-    // used to generate a random ping for tests
-
     var ping_cache = try PingCache.init(testing.allocator, 10_000, 1000, 1024);
     defer ping_cache.deinit();
 
@@ -255,9 +253,12 @@ test "gossip.ping_pong: PingCache works" {
 
     var now2 = try std.time.Instant.now();
     var resp = ping_cache.check(now2, node, our_kp);
-    _ = resp;
+    try testing.expect(!resp.check);
+    try testing.expect(resp.maybe_ping != null);
 
-    _ = try ping_cache.filter_valid_peers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
+    var result = try ping_cache.filter_valid_peers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
+    defer result.valid_peers.deinit();
+    defer result.pings.deinit();
 
     try testing.expect(ping != null);
 }

@@ -550,7 +550,9 @@ pub const GossipService = struct {
         var ping_cache: *PingCache = ping_cache_lock.mut();
         var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, gossip_peers);
         var valid_gossip_peers = result.valid_peers;
+        defer valid_gossip_peers.deinit();
         var pings_to_send_out = result.pings;
+        defer pings_to_send_out.deinit();
 
         for (pings_to_send_out.items) |ping_and_socket_addr| {
             var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
@@ -719,6 +721,8 @@ pub const GossipService = struct {
         var ping_cache: *PingCache = ping_cache_lock.mut();
         var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, peers);
         var valid_gossip_peers = result.valid_peers;
+        defer valid_gossip_peers.deinit();
+        defer result.pings.deinit();
 
         for (result.pings.items) |ping_and_socket_addr| {
             var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
