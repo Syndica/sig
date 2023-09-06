@@ -78,7 +78,7 @@ pub fn send_socket(
 //     var addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 9999);
 
 //     var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
-//     gossip_socket.bind(addr.toEndpoint()) catch return error.SocketBindFailed;
+//     gossip_socket.bind(addr.to_endpoint()) catch return error.SocketBindFailed;
 //     gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
 
 //     var send_channel = NonBlockingChannel(Packet).init(allocator, 10);
@@ -95,7 +95,7 @@ pub fn send_socket(
 //     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 //     var random_addr = SocketAddr.init_ipv4(.{ 103, 50, 32, 83 }, 8899);
 
-//     var packet = Packet.init(random_addr.toEndpoint(), packet_buf, 10);
+//     var packet = Packet.init(random_addr.to_endpoint(), packet_buf, 10);
 //     try send_channel.send(packet);
 
 //     std.time.sleep(std.time.ns_per_s * 4);

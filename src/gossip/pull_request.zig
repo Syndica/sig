@@ -33,9 +33,9 @@ pub fn build_crds_filters(
     max_n_filters: usize,
 ) error{ NotEnoughCrdsValues, OutOfMemory }!ArrayList(CrdsFilter) {
     var filter_set = blk: {
-        var crds_table_lg = crds_table_rw.read();
-        const crds_table: *const CrdsTable = crds_table_lg.get();
-        defer crds_table_lg.unlock();
+        var crds_table_lock = crds_table_rw.read();
+        const crds_table: *const CrdsTable = crds_table_lock.get();
+        defer crds_table_lock.unlock();
 
         const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
@@ -168,7 +168,7 @@ pub const CrdsFilterSet = struct {
         if (!can_consume_all) {
 
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(crds.get_wallclock());
+            var rng = std.rand.DefaultPrng.init(crds.get_wallclock_ms());
             shuffle_first_n(rng.random(), usize, indexs.items, output_size);
 
             // release others

@@ -10,7 +10,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock = @import("../gossip/crds.zig").get_wallclock;
+const get_wallclock_ms = @import("../gossip/crds.zig").get_wallclock_ms;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -66,7 +66,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(get_wallclock());
+        var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
         pull_request.shuffle_first_n(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
@@ -122,7 +122,7 @@ pub const ActiveSet = struct {
                 continue;
             }
 
-            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
+            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.to_endpoint());
             if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
                 break;
             }
@@ -151,7 +151,7 @@ test "gossip.active_set: init/deinit" {
         var value = try CrdsValue.initSigned(crds.CrdsData{
             .LegacyContactInfo = data,
         }, &keypair);
-        try crds_table.insert(value, get_wallclock());
+        try crds_table.insert(value, get_wallclock_ms());
     }
 
     var active_set = ActiveSet.init(alloc);

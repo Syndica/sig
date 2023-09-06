@@ -145,7 +145,7 @@ pub const PruneData = struct {
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
             .destination = Pubkey.random(rng, .{}),
-            .wallclock = crds.get_wallclock(),
+            .wallclock = crds.get_wallclock_ms(),
         };
         try self.sign(keypair);
 
@@ -183,7 +183,7 @@ pub const PruneData = struct {
 };
 
 test "gossip.protocol: push message serialization is predictable" {
-    var rng = DefaultPrng.init(crds.get_wallclock());
+    var rng = DefaultPrng.init(crds.get_wallclock_ms());
     var pubkey = Pubkey.random(rng.random(), .{});
     var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
     defer values.deinit();
@@ -222,7 +222,7 @@ test "gossip.protocol: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(crds.get_wallclock());
+    var rng = DefaultPrng.init(crds.get_wallclock_ms());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();
