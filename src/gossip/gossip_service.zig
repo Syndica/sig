@@ -451,13 +451,24 @@ pub const GossipService = struct {
                         };
 
                         try self.packet_outgoing_channel.send(packet);
-                        ping_log_entry.info("received ping message");
+
+                        ping_log_entry
+                            .field("pongs sent", 1)
+                            .info("received ping message");
                     },
                     .PongMessage => |*pong| {
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
 
+                        {
+                            var ping_cache_lock = self.ping_cache_rw.write();
+                            defer ping_cache_lock.unlock();
+
+                            var ping_cache: *PingCache = ping_cache_lock.mut();
+                            const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
+                            _ = ping_cache.recevied_pong(pong, SocketAddr.from_endpoint(from_endpoint), now);
+                        }
                         logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &pong.from.string())
@@ -865,8 +876,12 @@ pub const GossipService = struct {
 
         // send a ping
         if (result.maybe_ping) |ping| {
+            if (maybe_log_entry) |log_entry| {
+                _ = log_entry.field("pings_sent", 1);
+            }
             var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
-            var serialized_ping = bincode.writeToSlice(&ping_buff, ping, .{}) catch return error.SerializationError;
+            var protocol_msg = Protocol{ .PingMessage = ping };
+            var serialized_ping = bincode.writeToSlice(&ping_buff, protocol_msg, .{}) catch return error.SerializationError;
             var packet = Packet.init(pull_from_endpoint, ping_buff, serialized_ping.len);
             try self.packet_outgoing_channel.send(packet);
         }
@@ -1201,7 +1216,8 @@ pub const GossipService = struct {
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
         for (pings.items) |ping_and_addr| {
-            var serialized_ping = bincode.writeToSlice(&packet_buf, ping_and_addr.ping, .{}) catch return error.SerializationError;
+            const protocol_msg = Protocol{ .PingMessage = ping_and_addr.ping };
+            var serialized_ping = bincode.writeToSlice(&packet_buf, protocol_msg, .{}) catch return error.SerializationError;
 
             var to_endpoint = ping_and_addr.socket.to_endpoint();
             var packet = Packet.init(to_endpoint, packet_buf, serialized_ping.len);

@@ -146,11 +146,13 @@ pub const PingCache = struct {
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn recevied_pong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
         var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
-        if (self.pending_cache.peek(pong.hash)) |val| {
-            if (val == peer_and_addr) {
-                self.pings.pop(&peer_and_addr);
-                self.pongs.put(peer_and_addr, now);
-                self.pending_cache.pop(&pong.hash);
+        if (self.pending_cache.peek(pong.hash)) |pubkey_and_addr| {
+            const pubkey: Pubkey = pubkey_and_addr[0];
+            const addr: SocketAddr = pubkey_and_addr[1];
+            if (pubkey.equals(&pong.from) and addr.eql(&socket)) {
+                _ = self.pings.pop(peer_and_addr);
+                _ = self.pongs.put(peer_and_addr, now);
+                _ = self.pending_cache.pop(pong.hash);
                 return true;
             }
         }
