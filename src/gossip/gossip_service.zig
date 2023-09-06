@@ -133,7 +133,9 @@ pub const GossipService = struct {
             return error.SocketBindFailed;
         }
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
-        gossip_socket.bind(gossip_address.to_endpoint()) catch return error.SocketBindFailed;
+        // .ADDRNOTAVAIL on public ip
+        // gossip_socket.bind(gossip_address.to_endpoint()) catch return error.SocketBindFailed;
+        gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
 
         var failed_pull_hashes = HashTimeQueue.init(allocator);
