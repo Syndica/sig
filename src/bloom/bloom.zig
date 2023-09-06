@@ -35,9 +35,9 @@ pub const Bloom = struct {
                 break :blk std.math.pow(u64, 2, std.math.log2(n_bits));
             }
         };
-        if (bitset_bits != n_bits) {
-            std.debug.print("rounding n_bits from {d} to {d}...\n", .{ n_bits, bitset_bits });
-        }
+        // if (bitset_bits != n_bits) {
+        //     std.debug.print("rounding n_bits from {d} to {d}...\n", .{ n_bits, bitset_bits });
+        // }
 
         return Self{
             .keys = keys orelse ArrayList(u64).init(alloc),

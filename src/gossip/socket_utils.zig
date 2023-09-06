@@ -53,14 +53,6 @@ pub fn send_socket(
         defer recv_channel.allocator.free(packets);
 
         for (packets) |p| {
-            // NOTE: sometimes this hard fails (with 195.156.175.48:38647 => UnexpectedError: errno: 49)
-            //  MAC: 49 EADDRNOTAVAIL Cannot assign requested address.  Normally results from
-            //          an attempt to create a socket with an address not on this
-            //          machine.
-            // on linux = send_socket error: UnreachableAddress
-
-            std.debug.print("socket endpoint: {any}\n", .{socket.getLocalEndPoint()});
-            std.debug.print("sending to {s}: {any}\n", .{ p.addr, p.size });
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                 std.debug.print("send_socket error: {s}\n", .{@errorName(e)});
                 continue;
