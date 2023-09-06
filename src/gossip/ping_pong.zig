@@ -145,11 +145,11 @@ pub const PingCache = struct {
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn recevied_pong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
-        var node = newPubkeyAndSocketAddr(pong.from, socket);
+        var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
         if (self.pending_cache.peek(pong.hash)) |val| {
-            if (val == node) {
-                self.pings.pop(&node);
-                self.pongs.put(node, now);
+            if (val == peer_and_addr) {
+                self.pings.pop(&peer_and_addr);
+                self.pongs.put(peer_and_addr, now);
                 self.pending_cache.pop(&pong.hash);
                 return true;
             }
@@ -160,10 +160,10 @@ pub const PingCache = struct {
     pub fn maybe_ping(
         self: *Self,
         now: std.time.Instant,
-        node: PubkeyAndSocketAddr,
+        peer_and_addr: PubkeyAndSocketAddr,
         keypair: KeyPair,
     ) ?Ping {
-        if (self.pings.peek(node)) |earlier| {
+        if (self.pings.peek(peer_and_addr)) |earlier| {
             // to prevent integer overflow
             assert(now.order(earlier) != .lt);
 
@@ -175,8 +175,8 @@ pub const PingCache = struct {
         var ping = Ping.random(keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        _ = self.pending_cache.put(hash, node);
-        _ = self.pings.put(node, now);
+        _ = self.pending_cache.put(hash, peer_and_addr);
+        _ = self.pings.put(peer_and_addr, now);
         return ping;
     }
 
@@ -188,10 +188,10 @@ pub const PingCache = struct {
     pub fn check(
         self: *Self,
         now: std.time.Instant,
-        node: PubkeyAndSocketAddr,
+        peer_and_addr: PubkeyAndSocketAddr,
         keypair: KeyPair,
-    ) struct { check: bool, maybe_ping: ?Ping } {
-        if (self.pongs.get(node)) |last_pong_time| {
+    ) struct { passes_ping_check: bool, maybe_ping: ?Ping } {
+        if (self.pongs.get(peer_and_addr)) |last_pong_time| {
             // to prevent integer overflow
             assert(now.order(last_pong_time) != .lt);
 
@@ -199,13 +199,13 @@ pub const PingCache = struct {
 
             // if age is greater than time-to-live, remove pong
             if (age > self.ttl_ns) {
-                _ = self.pongs.pop(node);
+                _ = self.pongs.pop(peer_and_addr);
             }
 
             // if age is greater than time-to-live divided by 8, we maybe ping again
-            return .{ .check = true, .maybe_ping = if (age > self.ttl_ns / 8) self.maybe_ping(now, node, keypair) else null };
+            return .{ .passes_ping_check = true, .maybe_ping = if (age > self.ttl_ns / 8) self.maybe_ping(now, peer_and_addr, keypair) else null };
         }
-        return .{ .check = false, .maybe_ping = self.maybe_ping(now, node, keypair) };
+        return .{ .passes_ping_check = false, .maybe_ping = self.maybe_ping(now, peer_and_addr, keypair) };
     }
 
     /// Filters valid peers according to `PingCache` state and returns them along with any possible pings that need to be sent out.
@@ -218,14 +218,14 @@ pub const PingCache = struct {
         peers: []LegacyContactInfo,
     ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(LegacyContactInfo), pings: std.ArrayList(PingAndSocketAddr) } {
         var now = std.time.Instant.now() catch @panic("time not supported by OS!");
-        var filtered_nodes = std.ArrayList(LegacyContactInfo).init(allocator);
+        var valid_peers = std.ArrayList(LegacyContactInfo).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers) |peer| {
             if (!peer.gossip.is_unspecified()) {
                 var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, our_keypair);
-                if (result.check) {
-                    try filtered_nodes.append(peer);
+                if (result.passes_ping_check) {
+                    try valid_peers.append(peer);
                 }
                 if (result.maybe_ping) |ping| {
                     try pings.append(.{ .ping = ping, .socket = peer.gossip });
@@ -233,7 +233,7 @@ pub const PingCache = struct {
             }
         }
 
-        return .{ .valid_peers = filtered_nodes, .pings = pings };
+        return .{ .valid_peers = valid_peers, .pings = pings };
     }
 };
 pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
@@ -258,7 +258,7 @@ test "gossip.ping_pong: PingCache works" {
 
     var now2 = try std.time.Instant.now();
     var resp = ping_cache.check(now2, node, our_kp);
-    try testing.expect(!resp.check);
+    try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
     var result = try ping_cache.filter_valid_peers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
