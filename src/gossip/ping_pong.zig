@@ -257,6 +257,7 @@ test "gossip.ping_pong: PingCache works" {
     );
 
     var now2 = try std.time.Instant.now();
+
     var resp = ping_cache.check(now2, node, &our_kp);
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
