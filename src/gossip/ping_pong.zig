@@ -161,7 +161,7 @@ pub const PingCache = struct {
         self: *Self,
         now: std.time.Instant,
         peer_and_addr: PubkeyAndSocketAddr,
-        keypair: KeyPair,
+        keypair: *const KeyPair,
     ) ?Ping {
         if (self.pings.peek(peer_and_addr)) |earlier| {
             // to prevent integer overflow
@@ -180,16 +180,11 @@ pub const PingCache = struct {
         return ping;
     }
 
-    // only used in tests
-    pub fn _set_pong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
-        _ = self.pongs.put(newPubkeyAndSocketAddr(peer, socket_addr), std.time.Instant.now() catch unreachable);
-    }
-
     pub fn check(
         self: *Self,
         now: std.time.Instant,
         peer_and_addr: PubkeyAndSocketAddr,
-        keypair: KeyPair,
+        keypair: *const KeyPair,
     ) struct { passes_ping_check: bool, maybe_ping: ?Ping } {
         if (self.pongs.get(peer_and_addr)) |last_pong_time| {
             // to prevent integer overflow
@@ -223,7 +218,7 @@ pub const PingCache = struct {
 
         for (peers) |peer| {
             if (!peer.gossip.is_unspecified()) {
-                var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, our_keypair);
+                var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(peer);
                 }
@@ -234,6 +229,11 @@ pub const PingCache = struct {
         }
 
         return .{ .valid_peers = valid_peers, .pings = pings };
+    }
+
+    // only used in tests
+    pub fn _set_pong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
+        _ = self.pongs.put(newPubkeyAndSocketAddr(peer, socket_addr), std.time.Instant.now() catch unreachable);
     }
 };
 pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
@@ -253,11 +253,11 @@ test "gossip.ping_pong: PingCache works" {
     var ping = ping_cache.maybe_ping(
         now1,
         node,
-        our_kp,
+        &our_kp,
     );
 
     var now2 = try std.time.Instant.now();
-    var resp = ping_cache.check(now2, node, our_kp);
+    var resp = ping_cache.check(now2, node, &our_kp);
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 

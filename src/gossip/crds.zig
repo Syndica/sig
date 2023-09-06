@@ -519,7 +519,7 @@ pub const LowestSlot = struct {
             .lowest = rng.int(u64),
             .slots = &slots,
             .stash = &stash,
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
         };
     }
 };
@@ -548,7 +548,7 @@ pub const AccountsHashes = struct {
         return AccountsHashes{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .hashes = &slice,
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
         };
     }
 
@@ -646,7 +646,7 @@ pub const LegacyVersion = struct {
     pub fn random(rng: std.rand.Random) LegacyVersion {
         return LegacyVersion{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .version = LegacyVersion1.random(rng),
         };
     }
@@ -694,7 +694,7 @@ pub const Version = struct {
     pub fn random(rng: std.rand.Random) Version {
         return Version{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .version = LegacyVersion2.random(rng),
         };
     }
@@ -743,7 +743,7 @@ pub const NodeInstance = struct {
     pub fn random(rng: std.rand.Random) Self {
         return Self{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .timestamp = rng.int(u64),
             .token = rng.int(u64),
         };
@@ -823,7 +823,7 @@ pub const SnapshotHashes = struct {
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .full = .{ Slot.init(rng.int(u64)), Hash.random() },
             .incremental = &slice,
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
         };
     }
 };

@@ -13,7 +13,7 @@ const AtomicBool = std.atomic.Atomic(bool);
 const SocketAddr = @import("net.zig").SocketAddr;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock = @import("crds.zig").get_wallclock;
+const get_wallclock_ms = @import("crds.zig").get_wallclock_ms;
 
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
@@ -285,7 +285,7 @@ pub fn main() !void {
     );
 
     // blast it
-    var seed = get_wallclock();
+    var seed = get_wallclock_ms();
     // var seed: u64 = 1693494238796;
     std.debug.print("SEED: {d}\n", .{seed});
     var rng = std.rand.DefaultPrng.init(seed);
@@ -299,22 +299,22 @@ pub fn main() !void {
         var packet = switch (command) {
             0 => blk: {
                 // send ping message
-                const packet = random_ping(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+                const packet = random_ping(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
                 break :blk packet;
             },
             1 => blk: {
                 // send pong message
-                const packet = random_pong(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+                const packet = random_pong(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
                 break :blk packet;
             },
             2 => blk: {
                 // send push message
-                const packet = random_push_message(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+                const packet = random_push_message(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
                 break :blk packet;
             },
             3 => blk: {
                 // send pull response
-                const packet = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+                const packet = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
                 break :blk packet;
             },
             4 => blk: {
@@ -323,7 +323,7 @@ pub fn main() !void {
                     allocator,
                     rng.random(),
                     &fuzz_keypair,
-                    gossip_address.toEndpoint(),
+                    gossip_address.to_endpoint(),
                 );
                 break :blk packet;
             },
@@ -334,11 +334,11 @@ pub fn main() !void {
             continue;
         };
 
-        try gossip_service_fuzzer.responder_channel.send(send_packet);
+        try gossip_service_fuzzer.packet_outgoing_channel.send(send_packet);
 
         var send_duplicate = rng.random().boolean();
         if (send_duplicate) {
-            try gossip_service_fuzzer.responder_channel.send(send_packet);
+            try gossip_service_fuzzer.packet_outgoing_channel.send(send_packet);
         }
 
         std.time.sleep(std.time.ns_per_ms * 10);

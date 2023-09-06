@@ -405,7 +405,7 @@ pub const CrdsTable = struct {
     }
 
     // ** triming values in the crdstable **
-    pub fn remove(self: *Self, label: CrdsValueLabel) error{LabelNotFound}!void {
+    pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
         const now = crds.get_wallclock_ms();
 
         const maybe_entry = self.store.getEntry(label);
