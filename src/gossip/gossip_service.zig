@@ -1279,19 +1279,26 @@ test "gossip.gossip_service: tests handle_prune_messages" {
 
     // add some peers
     var lg = gossip_service.crds_table_rw.write();
+    var peers = std.ArrayList(crds.LegacyContactInfo).init(allocator);
+    defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
         var value = try CrdsValue.random_with_index(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock());
+        try peers.append(value.data.LegacyContactInfo);
     }
     lg.unlock();
 
-    // set the active set
-    try gossip_service.rotate_active_set();
+    {
+        var as_lg = gossip_service.active_set_rw.write();
+        var as: *ActiveSet = as_lg.mut();
+        try as.rotate(peers.items);
+        as_lg.unlock();
+    }
 
     var as_lg = gossip_service.active_set_rw.read();
     var as: *const ActiveSet = as_lg.get();
-    try std.testing.expect(as.len > 0);
+    try std.testing.expect(as.len > 0); // FIX
     var peer0 = as.peers[0];
     as_lg.unlock();
 
@@ -1416,12 +1423,17 @@ test "gossip.gossip_service: tests handle_pull_request" {
     ci_data.LegacyContactInfo.id = my_pubkey;
     const crds_value = try CrdsValue.initSigned(ci_data, &my_keypair);
 
+    const addr = SocketAddr.random(rng.random());
+    var ping_lg = gossip_service.ping_cache.write();
+    var ping_cache: *PingCache = ping_lg.mut();
+    ping_cache._set_pong(my_pubkey, addr);
+    ping_lg.unlock();
+
     const filter = CrdsFilter{
         .filter = bloom,
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
     };
-    const addr = SocketAddr.random(rng.random());
 
     var packets = try gossip_service.handle_pull_request(
         crds_value,
@@ -1529,12 +1541,16 @@ test "gossip.gossip_service: test build_pull_requests" {
 
     // insert peers to send msgs to
     var keypair = try KeyPair.create([_]u8{1} ** 32);
+    var ping_lg = gossip_service.ping_cache.write();
     var lg = gossip_service.crds_table_rw.write();
     for (0..20) |_| {
-        var value = try CrdsValue.random(rng.random(), &keypair);
+        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0);
         try lg.mut().insert(value, get_wallclock());
+        var pc: *PingCache = ping_lg.mut();
+        pc._set_pong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
     }
     lg.unlock();
+    ping_lg.unlock();
 
     var packets = try gossip_service.build_pull_requests(2);
     defer packets.deinit();
@@ -1562,11 +1578,14 @@ test "gossip.gossip_service: test build_push_messages" {
     defer gossip_service.deinit();
 
     // add some peers
+    var peers = std.ArrayList(crds.LegacyContactInfo).init(allocator);
+    defer peers.deinit();
     var lg = gossip_service.crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
         var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock());
+        try peers.append(value.data.LegacyContactInfo);
     }
     lg.unlock();
 
@@ -1575,11 +1594,12 @@ test "gossip.gossip_service: test build_push_messages" {
     var value = try CrdsValue.random(rng.random(), &keypair);
 
     // set the active set
-    try gossip_service.rotate_active_set();
     {
-        var aslg = gossip_service.active_set_rw.read();
-        try std.testing.expect(aslg.get().len > 0);
-        aslg.unlock();
+        var as_lg = gossip_service.active_set_rw.write();
+        var as: *ActiveSet = as_lg.mut();
+        try as.rotate(peers.items);
+        as_lg.unlock();
+        try std.testing.expect(as.len > 0);
     }
 
     {

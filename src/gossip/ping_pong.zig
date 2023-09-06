@@ -180,6 +180,11 @@ pub const PingCache = struct {
         return ping;
     }
 
+    // only used in tests
+    pub fn _set_pong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
+        _ = self.pongs.put(newPubkeyAndSocketAddr(peer, socket_addr), std.time.Instant.now() catch unreachable);
+    }
+
     pub fn check(
         self: *Self,
         now: std.time.Instant,
