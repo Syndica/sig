@@ -263,13 +263,12 @@ pub const GossipService = struct {
                 ) catch {
                     failed_protocol_msgs += 1;
                     logger.debugf("failed to deserialize protocol message: {d}\n", .{std.mem.readIntLittle(u32, packet.data[0..4])});
-                    // std.debug.print("[", .{});
                     // // print the packet data
+                    // std.debug.print("[", .{});
                     // for (packet.data[0..packet.size]) |byte| {
                     //     std.debug.print("{d}, ", .{byte});
                     // }
                     // std.debug.print("]\n", .{});
-
                     continue;
                 };
 

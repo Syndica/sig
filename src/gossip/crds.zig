@@ -19,11 +19,6 @@ pub fn get_wallclock_ms() u64 {
     return @intCast(std.time.milliTimestamp());
 }
 
-fn camelCase() void {
-    var some_var = 3;
-    _ = some_var;
-}
-
 pub const MAX_EPOCH_SLOTS: u8 = 255;
 pub const MAX_VOTES: u8 = 32;
 pub const MAX_SLOT: u64 = 1_000_000_000_000_000;
@@ -633,7 +628,7 @@ pub const Uncompressed = struct {
 
 pub fn BitVec(comptime T: type) type {
     return struct {
-        bits: Option([]T),
+        bits: ?[]T,
         len: usize,
     };
 }
