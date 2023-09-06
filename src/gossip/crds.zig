@@ -5,7 +5,6 @@ const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Slot = @import("../core/slot.zig").Slot;
-const Option = @import("../option.zig").Option;
 const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
@@ -704,7 +703,7 @@ pub const LegacyVersion2 = struct {
 
     const Self = @This();
 
-    pub const CURRENT = LegacyVersion2.init(1, 14, 17, Option(u32).Some(2996451279), 3488713414);
+    pub const CURRENT = LegacyVersion2.init(1, 14, 17, 2996451279, 3488713414);
 
     pub fn random(rng: std.rand.Random) Self {
         return Self{
@@ -716,7 +715,7 @@ pub const LegacyVersion2 = struct {
         };
     }
 
-    pub fn init(major: u16, minor: u16, patch: u16, commit: Option(u32), feature_set: u32) Self {
+    pub fn init(major: u16, minor: u16, patch: u16, commit: ?u32, feature_set: u32) Self {
         return Self{
             .major = major,
             .minor = minor,
