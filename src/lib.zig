@@ -12,6 +12,7 @@ pub const core = struct {
     pub usingnamespace @import("core/hash.zig");
     pub usingnamespace @import("core/signature.zig");
     pub usingnamespace @import("core/slot.zig");
+    pub usingnamespace @import("core/hard_forks.zig");
 };
 
 pub const gossip = struct {

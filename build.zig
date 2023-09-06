@@ -83,20 +83,32 @@ pub fn build(b: *std.Build) void {
         .filter = if (b.args) |args| args[0] else null, // filter tests like so: zig build test -- "<FILTER>"
     });
 
+    const hard_fork_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/core/hard_forks.zig" },
+        .target = target,
+        .optimize = optimize,
+        .filter = if (b.args) |args| args[0] else null,
+    });
+    hard_fork_tests.main_pkg_path = .{ .path = "src" };
+    hard_fork_tests.addModule("zig-network", zig_network_module);
+    hard_fork_tests.addModule("base58-zig", base58_module);
+    hard_fork_tests.addModule("zig-cli", zig_cli_module);
+    hard_fork_tests.addModule("getty", getty_mod);
+
     tests.addModule("zig-network", zig_network_module);
     tests.addModule("base58-zig", base58_module);
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
 
     const run_tests = b.addRunArtifact(tests);
-
+    const run_hf_tests = b.addRunArtifact(hard_fork_tests);
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build test`
     // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib.step);
     test_step.dependOn(&run_tests.step);
-
+    test_step.dependOn(&run_hf_tests.step);
     const exe = b.addExecutable(.{
         .name = "sig",
         // In this case the main source file is merely a path, however, in more
