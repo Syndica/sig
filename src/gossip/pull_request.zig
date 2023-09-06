@@ -48,7 +48,7 @@ pub fn build_crds_filters(
             filter_set.add(&hash);
         }
         // add purged values
-        const purged_values = try crds_table.purged.get_values(alloc);
+        const purged_values = try crds_table.purged.get_values();
         for (purged_values.items) |hash| {
             filter_set.add(&hash);
         }
@@ -105,6 +105,20 @@ pub const CrdsFilterSet = struct {
             filters.appendAssumeCapacity(filter);
         }
 
+        return Self{
+            .filters = filters,
+            .mask_bits = mask_bits,
+        };
+    }
+
+    pub fn init_test(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+        const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
+
+        var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
+        for (0..n_filters) |_| {
+            var filter = try Bloom.random(alloc, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
+            filters.appendAssumeCapacity(filter);
+        }
         return Self{
             .filters = filters,
             .mask_bits = mask_bits,

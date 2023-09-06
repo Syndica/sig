@@ -23,7 +23,6 @@ pub const SocketAddr = union(enum(u8)) {
         if (version % 2 == 0) {
             var octets: [4]u8 = undefined;
             rng.bytes(&octets);
-
             return Self{
                 .V4 = .{ .ip = Ipv4Addr.init(octets[0], octets[1], octets[2], octets[3]), .port = pport },
             };

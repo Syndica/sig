@@ -22,10 +22,16 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
             }
             return list;
         }
+
+        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            _ = allocator;
+            data.deinit();
+        }
     };
 
     return bincode.FieldConfig(std.ArrayList(Child)){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
+        .free = S.free,
     };
 }

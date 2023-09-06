@@ -59,10 +59,12 @@ pub const CrdsValue = struct {
         return self;
     }
 
+    /// only used in tests
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         return try Self.initSigned(CrdsData.random(rng), keypair);
     }
 
+    /// only used in tests
     pub fn random_with_index(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
         return try Self.initSigned(CrdsData.random_from_index(rng, index), keypair);
     }
@@ -381,21 +383,41 @@ pub const CrdsData = union(enum(u32)) {
             .Vote => |*v| {
                 v[1].from = id;
             },
+            .LowestSlot => |*v| {
+                v[1].from = id;
+            },
+            .LegacySnapshotHashes => |*v| {
+                v.from = id;
+            },
+            .AccountsHashes => |*v| {
+                v.from = id;
+            },
             .EpochSlots => |*v| {
                 v[1].from = id;
+            },
+            .LegacyVersion => |*v| {
+                v.from = id;
+            },
+            .Version => |*v| {
+                v.from = id;
+            },
+            .NodeInstance => |*v| {
+                v.from = id;
             },
             .DuplicateShred => |*v| {
                 v[1].from = id;
             },
-            else => {
-                // tmp
-                @panic("set_id not implemented for the given type\n");
+            .SnapshotHashes => |*v| {
+                v.from = id;
+            },
+            .ContactInfo => |*v| {
+                v.pubkey = id;
             },
         }
     }
 
     pub fn random(rng: std.rand.Random) CrdsData {
-        const v = rng.intRangeAtMost(u16, 0, 3);
+        const v = rng.intRangeAtMost(u16, 0, 10);
         return CrdsData.random_from_index(rng, v);
     }
 
@@ -405,13 +427,37 @@ pub const CrdsData = union(enum(u32)) {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
             1 => {
-                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES), Vote.random(rng) } };
+                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.random(rng) } };
             },
             2 => {
-                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS), EpochSlots.random(rng) } };
+                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.random(rng) } };
             },
+            3 => {
+                return CrdsData{ .LowestSlot = .{ 0, LowestSlot.random(rng) } };
+            },
+            4 => {
+                return CrdsData{ .LegacySnapshotHashes = LegacySnapshotHashes.random(rng) };
+            },
+            5 => {
+                return CrdsData{ .AccountsHashes = AccountsHashes.random(rng) };
+            },
+            6 => {
+                return CrdsData{ .LegacyVersion = LegacyVersion.random(rng) };
+            },
+            7 => {
+                return CrdsData{ .Version = Version.random(rng) };
+            },
+            8 => {
+                return CrdsData{ .NodeInstance = NodeInstance.random(rng) };
+            },
+            9 => {
+                return CrdsData{ .SnapshotHashes = SnapshotHashes.random(rng) };
+            },
+            // 10 => {
+            //     return CrdsData { .ContactInfo = ContactInfo.random(rng) };
+            // },
             else => {
-                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS), DuplicateShred.random(rng) } };
+                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
             },
         }
     }
@@ -463,6 +509,19 @@ pub const LowestSlot = struct {
             return error.InvalidValue;
         }
     }
+
+    pub fn random(rng: std.rand.Random) LowestSlot {
+        var slots: [0]u64 = .{};
+        var stash: [0]DeprecatedEpochIncompleteSlots = .{};
+        return LowestSlot{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .root = 0,
+            .lowest = rng.int(u64),
+            .slots = &slots,
+            .stash = &stash,
+            .wallclock = get_wallclock(),
+        };
+    }
 };
 
 pub const DeprecatedEpochIncompleteSlots = struct {
@@ -483,6 +542,15 @@ pub const AccountsHashes = struct {
     from: Pubkey,
     hashes: []struct { u64, Hash },
     wallclock: u64,
+
+    pub fn random(rng: std.rand.Random) AccountsHashes {
+        var slice: [0]struct { u64, Hash } = .{};
+        return AccountsHashes{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .hashes = &slice,
+            .wallclock = get_wallclock(),
+        };
+    }
 
     pub fn sanitize(value: *const AccountsHashes) !void {
         try sanitize_wallclock(value.wallclock);
@@ -574,13 +642,30 @@ pub const LegacyVersion = struct {
     from: Pubkey,
     wallclock: u64,
     version: LegacyVersion1,
+
+    pub fn random(rng: std.rand.Random) LegacyVersion {
+        return LegacyVersion{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .wallclock = get_wallclock(),
+            .version = LegacyVersion1.random(rng),
+        };
+    }
 };
 
 pub const LegacyVersion1 = struct {
     major: u16,
     minor: u16,
     patch: u16,
-    commit: Option(u32), // first 4 bytes of the sha1 commit hash
+    commit: ?u32, // first 4 bytes of the sha1 commit hash
+
+    pub fn random(rng: std.rand.Random) LegacyVersion1 {
+        return LegacyVersion1{
+            .major = rng.int(u16),
+            .minor = rng.int(u16),
+            .patch = rng.int(u16),
+            .commit = rng.int(u32),
+        };
+    }
 };
 
 pub const Version = struct {
@@ -605,18 +690,36 @@ pub const Version = struct {
             .version = LegacyVersion2.CURRENT,
         };
     }
+
+    pub fn random(rng: std.rand.Random) Version {
+        return Version{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .wallclock = get_wallclock(),
+            .version = LegacyVersion2.random(rng),
+        };
+    }
 };
 
 pub const LegacyVersion2 = struct {
     major: u16,
     minor: u16,
     patch: u16,
-    commit: Option(u32), // first 4 bytes of the sha1 commit hash
+    commit: ?u32, // first 4 bytes of the sha1 commit hash
     feature_set: u32, // first 4 bytes of the FeatureSet identifier
 
     const Self = @This();
 
     pub const CURRENT = LegacyVersion2.init(1, 14, 17, Option(u32).Some(2996451279), 3488713414);
+
+    pub fn random(rng: std.rand.Random) Self {
+        return Self{
+            .major = rng.int(u16),
+            .minor = rng.int(u16),
+            .patch = rng.int(u16),
+            .commit = rng.int(u32),
+            .feature_set = rng.int(u32),
+        };
+    }
 
     pub fn init(major: u16, minor: u16, patch: u16, commit: Option(u32), feature_set: u32) Self {
         return Self{
@@ -636,6 +739,15 @@ pub const NodeInstance = struct {
     token: u64, // Randomly generated value at node instantiation.
 
     const Self = @This();
+
+    pub fn random(rng: std.rand.Random) Self {
+        return Self{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .wallclock = get_wallclock(),
+            .timestamp = rng.int(u64),
+            .token = rng.int(u64),
+        };
+    }
 
     pub fn init(from: Pubkey, wallclock: u64) Self {
         var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
@@ -674,15 +786,19 @@ pub const DuplicateShred = struct {
     chunk: []u8,
 
     pub fn random(rng: std.rand.Random) DuplicateShred {
-        var slice = [_]u8{0} ** 32;
+        // NOTE: cant pass around a slice here (since the stack data will get cleared)
+        var slice = [0]u8{}; // empty slice
+        var num_chunks = rng.intRangeAtMost(u8, 5, 100);
+        var chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
+
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .wallclock = get_wallclock_ms(),
             .slot = Slot.init(rng.int(u64)),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
-            .num_chunks = rng.int(u8),
-            .chunk_index = rng.int(u8),
+            .num_chunks = num_chunks,
+            .chunk_index = chunk_index,
             .chunk = &slice,
         };
     }
@@ -700,7 +816,29 @@ pub const SnapshotHashes = struct {
     full: struct { Slot, Hash },
     incremental: []struct { Slot, Hash },
     wallclock: u64,
+
+    pub fn random(rng: std.rand.Random) SnapshotHashes {
+        var slice: [0]struct { Slot, Hash } = .{};
+        return SnapshotHashes{
+            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .full = .{ Slot.init(rng.int(u64)), Hash.random() },
+            .incremental = &slice,
+            .wallclock = get_wallclock(),
+        };
+    }
 };
+
+test "gossip.crds: test sig verify duplicateShreds" {
+    var keypair = try KeyPair.create([_]u8{1} ** 32);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
+    var rng = std.rand.DefaultPrng.init(0);
+    var data = DuplicateShred.random(rng.random());
+    data.from = pubkey;
+
+    var value = try CrdsValue.initSigned(CrdsData{ .DuplicateShred = .{ 0, data } }, &keypair);
+
+    try std.testing.expect(try value.verify(pubkey));
+}
 
 test "gossip.crds: test sanitize CrdsData" {
     var rng = std.rand.DefaultPrng.init(0);

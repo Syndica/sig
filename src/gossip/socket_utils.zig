@@ -53,10 +53,52 @@ pub fn send_socket(
         defer recv_channel.allocator.free(packets);
 
         for (packets) |p| {
-            const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch return error.SocketSendError;
+            // NOTE: sometimes this hard fails (with 195.156.175.48:38647 => UnexpectedError: errno: 49)
+            //  MAC: 49 EADDRNOTAVAIL Cannot assign requested address.  Normally results from
+            //          an attempt to create a socket with an address not on this
+            //          machine.
+            // on linux = send_socket error: UnreachableAddress
+
+            std.debug.print("socket endpoint: {any}\n", .{socket.getLocalEndPoint()});
+            std.debug.print("sending to {s}: {any}\n", .{ p.addr, p.size });
+            const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
+                std.debug.print("send_socket error: {s}\n", .{@errorName(e)});
+                continue;
+            };
             packets_sent +|= 1;
             std.debug.assert(bytes_sent == p.size);
         }
     }
     std.debug.print("send_socket loop closed\n", .{});
 }
+
+// // TODO: fix
+// test "gossip.socket_utils: sending a packet" {
+//     var allocator = std.testing.allocator;
+//     var addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 9999);
+
+//     var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
+//     gossip_socket.bind(addr.toEndpoint()) catch return error.SocketBindFailed;
+//     gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
+
+//     var send_channel = NonBlockingChannel(Packet).init(allocator, 10);
+//     defer send_channel.deinit();
+
+//     var exit = std.atomic.Atomic(bool).init(false);
+//     var responder_handle = try std.Thread.spawn(.{}, send_socket, .{
+//         &gossip_socket,
+//         send_channel,
+//         &exit,
+//     });
+//     defer responder_handle.join();
+
+//     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+//     var random_addr = SocketAddr.init_ipv4(.{ 103, 50, 32, 83 }, 8899);
+
+//     var packet = Packet.init(random_addr.toEndpoint(), packet_buf, 10);
+//     try send_channel.send(packet);
+
+//     std.time.sleep(std.time.ns_per_s * 4);
+
+//     exit.store(true, std.atomic.Ordering.Unordered);
+// }
