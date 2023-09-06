@@ -129,12 +129,7 @@ pub const GossipService = struct {
 
         // bind the socket
         const gossip_address = my_contact_info.gossip;
-        if (gossip_address.is_unspecified()) {
-            return error.SocketBindFailed;
-        }
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
-        // .ADDRNOTAVAIL on public ip
-        // gossip_socket.bind(gossip_address.to_endpoint()) catch return error.SocketBindFailed;
         gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
 
@@ -267,7 +262,14 @@ pub const GossipService = struct {
                     bincode.Params.standard,
                 ) catch {
                     failed_protocol_msgs += 1;
-                    logger.debugf("failed to deserialize protocol message\n", .{});
+                    logger.debugf("failed to deserialize protocol message: {d}\n", .{std.mem.readIntLittle(u32, packet.data[0..4])});
+                    // std.debug.print("[", .{});
+                    // // print the packet data
+                    // for (packet.data[0..packet.size]) |byte| {
+                    //     std.debug.print("{d}, ", .{byte});
+                    // }
+                    // std.debug.print("]\n", .{});
+
                     continue;
                 };
 
