@@ -7,37 +7,37 @@ const assert = std.debug.assert;
 /// A thread-safe LRU Cache
 ///
 // TODO: allow for passing custom hash context to use in std.ArrayHashMap for performance.
-pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) type {
+pub fn LruCache(comptime K: type, comptime V: type) type {
     return struct {
         allocator: Allocator,
-        hashmap: std.AutoArrayHashMap(K, *Node),
-        dbl_link_list: TailQueue(Entry),
+        hashmap: if (K == []const u8) std.StringArrayHashMap(*Node) else std.AutoArrayHashMap(K, *Node),
+        dbl_link_list: TailQueue(LruEntry),
         max_items: usize,
         len: usize = 0,
         mux: std.Thread.Mutex,
 
         const Self = @This();
 
-        pub const Entry = struct {
+        pub const LruEntry = struct {
             key: K,
             value: V,
 
             const Self = @This();
 
-            pub fn init(key: K, val: V) Entry {
-                return Entry{
+            pub fn init(key: K, val: V) LruEntry {
+                return LruEntry{
                     .key = key,
                     .value = val,
                 };
             }
         };
 
-        const Node = TailQueue(Entry).Node;
+        const Node = TailQueue(LruEntry).Node;
 
-        fn initNode(self: *Self, key: K, val: V) Allocator.Error!*Node {
+        fn initNode(self: *Self, key: K, val: V) error{OutOfMemory}!*Node {
             self.len += 1;
             var node = try self.allocator.create(Node);
-            node.* = .{ .data = Entry.init(key, val) };
+            node.* = .{ .data = LruEntry.init(key, val) };
             return node;
         }
 
@@ -46,11 +46,12 @@ pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) t
             self.allocator.destroy(node);
         }
 
-        pub fn init(allocator: Allocator) Allocator.Error!Self {
+        pub fn init(allocator: Allocator, max_items: usize) error{OutOfMemory}!Self {
+            var hashmap = if (K == []const u8) std.StringArrayHashMap(*Node).init(allocator) else std.AutoArrayHashMap(K, *Node).init(allocator);
             var self = Self{
                 .allocator = allocator,
-                .hashmap = std.AutoArrayHashMap(K, *Node).init(allocator),
-                .dbl_link_list = TailQueue(Entry){},
+                .hashmap = hashmap,
+                .dbl_link_list = TailQueue(LruEntry){},
                 .max_items = max_items,
                 .mux = std.Thread.Mutex{},
             };
@@ -65,45 +66,62 @@ pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) t
         pub fn deinit(self: *Self) void {
             self.mux.lock();
             defer self.mux.unlock();
+
             while (self.dbl_link_list.pop()) |node| {
                 self.deinitNode(node);
             }
             self.hashmap.deinit();
         }
 
-        /// Inserts key/value if key doesn't exist, updates only value if it does.
-        /// In any case, it will affect cache ordering.
-        pub fn insert(self: *Self, key: K, value: V) Allocator.Error!void {
-            self.mux.lock();
-            defer self.mux.unlock();
-
-            // if key exists, we update it
-            if (self.hashmap.get(key)) |existing_node| {
-                self.dbl_link_list.remove(existing_node);
-                existing_node.data.value = value;
-                self.dbl_link_list.append(existing_node);
-                return;
-            }
-
-            if (self.dbl_link_list.len + 1 > self.max_items) {
+        /// Recycles an old node if LruCache capacity is full. If replaced, first element of tuple is replaced
+        /// Entry (otherwise null) and second element of tuple is inserted Entry.
+        fn internal_recycle_or_create_node(self: *Self, key: K, value: V) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
+            if (self.dbl_link_list.len == self.max_items) {
                 var recycled_node = self.dbl_link_list.popFirst().?;
                 assert(self.hashmap.swapRemove(recycled_node.data.key));
                 // after swap, this node is thrown away
                 var node_to_swap: Node = .{
-                    .data = Entry.init(key, value),
+                    .data = LruEntry.init(key, value),
                     .next = null,
                     .prev = null,
                 };
                 std.mem.swap(Node, recycled_node, &node_to_swap);
                 self.dbl_link_list.append(recycled_node);
                 self.hashmap.putAssumeCapacityNoClobber(key, recycled_node);
-                return;
+                return .{ node_to_swap.data, recycled_node.data };
             }
 
             // key not exist, alloc a new node
             var node = try self.initNode(key, value);
             self.hashmap.putAssumeCapacityNoClobber(key, node);
             self.dbl_link_list.append(node);
+            return .{ null, node.data };
+        }
+
+        fn internal_insert(self: *Self, key: K, value: V) LruEntry {
+            // if key exists, we update it
+            if (self.hashmap.get(key)) |existing_node| {
+                existing_node.data.value = value;
+                self.internal_reorder(existing_node);
+                return existing_node.data;
+            }
+
+            var replaced_and_created_node = self.internal_recycle_or_create_node(key, value) catch |e| {
+                std.debug.print("replace_or_create_node returned error: {any}", .{e});
+                @panic("could not recycle_or_create_node");
+            };
+            var new_lru_entry = replaced_and_created_node[1];
+            return new_lru_entry;
+        }
+
+        /// Inserts key/value if key doesn't exist, updates only value if it does.
+        /// In any case, it will affect cache ordering.
+        pub fn insert(self: *Self, key: K, value: V) error{OutOfMemory}!void {
+            self.mux.lock();
+            defer self.mux.unlock();
+
+            _ = self.internal_insert(key, value);
+            return;
         }
 
         /// Whether or not contains key.
@@ -111,13 +129,15 @@ pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) t
         pub fn contains(self: *Self, key: K) bool {
             self.mux.lock();
             defer self.mux.unlock();
+
             return self.hashmap.contains(key);
         }
 
         /// Most recently used entry
-        pub fn mru(self: *Self) ?Entry {
+        pub fn mru(self: *Self) ?LruEntry {
             self.mux.lock();
             defer self.mux.unlock();
+
             if (self.dbl_link_list.last) |node| {
                 return node.data;
             }
@@ -125,13 +145,20 @@ pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) t
         }
 
         /// Least recently used entry
-        pub fn lru(self: *Self) ?Entry {
+        pub fn lru(self: *Self) ?LruEntry {
             self.mux.lock();
             defer self.mux.unlock();
+
             if (self.dbl_link_list.first) |node| {
                 return node.data;
             }
             return null;
+        }
+
+        // reorder Node to the top
+        fn internal_reorder(self: *Self, node: *Node) void {
+            self.dbl_link_list.remove(node);
+            self.dbl_link_list.append(node);
         }
 
         /// Gets value associated with key if exists
@@ -147,10 +174,50 @@ pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) t
             return null;
         }
 
+        pub fn pop(self: *Self, k: K) ?V {
+            self.mux.lock();
+            defer self.mux.unlock();
+            if (self.hashmap.fetchSwapRemove(k)) |kv| {
+                self.dbl_link_list.remove(kv.value);
+                return kv.value.data.value;
+            }
+            return null;
+        }
+
+        pub fn peek(self: *Self, key: K) ?V {
+            self.mux.lock();
+            defer self.mux.unlock();
+
+            if (self.hashmap.get(key)) |node| {
+                return node.data.value;
+            }
+
+            return null;
+        }
+
+        /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
+        /// the key's value and returns the old value. Otherwise, `null` is returned.
+        pub fn put(self: *Self, key: K, value: V) ?V {
+            self.mux.lock();
+            defer self.mux.unlock();
+
+            if (self.hashmap.getEntry(key)) |existing_entry| {
+                var existing_node: *Node = existing_entry.value_ptr.*;
+                var old_value = existing_node.data.value;
+                existing_node.data.value = value;
+                self.internal_reorder(existing_node);
+                return old_value;
+            }
+
+            _ = self.internal_insert(key, value);
+            return null;
+        }
+
         /// Removes key from cache. Returns true if found, false if not.
         pub fn remove(self: *Self, key: K) bool {
             self.mux.lock();
             defer self.mux.unlock();
+
             if (self.hashmap.fetchSwapRemove(key)) |kv| {
                 var node = kv.value;
                 self.dbl_link_list.remove(node);
@@ -163,7 +230,7 @@ pub fn LruCache(comptime K: type, comptime V: type, comptime max_items: usize) t
 }
 
 test "common.lru: LruCache state is correct" {
-    var cache = try LruCache(u64, []const u8, 4).init(testing.allocator);
+    var cache = try LruCache(u64, []const u8).init(testing.allocator, 4);
     defer cache.deinit();
 
     try cache.insert(1, "one");
@@ -192,4 +259,20 @@ test "common.lru: LruCache state is correct" {
     try testing.expect(cache.remove(5));
     try testing.expectEqualStrings("two", cache.mru().?.value);
     try testing.expectEqual(cache.len, 3);
+}
+
+test "common.lru: put works as expected" {
+    var cache = try LruCache([]const u8, usize).init(testing.allocator, 4);
+    defer cache.deinit();
+
+    try cache.insert("a", 1);
+
+    var old = cache.put("a", 2);
+
+    try testing.expectEqual(@as(usize, 1), old.?);
+    try testing.expectEqual(@as(usize, 2), cache.get("a").?);
+
+    var possible_old = cache.put("b", 3);
+    try testing.expectEqual(possible_old, null);
+    try testing.expectEqual(@as(usize, 3), cache.get("b").?);
 }
