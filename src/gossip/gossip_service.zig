@@ -829,7 +829,7 @@ pub const GossipService = struct {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
                 var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
                 var packet = Packet.init(entrypoint_addr.to_endpoint(), packet_buf, msg_slice.len);
-                output.appendAssumeCapacity(packet);
+                try output.append(packet);
             }
         }
 
