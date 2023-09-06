@@ -29,7 +29,7 @@ pub const Ping = struct {
 
     const Self = @This();
 
-    pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: KeyPair) !Self {
+    pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
         const sig = try keypair.sign(&token, null);
         var self = Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key, true),
@@ -39,7 +39,7 @@ pub const Ping = struct {
         return self;
     }
 
-    pub fn random(keypair: KeyPair) !Self {
+    pub fn random(keypair: *const KeyPair) !Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
         rand.fill(&token);
@@ -92,7 +92,7 @@ test "gossip.protocol: ping signatures match rust" {
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-    var ping = Ping.init([_]u8{0} ** PING_TOKEN_SIZE, keypair) catch unreachable;
+    var ping = Ping.init([_]u8{0} ** PING_TOKEN_SIZE, &keypair) catch unreachable;
     const sig = ping.signature.data;
 
     const rust_sig = [_]u8{ 52, 171, 91, 205, 183, 211, 38, 219, 53, 155, 163, 118, 202, 169, 15, 237, 147, 87, 209, 20, 6, 115, 24, 114, 196, 41, 217, 55, 123, 245, 35, 138, 126, 47, 233, 182, 90, 206, 13, 173, 212, 107, 94, 120, 167, 254, 14, 11, 253, 199, 158, 4, 203, 42, 173, 143, 214, 209, 132, 158, 223, 62, 214, 11 };

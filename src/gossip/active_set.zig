@@ -17,10 +17,7 @@ const CrdsTable = _crds_table.CrdsTable;
 
 const pull_request = @import("../gossip/pull_request.zig");
 
-const GossipService = @import("../gossip/gossip_service.zig").GossipService;
-
 const Bloom = @import("../bloom/bloom.zig").Bloom;
-const RwMux = @import("../sync/mux.zig").RwMux;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const CRDS_GOSSIP_PUSH_FANOUT: usize = 6;
@@ -113,7 +110,7 @@ pub const ActiveSet = struct {
             // lookup peer contact info
             const peer_info = crds_table.get(crds.CrdsValueLabel{
                 .LegacyContactInfo = peer_pubkey,
-            }) orelse @panic("crds lookup error: peer contactInfo not found");
+            }) orelse continue; // peer pubkey could have been removed from the crds table
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
             crds.sanitize_socket(&peer_gossip_addr) catch continue;

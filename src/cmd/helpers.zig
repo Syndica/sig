@@ -1,11 +1,6 @@
 const std = @import("std");
-const UdpSocket = @import("zig-network").Socket;
 
-const GossipService = @import("../gossip/gossip_service.zig").GossipService;
-const SocketAddr = @import("../gossip/net.zig").SocketAddr;
-const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
 const Logger = @import("../trace/log.zig").Logger;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
 
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;

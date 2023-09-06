@@ -138,11 +138,17 @@ pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
             var dynamic_bitset = try bitvec.toBitSet(ally);
             return dynamic_bitset;
         }
+
+        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            _ = allocator;
+            data.deinit();
+        }
     };
 
     return bincode.FieldConfig(DynamicBitSet){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
+        .free = S.free,
     };
 }
 
@@ -163,7 +169,13 @@ test "bloom: serializes/deserializes correctly" {
     var buf: [10000]u8 = undefined;
     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    defer bincode.free(testing.allocator, deserialized);
+
+    // allocate some memory to make sure were cleaning up too
+    try deserialized.add_key(10);
+    try deserialized.bits.resize(100, true);
+
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 

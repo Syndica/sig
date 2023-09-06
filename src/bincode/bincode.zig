@@ -165,6 +165,25 @@ pub fn Deserializer(comptime Reader: type) type {
                     },
                     .Struct => |*info| {
                         inline for (info.fields) |field| {
+                            // std.debug.print("freeing {s} on {s}\n", .{ field.name, @typeName(T) });
+                            if (get_field_config(T, field)) |config| {
+                                if (config.free) |free_fcn| {
+                                    // std.debug.print("found free fcn...\n", .{});
+                                    var field_value = @field(value, field.name);
+                                    switch (@typeInfo(field.type)) {
+                                        .Pointer => |*field_info| {
+                                            if (field_info.size == .Slice) {
+                                                free_fcn(allocator, field_value);
+                                                continue;
+                                            }
+                                        },
+                                        else => {},
+                                    }
+                                    free_fcn(allocator, &field_value);
+                                    continue;
+                                }
+                            }
+
                             if (!field.is_comptime) {
                                 getty.de.free(allocator, d, @field(value, field.name));
                             }
@@ -174,7 +193,6 @@ pub fn Deserializer(comptime Reader: type) type {
                         if (info.size == .Many) {
                             unreachable;
                         }
-
                         std.debug.assert(info.size == .Slice);
                         for (value) |item| {
                             getty.de.free(allocator, d, item);
@@ -487,12 +505,14 @@ pub fn DeserializeFunction(comptime T: type) type {
     return fn (alloc: ?std.mem.Allocator, reader: anytype, params: Params) anyerror!T;
 }
 pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
+pub const FreeFunction = fn (allocator: std.mem.Allocator, data: anytype) void;
 
 // ** Field Functions ** //
 pub fn FieldConfig(comptime T: type) type {
     return struct {
         deserializer: ?DeserializeFunction(T) = null,
         serializer: ?SerializeFunction = null,
+        free: ?FreeFunction = null,
         skip: bool = false,
     };
 }
