@@ -35,7 +35,7 @@ pub const HardForks = struct {
     }
 };
 
-test "hard_forks" {
+test "core.hard_forks: test hardforks" {
     const testing_alloc = std.testing.allocator;
 
     var hard_forks = HardForks.default(testing_alloc);
