@@ -64,6 +64,11 @@ pub fn send_socket(
     std.debug.print("send_socket loop closed\n", .{});
 }
 
-pub fn benchmark_packet_processing() void {
-    std.time.sleep(std.time.ns_per_ms * 2);
-}
+pub const benchmark_packet_processing = struct {
+    pub const min_iterations = 1000;
+    pub const max_iterations = 1000;
+
+    pub fn run() void {
+        std.time.sleep(200);
+    }
+};
