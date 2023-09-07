@@ -157,7 +157,7 @@ pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
     };
 }
 
-test "bloom: helper fcns match rust" {
+test "bloom.bloom: helper fcns match rust" {
     const n_bits = Bloom.num_bits(100.2, 1e-5);
     try testing.expectEqual(@as(f64, 2402), n_bits);
 
@@ -168,7 +168,7 @@ test "bloom: helper fcns match rust" {
     defer bloom.deinit();
 }
 
-test "bloom: serializes/deserializes correctly" {
+test "bloom.bloom: serializes/deserializes correctly" {
     var bloom = Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
@@ -184,7 +184,7 @@ test "bloom: serializes/deserializes correctly" {
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
-test "bloom: serializes/deserializes correctly with set bits" {
+test "bloom.bloom: serializes/deserializes correctly with set bits" {
     var bloom = Bloom.init(testing.allocator, 128, null);
     try bloom.add_key(10);
     // required for memory leaks
@@ -199,7 +199,7 @@ test "bloom: serializes/deserializes correctly with set bits" {
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
-test "bloom: rust: serialized bytes equal rust (one key)" {
+test "bloom.bloom: rust: serialized bytes equal rust (one key)" {
     // note: need to init with len 2^i
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
@@ -216,7 +216,7 @@ test "bloom: rust: serialized bytes equal rust (one key)" {
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }
 
-test "bloom: rust: serialized bytes equal rust (multiple keys)" {
+test "bloom.bloom: rust: serialized bytes equal rust (multiple keys)" {
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
 

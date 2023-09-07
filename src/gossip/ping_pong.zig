@@ -271,7 +271,7 @@ test "gossip.ping_pong: PingCache works" {
     try testing.expect(ping != null);
 }
 
-test "gossip.protocol: ping signatures match rust" {
+test "gossip.ping_pong: ping signatures match rust" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
