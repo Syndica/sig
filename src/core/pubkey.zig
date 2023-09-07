@@ -88,6 +88,10 @@ pub const Pubkey = struct {
         return Self{ .data = bytes[0..32].*, .cached_str = dest[0..44].* };
     }
 
+    pub fn default() Self {
+        return Self{ .data = [_]u8{0} ** 32 };
+    }
+
     pub fn equals(self: *const Self, other: *const Pubkey) bool {
         return std.mem.eql(u8, &self.data, &other.data);
     }

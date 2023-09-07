@@ -22,6 +22,15 @@ var gossip_port_option = cli.Option{
     .value_name = "Gossip Port",
 };
 
+var gossip_entrypoints_option = cli.Option{
+    .long_name = "entrypoint",
+    .help = "gossip address of the entrypoint validators",
+    .short_alias = 'e',
+    .value = cli.OptionValue{ .string_list = null },
+    .required = false,
+    .value_name = "Entrypoints",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
@@ -42,6 +51,7 @@ var app = &cli.App{
         \\Start Solana gossip client on specified port.
         , .action = gossip, .options = &.{
             &gossip_port_option,
+            &gossip_entrypoints_option,
         } },
     },
 };
@@ -65,27 +75,37 @@ fn gossip(_: []const []const u8) !void {
     defer logger.deinit();
     logger.spawn();
 
-    var exit = std.atomic.Atomic(bool).init(false);
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
-    var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
+    var gossip_address = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, gossip_port);
     std.debug.print("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.shred_version = 0;
+    contact_info.shred_version = 0; // TODO: double check
     contact_info.gossip = gossip_address;
 
-    // TODO
-    var entrypoints = std.ArrayList(LegacyContactInfo).init(gpa_allocator);
+    var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     defer entrypoints.deinit();
+    if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
+        for (entrypoints_strs) |entrypoint| {
+            var value = SocketAddr.parse(entrypoint) catch {
+                std.debug.print("Invalid entrypoint: {s}\n", .{entrypoint});
+                return;
+            };
+            try entrypoints.append(value);
+        }
+    }
+    std.debug.print("entrypoints: {any}\n", .{entrypoints.items});
 
+    var exit = std.atomic.Atomic(bool).init(false);
     var gossip_service = try GossipService.init(
         gpa_allocator,
         contact_info,
         my_keypair,
+        entrypoints,
         &exit,
     );
     defer gossip_service.deinit();

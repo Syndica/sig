@@ -9,7 +9,6 @@ const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
 const LegacyContactInfo = crds.LegacyContactInfo;
 const ContactInfo = @import("node.zig").ContactInfo;
-const SOCKET_TAG_GOSSIP = @import("node.zig").SOCKET_TAG_GOSSIP;
 
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
@@ -146,11 +145,13 @@ pub const PingCache = struct {
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn recevied_pong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
         var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
-        if (self.pending_cache.peek(pong.hash)) |val| {
-            if (val == peer_and_addr) {
-                self.pings.pop(&peer_and_addr);
-                self.pongs.put(peer_and_addr, now);
-                self.pending_cache.pop(&pong.hash);
+        if (self.pending_cache.peek(pong.hash)) |pubkey_and_addr| {
+            const pubkey: Pubkey = pubkey_and_addr[0];
+            const addr: SocketAddr = pubkey_and_addr[1];
+            if (pubkey.equals(&pong.from) and addr.eql(&socket)) {
+                _ = self.pings.pop(peer_and_addr);
+                _ = self.pongs.put(peer_and_addr, now);
+                _ = self.pending_cache.pop(pong.hash);
                 return true;
             }
         }
@@ -269,7 +270,7 @@ test "gossip.ping_pong: PingCache works" {
     try testing.expect(ping != null);
 }
 
-test "gossip.protocol: ping signatures match rust" {
+test "gossip.ping_pong: ping signatures match rust" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,

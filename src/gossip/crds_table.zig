@@ -380,8 +380,20 @@ pub const CrdsTable = struct {
         );
     }
 
+    pub fn get_all_contact_infos(self: *const Self) error{OutOfMemory}!std.ArrayList(LegacyContactInfo) {
+        const n_contact_infos = self.contact_infos.count();
+        var contact_infos = try std.ArrayList(LegacyContactInfo).initCapacity(self.allocator, n_contact_infos);
+        var contact_indexs = self.contact_infos.keys();
+        for (contact_indexs) |index| {
+            const entry: CrdsVersionedValue = self.store.values()[index];
+            contact_infos.appendAssumeCapacity(entry.value.data.LegacyContactInfo);
+        }
+
+        return contact_infos;
+    }
+
     pub fn get_contact_infos(self: *const Self, buf: []CrdsVersionedValue) []CrdsVersionedValue {
-        const store_values = self.store.iterator().values;
+        const store_values = self.store.values();
         const contact_indexs = self.contact_infos.iterator().keys;
         const size = @min(self.contact_infos.count(), buf.len);
 
@@ -884,6 +896,10 @@ test "gossip.crds_table: insert and get contact_info" {
     var nodes = crds_table.get_contact_infos(&buf);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
+
+    var nodes_array = try crds_table.get_all_contact_infos();
+    defer nodes_array.deinit();
+    try std.testing.expect(nodes_array.items.len == 1);
 
     // test re-insertion
     const result = crds_table.insert(crds_value, 0);
