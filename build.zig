@@ -66,23 +66,13 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    // const main_tests = b.addTest(.{
-    //     .root_source_file = .{ .path = "src/main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // const run_main_tests = b.addRunArtifact(main_tests);
-
+    // unit tests 
     const tests = b.addTest(.{
         .root_source_file = .{ .path = "src/tests.zig" },
         .target = target,
         .optimize = optimize,
         .filter = if (b.args) |args| args[0] else null, // filter tests like so: zig build test -- "<FILTER>"
     });
-
     tests.addModule("zig-network", zig_network_module);
     tests.addModule("base58-zig", base58_module);
     tests.addModule("zig-cli", zig_cli_module);
@@ -96,6 +86,23 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib.step);
     test_step.dependOn(&run_tests.step);
+
+    // benchmarks 
+    const benchmarks = b.addTest(.{
+        .root_source_file = .{ .path = "src/benchmarks.zig" },
+        .target = target,
+        .optimize = std.builtin.Mode.ReleaseSafe, // to get decent results
+        .single_threaded = false, // ?
+    });
+    benchmarks.addModule("zig-network", zig_network_module);
+    benchmarks.addModule("base58-zig", base58_module);
+    benchmarks.addModule("zig-cli", zig_cli_module);
+    benchmarks.addModule("getty", getty_mod);
+
+    const run_benchmarks = b.addRunArtifact(benchmarks);
+    const benchmark_step = b.step("benchmark", "Run library benchmarks");
+    benchmark_step.dependOn(&lib.step);
+    benchmark_step.dependOn(&run_benchmarks.step);
 
     const exe = b.addExecutable(.{
         .name = "sig",

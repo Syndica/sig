@@ -4,5 +4,6 @@ const builtin = @import("builtin");
 
 test {
     std.testing.log_level = std.log.Level.err;
-    std.testing.refAllDecls(lib);
+    // need to mention benchmark file here
+    _ = &lib.benchmark.gossip;
 }
