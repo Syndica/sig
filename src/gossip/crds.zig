@@ -1,5 +1,5 @@
 const std = @import("std");
-const SocketAddr = @import("net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;

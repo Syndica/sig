@@ -10,7 +10,7 @@ const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
 
-const SocketAddr = @import("net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const get_wallclock_ms = @import("crds.zig").get_wallclock_ms;

@@ -6,7 +6,7 @@ const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
 const Logger = @import("../trace/log.zig").Logger;
 const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const SocketAddr = @import("../gossip/net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
