@@ -1,15 +1,6 @@
 const std = @import("std");
-const lib = @import("lib.zig");
-
 const Decl = std.builtin.Type.Declaration;
-const BENCHMARK_FLAG = "benchmark_";
 
-pub fn main() !void {
-    try benchmark(@import("gossip/socket_utils.zig").benchmark_packet_processing);
-}
-
-// src: https://github.com/Hejsil/zig-bench
-// bench.zig
 const debug = std.debug;
 const io = std.io;
 const math = std.math;
@@ -17,6 +8,11 @@ const mem = std.mem;
 const meta = std.meta;
 const time = std.time;
 
+pub fn main() !void {
+    try benchmark(@import("gossip/socket_utils.zig").benchmark_packet_processing);
+}
+
+// src: https://github.com/Hejsil/zig-bench
 pub fn benchmark(comptime B: type) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
     const arg_names = if (@hasDecl(B, "arg_names")) B.arg_names else [_]u8{};

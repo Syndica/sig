@@ -1963,7 +1963,3 @@ test "gossip.gossip_service: init, exit, and deinit" {
     handle.join();
     gossip_service.deinit();
 }
-
-// pub fn benchmark_gossip_service() void {
-//     std.time.sleep(std.time.ns_per_ms);
-// }
