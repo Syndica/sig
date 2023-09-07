@@ -251,6 +251,7 @@ pub fn main() !void {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -276,6 +277,7 @@ pub fn main() !void {
         allocator,
         fuzz_contact_info,
         fuzz_keypair,
+        null,
         &fuzz_exit,
     );
     var fuzz_handle = try std.Thread.spawn(

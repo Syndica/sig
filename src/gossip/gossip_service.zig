@@ -50,7 +50,6 @@ const Channel = @import("../sync/channel.zig").Channel;
 const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
-const Mutable = @import("../sync/mux.zig").Mutable;
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 
@@ -98,6 +97,7 @@ pub const GossipService = struct {
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
+    entrypoints: std.ArrayList(SocketAddr),
     ping_cache_rw: RwMux(PingCache),
 
     const Self = @This();
@@ -106,6 +106,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_contact_info: crds.LegacyContactInfo,
         my_keypair: KeyPair,
+        entrypoints: ?std.ArrayList(SocketAddr),
         exit: *AtomicBool,
     ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_incoming_channel = PacketChannel.init(allocator, 10000);
@@ -127,11 +128,8 @@ pub const GossipService = struct {
 
         // bind the socket
         const gossip_address = my_contact_info.gossip;
-        if (gossip_address.is_unspecified()) {
-            return error.SocketBindFailed;
-        }
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
-        gossip_socket.bind(gossip_address.to_endpoint()) catch return error.SocketBindFailed;
+        gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
 
         var failed_pull_hashes = HashTimeQueue.init(allocator);
@@ -152,6 +150,7 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
+            .entrypoints = entrypoints orelse std.ArrayList(SocketAddr).init(allocator),
             .ping_cache_rw = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
@@ -180,6 +179,8 @@ pub const GossipService = struct {
         self.packet_incoming_channel.deinit();
         self.packet_outgoing_channel.deinit();
         self.verified_incoming_channel.deinit();
+
+        self.entrypoints.deinit();
 
         deinit_rw_mux(&self.crds_table_rw);
         deinit_rw_mux(&self.active_set_rw);
@@ -260,7 +261,13 @@ pub const GossipService = struct {
                     bincode.Params.standard,
                 ) catch {
                     failed_protocol_msgs += 1;
-                    logger.debugf("failed to deserialize protocol message\n", .{});
+                    logger.debugf("failed to deserialize protocol message: {d}\n", .{std.mem.readIntLittle(u32, packet.data[0..4])});
+                    // // print the packet data
+                    // std.debug.print("[", .{});
+                    // for (packet.data[0..packet.size]) |byte| {
+                    //     std.debug.print("{d}, ", .{byte});
+                    // }
+                    // std.debug.print("]\n", .{});
                     continue;
                 };
 
@@ -360,6 +367,17 @@ pub const GossipService = struct {
                         var pull_filter: CrdsFilter = pull[0];
                         var pull_value: CrdsValue = pull[1]; // contact info
 
+                        switch (pull_value.data) {
+                            .LegacyContactInfo => |*info| {
+                                if (info.id.equals(&self.my_pubkey)) {
+                                    // talking to myself == ignore
+                                    continue;
+                                }
+                            },
+                            // only contact info supported
+                            else => continue,
+                        }
+
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
@@ -433,13 +451,24 @@ pub const GossipService = struct {
                         };
 
                         try self.packet_outgoing_channel.send(packet);
-                        ping_log_entry.info("received ping message");
+
+                        ping_log_entry
+                            .field("pongs sent", 1)
+                            .info("received ping message");
                     },
                     .PongMessage => |*pong| {
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
 
+                        {
+                            var ping_cache_lock = self.ping_cache_rw.write();
+                            defer ping_cache_lock.unlock();
+
+                            var ping_cache: *PingCache = ping_cache_lock.mut();
+                            const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
+                            _ = ping_cache.recevied_pong(pong, SocketAddr.from_endpoint(from_endpoint), now);
+                        }
                         logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &pong.from.string())
@@ -691,6 +720,63 @@ pub const GossipService = struct {
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
     ) !std.ArrayList(Packet) {
+        // get nodes from crds table
+        var buf: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
+        const now = get_wallclock_ms();
+        var peers = self.get_gossip_nodes(
+            &buf,
+            MAX_NUM_PULL_REQUESTS,
+            now,
+        );
+
+        // randomly include an entrypoint in the pull if we dont have their contact info
+        var rng = std.rand.DefaultPrng.init(now);
+        var entrypoint_index: i16 = -1;
+        if (self.entrypoints.items.len != 0) blk: {
+            var crds_table_lg = self.crds_table_rw.read();
+            defer crds_table_lg.unlock();
+
+            var maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
+            const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
+
+            const crds_table: *const CrdsTable = crds_table_lg.get();
+            const contact_infos = try crds_table.get_all_contact_infos();
+            defer contact_infos.deinit();
+
+            for (contact_infos.items) |contact_info| {
+                if (contact_info.gossip.eql(&entrypoint)) {
+                    // early exit - we already have the peers in our contact info
+                    break :blk;
+                }
+            }
+            // we dont have them so well add them to the peer list (as default contact info)
+            entrypoint_index = @intCast(maybe_entrypoint_index);
+        }
+
+        // filter out peers who have responded to pings
+        var ping_cache_result = blk: {
+            var ping_cache_lock = self.ping_cache_rw.write();
+            defer ping_cache_lock.unlock();
+            var ping_cache: *PingCache = ping_cache_lock.mut();
+
+            var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, peers);
+            break :blk result;
+        };
+        var valid_gossip_peers = ping_cache_result.valid_peers;
+        defer valid_gossip_peers.deinit();
+
+        // send pings to peers
+        var pings_to_send_out = ping_cache_result.pings;
+        defer pings_to_send_out.deinit();
+        try self.send_pings(pings_to_send_out);
+
+        const should_send_to_entrypoint = entrypoint_index != -1;
+        const num_peers = valid_gossip_peers.items.len;
+
+        if (num_peers == 0 and !should_send_to_entrypoint) {
+            return error.NoPeers;
+        }
+
         // compute failed pull crds hash values
         const failed_pull_hashes_array = blk: {
             var failed_pull_hashes_lock = self.failed_pull_hashes_mux.lock();
@@ -711,38 +797,6 @@ pub const GossipService = struct {
         );
         defer pull_request.deinit_crds_filters(&filters);
 
-        // get nodes from crds table
-        var buf: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
-        const now = get_wallclock_ms();
-        var peers = self.get_gossip_nodes(
-            &buf,
-            MAX_NUM_PULL_REQUESTS,
-            now,
-        );
-
-        // filter out valid peers and send ping messages to peers
-        // filter out peers who have responded to pings
-        var ping_cache_result = blk: {
-            var ping_cache_lock = self.ping_cache_rw.write();
-            defer ping_cache_lock.unlock();
-            var ping_cache: *PingCache = ping_cache_lock.mut();
-
-            var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, peers);
-            break :blk result;
-        };
-        var valid_gossip_peers = ping_cache_result.valid_peers;
-        defer valid_gossip_peers.deinit();
-
-        // send pings to peers
-        var pings_to_send_out = ping_cache_result.pings;
-        defer pings_to_send_out.deinit();
-        try self.send_pings(pings_to_send_out);
-
-        const num_peers = valid_gossip_peers.items.len;
-        if (num_peers == 0) {
-            return error.NoPeers;
-        }
-
         // build packet responses
         var output = try std.ArrayList(Packet).initCapacity(self.allocator, filters.items.len);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -753,18 +807,30 @@ pub const GossipService = struct {
             .LegacyContactInfo = self.my_contact_info,
         }, &self.my_keypair);
 
-        var rng = std.rand.DefaultPrng.init(now);
-        for (filters.items) |filter_i| {
-            // TODO: incorperate stake weight in random sampling
-            const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
-            const peer_contact_info = valid_gossip_peers.items[peer_index];
-            const peer_addr = peer_contact_info.gossip.to_endpoint();
+        if (num_peers != 0) {
+            for (filters.items) |filter_i| {
+                // TODO: incorperate stake weight in random sampling
+                const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
+                const peer_contact_info = valid_gossip_peers.items[peer_index];
+                const peer_addr = peer_contact_info.gossip.to_endpoint();
 
-            const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
+                const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
-            var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-            var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
-            output.appendAssumeCapacity(packet);
+                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+                var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
+                output.appendAssumeCapacity(packet);
+            }
+        }
+
+        // append entrypoint msgs
+        if (should_send_to_entrypoint) {
+            const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+            for (filters.items) |filter| {
+                const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
+                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
+                var packet = Packet.init(entrypoint_addr.to_endpoint(), packet_buf, msg_slice.len);
+                try output.append(packet);
+            }
         }
 
         return output;
@@ -810,8 +876,12 @@ pub const GossipService = struct {
 
         // send a ping
         if (result.maybe_ping) |ping| {
+            if (maybe_log_entry) |log_entry| {
+                _ = log_entry.field("pings_sent", 1);
+            }
             var ping_buff = [_]u8{0} ** PACKET_DATA_SIZE;
-            var serialized_ping = bincode.writeToSlice(&ping_buff, ping, .{}) catch return error.SerializationError;
+            var protocol_msg = Protocol{ .PingMessage = ping };
+            var serialized_ping = bincode.writeToSlice(&ping_buff, protocol_msg, .{}) catch return error.SerializationError;
             var packet = Packet.init(pull_from_endpoint, ping_buff, serialized_ping.len);
             try self.packet_outgoing_channel.send(packet);
         }
@@ -1146,7 +1216,8 @@ pub const GossipService = struct {
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
         for (pings.items) |ping_and_addr| {
-            var serialized_ping = bincode.writeToSlice(&packet_buf, ping_and_addr.ping, .{}) catch return error.SerializationError;
+            const protocol_msg = Protocol{ .PingMessage = ping_and_addr.ping };
+            var serialized_ping = bincode.writeToSlice(&packet_buf, protocol_msg, .{}) catch return error.SerializationError;
 
             var to_endpoint = ping_and_addr.socket.to_endpoint();
             var packet = Packet.init(to_endpoint, packet_buf, serialized_ping.len);
@@ -1169,7 +1240,8 @@ pub const GossipService = struct {
     ) []crds.LegacyContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
-        var buf: [MAX_SIZE]crds.CrdsVersionedValue = undefined;
+        // * 2 bc we might filter out some
+        var buf: [MAX_SIZE * 2]crds.CrdsVersionedValue = undefined;
         const contact_infos = blk: {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
@@ -1297,6 +1369,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1359,6 +1432,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1406,6 +1480,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1484,6 +1559,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1555,6 +1631,7 @@ test "gossip.gossip_service: test build_pull_requests" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1597,6 +1674,7 @@ test "gossip.gossip_service: test build_push_messages" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1658,7 +1736,7 @@ test "gossip.gossip_service: test packet verification" {
     var contact_info = crds.LegacyContactInfo.default(id);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
-    var gossip_service = try GossipService.init(allocator, contact_info, keypair, &exit);
+    var gossip_service = try GossipService.init(allocator, contact_info, keypair, null, &exit);
     defer gossip_service.deinit();
 
     var packet_channel = gossip_service.packet_incoming_channel;
@@ -1782,6 +1860,7 @@ test "gossip.gossip_service: process contact_info push packet" {
         allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
     defer gossip_service.deinit();
@@ -1866,6 +1945,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
         std.testing.allocator,
         contact_info,
         my_keypair,
+        null,
         &exit,
     );
 
