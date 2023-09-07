@@ -30,12 +30,6 @@ pub const gossip = struct {
     pub usingnamespace @import("gossip/socket_utils.zig");
 };
 
-pub const benchmark = struct {
-    pub const gossip = struct {
-        pub usingnamespace @import("gossip/benchmark.zig");
-    };
-};
-
 pub const bloom = struct {
     pub usingnamespace @import("bloom/bitvec.zig");
     pub usingnamespace @import("bloom/bloom.zig");
