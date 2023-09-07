@@ -353,29 +353,3 @@ test "gossip.pull: crds filter matches rust bytes" {
     var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
 }
-
-test "gossip.pull: crds filter matches rust bytes with values" {
-    // const hash = Hash {
-    //     .data = .{ 1 } ** 32,
-    // };
-    // var keys = std.ArrayList(u64).init(std.testing.allocator);
-    // try keys.append(19);
-
-    // var filter = CrdsFilter {
-    //     .filter = Bloom.init(std.testing.allocator, 32, null),
-    //     .mask = 0,
-    //     .mask_bits = 0,
-    // };
-    // defer filter.deinit();
-    // filter.filter.bits.set(19);
-
-    // var buf = [_]u8{0} ** 1024;
-    // {
-    //     var bytes = try bincode.writeToSlice(&buf, filter, bincode.Params.standard);
-    //     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-
-    //     // std.debug.print("\n{any}\n", .{bytes});
-    //     // std.debug.print("{any}\n", .{rust_bytes});
-    //     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
-    // }
-}
