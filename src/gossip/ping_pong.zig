@@ -9,7 +9,6 @@ const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
 const LegacyContactInfo = crds.LegacyContactInfo;
 const ContactInfo = @import("node.zig").ContactInfo;
-const SOCKET_TAG_GOSSIP = @import("node.zig").SOCKET_TAG_GOSSIP;
 
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
@@ -19,7 +18,6 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 const LruCache = @import("../common/lru.zig").LruCache;
 const SocketAddr = @import("net.zig").SocketAddr;
-const bincode = @import("../bincode/bincode.zig");
 const Instant = std.time.Instant;
 const assert = std.debug.assert;
 

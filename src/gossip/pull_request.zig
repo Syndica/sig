@@ -5,7 +5,6 @@ const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
-const BitVec = @import("../bloom/bitvec.zig").BitVec;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;

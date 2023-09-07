@@ -50,7 +50,6 @@ const Channel = @import("../sync/channel.zig").Channel;
 const PacketChannel = Channel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
-const Mutable = @import("../sync/mux.zig").Mutable;
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 
