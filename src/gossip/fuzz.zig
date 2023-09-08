@@ -53,30 +53,36 @@ const PacketChannel = NonBlockingChannel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = NonBlockingChannel(ProtocolMessage);
 
-pub fn random_ping(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    var ping_buf: [32]u8 = undefined;
-    rng.bytes(&ping_buf);
-    const ping = Protocol{
-        .PingMessage = try Ping.init(ping_buf, keypair),
-    };
-
+pub fn serialize_to_packet(d: anytype, to_addr: EndPoint) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var msg_slice = try bincode.writeToSlice(&packet_buf, ping, bincode.Params{});
+    var msg_slice = try bincode.writeToSlice(&packet_buf, d, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
     return packet;
 }
 
-pub fn random_pong(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    var ping_buf: [32]u8 = undefined;
-    rng.bytes(&ping_buf);
-    const ping = try Ping.init(ping_buf, keypair);
-
-    const pong = Protocol{
-        .PongMessage = try Pong.init(&ping, keypair),
+pub fn random_ping(rng: std.rand.Random, keypair: *const KeyPair) !Protocol {
+    const ping = Protocol{
+        .PingMessage = try Ping.random(rng, keypair),
     };
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var msg_slice = try bincode.writeToSlice(&packet_buf, pong, bincode.Params{});
-    var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
+    return ping;
+}
+
+pub fn random_ping_packet(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+    const ping = try random_ping(rng, keypair);
+    const packet = try serialize_to_packet(ping, to_addr);
+    return packet;
+}
+
+pub fn random_pong(rng: std.rand.Random, keypair: *const KeyPair) !Protocol {
+    const pong = Protocol{
+        .PongMessage = try Pong.random(rng, keypair),
+    };
+    return pong;
+}
+
+pub fn random_pong_packet(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+    const pong = try random_pong(rng, keypair);
+    const packet = try serialize_to_packet(pong, to_addr);
     return packet;
 }
 
@@ -229,7 +235,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
-    var logger = Logger.init(gpa.allocator(), .debug, null);
+    var logger = Logger.init(gpa.allocator(), .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -301,12 +307,12 @@ pub fn main() !void {
         var packet = switch (command) {
             0 => blk: {
                 // send ping message
-                const packet = random_ping(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packet = random_ping_packet(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
                 break :blk packet;
             },
             1 => blk: {
                 // send pong message
-                const packet = random_pong(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packet = random_pong_packet(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
                 break :blk packet;
             },
             2 => blk: {

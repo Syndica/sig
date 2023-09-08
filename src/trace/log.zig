@@ -227,6 +227,5 @@ test "trace.logger: works" {
     defer logger_null.deinit();
 
     logger_null.field("elapsed", 4245).debug("request with id succeeded");
-
     std.time.sleep(std.time.ns_per_ms * 100);
 }

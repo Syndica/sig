@@ -22,13 +22,13 @@ pub fn main() !void {
             std.debug.print("filtering benchmarks with prefix: {s}\n", .{filter});
             break :blk filter;
         } else {
-            std.debug.print("no filter\n", .{});
+            std.debug.print("no filter: running all benchmarks\n", .{});
             break :blk "";
         }
     };
 
     // TODO: very manual for now (bc we only have 2 benchmarks)
-    // if we have more benchmarks we should make this more efficient
+    // if we have more benchmarks we can make this more efficient
 
     if (std.mem.startsWith(u8, "socket_utils", filter)) {
         try benchmark(@import("gossip/socket_utils.zig").benchmark_packet_processing);

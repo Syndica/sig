@@ -45,10 +45,9 @@ pub const Ping = struct {
         return self;
     }
 
-    pub fn random(keypair: *const KeyPair) !Self {
+    pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
-        var rand = DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-        rand.fill(&token);
+        rng.bytes(&token);
         var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
@@ -88,6 +87,11 @@ pub const Pong = struct {
         if (!self.signature.verify(self.from, &self.hash.data)) {
             return error.InvalidSignature;
         }
+    }
+
+    pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
+        const ping = try Ping.random(rng, keypair);
+        return try Pong.init(&ping, keypair);
     }
 };
 
@@ -172,7 +176,8 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var ping = Ping.random(keypair) catch return null;
+        var rng = DefaultPrng.init(crds.get_wallclock_ms());
+        var ping = Ping.random(rng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, peer_and_addr);
