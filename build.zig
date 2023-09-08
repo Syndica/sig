@@ -146,6 +146,7 @@ pub fn build(b: *std.Build) void {
         .name = "benchmark",
         .root_source_file = .{ .path = "src/benchmarks.zig" },
         .target = target,
+        // TODO: make it work
         // .optimize = std.builtin.Mode.ReleaseSafe, // to get decent results - but things get optimized away
         .optimize = optimize,
         .main_pkg_path = .{ .path = "src" },
