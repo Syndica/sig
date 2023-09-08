@@ -107,7 +107,7 @@ pub fn random_crds_value(rng: std.rand.Random, maybe_should_pass_sig_verificatio
     return value;
 }
 
-pub fn random_push_message(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn random_push_message(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var crds_values: [size]CrdsValue = undefined;
     var should_pass_sig_verification = rng.boolean();
@@ -116,30 +116,18 @@ pub fn random_push_message(rng: std.rand.Random, keypair: *const KeyPair, to_add
         crds_values[i] = value;
     }
 
-    // serialize and send as packet
-    var size_for_packet = @as(usize, size);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    while (size_for_packet > 0) {
-        var msg = Protocol{ .PushMessage = .{ pubkey, crds_values[0..size_for_packet] } };
-        var msg_slice = bincode.writeToSlice(&packet_buf, msg, bincode.Params{}) catch |err| {
-            if (err == error.OutOfMemory) {
-                // TODO: optimize
-                size_for_packet -= 1;
-                continue;
-            } else {
-                return err;
-            }
-        };
-
-        var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
-        return packet;
-    }
-
-    return error.FailedToBuildRandomPushPacket;
+    const allocator = std.heap.page_allocator;
+    const packets = try crds_values_to_packets(
+        allocator,
+        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &crds_values,
+        &to_addr,
+        ChunkType.PushMessage,
+    );
+    return packets;
 }
 
-pub fn random_pull_response(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn random_pull_response(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var crds_values: [size]CrdsValue = undefined;
     var should_pass_sig_verification = rng.boolean();
@@ -156,10 +144,7 @@ pub fn random_pull_response(rng: std.rand.Random, keypair: *const KeyPair, to_ad
         &to_addr,
         ChunkType.PullResponse,
     );
-    defer packets.deinit();
-
-    const packet = packets.items[0];
-    return packet;
+    return packets;
 }
 
 pub fn random_pull_request(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
@@ -313,12 +298,24 @@ pub fn main() !void {
             },
             2 => blk: {
                 // send push message
-                const packet = random_push_message(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packets = random_push_message(rng.random(), &fuzz_keypair, gossip_address.to_endpoint()) catch |err| {
+                    std.debug.print("ERROR: {s}\n", .{@errorName(err)});
+                    continue;
+                };
+                defer packets.deinit();
+
+                const packet = packets.items[0];
                 break :blk packet;
             },
             3 => blk: {
                 // send pull response
-                const packet = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packets = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.to_endpoint()) catch |err| {
+                    std.debug.print("ERROR: {s}\n", .{@errorName(err)});
+                    continue;
+                };
+                defer packets.deinit();
+
+                const packet = packets.items[0];
                 break :blk packet;
             },
             4 => blk: {
