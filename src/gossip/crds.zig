@@ -469,7 +469,7 @@ pub const Vote = struct {
         return Vote{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .transaction = Transaction.default(),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .slot = rng.int(u64),
         };
     }
@@ -787,7 +787,7 @@ pub const DuplicateShred = struct {
 
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock(),
+            .wallclock = get_wallclock_ms(),
             .slot = rng.int(u64),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
@@ -815,7 +815,7 @@ pub const SnapshotHashes = struct {
         var slice: [0]struct { Slot, Hash } = .{};
         return SnapshotHashes{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .full = .{ Slot.init(rng.int(u64)), Hash.random() },
+            .full = .{ rng.int(u64), Hash.random() },
             .incremental = &slice,
             .wallclock = get_wallclock_ms(),
         };
