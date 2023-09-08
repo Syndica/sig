@@ -17,12 +17,23 @@ pub const Logger = struct {
     exit_sig: AtomicBool,
     handle: ?std.Thread,
     channel: *Channel(*Entry),
+    entry_sink: EntrySink,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, default_level: Level) *Self {
+    pub fn init(allocator: std.mem.Allocator, default_level: Level, entry_sink: ?EntrySink) *Self {
         var self = allocator.create(Self) catch @panic("could not allocator.create Logger");
         var arena = std.heap.ArenaAllocator.init(allocator);
+
+        var sink = blk: {
+            if (entry_sink == null) {
+                var sink = StdErrEntrySink{};
+                break :blk sink.entry_sink();
+            } else {
+                break :blk entry_sink.?;
+            }
+        };
+
         self.* = .{
             .allocator = allocator,
             .arena = arena,
@@ -30,6 +41,7 @@ pub const Logger = struct {
             .exit_sig = AtomicBool.init(false),
             .handle = null,
             .channel = Channel(*Entry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
+            .entry_sink = sink,
         };
         return self;
     }
@@ -50,8 +62,6 @@ pub const Logger = struct {
     }
 
     fn run(self: *Self) void {
-        var stdErrConsumer = BasicStdErrSink{};
-
         while (!self.exit_sig.load(.SeqCst)) {
             std.time.sleep(std.time.ns_per_ms * 5);
 
@@ -61,7 +71,7 @@ pub const Logger = struct {
             };
             defer self.channel.allocator.free(entries);
 
-            stdErrConsumer.consumeEntries(entries);
+            self.entry_sink.consume_entries(entries);
 
             // deinit entries
             for (entries) |e| {
@@ -107,10 +117,30 @@ pub const Logger = struct {
     }
 };
 
-const BasicStdErrSink = struct {
+const EntrySink = struct {
+    ptr: *anyopaque,
+    impl: *const Impl,
+
     const Self = @This();
 
-    pub fn consumeEntries(_: Self, entries: []*Entry) void {
+    const Impl = struct {
+        consume_entries: *const fn (ctx: *anyopaque, entries: []*Entry) void,
+        consume_entry: *const fn (ctx: *anyopaque, entry: *Entry) void,
+    };
+
+    pub fn consume_entries(self: *Self, entries: []*Entry) void {
+        self.impl.consume_entries(self.ptr, entries);
+    }
+
+    pub fn consume_entry(self: *Self, e: *Entry) void {
+        self.impl.consume_entry(self.ptr, e);
+    }
+};
+
+pub const StdErrEntrySink = struct {
+    const Self = @This();
+
+    pub fn consume_entries(_: *anyopaque, entries: []*Entry) void {
         var std_err_writer = std.io.getStdErr().writer();
         var std_err_mux = std.debug.getStderrMutex();
         std_err_mux.lock();
@@ -121,7 +151,7 @@ const BasicStdErrSink = struct {
         }
     }
 
-    pub fn consumeEntry(_: Self, e: *Entry) void {
+    pub fn consume_entry(_: *anyopaque, e: *Entry) void {
         var std_err_writer = std.io.getStdErr().writer();
         var std_err_mux = std.debug.getStderrMutex();
         std_err_mux.lock();
@@ -129,10 +159,42 @@ const BasicStdErrSink = struct {
 
         logfmt.formatter(e, std_err_writer) catch unreachable;
     }
+
+    pub fn entry_sink(self: *Self) EntrySink {
+        return EntrySink{
+            .ptr = self,
+            .impl = &.{
+                .consume_entries = consume_entries,
+                .consume_entry = consume_entry,
+            },
+        };
+    }
+};
+
+pub const DoNothingSink = struct {
+    const Self = @This();
+
+    pub fn consume_entries(_: *anyopaque, entries: []*Entry) void {
+        _ = entries;
+    }
+
+    pub fn consume_entry(_: *anyopaque, e: *Entry) void {
+        _ = e;
+    }
+
+    pub fn entry_sink(self: *Self) EntrySink {
+        return EntrySink{
+            .ptr = self,
+            .impl = &.{
+                .consume_entries = consume_entries,
+                .consume_entry = consume_entry,
+            },
+        };
+    }
 };
 
 test "trace.logger: works" {
-    var logger = Logger.init(testing.allocator, .info);
+    var logger = Logger.init(testing.allocator, .info, null);
     logger.spawn();
     defer logger.deinit();
 
@@ -155,6 +217,16 @@ test "trace.logger: works" {
         .field("tmp2", 456)
         .field("tmp2", s)
         .info("new push message");
+
+    std.time.sleep(std.time.ns_per_ms * 100);
+
+    std.debug.print("--- \n", .{});
+    var sink = DoNothingSink{};
+    var logger_null = Logger.init(testing.allocator, .info, sink.entry_sink());
+    logger_null.spawn();
+    defer logger_null.deinit();
+
+    logger_null.field("elapsed", 4245).debug("request with id succeeded");
 
     std.time.sleep(std.time.ns_per_ms * 100);
 }

@@ -33,6 +33,7 @@ const HashTimeQueue = _crds_table.HashTimeQueue;
 const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
 
 const Logger = @import("../trace/log.zig").Logger;
+const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
 const Entry = @import("../trace/entry.zig").Entry;
 
 const pull_request = @import("../gossip/pull_request.zig");
@@ -99,6 +100,9 @@ pub const GossipService = struct {
 
     entrypoints: std.ArrayList(SocketAddr),
     ping_cache_rw: RwMux(PingCache),
+
+    // used for benchmarking
+    messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
 
     const Self = @This();
 
@@ -294,6 +298,8 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing `Protocol` messages.
     pub fn process_messages(self: *Self, logger: *Logger) !void {
+        var msg_count: usize = 0;
+
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
             if (maybe_protocol_messages == null) {
@@ -485,6 +491,9 @@ pub const GossipService = struct {
                         logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
                     };
                 }
+
+                msg_count += 1;
+                self.messages_processed.store(msg_count, std.atomic.Ordering.Unordered);
             }
         }
 
@@ -1573,7 +1582,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
         try values.append(value);
     }
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, .debug, null);
     defer logger.deinit();
     logger.spawn();
 
@@ -1636,7 +1645,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     );
     defer gossip_service.deinit();
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, .debug, null);
     defer logger.deinit();
     logger.spawn();
 
@@ -1742,7 +1751,7 @@ test "gossip.gossip_service: test packet verification" {
     var packet_channel = gossip_service.packet_incoming_channel;
     var verified_channel = gossip_service.verified_incoming_channel;
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, .debug, null);
     defer logger.deinit();
     logger.spawn();
 
@@ -1868,7 +1877,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var verified_channel = gossip_service.verified_incoming_channel;
     var responder_channel = gossip_service.packet_outgoing_channel;
 
-    var logger = Logger.init(allocator, .debug);
+    var logger = Logger.init(allocator, .debug, null);
     defer logger.deinit();
     logger.spawn();
 
@@ -1949,7 +1958,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
         &exit,
     );
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, .debug, null);
     defer logger.deinit();
     logger.spawn();
 
@@ -1969,6 +1978,46 @@ pub const benchmark_message_processing = struct {
     pub const max_iterations = 5;
 
     pub fn benchmark_gossip_service() !void {
-        std.time.sleep(std.time.ns_per_ms);
+        const allocator = std.heap.page_allocator;
+        var keypair = try KeyPair.create(null);
+        var address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+
+        var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+        var contact_info = crds.LegacyContactInfo.default(pubkey);
+        contact_info.shred_version = 19;
+        contact_info.gossip = address;
+
+        var exit = AtomicBool.init(false);
+        var gossip_service = try GossipService.init(
+            allocator,
+            contact_info,
+            keypair,
+            null,
+            &exit,
+        );
+        defer gossip_service.deinit();
+
+        var sink = DoNothingSink{};
+        var logger = Logger.init(allocator, .debug, sink.entry_sink());
+        defer logger.deinit();
+        logger.spawn();
+
+        var packet_handle = try Thread.spawn(.{}, GossipService.process_messages, .{
+            &gossip_service, logger,
+        });
+
+        // send a ping message
+        var msg = Protocol{ .PingMessage = try Ping.init(.{0} ** 32, &keypair) };
+        try gossip_service.verified_incoming_channel.send(ProtocolMessage{ .from_endpoint = address.to_endpoint(), .message = msg });
+
+        while (true) {
+            const v = gossip_service.messages_processed.load(std.atomic.Ordering.Unordered);
+            if (v == 1) {
+                break;
+            }
+        }
+
+        exit.store(true, std.atomic.Ordering.Unordered);
+        packet_handle.join();
     }
 };

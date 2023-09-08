@@ -229,7 +229,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
-    var logger = Logger.init(gpa.allocator(), .debug);
+    var logger = Logger.init(gpa.allocator(), .debug, null);
     defer logger.deinit();
     logger.spawn();
 
