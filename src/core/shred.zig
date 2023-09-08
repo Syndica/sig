@@ -3,6 +3,7 @@ const std = @import("std");
 const HardForks = @import("hard_forks.zig").HardForks;
 const Slot = @import("slot.zig").Slot;
 const Allocator = std.mem.Allocator;
+
 pub const ShredVersion = struct {
     value: u16,
 
@@ -24,13 +25,14 @@ pub const ShredVersion = struct {
         var version = (@as(u16, accum[0]) << 8) | accum[1];
         return version +| 1;
     }
+
     pub fn compute_shred_version(genesis_hash: Hash, hard_forks: ?HardForks, alloc: Allocator) u16 {
         var hash = genesis_hash;
         if (hard_forks != null) {
             for (hard_forks.?.get_forks()) |hard_fork| {
-                var buf = [_]u8{0} ** 16;
-                std.mem.writeIntLittle(u64, buf[0..8], hard_fork[0].value);
-                std.mem.writeIntLittle(u64, buf[8..], @as(u64, hard_fork[1]));
+                var buf: [16]u8 = undefined;
+                std.mem.writeIntLittle(u64, buf[0..8], hard_fork.slot.value);
+                std.mem.writeIntLittle(u64, buf[8..], @as(u64, hard_fork.count));
                 hash = Hash.extend_and_hash(genesis_hash, buf[0..], alloc) catch genesis_hash;
             }
         }

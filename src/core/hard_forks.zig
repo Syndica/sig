@@ -2,41 +2,46 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const allocator = std.mem.Allocator;
 const Slot = @import("slot.zig").Slot;
-pub const HardFork = struct { Slot, usize };
+pub const HardFork = struct { slot: Slot, count: usize };
 pub const HardForks = struct {
     hard_forks: ArrayList(HardFork),
 
     const Self = @This();
+
     pub fn default(alloc: allocator) Self {
         return .{ .hard_forks = ArrayList(HardFork).init(alloc) };
     }
+
     pub fn register(self: *Self, new_slot: Slot) !void {
-        const index = for (self.hard_forks.items, 0..) |hf, i| {
-            if (hf[0].value == new_slot.value) break i;
+        const index = for (self.hard_forks.items, 0..) |hard_fork, index| {
+            if (hard_fork.slot.value == new_slot.value) break index;
         } else null;
 
         if (index != null) {
-            try self.hard_forks.append(.{ new_slot, self.hard_forks.items[index.?][1] +| 1 });
+            self.hard_forks.items[index.?] = .{ .slot = new_slot, .count = self.hard_forks.items[index.?].count +| 1 };
         } else {
-            try self.hard_forks.append(.{ new_slot, 1 });
+            try self.hard_forks.append(.{ .slot = new_slot, .count = 1 });
         }
         std.mem.sort(HardFork, self.hard_forks.items, {}, struct {
             pub fn lessThan(_: void, a: HardFork, b: HardFork) bool {
-                return a[0].value < b[0].value;
+                return a.slot.value < b.slot.value;
             }
         }.lessThan);
     }
+
     pub fn deinit(self: *Self) void {
         self.hard_forks.deinit();
     }
+
     pub fn get_forks(self: *const Self) []HardFork {
         return self.hard_forks.items;
     }
+
     pub fn get_hash_data(self: *Self, slot: Slot, parent_slot: Slot) ?[8]u8 {
-        var fork_count: usize = 0;
+        var fork_count: u64 = 0;
         for (self.hard_forks.items) |hard_fork| {
-            var current_fork_slot = hard_fork[0].value;
-            var current_fork_count = hard_fork[1];
+            var current_fork_slot = hard_fork.slot.value;
+            var current_fork_count = hard_fork.count;
 
             if (parent_slot.value < current_fork_slot and slot.value >= current_fork_slot) {
                 fork_count += current_fork_count;
@@ -44,8 +49,8 @@ pub const HardForks = struct {
         }
 
         if (fork_count > 0) {
-            var buf = [_]u8{0} ** 8;
-            std.mem.writeIntLittle(u64, &buf, @as(u64, fork_count));
+            var buf: [8]u8 = undefined;
+            std.mem.writeIntLittle(u64, &buf, fork_count);
             return buf;
         } else {
             return null;
@@ -64,10 +69,10 @@ test "core.hard_forks: test hardforks" {
     try hard_forks.register(slot_one);
     try hard_forks.register(slot_two);
 
-    try std.testing.expect(hard_forks.get_forks()[0][0].value == 10);
-    try std.testing.expect(hard_forks.get_forks()[1][1] == 1);
-    try std.testing.expect(hard_forks.get_forks()[1][0].value == 20);
-    try std.testing.expect(hard_forks.get_forks()[1][1] == 1);
+    try std.testing.expect(hard_forks.get_forks()[0].slot.value == 10);
+    try std.testing.expect(hard_forks.get_forks()[1].count == 1);
+    try std.testing.expect(hard_forks.get_forks()[1].slot.value == 20);
+    try std.testing.expect(hard_forks.get_forks()[1].count == 1);
 
     var slot_three = Slot.init(10);
     var slot_four = Slot.init(0);
