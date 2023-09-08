@@ -3,9 +3,14 @@
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
-const GossipService = @import("gossip_service.zig").GossipService;
-const Logger = @import("../trace/log.zig").Logger;
 
+const _gossip_service = @import("./gossip_service.zig");
+const GossipService = _gossip_service.GossipService;
+const ChunkType = _gossip_service.ChunkType;
+const crds_values_to_packets = _gossip_service.crds_values_to_packets;
+const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
+
+const Logger = @import("../trace/log.zig").Logger;
 const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -143,27 +148,18 @@ pub fn random_pull_response(rng: std.rand.Random, keypair: *const KeyPair, to_ad
         crds_values[i] = value;
     }
 
-    // serialize and send as packet
-    var size_for_packet = @as(usize, size);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    while (size_for_packet > 0) {
-        var msg = Protocol{ .PullResponse = .{ pubkey, crds_values[0..size_for_packet] } };
-        var msg_slice = bincode.writeToSlice(&packet_buf, msg, bincode.Params{}) catch |err| {
-            if (err == error.OutOfMemory) {
-                // TODO: optimize
-                size_for_packet -= 1;
-                continue;
-            } else {
-                return err;
-            }
-        };
+    const allocator = std.heap.page_allocator;
+    const packets = try crds_values_to_packets(
+        allocator,
+        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &crds_values,
+        &to_addr,
+        ChunkType.PullResponse,
+    );
+    defer packets.deinit();
 
-        var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
-        return packet;
-    }
-
-    return error.FailedToBuildRandomPullResponsePacket;
+    const packet = packets.items[0];
+    return packet;
 }
 
 pub fn random_pull_request(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
@@ -235,12 +231,12 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
-    var logger = Logger.init(gpa.allocator(), .debug);
+    var logger = Logger.init(gpa.allocator(), .debug, null);
     defer logger.deinit();
     logger.spawn();
 
     // setup the gossip service
-    var gossip_port: u16 = 8001;
+    var gossip_port: u16 = 9997;
     var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
 
     var my_keypair = try KeyPair.create(null);

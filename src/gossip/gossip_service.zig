@@ -54,27 +54,27 @@ const ProtocolChannel = Channel(ProtocolMessage);
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 
-const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
-const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
-const CRDS_GOSSIP_PRUNE_MSG_TIMEOUT_MS: u64 = 500;
+pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
+pub const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
+pub const CRDS_GOSSIP_PRUNE_MSG_TIMEOUT_MS: u64 = 500;
 
-const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
+pub const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
 
-const MAX_PACKETS_PER_PUSH: usize = 64;
-const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH);
+pub const MAX_PACKETS_PER_PUSH: usize = 64;
+pub const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH);
 
 // 4 (enum) + 32 (pubkey) + 8 (len) = 44
-const MAX_PUSH_MESSAGE_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
+pub const MAX_PUSH_MESSAGE_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
-const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
-const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
-const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
-const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
+pub const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
+pub const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
+pub const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
+pub const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
 
 /// Maximum number of origin nodes that a PruneData may contain, such that the
 /// serialized size of the PruneMessage stays below PACKET_DATA_SIZE.
-const MAX_PRUNE_DATA_NODES: usize = 32;
-const NUM_ACTIVE_SET_ENTRIES: usize = 25;
+pub const MAX_PRUNE_DATA_NODES: usize = 32;
+pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
@@ -705,7 +705,6 @@ pub const GossipService = struct {
 
         var packets = std.ArrayList(Packet).init(self.allocator);
         errdefer packets.deinit();
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
@@ -713,26 +712,16 @@ pub const GossipService = struct {
             const to_endpoint: *const EndPoint = push_entry.key_ptr;
 
             // send the values as a pull response
-            const indexs = try chunk_values_into_packet_indexs(
+            var endpoint_packets = try crds_values_to_packets(
                 self.allocator,
+                &self.my_pubkey,
                 crds_values.items,
-                MAX_PUSH_MESSAGE_PAYLOAD_SIZE,
+                to_endpoint,
+                ChunkType.PushMessage,
             );
-            defer indexs.deinit();
-            var chunk_iter = std.mem.window(usize, indexs.items, 2, 1);
+            defer endpoint_packets.deinit();
 
-            while (chunk_iter.next()) |window| {
-                const start_index = window[0];
-                const end_index = window[1];
-                const values = crds_values.items[start_index..end_index];
-
-                const protocol_msg = Protocol{ .PushMessage = .{ self.my_pubkey, values } };
-                var msg_slice = bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{}) catch {
-                    return error.SerializationError;
-                };
-                var packet = Packet.init(to_endpoint.*, packet_buf, msg_slice.len);
-                try packets.append(packet);
-            }
+            try packets.appendSlice(endpoint_packets.items);
         }
 
         return packets;
@@ -939,31 +928,13 @@ pub const GossipService = struct {
         }
 
         // send the values as a pull response
-        const indexs = try chunk_values_into_packet_indexs(
+        const packets = try crds_values_to_packets(
             self.allocator,
+            &self.my_pubkey,
             crds_values.items,
-            MAX_PUSH_MESSAGE_PAYLOAD_SIZE,
+            &pull_from_endpoint,
+            ChunkType.PullResponse,
         );
-        defer indexs.deinit();
-        var chunk_iter = std.mem.window(usize, indexs.items, 2, 1);
-
-        var packets = std.ArrayList(Packet).init(self.allocator);
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-
-        while (chunk_iter.next()) |window| {
-            const start_index = window[0];
-            const end_index = window[1];
-            const values = crds_values.items[start_index..end_index];
-
-            const protocol_msg = Protocol{ .PullResponse = .{ self.my_pubkey, values } };
-            var msg_slice = bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{}) catch {
-                return error.SerializationError;
-            };
-            var packet = Packet.init(pull_from_endpoint, packet_buf, msg_slice.len);
-
-            try packets.append(packet);
-        }
-
         return packets;
     }
 
@@ -1329,6 +1300,49 @@ pub const GossipService = struct {
         return nodes[0..node_index];
     }
 };
+
+pub const ChunkType = enum(u8) {
+    PushMessage,
+    PullResponse,
+};
+
+pub fn crds_values_to_packets(
+    allocator: std.mem.Allocator,
+    my_pubkey: *const Pubkey,
+    crds_values: []CrdsValue,
+    to_endpoint: *const EndPoint,
+    chunk_type: ChunkType,
+) error{ OutOfMemory, SerializationError }!std.ArrayList(Packet) {
+    const indexs = try chunk_values_into_packet_indexs(
+        allocator,
+        crds_values,
+        MAX_PUSH_MESSAGE_PAYLOAD_SIZE,
+    );
+    defer indexs.deinit();
+    var chunk_iter = std.mem.window(usize, indexs.items, 2, 1);
+
+    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+    var packets = try std.ArrayList(Packet).initCapacity(allocator, indexs.items.len -| 1);
+    errdefer packets.deinit();
+
+    while (chunk_iter.next()) |window| {
+        const start_index = window[0];
+        const end_index = window[1];
+        const values = crds_values[start_index..end_index];
+
+        const protocol_msg = switch (chunk_type) {
+            .PushMessage => Protocol{ .PushMessage = .{ my_pubkey.*, values } },
+            .PullResponse => Protocol{ .PullResponse = .{ my_pubkey.*, values } },
+        };
+        var msg_slice = bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{}) catch {
+            return error.SerializationError;
+        };
+        var packet = Packet.init(to_endpoint.*, packet_buf, msg_slice.len);
+        packets.appendAssumeCapacity(packet);
+    }
+
+    return packets;
+}
 
 pub fn chunk_values_into_packet_indexs(
     allocator: std.mem.Allocator,

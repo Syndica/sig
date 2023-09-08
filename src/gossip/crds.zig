@@ -362,7 +362,7 @@ pub const CrdsData = union(enum(u32)) {
                 try v.sanitize();
             },
             else => {
-                std.debug.print("sanitize not implemented for type: {any}\n", .{@tagName(self.*)});
+                std.debug.print("sanitize not implemented for type: {s}\n", .{@tagName(self.*)});
                 return error.NotImplemented;
             },
         }
