@@ -26,10 +26,10 @@ pub const ShredVersion = struct {
         return version +| 1;
     }
 
-    pub fn compute_shred_version(genesis_hash: Hash, hard_forks: ?HardForks, alloc: Allocator) u16 {
+    pub fn compute_shred_version(genesis_hash: Hash, maybe_hard_forks: ?HardForks, alloc: Allocator) u16 {
         var hash = genesis_hash;
-        if (hard_forks != null) {
-            for (hard_forks.?.get_forks()) |hard_fork| {
+        if (maybe_hard_forks) |hard_forks| {
+            for (hard_forks.get_forks()) |hard_fork| {
                 var buf: [16]u8 = undefined;
                 std.mem.writeIntLittle(u64, buf[0..8], hard_fork.slot);
                 std.mem.writeIntLittle(u64, buf[8..], @as(u64, hard_fork.count));

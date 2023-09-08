@@ -13,12 +13,12 @@ pub const HardForks = struct {
     }
 
     pub fn register(self: *Self, new_slot: Slot) !void {
-        const index = for (self.hard_forks.items, 0..) |hard_fork, index| {
+        const maybe_index = for (self.hard_forks.items, 0..) |hard_fork, index| {
             if (hard_fork.slot == new_slot) break index;
         } else null;
 
-        if (index != null) {
-            self.hard_forks.items[index.?] = .{ .slot = new_slot, .count = self.hard_forks.items[index.?].count +| 1 };
+        if (maybe_index) |index| {
+            self.hard_forks.items[index] = .{ .slot = new_slot, .count = self.hard_forks.items[index].count +| 1 };
         } else {
             try self.hard_forks.append(.{ .slot = new_slot, .count = 1 });
         }

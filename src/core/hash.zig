@@ -51,9 +51,9 @@ pub const Hash = struct {
     }
 
     pub fn extend_and_hash(id: Hash, val: []u8, alloc: Allocator) !Self {
-        var hash_data = std.ArrayList(u8).init(alloc);
-        defer _ = hash_data.deinit();
-        try hash_data.insertSlice(0, id.data[0..]);
+        var hash_data = try std.ArrayList(u8).initCapacity(alloc, val.len + id.data.len);
+        defer hash_data.deinit();
+        hash_data.appendSliceAssumeCapacity(id.data[0..]);
         try hash_data.appendSlice(val);
         const hash = generateSha256Hash(hash_data.items);
         return hash;
