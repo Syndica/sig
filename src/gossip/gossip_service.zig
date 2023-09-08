@@ -1989,9 +1989,8 @@ test "gossip.gossip_service: init, exit, and deinit" {
 }
 
 const fuzz = @import("./fuzz.zig");
-
 pub const benchmark_message_processing = struct {
-    pub const min_iterations = 3;
+    pub const min_iterations = 1;
     pub const max_iterations = 5;
 
     pub fn benchmark_gossip_service() !void {
@@ -2036,7 +2035,7 @@ pub const benchmark_message_processing = struct {
                 self.gs.verified_incoming_channel.send(ProtocolMessage{
                     .message = msg,
                     .from_endpoint = self.to_endpoint,
-                }) catch unreachable;
+                }) catch @panic("ahhhh");
             }
         };
         var sender = Sender{
@@ -2045,21 +2044,44 @@ pub const benchmark_message_processing = struct {
         };
 
         // send a ping message
+        var msg_sent: usize = 0;
         {
             var msg = try fuzz.random_ping(rng, &keypair);
             sender.send(msg);
+            msg_sent += 1;
         }
         // send a pong message
         {
             var msg = try fuzz.random_pong(rng, &keypair);
             sender.send(msg);
+            msg_sent += 1;
         }
-
         // send a push message
+        {
+            var packets = try fuzz.random_push_message(rng, &keypair, address.to_endpoint());
+            defer packets.deinit();
+
+            for (packets.items) |packet| {
+                var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                sender.send(msg);
+                msg_sent += 1;
+            }
+        }
+        // send a pull message
+        {
+            var packets = try fuzz.random_pull_response(rng, &keypair, address.to_endpoint());
+            defer packets.deinit();
+
+            for (packets.items) |packet| {
+                var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                sender.send(msg);
+                msg_sent += 1;
+            }
+        }
 
         while (true) {
             const v = gossip_service.messages_processed.load(std.atomic.Ordering.Unordered);
-            if (v == 1) {
+            if (v == msg_sent) {
                 break;
             }
         }
