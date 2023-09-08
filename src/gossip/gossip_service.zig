@@ -212,6 +212,7 @@ pub const GossipService = struct {
             &self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
+            logger,
         });
         defer self.join_and_exit(&receiver_handle);
 
@@ -236,6 +237,7 @@ pub const GossipService = struct {
             &self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
+            logger,
         });
         defer self.join_and_exit(&responder_handle);
     }

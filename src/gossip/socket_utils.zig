@@ -3,11 +3,14 @@ const Packet = @import("../gossip/packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("../gossip/packet.zig").PACKET_DATA_SIZE;
 const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
+const Logger = @import("../trace/log.zig").Logger;
+const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
 
 pub fn read_socket(
     socket: *UdpSocket,
     incoming_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
+    logger: *Logger,
 ) error{ SocketClosed, SocketRecvError, OutOfMemory, ChannelClosed }!void {
     var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var packets_read: u64 = 0;
@@ -18,12 +21,14 @@ pub fn read_socket(
                 std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             } else {
-                return error.SocketRecvError;
+                logger.debugf("read_socket error: {s}\n", .{@errorName(err)});
+                continue;
             }
         };
 
         const bytes_read = recv_meta.numberOfBytes;
         if (bytes_read == 0) {
+            logger.debugf("read_socket closed\n", .{});
             return error.SocketClosed;
         }
         packets_read +|= 1;
@@ -32,13 +37,14 @@ pub fn read_socket(
         const packet = Packet.init(recv_meta.sender, read_buf, bytes_read);
         try incoming_channel.send(packet);
     }
-    std.debug.print("read_socket loop closed\n", .{});
+    logger.debugf("read_socket loop closed\n", .{});
 }
 
 pub fn send_socket(
     socket: *UdpSocket,
     outgoing_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
+    logger: *Logger,
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
@@ -54,14 +60,14 @@ pub fn send_socket(
 
         for (packets) |p| {
             const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                std.debug.print("send_socket error: {s}\n", .{@errorName(e)});
+                logger.debugf("send_socket error: {s}\n", .{@errorName(e)});
                 continue;
             };
             packets_sent +|= 1;
             std.debug.assert(bytes_sent == p.size);
         }
     }
-    std.debug.print("send_socket loop closed\n", .{});
+    logger.debugf("send_socket loop closed\n", .{});
 }
 
 pub const benchmark_packet_processing = struct {
@@ -83,7 +89,12 @@ pub const benchmark_packet_processing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, read_socket, .{ &socket, channel, &exit });
+        var sink = DoNothingSink{};
+        var logger = Logger.init(allocator, .debug, sink.entry_sink());
+        defer logger.deinit();
+        logger.spawn();
+
+        var handle = try std.Thread.spawn(.{}, read_socket, .{ &socket, channel, &exit, logger });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -121,7 +132,12 @@ pub const benchmark_packet_processing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, send_socket, .{ &socket, channel, &exit });
+        var sink = DoNothingSink{};
+        var logger = Logger.init(allocator, .debug, sink.entry_sink());
+        defer logger.deinit();
+        logger.spawn();
+
+        var handle = try std.Thread.spawn(.{}, send_socket, .{ &socket, channel, &exit, logger });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
