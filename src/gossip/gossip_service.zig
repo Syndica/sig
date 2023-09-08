@@ -1963,3 +1963,12 @@ test "gossip.gossip_service: init, exit, and deinit" {
     handle.join();
     gossip_service.deinit();
 }
+
+pub const benchmark_message_processing = struct {
+    pub const min_iterations = 3;
+    pub const max_iterations = 5;
+
+    pub fn benchmark_gossip_service() !void {
+        std.time.sleep(std.time.ns_per_ms);
+    }
+};

@@ -146,7 +146,8 @@ pub fn build(b: *std.Build) void {
         .name = "benchmark",
         .root_source_file = .{ .path = "src/benchmarks.zig" },
         .target = target,
-        .optimize = optimize,
+        .optimize = std.builtin.Mode.ReleaseSafe, // to get decent results
+        // .optimize = optimize,
         .main_pkg_path = .{ .path = "src" },
     });
     benchmark_exe.addModule("base58-zig", base58_module);
@@ -155,5 +156,9 @@ pub fn build(b: *std.Build) void {
     benchmark_exe.addModule("getty", getty_mod);
     b.installArtifact(benchmark_exe);
     const benchmark_cmd = b.addRunArtifact(benchmark_exe);
+    if (b.args) |args| {
+        benchmark_cmd.addArgs(args);
+    }
+
     b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
 }

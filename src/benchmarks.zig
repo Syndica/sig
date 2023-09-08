@@ -8,8 +8,35 @@ const mem = std.mem;
 const meta = std.meta;
 const time = std.time;
 
+/// to run gossip benchmarks:
+/// zig build benchmark -- gossip
 pub fn main() !void {
-    try benchmark(@import("gossip/socket_utils.zig").benchmark_packet_processing);
+    var alloc = std.heap.page_allocator;
+    var cli_args = try std.process.argsWithAllocator(alloc);
+    defer cli_args.deinit();
+
+    _ = cli_args.skip();
+    var maybe_filter = cli_args.next();
+    var filter = blk: {
+        if (maybe_filter) |filter| {
+            std.debug.print("filtering benchmarks with prefix: {s}\n", .{filter});
+            break :blk filter;
+        } else {
+            std.debug.print("no filter\n", .{});
+            break :blk "";
+        }
+    };
+
+    // TODO: very manual for now (bc we only have 2 benchmarks)
+    // if we have more benchmarks we should make this more efficient
+
+    if (std.mem.startsWith(u8, "socket_utils", filter)) {
+        try benchmark(@import("gossip/socket_utils.zig").benchmark_packet_processing);
+    }
+
+    if (std.mem.startsWith(u8, "gossip", filter)) {
+        try benchmark(@import("gossip/gossip_service.zig").benchmark_message_processing);
+    }
 }
 
 // src: https://github.com/Hejsil/zig-bench
