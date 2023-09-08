@@ -101,6 +101,7 @@ pub fn benchmark(comptime B: type) !void {
                     void => @field(B, def.name)(),
                     else => @field(B, def.name)(arg),
                 };
+                res catch @panic("panic");
                 runtimes[i] = timer.read();
                 runtime_sum += runtimes[i];
                 if (runtimes[i] < min) min = runtimes[i];
