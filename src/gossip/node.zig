@@ -21,20 +21,20 @@ const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
 const net = std.net;
 
-const SOCKET_TAG_GOSSIP: u8 = 0;
-const SOCKET_TAG_REPAIR: u8 = 1;
-const SOCKET_TAG_RPC: u8 = 2;
-const SOCKET_TAG_RPC_PUBSUB: u8 = 3;
-const SOCKET_TAG_SERVE_REPAIR: u8 = 4;
-const SOCKET_TAG_TPU: u8 = 5;
-const SOCKET_TAG_TPU_FORWARDS: u8 = 6;
-const SOCKET_TAG_TPU_FORWARDS_QUIC: u8 = 7;
-const SOCKET_TAG_TPU_QUIC: u8 = 8;
-const SOCKET_TAG_TPU_VOTE: u8 = 9;
-const SOCKET_TAG_TVU: u8 = 10;
-const SOCKET_TAG_TVU_FORWARDS: u8 = 11;
-const SOCKET_TAG_TVU_QUIC: u8 = 12;
-const SOCKET_CACHE_SIZE: usize = SOCKET_TAG_TVU_QUIC + 1;
+pub const SOCKET_TAG_GOSSIP: u8 = 0;
+pub const SOCKET_TAG_REPAIR: u8 = 1;
+pub const SOCKET_TAG_RPC: u8 = 2;
+pub const SOCKET_TAG_RPC_PUBSUB: u8 = 3;
+pub const SOCKET_TAG_SERVE_REPAIR: u8 = 4;
+pub const SOCKET_TAG_TPU: u8 = 5;
+pub const SOCKET_TAG_TPU_FORWARDS: u8 = 6;
+pub const SOCKET_TAG_TPU_FORWARDS_QUIC: u8 = 7;
+pub const SOCKET_TAG_TPU_QUIC: u8 = 8;
+pub const SOCKET_TAG_TPU_VOTE: u8 = 9;
+pub const SOCKET_TAG_TVU: u8 = 10;
+pub const SOCKET_TAG_TVU_FORWARDS: u8 = 11;
+pub const SOCKET_TAG_TVU_QUIC: u8 = 12;
+pub const SOCKET_CACHE_SIZE: usize = SOCKET_TAG_TVU_QUIC + 1;
 
 const Node = struct {
     contactInfo: ContactInfo,
@@ -123,7 +123,7 @@ pub const ContactInfo = struct {
         };
     }
 
-    pub fn getSocket(self: *Self, key: u8) ?SocketAddr {
+    pub fn getSocket(self: *const Self, key: u8) ?SocketAddr {
         if (self.cache[key].eql(&SocketAddr.UNSPECIFIED)) {
             return null;
         }
@@ -348,7 +348,7 @@ test "contact info bincode serialize matches rust bincode" {
 
     var stream = std.io.fixedBufferStream(buf.items);
     var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-    defer ci2.deinit();
+    defer bincode.free(testing.allocator, ci2);
 
     try testing.expect(ci2.addrs.items.len == 4);
     try testing.expect(ci2.sockets.items.len == 6);

@@ -23,11 +23,16 @@ pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
             }
             return elems;
         }
+
+        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            allocator.free(data);
+        }
     };
 
     return bincode.FieldConfig([]Child){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
+        .free = S.free,
     };
 }
 
@@ -53,10 +58,16 @@ pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig(std.Arr
             }
             return list;
         }
+
+        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            _ = allocator;
+            data.deinit();
+        }
     };
 
     return bincode.FieldConfig(std.ArrayList(Child)){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
+        .free = S.free,
     };
 }

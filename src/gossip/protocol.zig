@@ -42,7 +42,7 @@ pub const Protocol = union(enum(u32)) {
                 var value = pull[1];
                 const is_verified = try value.verify(value.id());
                 if (!is_verified) {
-                    return error.InvalidValue;
+                    return error.InvalidPullRequest;
                 }
             },
             .PullResponse => |*pull| {
@@ -50,7 +50,7 @@ pub const Protocol = union(enum(u32)) {
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
                     if (!is_verified) {
-                        return error.InvalidValue;
+                        return error.InvalidPullResponse;
                     }
                 }
             },
@@ -59,19 +59,19 @@ pub const Protocol = union(enum(u32)) {
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
                     if (!is_verified) {
-                        return error.InvalidValue;
+                        return error.InvalidPushMessage;
                     }
                 }
             },
             .PruneMessage => |*prune| {
-                var data = prune[1];
-                try data.verify();
+                var data: PruneData = prune[1];
+                data.verify() catch return error.InvalidPruneMessage;
             },
             .PingMessage => |*ping| {
-                try ping.verify();
+                ping.verify() catch return error.InvalidPingMessage;
             },
             .PongMessage => |*pong| {
-                try pong.verify();
+                pong.verify() catch return error.InvalidPongMessage;
             },
         }
     }
@@ -145,7 +145,7 @@ pub const PruneData = struct {
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
             .destination = Pubkey.random(rng, .{}),
-            .wallclock = crds.get_wallclock(),
+            .wallclock = crds.get_wallclock_ms(),
         };
         try self.sign(keypair);
 
@@ -183,7 +183,7 @@ pub const PruneData = struct {
 };
 
 test "gossip.protocol: push message serialization is predictable" {
-    var rng = DefaultPrng.init(crds.get_wallclock());
+    var rng = DefaultPrng.init(crds.get_wallclock_ms());
     var pubkey = Pubkey.random(rng.random(), .{});
     var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
     defer values.deinit();
@@ -222,7 +222,7 @@ test "gossip.protocol: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(crds.get_wallclock());
+    var rng = DefaultPrng.init(crds.get_wallclock_ms());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();
@@ -245,7 +245,7 @@ test "gossip.protocol: test prune data sig verify" {
 test "gossip.protocol: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var original = Protocol{ .PingMessage = try Ping.random(keypair) };
+    var original = Protocol{ .PingMessage = try Ping.random(&keypair) };
     var buf = [_]u8{0} ** 1232;
 
     var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
@@ -260,7 +260,7 @@ test "gossip.protocol: ping message serializes and deserializes correctly" {
 test "gossip.protocol: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var ping = try Ping.random(keypair);
+    var ping = try Ping.random(&keypair);
     var msg = Protocol{ .PingMessage = ping };
     try msg.verify_signature();
 

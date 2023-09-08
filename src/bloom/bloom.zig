@@ -23,20 +23,25 @@ pub const Bloom = struct {
     const Self = @This();
 
     pub fn init(alloc: std.mem.Allocator, n_bits: u64, keys: ?ArrayList(u64)) Self {
-        // need to be power of 2 for serialization to match rust
-        var bits = n_bits;
-        if (n_bits != 0) {
-            if (n_bits & (n_bits - 1) != 0) {
-                // nearest power of two
-                const _n_bits = std.math.pow(u64, 2, std.math.log2(n_bits) + 1);
-                std.debug.print("rounding n_bits of bloom from {any} to {any}\n", .{ n_bits, _n_bits });
-                bits = _n_bits;
+        // note: we do this to match the rust deserialization
+        // needs to be power of 2 < 64
+        const bitset_bits = blk: {
+            if (n_bits == 0) {
+                break :blk 0;
+            } else if (n_bits < 64) {
+                break :blk 64;
+            } else {
+                // smallest power of 2 >= 64
+                break :blk std.math.pow(u64, 2, std.math.log2(n_bits));
             }
-        }
+        };
+        // if (bitset_bits != n_bits) {
+        //     std.debug.print("rounding n_bits from {d} to {d}...\n", .{ n_bits, bitset_bits });
+        // }
 
         return Self{
             .keys = keys orelse ArrayList(u64).init(alloc),
-            .bits = DynamicBitSet.initEmpty(alloc, n_bits) catch unreachable,
+            .bits = DynamicBitSet.initEmpty(alloc, bitset_bits) catch unreachable,
             .num_bits_set = 0,
         };
     }
@@ -138,15 +143,21 @@ pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
             var dynamic_bitset = try bitvec.toBitSet(ally);
             return dynamic_bitset;
         }
+
+        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            _ = allocator;
+            data.deinit();
+        }
     };
 
     return bincode.FieldConfig(DynamicBitSet){
         .serializer = S.serialize,
         .deserializer = S.deserialize,
+        .free = S.free,
     };
 }
 
-test "bloom: helper fcns match rust" {
+test "bloom.bloom: helper fcns match rust" {
     const n_bits = Bloom.num_bits(100.2, 1e-5);
     try testing.expectEqual(@as(f64, 2402), n_bits);
 
@@ -157,17 +168,23 @@ test "bloom: helper fcns match rust" {
     defer bloom.deinit();
 }
 
-test "bloom: serializes/deserializes correctly" {
+test "bloom.bloom: serializes/deserializes correctly" {
     var bloom = Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
     var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
+    defer bincode.free(testing.allocator, deserialized);
+
+    // allocate some memory to make sure were cleaning up too
+    try deserialized.add_key(10);
+    try deserialized.bits.resize(100, true);
+
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
-test "bloom: serializes/deserializes correctly with set bits" {
+test "bloom.bloom: serializes/deserializes correctly with set bits" {
     var bloom = Bloom.init(testing.allocator, 128, null);
     try bloom.add_key(10);
     // required for memory leaks
@@ -182,7 +199,7 @@ test "bloom: serializes/deserializes correctly with set bits" {
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
-test "bloom: rust: serialized bytes equal rust (no keys)" {
+test "bloom.bloom: rust: serialized bytes equal rust (one key)" {
     // note: need to init with len 2^i
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
@@ -199,7 +216,7 @@ test "bloom: rust: serialized bytes equal rust (no keys)" {
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
 }
 
-test "bloom: rust: serialized bytes equal rust (multiple keys)" {
+test "bloom.bloom: rust: serialized bytes equal rust (multiple keys)" {
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
 

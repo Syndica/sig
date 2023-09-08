@@ -23,6 +23,7 @@ while 1:
     if len(dirs) == 0: 
         break 
 
+total_removes = 0
 n_remove_iter = 0
 n_removes = 1
 while n_removes > 0:
@@ -68,6 +69,7 @@ while n_removes > 0:
         new_lines = []
         lines_to_remove = [i for (_, i) in unused_vars]
         n_removes += len(lines_to_remove)
+        total_removes += len(lines_to_remove)
 
         for (i, line) in enumerate(full_lines): 
             if i in lines_to_remove: 
@@ -80,4 +82,6 @@ while n_removes > 0:
         with open(filename, 'w') as f:
             f.writelines(new_lines)
 
+print("total iterations: ", n_remove_iter)
+print("total lines removed: ", total_removes)
             

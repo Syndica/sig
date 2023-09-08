@@ -16,6 +16,64 @@ pub const SocketAddr = union(enum(u8)) {
         },
     };
 
+    pub fn parse(bytes: []const u8) !Self {
+        // TODO: parse v6 if v4 fails
+        return parse_v4(bytes);
+    }
+
+    pub fn parse_v4(bytes: []const u8) !Self {
+        // parse v4
+        var octs: [4]u8 = [_]u8{0} ** 4;
+        var addr_port: u16 = 0;
+        var octets_index: usize = 0;
+        var parsed_digit: bool = false;
+        var parsed_ip = false;
+
+        for (bytes) |byte| {
+            switch (byte) {
+                '.' => {
+                    if (!parsed_digit) return error.InvalidIpv4;
+                    if (octets_index == 4) return error.InvalidIpv4;
+                    octets_index += 1;
+                    parsed_digit = false;
+                },
+                '0'...'9' => {
+                    const value = byte - '0';
+
+                    if (!parsed_ip) {
+                        // octs[octets_index] = octs[octets_index] * 10 + value
+                        const mul_result = @mulWithOverflow(octs[octets_index], 10);
+                        if (mul_result[1] == 1) return error.InvalidIpv4;
+                        const add_result = @addWithOverflow(mul_result[0], value);
+                        if (add_result[1] == 1) return error.InvalidIpv4;
+                        octs[octets_index] = add_result[0];
+                    } else {
+                        // addr_port = addr_port * 10 + value
+                        const mul_result = @mulWithOverflow(addr_port, 10);
+                        if (mul_result[1] == 1) return error.InvalidIpv4;
+                        const add_result = @addWithOverflow(mul_result[0], value);
+                        if (add_result[1] == 1) return error.InvalidIpv4;
+                        addr_port = add_result[0];
+                    }
+                    parsed_digit = true;
+                },
+                ':' => {
+                    if (octets_index != 3) return error.InvalidIpv4;
+                    parsed_ip = true;
+                },
+                else => {
+                    return error.InvalidIpv4;
+                },
+            }
+        }
+        if (!parsed_ip) return error.InvalidIpv4;
+
+        return Self{ .V4 = .{
+            .ip = Ipv4Addr.init(octs[0], octs[1], octs[2], octs[3]),
+            .port = addr_port,
+        } };
+    }
+
     pub fn random(rng: std.rand.Random) Self {
         const pport = rng.int(u16);
 
@@ -23,7 +81,6 @@ pub const SocketAddr = union(enum(u8)) {
         if (version % 2 == 0) {
             var octets: [4]u8 = undefined;
             rng.bytes(&octets);
-
             return Self{
                 .V4 = .{ .ip = Ipv4Addr.init(octets[0], octets[1], octets[2], octets[3]), .port = pport },
             };
@@ -100,7 +157,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn toEndpoint(self: *const Self) network.EndPoint {
+    pub fn to_endpoint(self: *const Self) network.EndPoint {
         switch (self.*) {
             .V4 => |addr| {
                 return network.EndPoint{
@@ -112,6 +169,29 @@ pub const SocketAddr = union(enum(u8)) {
                 return network.EndPoint{
                     .address = .{ .ipv6 = network.Address.IPv6{ .value = addr.ip.octets, .scope_id = addr.scope_id } },
                     .port = self.port(),
+                };
+            },
+        }
+    }
+
+    pub fn from_endpoint(endpoint: network.EndPoint) Self {
+        switch (endpoint.address) {
+            .ipv4 => |v4| {
+                return Self{
+                    .V4 = SocketAddrV4{
+                        .ip = Ipv4Addr.init(v4.value[0], v4.value[1], v4.value[2], v4.value[3]),
+                        .port = endpoint.port,
+                    },
+                };
+            },
+            .ipv6 => |v6| {
+                return Self{
+                    .V6 = SocketAddrV6{
+                        .ip = Ipv6Addr.init(v6.value),
+                        .port = endpoint.port,
+                        .flowinfo = 0,
+                        .scope_id = v6.scope_id,
+                    },
                 };
             },
         }
@@ -225,6 +305,29 @@ pub const IpAddr = union(enum(u32)) {
         }
     }
 };
+
+test "gossip.net: invalid ipv4 socket parsing" {
+    {
+        var addr = "127.0.0.11234";
+        var result = SocketAddr.parse_v4(addr);
+        try std.testing.expectError(error.InvalidIpv4, result);
+    }
+    {
+        var addr = "127.0.0:1123";
+        var result = SocketAddr.parse_v4(addr);
+        try std.testing.expectError(error.InvalidIpv4, result);
+    }
+}
+
+test "gossip.net: valid ipv4 socket parsing" {
+    var addr = "127.0.0.1:1234";
+    var expected_addr = SocketAddr{ .V4 = SocketAddrV4{
+        .ip = Ipv4Addr.init(127, 0, 0, 1),
+        .port = 1234,
+    } };
+    var actual_addr = try SocketAddr.parse_v4(addr);
+    try std.testing.expectEqual(expected_addr, actual_addr);
+}
 
 test "gossip.net: test random" {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
