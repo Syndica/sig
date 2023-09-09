@@ -50,11 +50,11 @@ pub const Hash = struct {
         return CompareResult.Equal;
     }
 
-    pub fn extend_and_hash(id: Hash, val: []u8, alloc: Allocator) !Self {
+    pub fn extend_and_hash(id: Hash, val: []u8, alloc: Allocator) Allocator.Error!Self {
         var hash_data = try std.ArrayList(u8).initCapacity(alloc, val.len + id.data.len);
         defer hash_data.deinit();
-        hash_data.appendSliceAssumeCapacity(id.data[0..]);
-        try hash_data.appendSlice(val);
+        hash_data.appendSliceAssumeCapacity(&id.data);
+        hash_data.appendSliceAssumeCapacity(val);
         const hash = generateSha256Hash(hash_data.items);
         return hash;
     }

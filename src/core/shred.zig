@@ -26,14 +26,14 @@ pub const ShredVersion = struct {
         return version +| 1;
     }
 
-    pub fn compute_shred_version(genesis_hash: Hash, maybe_hard_forks: ?HardForks, alloc: Allocator) u16 {
+    pub fn compute_shred_version(alloc: Allocator, genesis_hash: Hash, maybe_hard_forks: ?HardForks) u16 {
         var hash = genesis_hash;
         if (maybe_hard_forks) |hard_forks| {
+            var buf: [16]u8 = undefined;
             for (hard_forks.get_forks()) |hard_fork| {
-                var buf: [16]u8 = undefined;
                 std.mem.writeIntLittle(u64, buf[0..8], hard_fork.slot);
                 std.mem.writeIntLittle(u64, buf[8..], @as(u64, hard_fork.count));
-                hash = Hash.extend_and_hash(genesis_hash, buf[0..], alloc) catch genesis_hash;
+                hash = Hash.extend_and_hash(genesis_hash, &buf, alloc) catch genesis_hash;
             }
         }
         return version_from_hash(&hash);
@@ -50,13 +50,17 @@ test "core.shred: test ShredVersion" {
     defer _ = hard_forks.deinit();
     try hard_forks.register(1);
 
-    var shred_version = ShredVersion.compute_shred_version(Hash.default(), hard_forks, testing_alloc);
+    var shred_version = ShredVersion.compute_shred_version(testing_alloc, Hash.default(), hard_forks);
     try std.testing.expect(shred_version == 55551);
 
     std.debug.print("shred_version: {}\n", .{shred_version});
 
     try hard_forks.register(1);
-    var shred_version_two = ShredVersion.compute_shred_version(Hash.default(), hard_forks, testing_alloc);
+    var shred_version_two = ShredVersion.compute_shred_version(
+        testing_alloc,
+        Hash.default(),
+        hard_forks,
+    );
     try std.testing.expect(shred_version_two == 46353);
 
     std.debug.print("shred_version_two: {}\n", .{shred_version_two});

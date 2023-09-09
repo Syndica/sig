@@ -37,7 +37,7 @@ pub const HardForks = struct {
         return self.hard_forks.items;
     }
 
-    pub fn get_hash_data(self: *Self, slot: Slot, parent_slot: Slot) ?[8]u8 {
+    pub fn get_hash_data(self: *const Self, slot: Slot, parent_slot: Slot) ?[8]u8 {
         var fork_count: u64 = 0;
         for (self.hard_forks.items) |hard_fork| {
             var current_fork_slot = hard_fork.slot;
