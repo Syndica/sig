@@ -65,6 +65,10 @@ pub const bincode = struct {
     pub usingnamespace @import("bincode/bincode.zig");
 };
 
+pub const merkle_tree = struct {
+    pub usingnamespace @import("merkle-tree/merkle-tree.zig");
+};
+
 pub const cmd = struct {
     pub usingnamespace @import("cmd/helpers.zig");
 };
