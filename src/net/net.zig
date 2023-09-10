@@ -16,9 +16,9 @@ pub const SocketAddr = union(enum(u8)) {
         },
     };
 
-    pub fn parse(bytes: []const u8) !Self {
+    pub fn parse(bytes: []const u8, ip_port: u16) !Self {
         // TODO: parse v6 if v4 fails
-        return parseIpv4(bytes);
+        return parseIpv4(bytes) catch parse_v6(bytes, ip_port);
     }
 
     pub fn parseIpv4(bytes: []const u8) !Self {
@@ -73,7 +73,122 @@ pub const SocketAddr = union(enum(u8)) {
             .port = addr_port,
         } };
     }
+    pub fn parse_v6(buf: []const u8, ip_port: u16) !Self {
+        var result = Self{
+            .V6 = SocketAddrV6{
+                .scope_id = 0,
+                .port = std.mem.nativeToBig(u16, ip_port),
+                .flowinfo = 0,
+                .ip = Ipv6Addr{ .octets = undefined },
+            },
+        };
+        var ip_slice: *[16]u8 = result.V6.ip.octets[0..];
 
+        var tail: [16]u8 = undefined;
+
+        var x: u16 = 0;
+        var saw_any_digits = false;
+        var index: u8 = 0;
+        var scope_id = false;
+        var abbrv = false;
+        for (buf, 0..) |c, i| {
+            if (scope_id) {
+                if (c >= '0' and c <= '9') {
+                    const digit = c - '0';
+                    {
+                        const ov = @mulWithOverflow(result.V6.scope_id, 10);
+                        if (ov[1] != 0) return error.Overflow;
+                        result.V6.scope_id = ov[0];
+                    }
+                    {
+                        const ov = @addWithOverflow(result.V6.scope_id, digit);
+                        if (ov[1] != 0) return error.Overflow;
+                        result.V6.scope_id = ov[0];
+                    }
+                } else {
+                    return error.InvalidCharacter;
+                }
+            } else if (c == ':') {
+                if (!saw_any_digits) {
+                    if (abbrv) return error.InvalidCharacter; // ':::'
+                    if (i != 0) abbrv = true;
+                    @memset(ip_slice[index..], 0);
+                    ip_slice = tail[0..];
+                    index = 0;
+                    continue;
+                }
+                if (index == 14) {
+                    return error.InvalidEnd;
+                }
+                ip_slice[index] = @as(u8, @truncate(x >> 8));
+                index += 1;
+                ip_slice[index] = @as(u8, @truncate(x));
+                index += 1;
+
+                x = 0;
+                saw_any_digits = false;
+            } else if (c == '%') {
+                if (!saw_any_digits) {
+                    return error.InvalidCharacter;
+                }
+                scope_id = true;
+                saw_any_digits = false;
+            } else if (c == '.') {
+                if (!abbrv or ip_slice[0] != 0xff or ip_slice[1] != 0xff) {
+                    // must start with '::ffff:'
+                    return error.InvalidIpv4Mapping;
+                }
+                const start_index = std.mem.lastIndexOfScalar(u8, buf[0..i], ':').? + 1;
+                const addr = (std.net.Ip4Address.parse(buf[start_index..], 0) catch {
+                    return error.InvalidIpv4Mapping;
+                }).sa.addr;
+                ip_slice = result.V6.ip.octets[0..];
+                ip_slice[10] = 0xff;
+                ip_slice[11] = 0xff;
+
+                const ptr = std.mem.sliceAsBytes(@as(*const [1]u32, &addr)[0..]);
+
+                ip_slice[12] = ptr[0];
+                ip_slice[13] = ptr[1];
+                ip_slice[14] = ptr[2];
+                ip_slice[15] = ptr[3];
+                return result;
+            } else {
+                const digit = try std.fmt.charToDigit(c, 16);
+                {
+                    const ov = @mulWithOverflow(x, 16);
+                    if (ov[1] != 0) return error.Overflow;
+                    x = ov[0];
+                }
+                {
+                    const ov = @addWithOverflow(x, digit);
+                    if (ov[1] != 0) return error.Overflow;
+                    x = ov[0];
+                }
+                saw_any_digits = true;
+            }
+        }
+
+        if (!saw_any_digits and !abbrv) {
+            return error.Incomplete;
+        }
+        if (!abbrv and index < 14) {
+            return error.Incomplete;
+        }
+
+        if (index == 14) {
+            ip_slice[14] = @as(u8, @truncate(x >> 8));
+            ip_slice[15] = @as(u8, @truncate(x));
+            return result;
+        } else {
+            ip_slice[index] = @as(u8, @truncate(x >> 8));
+            index += 1;
+            ip_slice[index] = @as(u8, @truncate(x));
+            index += 1;
+            @memcpy(result.V6.ip.octets[16 - index ..][0..index], ip_slice[0..index]);
+            return result;
+        }
+    }
     pub fn random(rng: std.rand.Random) Self {
         const pport = rng.int(u16);
 
@@ -101,7 +216,7 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn initIpv6(octets: [16]u8, portt: u16) Self {
         return Self{
-            .V4 = .{ .ip = Ipv6Addr.init(octets), .port = portt },
+            .V6 = .{ .ip = Ipv6Addr.init(octets), .port = portt, .flowinfo = 0, .scope_id = 0 },
         };
     }
 
@@ -268,6 +383,15 @@ pub const Ipv6Addr = struct {
     pub fn isMulticast(self: *const Self) bool {
         return self.octets[0] == 255;
     }
+
+    pub fn to_hex(self: *const Self, alloc: std.mem.Allocator) ![]const u8 {
+        const ipv6_hex = try std.fmt.allocPrint(
+            alloc,
+            "{s}:{s}:{s}:{s}",
+            .{ std.fmt.fmtSliceHexLower(self.octets[0..4]), std.fmt.fmtSliceHexLower(self.octets[4..8]), std.fmt.fmtSliceHexLower(self.octets[8..12]), std.fmt.fmtSliceHexLower(self.octets[12..16]) },
+        );
+        return ipv6_hex;
+    }
 };
 
 pub const IpAddr = union(enum(u32)) {
@@ -327,6 +451,28 @@ test "gossip.net: valid ipv4 socket parsing" {
     } };
     var actual_addr = try SocketAddr.parseIpv4(addr);
     try std.testing.expectEqual(expected_addr, actual_addr);
+}
+
+test "gossip.ipv6 valid ipv6 socket parsing" {
+    var address = "2607:f8b0:4005:810::200e";
+    var port: u16 = 0;
+    var ipv6_addr = try SocketAddr.parse(address, port);
+
+    var alloc = std.testing.allocator;
+
+    var expected_addr = try ipv6_addr.V6.ip.to_hex(alloc);
+    defer alloc.free(expected_addr);
+
+    std.debug.print("ipv6 parse_v6: {!s}\n", .{expected_addr});
+    try std.testing.expect(std.mem.eql(u8, expected_addr, "2607f8b0:40050810:00000000:0000200e"));
+}
+
+test "gossip.ipv6 invalid ipv6 socket parsing" {
+    var address = "fe80:2030:31:24";
+    var port: u16 = 0;
+    var ipv6_addr = SocketAddr.parse(address, port);
+
+    try std.testing.expectError(error.Incomplete, ipv6_addr);
 }
 
 test "gossip.net: test random" {
