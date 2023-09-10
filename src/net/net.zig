@@ -17,7 +17,6 @@ pub const SocketAddr = union(enum(u8)) {
     };
 
     pub fn parse(bytes: []const u8, ip_port: u16) !Self {
-        // TODO: parse v6 if v4 fails
         return parseIpv4(bytes) catch parse_v6(bytes, ip_port);
     }
 
