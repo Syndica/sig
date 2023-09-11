@@ -1993,12 +1993,10 @@ pub const benchmark_message_processing = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
 
-    pub const args = [_]usize{
-        10, 100, 500
-    };
+    pub const args = [_]usize{ 10, 100, 500 };
 
     pub const arg_names = [_][]const u8{
-        "10_msg_iters",  "100_msg_iters",  "500_msg_iters",
+        "10_msg_iters", "100_msg_iters", "500_msg_iters",
     };
 
     pub fn benchmark_gossip_service(num_message_iterations: usize) !void {
@@ -2053,7 +2051,7 @@ pub const benchmark_message_processing = struct {
 
         // send a ping message
         var msg_sent: usize = 0;
-        for (0..num_message_iterations) |_| { 
+        for (0..num_message_iterations) |_| {
             {
                 var msg = try fuzz.random_ping(rng, &keypair);
                 sender.send(msg);

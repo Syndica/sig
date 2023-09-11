@@ -15,7 +15,7 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(alloc);
     defer cli_args.deinit();
 
-    _ = cli_args.skip(); 
+    _ = cli_args.skip();
     var maybe_filter = cli_args.next();
     var filter = blk: {
         if (maybe_filter) |filter| {
