@@ -125,15 +125,10 @@ const EntrySink = struct {
 
     const Impl = struct {
         consume_entries: *const fn (ctx: *anyopaque, entries: []*Entry) void,
-        consume_entry: *const fn (ctx: *anyopaque, entry: *Entry) void,
     };
 
     pub fn consume_entries(self: *Self, entries: []*Entry) void {
         self.impl.consume_entries(self.ptr, entries);
-    }
-
-    pub fn consume_entry(self: *Self, e: *Entry) void {
-        self.impl.consume_entry(self.ptr, e);
     }
 };
 
@@ -151,21 +146,11 @@ pub const StdErrEntrySink = struct {
         }
     }
 
-    pub fn consume_entry(_: *anyopaque, e: *Entry) void {
-        var std_err_writer = std.io.getStdErr().writer();
-        var std_err_mux = std.debug.getStderrMutex();
-        std_err_mux.lock();
-        defer std_err_mux.unlock();
-
-        logfmt.formatter(e, std_err_writer) catch unreachable;
-    }
-
     pub fn entry_sink(self: *Self) EntrySink {
         return EntrySink{
             .ptr = self,
             .impl = &.{
                 .consume_entries = consume_entries,
-                .consume_entry = consume_entry,
             },
         };
     }
@@ -178,16 +163,11 @@ pub const DoNothingSink = struct {
         _ = entries;
     }
 
-    pub fn consume_entry(_: *anyopaque, e: *Entry) void {
-        _ = e;
-    }
-
     pub fn entry_sink(self: *Self) EntrySink {
         return EntrySink{
             .ptr = self,
             .impl = &.{
                 .consume_entries = consume_entries,
-                .consume_entry = consume_entry,
             },
         };
     }
