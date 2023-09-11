@@ -29,23 +29,56 @@ pub fn main() !void {
 
     // TODO: very manual for now (bc we only have 2 benchmarks)
     // if we have more benchmarks we can make this more efficient
+    const max_time_per_bench = 500; // !!
 
     if (std.mem.startsWith(u8, "socket_utils", filter)) {
-        try benchmark(@import("gossip/socket_utils.zig").benchmark_packet_processing);
+        try benchmark(
+            @import("gossip/socket_utils.zig").benchmark_packet_processing,
+            max_time_per_bench,
+            timeUnits.milliseconds,
+        );
     }
 
     if (std.mem.startsWith(u8, "gossip", filter)) {
-        try benchmark(@import("gossip/gossip_service.zig").benchmark_message_processing);
+        try benchmark(
+            @import("gossip/gossip_service.zig").benchmark_message_processing,
+            max_time_per_bench,
+            timeUnits.milliseconds,
+        );
     }
 }
 
+const timeUnits = enum {
+    nanoseconds,
+    milliseconds,
+
+    const Self = @This();
+
+    pub fn toString(self: *const Self) []const u8 {
+        return switch (self.*) {
+            .nanoseconds => "ns",
+            .milliseconds => "ms",
+        };
+    }
+
+    pub fn unitsfromNanoseconds(self: *const Self, time_ns: u64) u64 {
+        return switch (self.*) {
+            .nanoseconds => time_ns,
+            .milliseconds => time_ns / std.time.ns_per_ms,
+        };
+    }
+};
+
 // src: https://github.com/Hejsil/zig-bench
-pub fn benchmark(comptime B: type) !void {
+pub fn benchmark(
+    comptime B: type,
+    max_time: u128,
+    time_unit: timeUnits,
+) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
     const arg_names = if (@hasDecl(B, "arg_names")) B.arg_names else [_]u8{};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
-    const max_time = 500 * time.ns_per_ms;
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
@@ -69,10 +102,10 @@ pub fn benchmark(comptime B: type) !void {
             "Benchmark",
             formatter("{s}", ""),
             formatter("{s}", "Iterations"),
-            formatter("{s}", "Min(ns)"),
-            formatter("{s}", "Max(ns)"),
-            formatter("{s}", "Variance"),
-            formatter("{s}", "Mean(ns)"),
+            formatter("Min({s})", time_unit.toString()),
+            formatter("Max({s})", time_unit.toString()),
+            formatter("Variance{s}", ""),
+            formatter("Mean({s})", time_unit.toString()),
         );
         inline for (functions) |f| {
             var i: usize = 0;
@@ -98,10 +131,10 @@ pub fn benchmark(comptime B: type) !void {
         "Benchmark",
         formatter("{s}", ""),
         formatter("{s}", "Iterations"),
-        formatter("{s}", "Min(ns)"),
-        formatter("{s}", "Max(ns)"),
-        formatter("{s}", "Variance"),
-        formatter("{s}", "Mean(ns)"),
+        formatter("Min({s})", time_unit.toString()),
+        formatter("Max({s})", time_unit.toString()),
+        formatter("Variance{s}", ""),
+        formatter("Mean({s})", time_unit.toString()),
     );
     try stderr.writeAll("\n");
     for (min_width) |w|
@@ -129,8 +162,10 @@ pub fn benchmark(comptime B: type) !void {
                     else => @field(B, def.name)(arg),
                 };
                 res catch @panic("panic");
-                runtimes[i] = timer.read();
-                runtime_sum += runtimes[i];
+                const ns_time = timer.read();
+                const runtime = time_unit.unitsfromNanoseconds(ns_time);
+                runtimes[i] = runtime;
+                runtime_sum += runtime;
                 if (runtimes[i] < min) min = runtimes[i];
                 if (runtimes[i] > max) max = runtimes[i];
                 switch (@TypeOf(res)) {
