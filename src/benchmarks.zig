@@ -198,7 +198,7 @@ pub fn benchmark(
                 const arg_name = formatter("{s}", arg_names[index]);
                 _ = try printBenchmark(stderr, min_width, def.name, arg_name, i, min, max, variance, runtime_mean);
             } else {
-                _ = try printBenchmark(stderr, min_width, def.name, index, i, min, max, variance, runtime_mean);
+                _ = try printBenchmark(stderr, min_width, def.name, formatter("{s}", ""), i, min, max, variance, runtime_mean);
             }
             try stderr.writeAll("\n");
             try stderr.context.flush();
