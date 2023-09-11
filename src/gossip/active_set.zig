@@ -96,7 +96,7 @@ pub const ActiveSet = struct {
     /// get a set of CRDS_GOSSIP_PUSH_FANOUT peers to send push messages to
     /// while accounting for peers that have been pruned from
     /// the given origin Pubkey
-    pub fn get_fanout_peers(
+    pub fn getFanoutPeers(
         self: *const Self,
         allocator: std.mem.Allocator,
         origin: Pubkey,
@@ -162,7 +162,7 @@ test "gossip.active_set: init/deinit" {
 
     const origin = Pubkey.random(rng.random(), .{});
 
-    var fanout = try active_set.get_fanout_peers(alloc, origin, &crds_table);
+    var fanout = try active_set.getFanoutPeers(alloc, origin, &crds_table);
     defer fanout.deinit();
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
@@ -170,7 +170,7 @@ test "gossip.active_set: init/deinit" {
     const peer_pubkey = active_set.peers[0];
     active_set.prune(peer_pubkey, origin);
 
-    var fanout_with_prune = try active_set.get_fanout_peers(alloc, origin, &crds_table);
+    var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &crds_table);
     defer fanout_with_prune.deinit();
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
 }

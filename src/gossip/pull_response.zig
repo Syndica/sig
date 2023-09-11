@@ -41,7 +41,7 @@ pub fn filter_crds_values(
 
     var bloom = filter.filter;
 
-    var match_indexs = try crds_table.get_bitmask_matches(alloc, filter.mask, filter.mask_bits);
+    var match_indexs = try crds_table.getBitmaskMatches(alloc, filter.mask, filter.mask_bits);
     defer match_indexs.deinit();
 
     for (match_indexs.items) |entry_index| {

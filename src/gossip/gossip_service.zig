@@ -484,7 +484,7 @@ pub const GossipService = struct {
                     defer crds_table_lock.unlock();
 
                     var crds_table: *CrdsTable = crds_table_lock.mut();
-                    crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                    crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
                         logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
                     };
                 }
@@ -622,7 +622,7 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             const crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.get_entries_with_cursor(&buf, push_cursor);
+            break :blk crds_table.getEntriesWithCursor(&buf, push_cursor);
         };
 
         if (crds_entries.len == 0) {
@@ -674,7 +674,7 @@ pub const GossipService = struct {
                     defer crds_table_lock.unlock();
                     const crds_table: *const CrdsTable = crds_table_lock.get();
 
-                    break :blk try active_set.get_fanout_peers(self.allocator, origin, crds_table);
+                    break :blk try active_set.getFanoutPeers(self.allocator, origin, crds_table);
                 };
                 defer active_set_peers.deinit();
 
@@ -748,7 +748,7 @@ pub const GossipService = struct {
             const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
 
             const crds_table: *const CrdsTable = crds_table_lg.get();
-            const contact_infos = try crds_table.get_all_contact_infos();
+            const contact_infos = try crds_table.getAllContactInfos();
             defer contact_infos.deinit();
 
             for (contact_infos.items) |contact_info| {
@@ -791,7 +791,7 @@ pub const GossipService = struct {
             defer failed_pull_hashes_lock.unlock();
 
             const failed_pull_hashes: *const HashTimeQueue = failed_pull_hashes_lock.get();
-            break :blk try failed_pull_hashes.get_values();
+            break :blk try failed_pull_hashes.getValues();
         };
         defer failed_pull_hashes_array.deinit();
 
@@ -948,7 +948,7 @@ pub const GossipService = struct {
         var crds_table_lock = self.crds_table_rw.write();
         var crds_table: *CrdsTable = crds_table_lock.mut();
 
-        const insert_results = try crds_table.insert_values(
+        const insert_results = try crds_table.insertValues(
             crds_values,
             CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
             true,
@@ -972,7 +972,7 @@ pub const GossipService = struct {
         defer successful_insert_indexs.deinit();
         for (successful_insert_indexs.items) |index| {
             const origin = crds_values[index].id();
-            crds_table.update_record_timestamp(origin, now);
+            crds_table.updateRecordTimestamp(origin, now);
         }
         crds_table_lock.unlock();
 
@@ -1115,7 +1115,7 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             var crds_table: *CrdsTable = crds_table_lock.mut();
-            var result = try crds_table.insert_values(
+            var result = try crds_table.insertValues(
                 push_values,
                 CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
                 false,
@@ -1179,8 +1179,8 @@ pub const GossipService = struct {
             var crds_table: *CrdsTable = crds_table_lock.mut();
 
             try crds_table.purged.trim(purged_cutoff_timestamp);
-            try crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
-            try crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+            try crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY);
+            try crds_table.removeOldLabels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
         }
 
         const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
@@ -1252,7 +1252,7 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             var crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.get_contact_infos(&buf);
+            break :blk crds_table.getContactInfos(&buf);
         };
 
         if (contact_infos.len == 0) {

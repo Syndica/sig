@@ -47,19 +47,19 @@ pub const CrdsShards = struct {
 
     pub fn insert(self: *Self, crds_index: usize, hash: *const Hash) !void {
         const uhash = CrdsPull.hash_to_u64(hash);
-        const shard_index = CrdsShards.compute_shard_index(self.shard_bits, uhash);
+        const shard_index = CrdsShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         try shard.put(crds_index, uhash);
     }
 
     pub fn remove(self: *Self, crds_index: usize, hash: *const Hash) void {
         const uhash = CrdsPull.hash_to_u64(hash);
-        const shard_index = CrdsShards.compute_shard_index(self.shard_bits, uhash);
+        const shard_index = CrdsShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         _ = shard.swapRemove(crds_index);
     }
 
-    pub fn compute_shard_index(shard_bits: u32, hash: u64) usize {
+    pub fn computeShardIndex(shard_bits: u32, hash: u64) usize {
         const shift_bits: u6 = @intCast(64 - shard_bits);
         return @intCast(hash >> shift_bits);
     }
@@ -71,7 +71,7 @@ pub const CrdsShards = struct {
 
         if (self.shard_bits < mask_bits) {
             // shard_bits is smaller, all matches with mask will be in the same shard index
-            var shard = self.shards[CrdsShards.compute_shard_index(self.shard_bits, mask)];
+            var shard = self.shards[CrdsShards.computeShardIndex(self.shard_bits, mask)];
 
             var shard_iter = shard.iterator();
             var result = std.ArrayList(usize).init(alloc);
@@ -87,7 +87,7 @@ pub const CrdsShards = struct {
             return result;
         } else if (self.shard_bits == mask_bits) {
             // when bits are equal we know the lookup will be exact
-            var shard = self.shards[CrdsShards.compute_shard_index(self.shard_bits, mask)];
+            var shard = self.shards[CrdsShards.computeShardIndex(self.shard_bits, mask)];
 
             var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
             try result.insertSlice(0, shard.keys());
@@ -96,7 +96,7 @@ pub const CrdsShards = struct {
             // shardbits > maskbits
             const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
             const count: usize = @intCast(@as(u64, 1) << shift_bits);
-            const end = CrdsShards.compute_shard_index(self.shard_bits, match_mask) + 1;
+            const end = CrdsShards.computeShardIndex(self.shard_bits, match_mask) + 1;
 
             var result = std.ArrayList(usize).init(alloc);
             var insert_index: usize = 0;

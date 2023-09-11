@@ -48,7 +48,7 @@ pub fn build_crds_filters(
             filter_set.add(&hash);
         }
         // add purged values
-        const purged_values = try crds_table.purged.get_values();
+        const purged_values = try crds_table.purged.getValues();
         for (purged_values.items) |hash| {
             filter_set.add(&hash);
         }

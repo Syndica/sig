@@ -11,8 +11,8 @@ const time = std.time;
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
 pub fn main() !void {
-    var alloc = std.heap.page_allocator;
-    var cli_args = try std.process.argsWithAllocator(alloc);
+    var allocator = std.heap.page_allocator;
+    var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
     _ = cli_args.skip();
