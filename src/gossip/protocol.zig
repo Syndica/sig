@@ -191,14 +191,14 @@ test "gossip.protocol: push message serialization is predictable" {
     defer values.deinit();
 
     var msg = Protocol{ .PushMessage = .{ pubkey, values.items } };
-    const empty_size = try bincode.get_serialized_size(
+    const empty_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg,
         bincode.Params{},
     );
 
     var value = try CrdsValue.random(rng.random(), &(try KeyPair.create(null)));
-    const value_size = try bincode.get_serialized_size(
+    const value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         value,
         bincode.Params{},
@@ -207,7 +207,7 @@ test "gossip.protocol: push message serialization is predictable" {
     try std.testing.expect(values.items.len == 1);
 
     var msg_with_value = Protocol{ .PushMessage = .{ pubkey, values.items } };
-    const msg_value_size = try bincode.get_serialized_size(
+    const msg_value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg_with_value,
         bincode.Params{},

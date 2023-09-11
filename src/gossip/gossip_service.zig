@@ -660,7 +660,7 @@ pub const GossipService = struct {
                     continue;
                 }
 
-                const byte_size = try bincode.get_serialized_size(self.allocator, value, bincode.Params{});
+                const byte_size = try bincode.getSerializedSize(self.allocator, value, bincode.Params{});
                 total_byte_size +|= byte_size;
 
                 if (total_byte_size > MAX_BYTES_PER_PUSH) {
@@ -1355,7 +1355,7 @@ pub fn chunkValuesIntoPacketIndexs(
     var buf_byte_size: u64 = 0;
 
     for (crds_values, 0..) |crds_value, i| {
-        const data_byte_size = bincode.get_serialized_size_with_slice(&packet_buf, crds_value, bincode.Params{}) catch {
+        const data_byte_size = bincode.getSerializedSizeWithSlice(&packet_buf, crds_value, bincode.Params{}) catch {
             return error.SerializationError;
         };
         const new_chunk_size = buf_byte_size + data_byte_size;
