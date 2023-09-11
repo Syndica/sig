@@ -33,7 +33,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "socket_utils", filter)) {
         try benchmark(
-            @import("gossip/socket_utils.zig").benchmark_packet_processing,
+            @import("gossip/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             timeUnits.milliseconds,
         );
@@ -41,15 +41,24 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "gossip", filter)) {
         try benchmark(
-            @import("gossip/gossip_service.zig").benchmark_message_processing,
+            @import("gossip/gossip_service.zig").BenchmarkMessageProcessing,
             max_time_per_bench,
             timeUnits.milliseconds,
+        );
+    }
+
+    if (std.mem.startsWith(u8, "sync", filter)) {
+        try benchmark(
+            @import("sync/channel.zig").BenchmarkChannel,
+            max_time_per_bench,
+            timeUnits.microseconds,
         );
     }
 }
 
 const timeUnits = enum {
     nanoseconds,
+    microseconds,
     milliseconds,
 
     const Self = @This();
@@ -58,6 +67,7 @@ const timeUnits = enum {
         return switch (self.*) {
             .nanoseconds => "ns",
             .milliseconds => "ms",
+            .microseconds => "us",
         };
     }
 
@@ -65,6 +75,7 @@ const timeUnits = enum {
         return switch (self.*) {
             .nanoseconds => time_ns,
             .milliseconds => time_ns / std.time.ns_per_ms,
+            .microseconds => time_ns / std.time.ns_per_us,
         };
     }
 };

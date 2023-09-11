@@ -6,7 +6,7 @@ const std = @import("std");
 const Logger = @import("../trace/log.zig").Logger;
 const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
 
-pub fn read_socket(
+pub fn readSocket(
     socket: *UdpSocket,
     incoming_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
@@ -40,7 +40,7 @@ pub fn read_socket(
     logger.debugf("read_socket loop closed\n", .{});
 }
 
-pub fn send_socket(
+pub fn sendSocket(
     socket: *UdpSocket,
     outgoing_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
@@ -70,11 +70,11 @@ pub fn send_socket(
     logger.debugf("send_socket loop closed\n", .{});
 }
 
-pub const benchmark_packet_processing = struct {
+pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 3;
     pub const max_iterations = 5;
 
-    pub fn benchmark_read_socket() !void {
+    pub fn benchmarkReadSocket() !void {
         const N_ITERS = 10;
         const allocator = std.heap.page_allocator;
 
@@ -90,11 +90,11 @@ pub const benchmark_packet_processing = struct {
         var exit = std.atomic.Atomic(bool).init(false);
 
         var sink = DoNothingSink{};
-        var logger = Logger.init(allocator, .debug, sink.entry_sink());
+        var logger = Logger.init(allocator, .debug, sink.sink());
         defer logger.deinit();
         logger.spawn();
 
-        var handle = try std.Thread.spawn(.{}, read_socket, .{ &socket, channel, &exit, logger });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ &socket, channel, &exit, logger });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -118,7 +118,7 @@ pub const benchmark_packet_processing = struct {
         handle.join();
     }
 
-    pub fn benchmark_send_socket() !void {
+    pub fn benchmarkSendSocket() !void {
         const N_ITERS = 10;
         const allocator = std.heap.page_allocator;
 
@@ -133,11 +133,11 @@ pub const benchmark_packet_processing = struct {
         var exit = std.atomic.Atomic(bool).init(false);
 
         var sink = DoNothingSink{};
-        var logger = Logger.init(allocator, .debug, sink.entry_sink());
+        var logger = Logger.init(allocator, .debug, sink.sink());
         defer logger.deinit();
         logger.spawn();
 
-        var handle = try std.Thread.spawn(.{}, send_socket, .{ &socket, channel, &exit, logger });
+        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, logger });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;

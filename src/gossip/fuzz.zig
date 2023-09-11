@@ -7,7 +7,7 @@ const std = @import("std");
 const _gossip_service = @import("./gossip_service.zig");
 const GossipService = _gossip_service.GossipService;
 const ChunkType = _gossip_service.ChunkType;
-const crds_values_to_packets = _gossip_service.crds_values_to_packets;
+const crds_values_to_packets = _gossip_service.crdsValuesToPackets;
 const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
 
 const Logger = @import("../trace/log.zig").Logger;
