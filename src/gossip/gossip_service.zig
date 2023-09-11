@@ -866,7 +866,7 @@ pub const GossipService = struct {
             var crds_table = crds_table_lock.mut();
 
             crds_table.insert(pull_value, now) catch {};
-            crds_table.update_record_timestamp(pull_value.id(), now);
+            crds_table.updateRecordTimestamp(pull_value.id(), now);
         }
 
         // filter out valid peers and send ping messages to peers
@@ -1939,7 +1939,7 @@ test "gossip.gossip_service: process contact_info push packet" {
 
     {
         var lg = gossip_service.crds_table_rw.read();
-        var res = lg.get().get_contact_infos(&buf2);
+        var res = lg.get().getContactInfos(&buf2);
         try std.testing.expect(res.len == 1);
         lg.unlock();
     }
