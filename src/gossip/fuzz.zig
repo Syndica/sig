@@ -50,8 +50,6 @@ const pull_request = @import("../gossip/pull_request.zig");
 const CrdsFilter = pull_request.CrdsFilter;
 const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 
-const pull_response = @import("../gossip/pull_response.zig");
-
 const Hash = @import("../core/hash.zig").Hash;
 
 const PacketChannel = NonBlockingChannel(Packet);
