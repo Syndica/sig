@@ -470,7 +470,7 @@ pub const GossipService = struct {
 
                             var ping_cache: *PingCache = ping_cache_lock.mut();
                             const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
-                            _ = ping_cache.recevied_pong(pong, SocketAddr.from_endpoint(from_endpoint), now);
+                            _ = ping_cache.recevied_pong(pong, SocketAddr.fromEndpoint(from_endpoint), now);
                         }
                         logger
                             .field("from_endpoint", endpoint_buf.items)
@@ -820,7 +820,7 @@ pub const GossipService = struct {
                 // TODO: incorperate stake weight in random sampling
                 const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info = valid_gossip_peers.items[peer_index];
-                const peer_addr = peer_contact_info.gossip.to_endpoint();
+                const peer_addr = peer_contact_info.gossip.toEndpoint();
 
                 const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
@@ -836,7 +836,7 @@ pub const GossipService = struct {
             for (filters.items) |filter| {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
                 var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-                var packet = Packet.init(entrypoint_addr.to_endpoint(), packet_buf, msg_slice.len);
+                var packet = Packet.init(entrypoint_addr.toEndpoint(), packet_buf, msg_slice.len);
                 try output.append(packet);
             }
         }
@@ -871,7 +871,7 @@ pub const GossipService = struct {
 
         // filter out valid peers and send ping messages to peers
         var now_instant = std.time.Instant.now() catch @panic("time is not supported on this OS!");
-        var puller_socket_addr = SocketAddr.from_endpoint(pull_from_endpoint);
+        var puller_socket_addr = SocketAddr.fromEndpoint(pull_from_endpoint);
 
         var ping_cache_lock = self.ping_cache_rw.write();
         var ping_cache: *PingCache = ping_cache_lock.mut();
@@ -1064,7 +1064,7 @@ pub const GossipService = struct {
         };
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
         crds.sanitizeSocket(&from_gossip_addr) catch return error.InvalidGossipAddress;
-        const from_gossip_endpoint = from_gossip_addr.to_endpoint();
+        const from_gossip_endpoint = from_gossip_addr.toEndpoint();
 
         const failed_origin_len = failed_origins.keys().len;
         var n_packets = failed_origins.keys().len / MAX_PRUNE_DATA_NODES;
@@ -1224,7 +1224,7 @@ pub const GossipService = struct {
             const protocol_msg = Protocol{ .PingMessage = ping_and_addr.ping };
             var serialized_ping = bincode.writeToSlice(&packet_buf, protocol_msg, .{}) catch return error.SerializationError;
 
-            var to_endpoint = ping_and_addr.socket.to_endpoint();
+            var to_endpoint = ping_and_addr.socket.toEndpoint();
             var packet = Packet.init(to_endpoint, packet_buf, serialized_ping.len);
             try self.packet_outgoing_channel.send(packet);
         }
@@ -1555,7 +1555,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var packets = try gossip_service.handlePullRequest(
         crds_value,
         filter,
-        addr.to_endpoint(),
+        addr.toEndpoint(),
         null,
     );
     defer packets.?.deinit();
@@ -1780,7 +1780,7 @@ test "gossip.gossip_service: test packet verification" {
     };
 
     var peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
-    var from = peer.to_endpoint();
+    var from = peer.toEndpoint();
 
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
@@ -1917,7 +1917,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     };
 
     // packet
-    const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).to_endpoint();
+    const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
     const protocol_msg = ProtocolMessage{
         .from_endpoint = peer,
         .message = msg,
@@ -2043,7 +2043,7 @@ pub const BenchmarkMessageProcessing = struct {
         };
         var sender = Sender{
             .gs = &gossip_service,
-            .to_endpoint = address.to_endpoint(),
+            .to_endpoint = address.toEndpoint(),
         };
 
         // send a ping message
@@ -2062,7 +2062,7 @@ pub const BenchmarkMessageProcessing = struct {
             }
             // send a push message
             {
-                var packets = try fuzz.randomPushMessage(rng, &keypair, address.to_endpoint());
+                var packets = try fuzz.randomPushMessage(rng, &keypair, address.toEndpoint());
                 defer packets.deinit();
 
                 for (packets.items) |packet| {
@@ -2073,7 +2073,7 @@ pub const BenchmarkMessageProcessing = struct {
             }
             // send a pull message
             {
-                var packets = try fuzz.randomPullResponse(rng, &keypair, address.to_endpoint());
+                var packets = try fuzz.randomPullResponse(rng, &keypair, address.toEndpoint());
                 defer packets.deinit();
 
                 for (packets.items) |packet| {

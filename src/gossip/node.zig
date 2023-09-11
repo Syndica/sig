@@ -105,7 +105,7 @@ pub const ContactInfo = struct {
         var sockets = ArrayList(SocketEntry).initCapacity(allocator, 6) catch unreachable;
 
         for (0..4) |_| {
-            addrs.append(IpAddr.new_v4(127, 0, 0, 1)) catch unreachable;
+            addrs.append(IpAddr.newIpv4(127, 0, 0, 1)) catch unreachable;
         }
 
         for (0..6) |_| {
@@ -322,7 +322,7 @@ test "set & get socket on contact info" {
 
     var set_socket = ci.getSocket(SOCKET_TAG_RPC);
     try testing.expect(set_socket.?.eql(&SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899)));
-    try testing.expect(ci.addrs.items[0].eql(&IpAddr.new_v4(127, 0, 0, 1)));
+    try testing.expect(ci.addrs.items[0].eql(&IpAddr.newIpv4(127, 0, 0, 1)));
     try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(SOCKET_TAG_RPC, 0, 8899)));
 }
 

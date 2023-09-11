@@ -222,7 +222,7 @@ pub const PingCache = struct {
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers) |peer| {
-            if (!peer.gossip.is_unspecified()) {
+            if (!peer.gossip.isUnspecified()) {
                 var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(peer);

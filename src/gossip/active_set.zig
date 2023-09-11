@@ -122,7 +122,7 @@ pub const ActiveSet = struct {
                 continue;
             }
 
-            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.to_endpoint());
+            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
             if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
                 break;
             }

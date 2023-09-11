@@ -277,10 +277,10 @@ pub fn sanitizeSocket(socket: *const SocketAddr) !void {
     if (socket.port() == 0) {
         return error.InvalidPort;
     }
-    if (socket.is_unspecified()) {
+    if (socket.isUnspecified()) {
         return error.UnspecifiedAddress;
     }
-    if (socket.is_multicast()) {
+    if (socket.isMulticast()) {
         return error.MulticastAddress;
     }
 }

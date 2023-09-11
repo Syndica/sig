@@ -18,10 +18,10 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn parse(bytes: []const u8) !Self {
         // TODO: parse v6 if v4 fails
-        return parse_v4(bytes);
+        return parseIpv4(bytes);
     }
 
-    pub fn parse_v4(bytes: []const u8) !Self {
+    pub fn parseIpv4(bytes: []const u8) !Self {
         // parse v4
         var octs: [4]u8 = [_]u8{0} ** 4;
         var addr_port: u16 = 0;
@@ -99,7 +99,7 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
-    pub fn init_ipv6(octets: [16]u8, portt: u16) Self {
+    pub fn initIpv6(octets: [16]u8, portt: u16) Self {
         return Self{
             .V4 = .{ .ip = Ipv6Addr.init(octets), .port = portt },
         };
@@ -157,7 +157,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn to_endpoint(self: *const Self) network.EndPoint {
+    pub fn toEndpoint(self: *const Self) network.EndPoint {
         switch (self.*) {
             .V4 => |addr| {
                 return network.EndPoint{
@@ -174,7 +174,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn from_endpoint(endpoint: network.EndPoint) Self {
+    pub fn fromEndpoint(endpoint: network.EndPoint) Self {
         switch (endpoint.address) {
             .ipv4 => |v4| {
                 return Self{
@@ -197,7 +197,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn is_unspecified(self: *const Self) bool {
+    pub fn isUnspecified(self: *const Self) bool {
         switch (self.*) {
             .V4 => |addr| {
                 return std.mem.readIntBig(u32, &addr.ip.octets) == 0;
@@ -208,14 +208,14 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn is_multicast(self: *const Self) bool {
+    pub fn isMulticast(self: *const Self) bool {
         switch (self.*) {
             .V4 => |addr| {
                 const octets = addr.ip.octets;
                 return octets[0] >= 224 and octets[0] <= 239;
             },
             .V6 => |addr| {
-                return addr.ip.is_multicast();
+                return addr.ip.isMulticast();
             },
         }
     }
@@ -265,7 +265,7 @@ pub const Ipv6Addr = struct {
     }
 
     /// defined in https://tools.ietf.org/html/rfc4291
-    pub fn is_multicast(self: *const Self) bool {
+    pub fn isMulticast(self: *const Self) bool {
         return self.octets[0] == 255;
     }
 };
@@ -276,7 +276,7 @@ pub const IpAddr = union(enum(u32)) {
 
     const Self = @This();
 
-    pub fn new_v4(a: u8, b: u8, c: u8, d: u8) IpAddr {
+    pub fn newIpv4(a: u8, b: u8, c: u8, d: u8) IpAddr {
         return .{
             .ipv4 = Ipv4Addr{
                 .octets = [4]u8{ a, b, c, d },
@@ -309,12 +309,12 @@ pub const IpAddr = union(enum(u32)) {
 test "gossip.net: invalid ipv4 socket parsing" {
     {
         var addr = "127.0.0.11234";
-        var result = SocketAddr.parse_v4(addr);
+        var result = SocketAddr.parseIpv4(addr);
         try std.testing.expectError(error.InvalidIpv4, result);
     }
     {
         var addr = "127.0.0:1123";
-        var result = SocketAddr.parse_v4(addr);
+        var result = SocketAddr.parseIpv4(addr);
         try std.testing.expectError(error.InvalidIpv4, result);
     }
 }
@@ -325,7 +325,7 @@ test "gossip.net: valid ipv4 socket parsing" {
         .ip = Ipv4Addr.init(127, 0, 0, 1),
         .port = 1234,
     } };
-    var actual_addr = try SocketAddr.parse_v4(addr);
+    var actual_addr = try SocketAddr.parseIpv4(addr);
     try std.testing.expectEqual(expected_addr, actual_addr);
 }
 

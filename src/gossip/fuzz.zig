@@ -288,17 +288,17 @@ pub fn main() !void {
         var packet = switch (command) {
             0 => blk: {
                 // send ping message
-                const packet = randomPingPacket(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packet = randomPingPacket(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
                 break :blk packet;
             },
             1 => blk: {
                 // send pong message
-                const packet = randomPongPacket(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packet = randomPongPacket(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
                 break :blk packet;
             },
             2 => blk: {
                 // send push message
-                const packets = randomPushMessage(rng.random(), &fuzz_keypair, gossip_address.to_endpoint()) catch |err| {
+                const packets = randomPushMessage(rng.random(), &fuzz_keypair, gossip_address.toEndpoint()) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -309,7 +309,7 @@ pub fn main() !void {
             },
             3 => blk: {
                 // send pull response
-                const packets = randomPullResponse(rng.random(), &fuzz_keypair, gossip_address.to_endpoint()) catch |err| {
+                const packets = randomPullResponse(rng.random(), &fuzz_keypair, gossip_address.toEndpoint()) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -324,7 +324,7 @@ pub fn main() !void {
                     allocator,
                     rng.random(),
                     &fuzz_keypair,
-                    gossip_address.to_endpoint(),
+                    gossip_address.toEndpoint(),
                 );
                 break :blk packet;
             },
