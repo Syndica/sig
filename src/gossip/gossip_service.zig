@@ -1993,7 +1993,15 @@ pub const benchmark_message_processing = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 5;
 
-    pub fn benchmark_gossip_service() !void {
+    pub const args = [_]usize{
+        10, 100, 500
+    };
+
+    pub const arg_names = [_][]const u8{
+        "10_msg_iters",  "100_msg_iters",  "500_msg_iters",
+    };
+
+    pub fn benchmark_gossip_service(num_message_iterations: usize) !void {
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
@@ -2045,37 +2053,39 @@ pub const benchmark_message_processing = struct {
 
         // send a ping message
         var msg_sent: usize = 0;
-        {
-            var msg = try fuzz.random_ping(rng, &keypair);
-            sender.send(msg);
-            msg_sent += 1;
-        }
-        // send a pong message
-        {
-            var msg = try fuzz.random_pong(rng, &keypair);
-            sender.send(msg);
-            msg_sent += 1;
-        }
-        // send a push message
-        {
-            var packets = try fuzz.random_push_message(rng, &keypair, address.to_endpoint());
-            defer packets.deinit();
-
-            for (packets.items) |packet| {
-                var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+        for (0..num_message_iterations) |_| { 
+            {
+                var msg = try fuzz.random_ping(rng, &keypair);
                 sender.send(msg);
                 msg_sent += 1;
             }
-        }
-        // send a pull message
-        {
-            var packets = try fuzz.random_pull_response(rng, &keypair, address.to_endpoint());
-            defer packets.deinit();
-
-            for (packets.items) |packet| {
-                var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+            // send a pong message
+            {
+                var msg = try fuzz.random_pong(rng, &keypair);
                 sender.send(msg);
                 msg_sent += 1;
+            }
+            // send a push message
+            {
+                var packets = try fuzz.random_push_message(rng, &keypair, address.to_endpoint());
+                defer packets.deinit();
+
+                for (packets.items) |packet| {
+                    var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                    sender.send(msg);
+                    msg_sent += 1;
+                }
+            }
+            // send a pull message
+            {
+                var packets = try fuzz.random_pull_response(rng, &keypair, address.to_endpoint());
+                defer packets.deinit();
+
+                for (packets.items) |packet| {
+                    var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                    sender.send(msg);
+                    msg_sent += 1;
+                }
             }
         }
 
