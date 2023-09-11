@@ -38,7 +38,7 @@ pub const Protocol = union(enum(u32)) {
 
     const Self = @This();
 
-    pub fn verify_signature(self: *Protocol) !void {
+    pub fn verifySignature(self: *Protocol) !void {
         switch (self.*) {
             .PullRequest => |*pull| {
                 var value = pull[1];
@@ -95,7 +95,7 @@ pub const Protocol = union(enum(u32)) {
                 if (!from.equals(&value.pubkey)) {
                     return error.InvalidValue;
                 }
-                try sanitize_wallclock(value.wallclock);
+                try sanitizeWallclock(value.wallclock);
             },
             // do nothing
             .PingMessage => {},
@@ -104,7 +104,7 @@ pub const Protocol = union(enum(u32)) {
     }
 };
 
-pub fn sanitize_wallclock(wallclock: u64) !void {
+pub fn sanitizeWallclock(wallclock: u64) !void {
     if (wallclock >= MAX_WALLCLOCK) {
         return error.InvalidValue;
     }
@@ -267,10 +267,10 @@ test "gossip.protocol: test ping pong sig verify" {
     var rng = std.rand.DefaultPrng.init(0);
     var ping = try Ping.random(rng.random(), &keypair);
     var msg = Protocol{ .PingMessage = ping };
-    try msg.verify_signature();
+    try msg.verifySignature();
 
     var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
-    try pong.verify_signature();
+    try pong.verifySignature();
 }
 
 test "gossip.protocol: pull request serializes and deserializes" {

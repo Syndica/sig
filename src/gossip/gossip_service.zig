@@ -278,7 +278,7 @@ pub const GossipService = struct {
                     continue;
                 };
 
-                protocol_message.verify_signature() catch |err| {
+                protocol_message.verifySignature() catch |err| {
                     logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
                     bincode.free(self.allocator, protocol_message);
                     continue;
@@ -470,7 +470,7 @@ pub const GossipService = struct {
 
                             var ping_cache: *PingCache = ping_cache_lock.mut();
                             const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
-                            _ = ping_cache.recevied_pong(pong, SocketAddr.fromEndpoint(from_endpoint), now);
+                            _ = ping_cache.receviedPong(pong, SocketAddr.fromEndpoint(from_endpoint), now);
                         }
                         logger
                             .field("from_endpoint", endpoint_buf.items)
@@ -593,7 +593,7 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, gossip_peers);
+            var result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, gossip_peers);
             break :blk result;
         };
         var valid_gossip_peers = ping_cache_result.valid_peers;
@@ -767,7 +767,7 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, peers);
+            var result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers);
             break :blk result;
         };
         var valid_gossip_peers = ping_cache_result.valid_peers;
@@ -796,14 +796,14 @@ pub const GossipService = struct {
         defer failed_pull_hashes_array.deinit();
 
         // build crds filters
-        var filters = try pull_request.build_crds_filters(
+        var filters = try pull_request.buildCrdsFilters(
             self.allocator,
             &self.crds_table_rw,
             &failed_pull_hashes_array,
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
         );
-        defer pull_request.deinit_crds_filters(&filters);
+        defer pull_request.deinitCrdsFilters(&filters);
 
         // build packet responses
         var output = try std.ArrayList(Packet).initCapacity(self.allocator, filters.items.len);
@@ -903,7 +903,7 @@ pub const GossipService = struct {
         var crds_table_lock = self.crds_table_rw.read();
         const crds_values = blk: {
             defer crds_table_lock.unlock();
-            break :blk try pull_response.filter_crds_values(
+            break :blk try pull_response.filterCrdsValues(
                 self.allocator,
                 crds_table_lock.get(),
                 &pull_filter,
@@ -1519,7 +1519,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
 
             // make sure well get a response from the request
             const vers_value = crds_table.get(value.label()).?;
-            const hash_bits = pull_request.hash_to_u64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
+            const hash_bits = pull_request.hashToU64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
             if (hash_bits == 0) {
                 done = true;
             }
@@ -1543,7 +1543,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     const addr = SocketAddr.random(rng.random());
     var ping_lock = gossip_service.ping_cache_rw.write();
     var ping_cache: *PingCache = ping_lock.mut();
-    ping_cache._set_pong(my_pubkey, addr);
+    ping_cache._setPong(my_pubkey, addr);
     ping_lock.unlock();
 
     const filter = CrdsFilter{
@@ -1666,7 +1666,7 @@ test "gossip.gossip_service: test build_pull_requests" {
         var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0);
         try lg.mut().insert(value, get_wallclock_ms());
         var pc: *PingCache = ping_lock.mut();
-        pc._set_pong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
+        pc._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
     }
     lg.unlock();
     ping_lock.unlock();

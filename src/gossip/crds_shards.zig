@@ -46,14 +46,14 @@ pub const CrdsShards = struct {
     }
 
     pub fn insert(self: *Self, crds_index: usize, hash: *const Hash) !void {
-        const uhash = CrdsPull.hash_to_u64(hash);
+        const uhash = CrdsPull.hashToU64(hash);
         const shard_index = CrdsShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         try shard.put(crds_index, uhash);
     }
 
     pub fn remove(self: *Self, crds_index: usize, hash: *const Hash) void {
-        const uhash = CrdsPull.hash_to_u64(hash);
+        const uhash = CrdsPull.hashToU64(hash);
         const shard_index = CrdsShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         _ = shard.swapRemove(crds_index);
@@ -135,7 +135,7 @@ fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersio
 }
 
 fn check_mask(value: *const CrdsVersionedValue, mask: u64, mask_bits: u32) bool {
-    const uhash = CrdsPull.hash_to_u64(&value.value_hash);
+    const uhash = CrdsPull.hashToU64(&value.value_hash);
     const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
     return (uhash | ones) == (mask | ones);
 }

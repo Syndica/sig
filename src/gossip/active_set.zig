@@ -67,7 +67,7 @@ pub const ActiveSet = struct {
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
         var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
-        pull_request.shuffle_first_n(rng.random(), crds.LegacyContactInfo, crds_peers, size);
+        pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {

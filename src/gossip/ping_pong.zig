@@ -146,7 +146,7 @@ pub const PingCache = struct {
     }
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
-    pub fn recevied_pong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
+    pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
         var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
         if (self.pending_cache.peek(pong.hash)) |pubkey_and_addr| {
             const pubkey: Pubkey = pubkey_and_addr[0];
@@ -161,7 +161,7 @@ pub const PingCache = struct {
         return false;
     }
 
-    pub fn maybe_ping(
+    pub fn maybePing(
         self: *Self,
         now: std.time.Instant,
         peer_and_addr: PubkeyAndSocketAddr,
@@ -203,15 +203,15 @@ pub const PingCache = struct {
             }
 
             // if age is greater than time-to-live divided by 8, we maybe ping again
-            return .{ .passes_ping_check = true, .maybe_ping = if (age > self.ttl_ns / 8) self.maybe_ping(now, peer_and_addr, keypair) else null };
+            return .{ .passes_ping_check = true, .maybe_ping = if (age > self.ttl_ns / 8) self.maybePing(now, peer_and_addr, keypair) else null };
         }
-        return .{ .passes_ping_check = false, .maybe_ping = self.maybe_ping(now, peer_and_addr, keypair) };
+        return .{ .passes_ping_check = false, .maybe_ping = self.maybePing(now, peer_and_addr, keypair) };
     }
 
     /// Filters valid peers according to `PingCache` state and returns them along with any possible pings that need to be sent out.
     ///
     /// *Note*: caller is responsible for deinit `ArrayList`(s) returned!
-    pub fn filter_valid_peers(
+    pub fn filterValidPeers(
         self: *Self,
         allocator: std.mem.Allocator,
         our_keypair: KeyPair,
@@ -237,7 +237,7 @@ pub const PingCache = struct {
     }
 
     // only used in tests
-    pub fn _set_pong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
+    pub fn _setPong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
         _ = self.pongs.put(newPubkeyAndSocketAddr(peer, socket_addr), std.time.Instant.now() catch unreachable);
     }
 };
@@ -255,7 +255,7 @@ test "gossip.ping_pong: PingCache works" {
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
-    var ping = ping_cache.maybe_ping(
+    var ping = ping_cache.maybePing(
         now1,
         node,
         &our_kp,
@@ -267,7 +267,7 @@ test "gossip.ping_pong: PingCache works" {
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
-    var result = try ping_cache.filter_valid_peers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
+    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
     defer result.valid_peers.deinit();
     defer result.pings.deinit();
 
