@@ -17,20 +17,20 @@ pub const Logger = struct {
     exit_sig: AtomicBool,
     handle: ?std.Thread,
     channel: *Channel(*Entry),
-    entry_sink: EntrySink,
+    sink: Sink,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, default_level: Level, entry_sink: ?EntrySink) *Self {
+    pub fn init(allocator: std.mem.Allocator, default_level: Level, maybe_sink: ?Sink) *Self {
         var self = allocator.create(Self) catch @panic("could not allocator.create Logger");
         var arena = std.heap.ArenaAllocator.init(allocator);
 
         var sink = blk: {
-            if (entry_sink == null) {
-                var sink = StdErrEntrySink{};
-                break :blk sink.entry_sink();
+            if (maybe_sink) |sink| {
+                break :blk sink;
             } else {
-                break :blk entry_sink.?;
+                var sink = StdErrSink{};
+                break :blk sink.sink();
             }
         };
 
@@ -41,7 +41,7 @@ pub const Logger = struct {
             .exit_sig = AtomicBool.init(false),
             .handle = null,
             .channel = Channel(*Entry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
-            .entry_sink = sink,
+            .sink = sink,
         };
         return self;
     }
@@ -71,7 +71,7 @@ pub const Logger = struct {
             };
             defer self.channel.allocator.free(entries);
 
-            self.entry_sink.consume_entries(entries);
+            self.sink.consume_entries(entries);
 
             // deinit entries
             for (entries) |e| {
@@ -117,25 +117,25 @@ pub const Logger = struct {
     }
 };
 
-const EntrySink = struct {
+const Sink = struct {
     ptr: *anyopaque,
     impl: *const Impl,
 
     const Self = @This();
 
     const Impl = struct {
-        consume_entries: *const fn (ctx: *anyopaque, entries: []*Entry) void,
+        consumeEntries: *const fn (ctx: *anyopaque, entries: []*Entry) void,
     };
 
-    pub fn consume_entries(self: *Self, entries: []*Entry) void {
-        self.impl.consume_entries(self.ptr, entries);
+    pub fn consumeEntries(self: *Self, entries: []*Entry) void {
+        self.impl.consumeEntries(self.ptr, entries);
     }
 };
 
-pub const StdErrEntrySink = struct {
+pub const StdErrSink = struct {
     const Self = @This();
 
-    pub fn consume_entries(_: *anyopaque, entries: []*Entry) void {
+    pub fn consumeEntries(_: *anyopaque, entries: []*Entry) void {
         var std_err_writer = std.io.getStdErr().writer();
         var std_err_mux = std.debug.getStderrMutex();
         std_err_mux.lock();
@@ -146,11 +146,11 @@ pub const StdErrEntrySink = struct {
         }
     }
 
-    pub fn entry_sink(self: *Self) EntrySink {
-        return EntrySink{
+    pub fn sink(self: *Self) Sink {
+        return Sink{
             .ptr = self,
             .impl = &.{
-                .consume_entries = consume_entries,
+                .consumeEntries = consumeEntries,
             },
         };
     }
@@ -159,15 +159,15 @@ pub const StdErrEntrySink = struct {
 pub const DoNothingSink = struct {
     const Self = @This();
 
-    pub fn consume_entries(_: *anyopaque, entries: []*Entry) void {
+    pub fn consumeEntries(_: *anyopaque, entries: []*Entry) void {
         _ = entries;
     }
 
-    pub fn entry_sink(self: *Self) EntrySink {
-        return EntrySink{
+    pub fn sink(self: *Self) Sink {
+        return Sink{
             .ptr = self,
             .impl = &.{
-                .consume_entries = consume_entries,
+                .consumeEntries = consumeEntries,
             },
         };
     }
@@ -202,7 +202,7 @@ test "trace.logger: works" {
 
     std.debug.print("--- \n", .{});
     var sink = DoNothingSink{};
-    var logger_null = Logger.init(testing.allocator, .info, sink.entry_sink());
+    var logger_null = Logger.init(testing.allocator, .info, sink.sink());
     logger_null.spawn();
     defer logger_null.deinit();
 
