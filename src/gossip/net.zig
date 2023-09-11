@@ -93,7 +93,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn init_ipv4(octets: [4]u8, portt: u16) Self {
+    pub fn initIpv4(octets: [4]u8, portt: u16) Self {
         return Self{
             .V4 = .{ .ip = Ipv4Addr.init(octets[0], octets[1], octets[2], octets[3]), .port = portt },
         };

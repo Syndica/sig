@@ -78,7 +78,7 @@ fn gossip(_: []const []const u8) !void {
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
-    var gossip_address = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, gossip_port);
+    var gossip_address = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, gossip_port);
     std.debug.print("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info

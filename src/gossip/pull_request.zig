@@ -62,7 +62,7 @@ pub fn build_crds_filters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);
+    const filters = try filter_set.consumeForCrdsFilters(alloc, max_n_filters);
     return filters;
 }
 
@@ -109,7 +109,7 @@ pub const CrdsFilterSet = struct {
         };
     }
 
-    pub fn init_test(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
@@ -151,7 +151,7 @@ pub const CrdsFilterSet = struct {
     }
 
     /// returns a list of CrdsFilters and consumes Self by calling deinit.
-    pub fn consume_for_crds_filters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
+    pub fn consumeForCrdsFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -167,7 +167,7 @@ pub const CrdsFilterSet = struct {
         if (!can_consume_all) {
 
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(crds.get_wallclock_ms());
+            var rng = std.rand.DefaultPrng.init(crds.getWallclockMs());
             shuffle_first_n(rng.random(), usize, indexs.items, output_size);
 
             // release others
@@ -312,7 +312,7 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consume_for_crds_filters(std.testing.allocator, 10);
+    var f = try filter_set.consumeForCrdsFilters(std.testing.allocator, 10);
     defer deinit_crds_filters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());

@@ -176,7 +176,7 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var rng = DefaultPrng.init(crds.get_wallclock_ms());
+        var rng = DefaultPrng.init(crds.getWallclockMs());
         var ping = Ping.random(rng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);

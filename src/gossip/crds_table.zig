@@ -189,7 +189,7 @@ pub const CrdsTable = struct {
             self.cursor += 1;
 
             // should overwrite existing entry
-        } else if (crds_overwrites(&versioned_value, result.value_ptr)) {
+        } else if (crdsOverwrites(&versioned_value, result.value_ptr)) {
             const old_entry = result.value_ptr.*;
 
             switch (value.data) {
@@ -255,7 +255,7 @@ pub const CrdsTable = struct {
         comptime record_inserts: bool,
         comptime record_timeouts: bool,
     ) error{OutOfMemory}!InsertResults {
-        var now = crds.get_wallclock_ms();
+        var now = crds.getWallclockMs();
 
         // TODO: change to record duplicate and old values seperately + handle when
         // crds table is full
@@ -418,7 +418,7 @@ pub const CrdsTable = struct {
 
     // ** triming values in the crdstable **
     pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
-        const now = crds.get_wallclock_ms();
+        const now = crds.getWallclockMs();
 
         const maybe_entry = self.store.getEntry(label);
         if (maybe_entry == null) return error.LabelNotFound;
@@ -664,7 +664,7 @@ pub const HashTimeQueue = struct {
     }
 };
 
-pub fn crds_overwrites(new_value: *const CrdsVersionedValue, old_value: *const CrdsVersionedValue) bool {
+pub fn crdsOverwrites(new_value: *const CrdsVersionedValue, old_value: *const CrdsVersionedValue) bool {
     // labels must match
     std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
 
@@ -717,7 +717,7 @@ test "gossip.crds_table: insert and remove value" {
     var crds_table = try CrdsTable.init(std.testing.allocator);
     defer crds_table.deinit();
 
-    const value = try CrdsValue.initSigned(CrdsData.random_from_index(rng.random(), 0), &keypair);
+    const value = try CrdsValue.initSigned(CrdsData.randomFromIndex(rng.random(), 0), &keypair);
     try crds_table.insert(value, 100);
 
     const label = value.label();

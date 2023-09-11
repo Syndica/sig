@@ -24,7 +24,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("../gossip/crds.zig").get_wallclock_ms;
+const get_wallclock_ms = @import("../gossip/crds.zig").getWallclockMs;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -1063,7 +1063,7 @@ pub const GossipService = struct {
             };
         };
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
-        crds.sanitize_socket(&from_gossip_addr) catch return error.InvalidGossipAddress;
+        crds.sanitizeSocket(&from_gossip_addr) catch return error.InvalidGossipAddress;
         const from_gossip_endpoint = from_gossip_addr.to_endpoint();
 
         const failed_origin_len = failed_origins.keys().len;
@@ -1281,7 +1281,7 @@ pub const GossipService = struct {
                 continue;
             }
             // filter on valid gossip address
-            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
             nodes[node_index] = peer_info;
             node_index += 1;
@@ -1381,7 +1381,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1398,7 +1398,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), &rand_keypair, 0); // contact info
+        var value = try CrdsValue.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock_ms());
         try peers.append(value.data.LegacyContactInfo);
     }
@@ -1444,7 +1444,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1459,7 +1459,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var crds_values: [5]CrdsValue = undefined;
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
-        var value = try CrdsValue.random_with_index(rng.random(), &kp, 0);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         crds_values[i] = value;
     }
@@ -1492,7 +1492,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1513,7 +1513,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     while (!done) {
         count += 1;
         for (0..5) |_| {
-            var value = try CrdsValue.random_with_index(rng.random(), &my_keypair, 0);
+            var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
             value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
             try crds_table.insert(value, get_wallclock_ms());
 
@@ -1536,7 +1536,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    var ci_data = crds.CrdsData.random_from_index(rng.random(), 0);
+    var ci_data = crds.CrdsData.randomFromIndex(rng.random(), 0);
     ci_data.LegacyContactInfo.id = my_pubkey;
     const crds_value = try CrdsValue.initSigned(ci_data, &my_keypair);
 
@@ -1571,7 +1571,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1586,7 +1586,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var values = std.ArrayList(CrdsValue).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        var value = try CrdsValue.random_with_index(rng.random(), &my_keypair, 0);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         try values.append(value);
     }
@@ -1599,7 +1599,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var send_contact_info = crds.LegacyContactInfo.random(rng.random());
     send_contact_info.id = push_from;
     // valid socket addr
-    var gossip_socket = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 20);
+    var gossip_socket = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20);
     send_contact_info.gossip = gossip_socket;
 
     var ci_value = try CrdsValue.initSigned(crds.CrdsData{
@@ -1643,7 +1643,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1663,7 +1663,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var ping_lock = gossip_service.ping_cache_rw.write();
     var lg = gossip_service.crds_table_rw.write();
     for (0..20) |_| {
-        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0);
         try lg.mut().insert(value, get_wallclock_ms());
         var pc: *PingCache = ping_lock.mut();
         pc._set_pong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
@@ -1686,7 +1686,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1703,7 +1703,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var lg = gossip_service.crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0); // contact info
+        var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock_ms());
         try peers.append(value.data.LegacyContactInfo);
     }
@@ -1752,7 +1752,7 @@ test "gossip.gossip_service: test packet verification" {
     var id = Pubkey.fromPublicKey(&keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(id);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(allocator, contact_info, keypair, null, &exit);
     defer gossip_service.deinit();
@@ -1767,7 +1767,7 @@ test "gossip.gossip_service: test packet verification" {
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verifyPackets, .{ &gossip_service, logger });
 
     var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
-    var data = crds.CrdsData.random_from_index(rng.random(), 0);
+    var data = crds.CrdsData.randomFromIndex(rng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
     var value = try CrdsValue.initSigned(data, &keypair);
@@ -1779,7 +1779,7 @@ test "gossip.gossip_service: test packet verification" {
         .PushMessage = .{ id, &values },
     };
 
-    var peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    var peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     var from = peer.to_endpoint();
 
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
@@ -1791,7 +1791,7 @@ test "gossip.gossip_service: test packet verification" {
     }
 
     // send one which fails sanitization
-    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 2), &keypair);
+    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 2), &keypair);
     value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
     var values_v2 = [_]crds.CrdsValue{value_v2};
     const protocol_msg_v2 = Protocol{
@@ -1804,7 +1804,7 @@ test "gossip.gossip_service: test packet verification" {
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
-    var value2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), &rand_keypair);
+    var value2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 0), &rand_keypair);
     var values2 = [_]crds.CrdsValue{value2};
     const protocol_msg2 = Protocol{
         .PushMessage = .{ id, &values2 },
@@ -1872,7 +1872,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var gossip_service = try GossipService.init(
         allocator,
@@ -1917,7 +1917,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     };
 
     // packet
-    const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).to_endpoint();
+    const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).to_endpoint();
     const protocol_msg = ProtocolMessage{
         .from_endpoint = peer,
         .message = msg,
@@ -1953,7 +1953,7 @@ test "gossip.gossip_service: process contact_info push packet" {
 }
 
 test "gossip.gossip_service: init, exit, and deinit" {
-    var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    var gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     var my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
     var contact_info = crds.LegacyContactInfo.random(rng.random());
@@ -1999,7 +1999,7 @@ pub const BenchmarkMessageProcessing = struct {
     pub fn benchmarkGossipService(num_message_iterations: usize) !void {
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
-        var address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+        var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
         var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
         var contact_info = crds.LegacyContactInfo.default(pubkey);
@@ -2050,19 +2050,19 @@ pub const BenchmarkMessageProcessing = struct {
         var msg_sent: usize = 0;
         for (0..num_message_iterations) |_| {
             {
-                var msg = try fuzz.random_ping(rng, &keypair);
+                var msg = try fuzz.randomPing(rng, &keypair);
                 sender.send(msg);
                 msg_sent += 1;
             }
             // send a pong message
             {
-                var msg = try fuzz.random_pong(rng, &keypair);
+                var msg = try fuzz.randomPong(rng, &keypair);
                 sender.send(msg);
                 msg_sent += 1;
             }
             // send a push message
             {
-                var packets = try fuzz.random_push_message(rng, &keypair, address.to_endpoint());
+                var packets = try fuzz.randomPushMessage(rng, &keypair, address.to_endpoint());
                 defer packets.deinit();
 
                 for (packets.items) |packet| {
@@ -2073,7 +2073,7 @@ pub const BenchmarkMessageProcessing = struct {
             }
             // send a pull message
             {
-                var packets = try fuzz.random_pull_response(rng, &keypair, address.to_endpoint());
+                var packets = try fuzz.randomPullResponse(rng, &keypair, address.to_endpoint());
                 defer packets.deinit();
 
                 for (packets.items) |packet| {

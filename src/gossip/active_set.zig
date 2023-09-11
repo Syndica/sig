@@ -10,7 +10,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("../gossip/crds.zig").get_wallclock_ms;
+const get_wallclock_ms = @import("../gossip/crds.zig").getWallclockMs;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -113,7 +113,7 @@ pub const ActiveSet = struct {
             }) orelse continue; // peer pubkey could have been removed from the crds table
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
-            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
             // check if peer has been pruned
             const entry = self.pruned_peers.getEntry(peer_pubkey) orelse unreachable;
