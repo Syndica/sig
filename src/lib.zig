@@ -69,4 +69,5 @@ pub const cmd = struct {
 
 pub const net = struct {
     pub usingnamespace @import("net/net.zig");
+    pub usingnamespace @import("net/echo.zig");
 };
