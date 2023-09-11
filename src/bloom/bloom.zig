@@ -52,7 +52,7 @@ pub const Bloom = struct {
     }
 
     // used in tests
-    pub fn add_key(self: *Self, key: u64) !void {
+    pub fn addKey(self: *Self, key: u64) !void {
         try self.keys.append(key);
     }
 
@@ -78,10 +78,10 @@ pub const Bloom = struct {
     }
 
     pub fn pos(self: *const Self, bytes: []const u8, hash_index: u64) u64 {
-        return hash_at_index(bytes, hash_index) % @as(u64, self.bits.capacity());
+        return hashAtIndex(bytes, hash_index) % @as(u64, self.bits.capacity());
     }
 
-    pub fn hash_at_index(bytes: []const u8, hash_index: u64) u64 {
+    pub fn hashAtIndex(bytes: []const u8, hash_index: u64) u64 {
         var hasher = FnvHasher.initWithOffset(hash_index);
         hasher.update(bytes);
         return hasher.final();
@@ -89,9 +89,9 @@ pub const Bloom = struct {
 
     pub fn random(alloc: std.mem.Allocator, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
         const n_items_f: f64 = @floatFromInt(num_items);
-        const m = Bloom.num_bits(n_items_f, false_rate);
+        const m = Bloom.numBits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
-        const n_keys = Bloom.num_keys(@floatFromInt(n_bits), n_items_f);
+        const n_keys = Bloom.numKeys(@floatFromInt(n_bits), n_items_f);
 
         var seed = @as(u64, @intCast(std.time.milliTimestamp()));
         var rnd = RndGen.init(seed);
@@ -105,7 +105,7 @@ pub const Bloom = struct {
         return Bloom.init(alloc, n_bits, keys);
     }
 
-    fn num_bits(num_items: f64, false_rate: f64) f64 {
+    fn numBits(num_items: f64, false_rate: f64) f64 {
         const n = num_items;
         const p = false_rate;
         const two: f64 = 2;
@@ -115,7 +115,7 @@ pub const Bloom = struct {
         return std.math.ceil((n * @log(p)) / d);
     }
 
-    fn num_keys(n_bits: f64, num_items: f64) usize {
+    fn numKeys(n_bits: f64, num_items: f64) usize {
         const n = num_items;
         const m = n_bits;
 
@@ -158,10 +158,10 @@ pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
 }
 
 test "bloom.bloom: helper fcns match rust" {
-    const n_bits = Bloom.num_bits(100.2, 1e-5);
+    const n_bits = Bloom.numBits(100.2, 1e-5);
     try testing.expectEqual(@as(f64, 2402), n_bits);
 
-    const n_keys = Bloom.num_keys(100.2, 10);
+    const n_keys = Bloom.numKeys(100.2, 10);
     try testing.expectEqual(@as(usize, 7), n_keys);
 
     var bloom = try Bloom.random(std.testing.allocator, 100, 0.1, 10000);
@@ -178,7 +178,7 @@ test "bloom.bloom: serializes/deserializes correctly" {
     defer bincode.free(testing.allocator, deserialized);
 
     // allocate some memory to make sure were cleaning up too
-    try deserialized.add_key(10);
+    try deserialized.addKey(10);
     try deserialized.bits.resize(100, true);
 
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
@@ -186,7 +186,7 @@ test "bloom.bloom: serializes/deserializes correctly" {
 
 test "bloom.bloom: serializes/deserializes correctly with set bits" {
     var bloom = Bloom.init(testing.allocator, 128, null);
-    try bloom.add_key(10);
+    try bloom.addKey(10);
     // required for memory leaks
     defer bloom.deinit();
 
@@ -203,7 +203,7 @@ test "bloom.bloom: rust: serialized bytes equal rust (one key)" {
     // note: need to init with len 2^i
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
-    try bloom.add_key(1);
+    try bloom.addKey(1);
 
     const v: [1]u8 = .{1};
     bloom.add(&v);
@@ -220,9 +220,9 @@ test "bloom.bloom: rust: serialized bytes equal rust (multiple keys)" {
     var bloom = Bloom.init(testing.allocator, 128, null);
     defer bloom.deinit();
 
-    try bloom.add_key(1);
-    try bloom.add_key(2);
-    try bloom.add_key(3);
+    try bloom.addKey(1);
+    try bloom.addKey(2);
+    try bloom.addKey(3);
 
     var buf: [10000]u8 = undefined;
 
