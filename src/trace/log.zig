@@ -71,7 +71,7 @@ pub const Logger = struct {
             };
             defer self.channel.allocator.free(entries);
 
-            self.sink.consume_entries(entries);
+            self.sink.consumeEntries(entries);
 
             // deinit entries
             for (entries) |e| {
