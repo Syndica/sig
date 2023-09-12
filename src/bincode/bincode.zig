@@ -45,7 +45,7 @@ pub fn Deserializer(comptime Reader: type) type {
         pub usingnamespace getty.Deserializer(
             *Self,
             Error,
-            customDeser,
+            CustomDeser,
             null,
             .{
                 .deserializeBool = deserializeBool,
@@ -123,7 +123,7 @@ pub fn Deserializer(comptime Reader: type) type {
             return try visitor.visitBool(ally, De, value);
         }
 
-        const customDeser = struct {
+        const CustomDeser = struct {
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,
@@ -329,7 +329,7 @@ pub fn Serializer(
             *Self,
             Ok,
             Error,
-            customSer,
+            CustomSer,
             null,
             null,
             Aggregate,
@@ -417,7 +417,7 @@ pub fn Serializer(
             }
         }
 
-        const customSer = struct {
+        const CustomSer = struct {
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,

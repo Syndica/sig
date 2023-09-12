@@ -35,7 +35,7 @@ pub fn main() !void {
         try benchmark(
             @import("gossip/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
-            timeUnits.milliseconds,
+            TimeUnits.milliseconds,
         );
     }
 
@@ -43,7 +43,7 @@ pub fn main() !void {
         try benchmark(
             @import("gossip/gossip_service.zig").BenchmarkMessageProcessing,
             max_time_per_bench,
-            timeUnits.milliseconds,
+            TimeUnits.milliseconds,
         );
     }
 
@@ -51,12 +51,12 @@ pub fn main() !void {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
-            timeUnits.microseconds,
+            TimeUnits.microseconds,
         );
     }
 }
 
-const timeUnits = enum {
+const TimeUnits = enum {
     nanoseconds,
     microseconds,
     milliseconds,
@@ -84,7 +84,7 @@ const timeUnits = enum {
 pub fn benchmark(
     comptime B: type,
     max_time: u128,
-    time_unit: timeUnits,
+    time_unit: TimeUnits,
 ) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
     const arg_names = if (@hasDecl(B, "arg_names")) B.arg_names else [_]u8{};
