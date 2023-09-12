@@ -253,13 +253,14 @@ pub fn main() !void {
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, logger },
+        .{&gossip_service},
     );
     std.debug.print("gossip service started on port {d}\n", .{gossip_port});
 
@@ -279,11 +280,12 @@ pub fn main() !void {
         fuzz_keypair,
         null,
         &fuzz_exit,
+        logger,
     );
     var fuzz_handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service_fuzzer, logger },
+        .{&gossip_service_fuzzer},
     );
 
     // blast it

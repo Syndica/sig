@@ -107,13 +107,14 @@ fn gossip(_: []const []const u8) !void {
         my_keypair,
         entrypoints,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, logger },
+        .{&gossip_service},
     );
 
     handle.join();

@@ -50,12 +50,11 @@ const IpEchoServerResponse = struct {
     }
 };
 
-const Server = struct {
+pub const Server = struct {
     allocator: std.mem.Allocator,
     logger: *Logger,
     server: http.Server,
     port: u16,
-    ctx: ?*anyopaque,
     conns: *Channel(*Response),
     conns_in_flight: Atomic(usize),
 
@@ -67,14 +66,12 @@ const Server = struct {
         allocator: std.mem.Allocator,
         port: u16,
         logger: *Logger,
-        ctx: ?*anyopaque,
     ) Self {
         return Self{
             .allocator = allocator,
             .server = http.Server.init(allocator, .{ .kernel_backlog = 1024 }),
             .port = port,
             .logger = logger,
-            .ctx = ctx,
             .conns = Channel(*Response).init(allocator, 1024),
             .conns_in_flight = Atomic(usize).init(0),
         };
@@ -105,6 +102,7 @@ const Server = struct {
     ) void {
         self.logger.debug("handling new connection");
         defer {
+            self.logger.debug("connection done");
             response.deinit();
             self.allocator.destroy(response);
             _ = self.conns_in_flight.fetchSub(1, .SeqCst);
@@ -123,12 +121,11 @@ const Server = struct {
             };
 
             // Process the request.
-            handleRequest(self.allocator, self.ctx, response) catch |err| {
+            handleRequest(self.allocator, self.logger, response) catch |err| {
                 self.logger.errf("error trying to handle req: {any}", .{err});
                 return;
             };
         }
-        self.logger.debug("connection done");
     }
 
     fn acceptorThread(
@@ -223,18 +220,23 @@ pub fn returnBadRequest(
     try resp.finish();
 }
 
-const AppContext = struct {
+pub fn returnNotFound(
+    resp: *http.Server.Response,
     logger: *Logger,
-};
+) !void {
+    _ = logger;
+    resp.status = .not_found;
+    try resp.headers.append("content-type", "text/plain");
+    try resp.do();
+    try resp.finish();
+}
 
 pub fn handleRequest(
     alloc: std.mem.Allocator,
-    ctx: ?*anyopaque,
+    logger: *Logger,
     resp: *http.Server.Response,
 ) !void {
-    var context: *AppContext = @ptrCast(@alignCast(ctx));
-
-    context.logger.debug("starting handling request");
+    logger.debug("starting handling request");
 
     var req = resp.request;
     // Read the request body.
@@ -246,7 +248,7 @@ pub fn handleRequest(
         var ip_echo_server_message = try std.json.parseFromSlice(IpEchoServerMessage, alloc, body, .{});
         defer ip_echo_server_message.deinit();
 
-        context.logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
+        logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
 
         var buff = [_]u8{0} ** 1024;
         var buffer = std.io.fixedBufferStream(&buff);
@@ -261,8 +263,8 @@ pub fn handleRequest(
         }, addr.getPort());
 
         std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, buffer.writer()) catch |err| {
-            context.logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
-            return try returnBadRequest(resp, context.logger);
+            logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
+            return try returnBadRequest(resp, logger);
         };
 
         resp.status = .ok;
@@ -284,13 +286,15 @@ pub fn handleRequest(
         // write response body
         try resp.do();
         resp.writeAll(buffer.getWritten()) catch |err| {
-            context.logger.errf("could not write all buffer: {any}\n", .{err});
-            return try returnBadRequest(resp, context.logger);
+            logger.errf("could not write all buffer: {any}\n", .{err});
+            return try returnBadRequest(resp, logger);
         };
         try resp.finish();
+    } else {
+        try returnNotFound(resp, logger);
     }
 
-    context.logger.debug("done handling request");
+    logger.debug("done handling request");
 }
 
 test "net.echo: Server works" {
@@ -301,10 +305,7 @@ test "net.echo: Server works" {
     defer logger.deinit();
     logger.spawn();
 
-    // App-wide context
-    var ctx = AppContext{ .logger = logger };
-
-    var server = Server.init(testing.allocator, port, logger, &ctx);
+    var server = Server.init(testing.allocator, port, logger);
     defer server.deinit();
     var server_thread_handle = try std.Thread.spawn(.{}, Server.listenAndServe, .{&server});
     if (builtin.os.tag == .linux) try server_thread_handle.setName("server_thread");
