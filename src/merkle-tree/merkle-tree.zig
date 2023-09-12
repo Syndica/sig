@@ -3,6 +3,10 @@ const Hash = @import("../core/hash.zig").Hash;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const ArrayList = std.ArrayList;
 const bs58 = @import("base58-zig");
+const Allocator = std.mem.Allocator;
+const expect = std.testing.expect;
+const print = std.debug.print;
+pub const MerkleTreeError = error{InvalidProofEntry};
 pub const LEAF_PREFIX: []const u8 = &.{0};
 
 pub const INTERMEDIATE_PREFIX: []const u8 = &.{1};
@@ -25,13 +29,79 @@ pub fn hashv(vals: []const []const u8) Hash {
     return Hash{ .data = hash };
 }
 
+pub const ProofEntry = struct {
+    target: Hash,
+    lsib: ?Hash,
+    rsib: ?Hash,
+    const Self = @This();
+    pub fn new(target: Hash, lsib: ?Hash, rsib: ?Hash) !Self {
+        if ((@intFromBool(lsib == null) ^ @intFromBool(rsib == null)) == 0) {
+            //print("lsib: {?} \nrsib: {?}", .{ lsib, rsib });
+            return MerkleTreeError.InvalidProofEntry;
+        }
+
+        return .{ .target = target, .lsib = lsib, .rsib = rsib };
+    }
+};
+
+pub const Proof = struct {
+    entries: ArrayList(ProofEntry),
+
+    const Self = @This();
+
+    pub fn init(alloc: Allocator) Self {
+        return .{ .entries = ArrayList(ProofEntry).init(alloc) };
+    }
+
+    pub fn push(self: *Self, entry: ProofEntry) Allocator.Error!void {
+        try self.entries.append(entry);
+    }
+
+    pub fn verify(self: *const Self, candidate: Hash) bool {
+        var result: ?Hash = undefined;
+        var accumulator = candidate;
+        for (self.entries.items, 0..) |entry, index| {
+            var lsib: Hash = undefined;
+            var rsib: Hash = undefined;
+            if (entry.lsib != null) {
+                lsib = entry.lsib.?;
+            } else {
+                lsib = accumulator;
+            }
+            if (entry.rsib != null) {
+                rsib = entry.rsib.?;
+            } else {
+                rsib = accumulator;
+            }
+            const hash = hash_intermediate(&lsib.data, &rsib.data);
+
+            if (std.mem.eql(u8, &hash.data, &entry.target.data)) {
+                accumulator = hash;
+            }
+            if (index == self.entries.items.len - 1) {
+                result = accumulator;
+            }
+        }
+
+        if (result != null) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    pub fn deinit(self: *const Self) void {
+        self.entries.deinit();
+    }
+};
+
 pub const MerkleTree = struct {
     leaf_count: usize,
     nodes: ArrayList(Hash),
 
     const Self = @This();
 
-    pub fn new(alloc: std.mem.Allocator, items: []const []const u8) !Self {
+    pub fn new(alloc: Allocator, items: []const []const u8) !Self {
         const capacity = Self.calculate_list_capacity(items.len);
         var mt = Self{ .leaf_count = items.len, .nodes = try ArrayList(Hash).initCapacity(alloc, capacity) };
         for (items) |item| {
@@ -87,10 +157,55 @@ pub const MerkleTree = struct {
             return (level_len + 1) / 2;
         }
     }
+
+    pub fn find_path(self: *const Self, alloc: Allocator, index: usize) !?Proof {
+        if (index >= self.leaf_count) {
+            return null;
+        }
+
+        var level_len = self.leaf_count;
+        var level_start: usize = 0;
+        var path = Proof.init(alloc);
+        var node_index = index;
+        var lsib: ?Hash = null;
+        var rsib: ?Hash = null;
+
+        while (level_len > 0) {
+            const level = self.nodes.items[level_start..(level_start + level_len)];
+            const target = level[node_index];
+
+            if (lsib != null or rsib != null) {
+                var pe = try ProofEntry.new(target, lsib, rsib);
+                try path.push(pe);
+            }
+
+            if (node_index % 2 == 0) {
+                lsib = null;
+                if (node_index + 1 < level.len) {
+                    rsib = level[node_index + 1];
+                } else {
+                    rsib = level[node_index];
+                }
+            } else {
+                lsib = level[node_index - 1];
+                rsib = null;
+            }
+
+            node_index /= 2;
+
+            level_start += level_len;
+            level_len = Self.next_level_len(level_len);
+        }
+
+        return path;
+    }
+
     pub fn deinit(self: *const Self) void {
         self.nodes.deinit();
     }
 };
+
+const TEST: []const []const u8 = &[_][]const u8{ "my", "very", "eager", "mother", "just", "served", "us", "nine", "pizzas", "make", "prime" };
 
 test "merkle-tree.hash_leaf: Hash a valid leaf" {
     const leaf = "Lorem Ipsum Dolor";
@@ -117,7 +232,6 @@ test "merkle-tree.calculate_list_capacity: Create a merkle tree with capacity" {
     }
     var mt = try MerkleTree.new(testing_allocator, test_items.items);
     defer mt.deinit();
-    //defer testing_allocator.free(test_items);
     defer test_items.deinit();
     var enc = bs58.Encoder.init(.{});
     var dest: [45]u8 = undefined;
@@ -125,4 +239,17 @@ test "merkle-tree.calculate_list_capacity: Create a merkle tree with capacity" {
     var res = try enc.encode(&mt.get_root().?.data, &dest);
     _ = res;
     std.debug.print("root: {?s}\n", .{dest});
+}
+test "merkle-tree.path_verify: Should validly verify a path" {
+    const testing_allocator = std.testing.allocator;
+    const mt = try MerkleTree.new(testing_allocator, TEST);
+    defer mt.deinit();
+    const k = TEST[0..1];
+    //    print("items: {s}\n", .{k});
+    for (k, 0..) |s, index| {
+        const hash = hash_leaf(s);
+        const path = try mt.find_path(testing_allocator, index);
+        defer path.?.deinit();
+        try expect(path.?.verify(hash));
+    }
 }
