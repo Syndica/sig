@@ -89,14 +89,12 @@ pub fn build(b: *std.Build) void {
     tests.addModule("getty", getty_mod);
 
     const run_tests = b.addRunArtifact(tests);
-
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build test`
     // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib.step);
     test_step.dependOn(&run_tests.step);
-
     const exe = b.addExecutable(.{
         .name = "sig",
         // In this case the main source file is merely a path, however, in more

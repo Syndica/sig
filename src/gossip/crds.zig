@@ -461,7 +461,7 @@ pub const Vote = struct {
     from: Pubkey,
     transaction: Transaction,
     wallclock: u64,
-    slot: Slot = Slot.default(),
+    slot: Slot = 0,
 
     pub const @"!bincode-config:slot" = bincode.FieldConfig(Slot){ .skip = true };
 
@@ -470,7 +470,7 @@ pub const Vote = struct {
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .transaction = Transaction.default(),
             .wallclock = get_wallclock_ms(),
-            .slot = Slot.init(rng.int(u64)),
+            .slot = rng.int(u64),
         };
     }
 
@@ -597,7 +597,7 @@ pub const Flate2 = struct {
     compressed: []u8,
 
     pub fn sanitize(self: *const Flate2) !void {
-        if (self.first_slot.value >= MAX_SLOT) {
+        if (self.first_slot >= MAX_SLOT) {
             return error.ValueOutOfBounds;
         }
         if (self.num >= MAX_SLOT_PER_ENTRY) {
@@ -612,7 +612,7 @@ pub const Uncompressed = struct {
     slots: BitVec(u8),
 
     pub fn sanitize(self: *const Uncompressed) !void {
-        if (self.first_slot.value >= MAX_SLOT) {
+        if (self.first_slot >= MAX_SLOT) {
             return error.ValueOutOfBounds;
         }
         if (self.num >= MAX_SLOT_PER_ENTRY) {
@@ -788,7 +788,7 @@ pub const DuplicateShred = struct {
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .wallclock = get_wallclock_ms(),
-            .slot = Slot.init(rng.int(u64)),
+            .slot = rng.int(u64),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
             .num_chunks = num_chunks,
@@ -815,7 +815,7 @@ pub const SnapshotHashes = struct {
         var slice: [0]struct { Slot, Hash } = .{};
         return SnapshotHashes{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .full = .{ Slot.init(rng.int(u64)), Hash.random() },
+            .full = .{ rng.int(u64), Hash.random() },
             .incremental = &slice,
             .wallclock = get_wallclock_ms(),
         };

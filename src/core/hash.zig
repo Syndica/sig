@@ -1,6 +1,6 @@
 const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
-
+const Allocator = std.mem.Allocator;
 pub const HASH_SIZE: usize = 32;
 
 pub const CompareResult = enum {
@@ -14,6 +14,9 @@ pub const Hash = struct {
 
     const Self = @This();
 
+    pub fn default() Self {
+        return .{ .data = [_]u8{0} ** HASH_SIZE };
+    }
     // used in tests
     pub fn random() Self {
         var seed = @as(u64, @intCast(std.time.milliTimestamp()));
@@ -45,5 +48,18 @@ pub const Hash = struct {
             }
         }
         return CompareResult.Equal;
+    }
+
+    pub fn extend_and_hash(
+        alloc: Allocator,
+        id: Hash,
+        val: []u8,
+    ) Allocator.Error!Self {
+        var hash_data = try std.ArrayList(u8).initCapacity(alloc, val.len + id.data.len);
+        defer hash_data.deinit();
+        hash_data.appendSliceAssumeCapacity(&id.data);
+        hash_data.appendSliceAssumeCapacity(val);
+        const hash = generateSha256Hash(hash_data.items);
+        return hash;
     }
 };
