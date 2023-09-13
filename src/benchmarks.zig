@@ -29,7 +29,7 @@ pub fn main() !void {
 
     // TODO: very manual for now (bc we only have 2 benchmarks)
     // if we have more benchmarks we can make this more efficient
-    const max_time_per_bench = 500; // !!
+    const max_time_per_bench = 2 * std.time.ms_per_s; // !!
 
     if (std.mem.startsWith(u8, "socket_utils", filter)) {
         try benchmark(
@@ -155,7 +155,10 @@ pub fn benchmark(
     try stderr.context.flush();
 
     var timer = try time.Timer.start();
-    inline for (functions) |def| {
+    inline for (functions, 0..) |def, fcni| {
+        if (fcni > 0) 
+            std.debug.print("---\n", .{});
+
         inline for (args, 0..) |arg, index| {
             var runtimes: [max_iterations]u64 = undefined;
             var min: u64 = math.maxInt(u64);

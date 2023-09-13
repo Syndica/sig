@@ -1071,33 +1071,30 @@ pub const GossipService = struct {
         var prune_packets = try std.ArrayList(Packet).initCapacity(self.allocator, n_packets);
         errdefer prune_packets.deinit();
 
-        var origin_buf: [MAX_PRUNE_DATA_NODES]Pubkey = undefined;
-        var origin_count: usize = 0;
-
         const now = get_wallclock_ms();
-        var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        const my_pubkey = Pubkey.fromPublicKey(&self.my_keypair.public_key, true);
+        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
-        for (failed_origins.keys(), 0..) |origin, i| {
-            origin_buf[origin_count] = origin;
-            origin_count += 1;
+        var index: usize = 0;
+        while (true) {
+            const prune_size = @min(failed_origin_len - index, MAX_PRUNE_DATA_NODES);
+            if (prune_size == 0) break;
 
-            const is_last_iter = i == failed_origin_len - 1;
-            if (origin_count == MAX_PRUNE_DATA_NODES or is_last_iter) {
-                // create protocol message
-                var prune_data = PruneData.init(my_pubkey, origin_buf[0..origin_count], prune_destination, now);
-                prune_data.sign(&self.my_keypair) catch return error.SignatureError;
+            var prune_data = PruneData.init(
+                self.my_pubkey,
+                failed_origins.keys()[index..(prune_size + index)],
+                prune_destination,
+                now,
+            );
+            prune_data.sign(&self.my_keypair) catch return error.SignatureError;
 
-                // put it into a packet
-                var msg = Protocol{ .PruneMessage = .{ my_pubkey, prune_data } };
-                // msg should never be bigger than the PacketSize and serialization shouldnt fail (unrecoverable)
-                var msg_slice = bincode.writeToSlice(&buf, msg, bincode.Params{}) catch unreachable;
-                var packet = Packet.init(from_gossip_endpoint, buf, msg_slice.len);
-                try prune_packets.append(packet);
+            // put it into a packet
+            var msg = Protocol{ .PruneMessage = .{ self.my_pubkey, prune_data } };
+            // msg should never be bigger than the PacketSize and serialization shouldnt fail (unrecoverable)
+            var msg_slice = bincode.writeToSlice(&packet_buf, msg, bincode.Params{}) catch unreachable;
+            var packet = Packet.init(from_gossip_endpoint, packet_buf, msg_slice.len);
+            try prune_packets.append(packet);
 
-                // reset array
-                origin_count = 0;
-            }
+            index += prune_size;
         }
 
         return prune_packets;
