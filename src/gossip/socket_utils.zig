@@ -4,13 +4,12 @@ const PACKET_DATA_SIZE = @import("../gossip/packet.zig").PACKET_DATA_SIZE;
 const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
 const Logger = @import("../trace/log.zig").Logger;
-const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
 
 pub fn readSocket(
     socket: *UdpSocket,
     incoming_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
-    logger: *Logger,
+    logger: Logger,
 ) error{ SocketClosed, SocketRecvError, OutOfMemory, ChannelClosed }!void {
     var read_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var packets_read: u64 = 0;
@@ -44,7 +43,7 @@ pub fn sendSocket(
     socket: *UdpSocket,
     outgoing_channel: *Channel(Packet),
     exit: *const std.atomic.Atomic(bool),
-    logger: *Logger,
+    logger: Logger,
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
@@ -89,12 +88,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var sink = DoNothingSink{};
-        var logger = Logger.init(allocator, .debug, sink.sink());
-        defer logger.deinit();
-        logger.spawn();
-
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ &socket, channel, &exit, logger });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ &socket, channel, &exit, .noop });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -132,12 +126,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var sink = DoNothingSink{};
-        var logger = Logger.init(allocator, .debug, sink.sink());
-        defer logger.deinit();
-        logger.spawn();
-
-        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, logger });
+        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, .noop });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;

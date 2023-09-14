@@ -6,7 +6,7 @@ const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
 const Logger = @import("../trace/log.zig").Logger;
 const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const SocketAddr = @import("../gossip/net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -58,7 +58,7 @@ var app = &cli.App{
 
 // prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, .debug, null);
+    var logger = Logger.init(gpa_allocator, .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -71,7 +71,7 @@ fn identity(_: []const []const u8) !void {
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(gpa_allocator);
-    var logger = Logger.init(arena.allocator(), .debug, null);
+    var logger = Logger.init(arena.allocator(), .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -107,13 +107,14 @@ fn gossip(_: []const []const u8) !void {
         my_keypair,
         entrypoints,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, logger },
+        .{&gossip_service},
     );
 
     handle.join();
