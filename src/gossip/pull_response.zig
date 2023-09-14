@@ -18,7 +18,7 @@ const CrdsFilter = crds_pull_req.CrdsFilter;
 pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 
 // TODO: make it batch
-pub fn filter_crds_values(
+pub fn filterCrdsValues(
     alloc: std.mem.Allocator,
     crds_table: *const CrdsTable,
     filter: *const CrdsFilter,
@@ -41,7 +41,7 @@ pub fn filter_crds_values(
 
     var bloom = filter.filter;
 
-    var match_indexs = try crds_table.get_bitmask_matches(alloc, filter.mask, filter.mask_bits);
+    var match_indexs = try crds_table.getBitmaskMatches(alloc, filter.mask, filter.mask_bits);
     defer match_indexs.deinit();
 
     for (match_indexs.items) |entry_index| {
@@ -96,14 +96,14 @@ test "gossip.pull: test filter_crds_values" {
 
     // recver
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try crds_pull_req.build_crds_filters(
+    var filters = try crds_pull_req.buildCrdsFilters(
         std.testing.allocator,
         &crds_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer crds_pull_req.deinit_crds_filters(&filters);
+    defer crds_pull_req.deinitCrdsFilters(&filters);
     var filter = filters.items[0];
 
     // corresponding value
@@ -123,7 +123,7 @@ test "gossip.pull: test filter_crds_values" {
         try lg.mut().insert(v2, 0);
     }
 
-    var values = try filter_crds_values(
+    var values = try filterCrdsValues(
         std.testing.allocator,
         lg.get(),
         &filter,

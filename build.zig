@@ -66,35 +66,22 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
-    // Creates a step for unit testing. This only builds the test executable
-    // but does not run it.
-    // const main_tests = b.addTest(.{
-    //     .root_source_file = .{ .path = "src/main.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-
-    // const run_main_tests = b.addRunArtifact(main_tests);
-
+    // unit tests
     const tests = b.addTest(.{
         .root_source_file = .{ .path = "src/tests.zig" },
         .target = target,
         .optimize = optimize,
         .filter = if (b.args) |args| args[0] else null, // filter tests like so: zig build test -- "<FILTER>"
     });
-
     tests.addModule("zig-network", zig_network_module);
     tests.addModule("base58-zig", base58_module);
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
-
     const run_tests = b.addRunArtifact(tests);
-    // This creates a build step. It will be visible in the `zig build --help` menu,
-    // and can be selected like this: `zig build test`
-    // This will evaluate the `test` step rather than the default, which is "install".
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib.step);
     test_step.dependOn(&run_tests.step);
+
     const exe = b.addExecutable(.{
         .name = "sig",
         // In this case the main source file is merely a path, however, in more
@@ -103,7 +90,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
     exe.addModule("base58-zig", base58_module);
     exe.addModule("zig-network", zig_network_module);
     exe.addModule("zig-cli", zig_cli_module);
@@ -151,9 +137,29 @@ pub fn build(b: *std.Build) void {
     fuzz_exe.addModule("zig-network", zig_network_module);
     fuzz_exe.addModule("zig-cli", zig_cli_module);
     fuzz_exe.addModule("getty", getty_mod);
-
     b.installArtifact(fuzz_exe);
-
     const fuzz_cmd = b.addRunArtifact(fuzz_exe);
     b.step("fuzz_gossip", "fuzz gossip").dependOn(&fuzz_cmd.step);
+
+    // benchmarking
+    const benchmark_exe = b.addExecutable(.{
+        .name = "benchmark",
+        .root_source_file = .{ .path = "src/benchmarks.zig" },
+        .target = target,
+        // TODO: make it work
+        // .optimize = std.builtin.Mode.ReleaseSafe, // to get decent results - but things get optimized away
+        .optimize = optimize,
+        .main_pkg_path = .{ .path = "src" },
+    });
+    benchmark_exe.addModule("base58-zig", base58_module);
+    benchmark_exe.addModule("zig-network", zig_network_module);
+    benchmark_exe.addModule("zig-cli", zig_cli_module);
+    benchmark_exe.addModule("getty", getty_mod);
+    b.installArtifact(benchmark_exe);
+    const benchmark_cmd = b.addRunArtifact(benchmark_exe);
+    if (b.args) |args| {
+        benchmark_cmd.addArgs(args);
+    }
+
+    b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
 }

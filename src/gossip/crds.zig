@@ -10,11 +10,11 @@ const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const sanitize_wallclock = @import("./protocol.zig").sanitize_wallclock;
+const sanitize_wallclock = @import("./protocol.zig").sanitizeWallclock;
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
 /// returns current timestamp in milliseconds
-pub fn get_wallclock_ms() u64 {
+pub fn getWallclockMs() u64 {
     return @intCast(std.time.milliTimestamp());
 }
 
@@ -59,8 +59,8 @@ pub const CrdsValue = struct {
     }
 
     /// only used in tests
-    pub fn random_with_index(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
-        return try Self.initSigned(CrdsData.random_from_index(rng, index), keypair);
+    pub fn randomWithIndex(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
+        return try Self.initSigned(CrdsData.randomFromIndex(rng, index), keypair);
     }
 
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {
@@ -234,8 +234,8 @@ pub const LegacyContactInfo = struct {
     }
 
     pub fn default(id: Pubkey) LegacyContactInfo {
-        const unspecified_addr = SocketAddr.init_ipv4(.{ 0, 0, 0, 0 }, 0);
-        const wallclock = get_wallclock_ms();
+        const unspecified_addr = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 0);
+        const wallclock = getWallclockMs();
 
         return LegacyContactInfo{
             .id = id,
@@ -267,20 +267,20 @@ pub const LegacyContactInfo = struct {
             .rpc = SocketAddr.random(rng),
             .rpc_pubsub = SocketAddr.random(rng),
             .serve_repair = SocketAddr.random(rng),
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .shred_version = rng.int(u16),
         };
     }
 };
 
-pub fn sanitize_socket(socket: *const SocketAddr) !void {
+pub fn sanitizeSocket(socket: *const SocketAddr) !void {
     if (socket.port() == 0) {
         return error.InvalidPort;
     }
-    if (socket.is_unspecified()) {
+    if (socket.isUnspecified()) {
         return error.UnspecifiedAddress;
     }
-    if (socket.is_multicast()) {
+    if (socket.isMulticast()) {
         return error.MulticastAddress;
     }
 }
@@ -362,14 +362,14 @@ pub const CrdsData = union(enum(u32)) {
                 try v.sanitize();
             },
             else => {
-                std.debug.print("sanitize not implemented for type: {any}\n", .{@tagName(self.*)});
+                std.debug.print("sanitize not implemented for type: {s}\n", .{@tagName(self.*)});
                 return error.NotImplemented;
             },
         }
     }
 
     // only used in tests
-    pub fn set_id(self: *CrdsData, id: Pubkey) void {
+    pub fn setId(self: *CrdsData, id: Pubkey) void {
         switch (self.*) {
             .LegacyContactInfo => |*v| {
                 v.id = id;
@@ -412,10 +412,10 @@ pub const CrdsData = union(enum(u32)) {
 
     pub fn random(rng: std.rand.Random) CrdsData {
         const v = rng.intRangeAtMost(u16, 0, 10);
-        return CrdsData.random_from_index(rng, v);
+        return CrdsData.randomFromIndex(rng, v);
     }
 
-    pub fn random_from_index(rng: std.rand.Random, index: usize) CrdsData {
+    pub fn randomFromIndex(rng: std.rand.Random, index: usize) CrdsData {
         switch (index) {
             0 => {
                 return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
@@ -469,7 +469,7 @@ pub const Vote = struct {
         return Vote{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .transaction = Transaction.default(),
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .slot = rng.int(u64),
         };
     }
@@ -513,7 +513,7 @@ pub const LowestSlot = struct {
             .lowest = rng.int(u64),
             .slots = &slots,
             .stash = &stash,
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
         };
     }
 };
@@ -542,7 +542,7 @@ pub const AccountsHashes = struct {
         return AccountsHashes{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .hashes = &slice,
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
         };
     }
 
@@ -567,7 +567,7 @@ pub const EpochSlots = struct {
         return EpochSlots{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .slots = &slice,
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
         };
     }
 
@@ -640,7 +640,7 @@ pub const LegacyVersion = struct {
     pub fn random(rng: std.rand.Random) LegacyVersion {
         return LegacyVersion{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .version = LegacyVersion1.random(rng),
         };
     }
@@ -680,7 +680,7 @@ pub const Version = struct {
     pub fn default(from: Pubkey) Self {
         return Self{
             .from = from,
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .version = LegacyVersion2.CURRENT,
         };
     }
@@ -688,7 +688,7 @@ pub const Version = struct {
     pub fn random(rng: std.rand.Random) Version {
         return Version{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .version = LegacyVersion2.random(rng),
         };
     }
@@ -737,7 +737,7 @@ pub const NodeInstance = struct {
     pub fn random(rng: std.rand.Random) Self {
         return Self{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .timestamp = rng.int(u64),
             .token = rng.int(u64),
         };
@@ -787,7 +787,7 @@ pub const DuplicateShred = struct {
 
         return DuplicateShred{
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
             .slot = rng.int(u64),
             .shred_index = rng.int(u32),
             .shred_type = ShredType.Data,
@@ -817,7 +817,7 @@ pub const SnapshotHashes = struct {
             .from = Pubkey.random(rng, .{ .skip_encoding = true }),
             .full = .{ rng.int(u64), Hash.random() },
             .incremental = &slice,
-            .wallclock = get_wallclock_ms(),
+            .wallclock = getWallclockMs(),
         };
     }
 };
@@ -839,7 +839,7 @@ test "gossip.crds: test sanitize CrdsData" {
     var rand = rng.random();
 
     for (0..4) |i| {
-        const data = CrdsData.random_from_index(rand, i);
+        const data = CrdsData.randomFromIndex(rand, i);
         data.sanitize() catch {};
     }
 }
@@ -882,7 +882,7 @@ test "gossip.crds: contact info serialization matches rust" {
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk, true);
 
-    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
+    const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
     var buf = [_]u8{0} ** 1024;
 
@@ -902,7 +902,7 @@ test "gossip.crds: crds data serialization matches rust" {
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk, true);
 
-    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
+    const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.gossip = gossip_addr;

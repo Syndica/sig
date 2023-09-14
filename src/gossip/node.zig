@@ -105,7 +105,7 @@ pub const ContactInfo = struct {
         var sockets = ArrayList(SocketEntry).initCapacity(allocator, 6) catch unreachable;
 
         for (0..4) |_| {
-            addrs.append(IpAddr.new_v4(127, 0, 0, 1)) catch unreachable;
+            addrs.append(IpAddr.newIpv4(127, 0, 0, 1)) catch unreachable;
         }
 
         for (0..6) |_| {
@@ -295,7 +295,7 @@ test "socketaddr bincode serialize matches rust" {
     const Tmp = struct {
         addr: SocketAddr,
     };
-    const tmp = Tmp{ .addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234) };
+    const tmp = Tmp{ .addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234) };
     var buf = [_]u8{0} ** 1024;
     var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
 
@@ -318,11 +318,11 @@ test "set & get socket on contact info" {
 
     var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
-    try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899));
+    try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
 
     var set_socket = ci.getSocket(SOCKET_TAG_RPC);
-    try testing.expect(set_socket.?.eql(&SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8899)));
-    try testing.expect(ci.addrs.items[0].eql(&IpAddr.new_v4(127, 0, 0, 1)));
+    try testing.expect(set_socket.?.eql(&SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899)));
+    try testing.expect(ci.addrs.items[0].eql(&IpAddr.newIpv4(127, 0, 0, 1)));
     try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(SOCKET_TAG_RPC, 0, 8899)));
 }
 

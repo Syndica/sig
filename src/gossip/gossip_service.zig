@@ -24,7 +24,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("../gossip/crds.zig").get_wallclock_ms;
+const get_wallclock_ms = @import("../gossip/crds.zig").getWallclockMs;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -33,6 +33,7 @@ const HashTimeQueue = _crds_table.HashTimeQueue;
 const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
 
 const Logger = @import("../trace/log.zig").Logger;
+const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
 const Entry = @import("../trace/entry.zig").Entry;
 
 const pull_request = @import("../gossip/pull_request.zig");
@@ -54,26 +55,27 @@ const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
 
-const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
-const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
-const CRDS_GOSSIP_PRUNE_MSG_TIMEOUT_MS: u64 = 500;
+pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
+pub const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
+pub const CRDS_GOSSIP_PRUNE_MSG_TIMEOUT_MS: u64 = 500;
 
-const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
+pub const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
 
-const MAX_PACKETS_PER_PUSH: usize = 64;
-const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH);
+pub const MAX_PACKETS_PER_PUSH: usize = 64;
+pub const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_PUSH);
 
-const PUSH_MESSAGE_MAX_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
+// 4 (enum) + 32 (pubkey) + 8 (len) = 44
+pub const MAX_PUSH_MESSAGE_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
-const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
-const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
-const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
-const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
+pub const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
+pub const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
+pub const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
+pub const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
 
 /// Maximum number of origin nodes that a PruneData may contain, such that the
 /// serialized size of the PruneMessage stays below PACKET_DATA_SIZE.
-const MAX_PRUNE_DATA_NODES: usize = 32;
-const NUM_ACTIVE_SET_ENTRIES: usize = 25;
+pub const MAX_PRUNE_DATA_NODES: usize = 32;
+pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
 const Config = struct { mode: enum { normal, tests, bench } = .normal };
 
@@ -104,6 +106,9 @@ pub const GossipService = struct {
     ping_cache_rw: RwMux(PingCache),
     echo_server: echo.Server,
     logger: Logger,
+
+    // used for benchmarking
+    messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
 
     const Self = @This();
 
@@ -171,13 +176,13 @@ pub const GossipService = struct {
         };
     }
 
-    fn deinit_rw_mux(v: anytype) void {
+    fn deinitRwMux(v: anytype) void {
         var lg = v.write();
         lg.mut().deinit();
         lg.unlock();
     }
 
-    fn deinit_mux(v: anytype) void {
+    fn deinitMux(v: anytype) void {
         var lg = v.lock();
         lg.mut().deinit();
         lg.unlock();
@@ -193,16 +198,16 @@ pub const GossipService = struct {
 
         self.entrypoints.deinit();
 
-        deinit_rw_mux(&self.crds_table_rw);
-        deinit_rw_mux(&self.active_set_rw);
-        deinit_rw_mux(&self.ping_cache_rw);
-        deinit_mux(&self.push_msg_queue_mux);
-        deinit_mux(&self.failed_pull_hashes_mux);
+        deinitRwMux(&self.crds_table_rw);
+        deinitRwMux(&self.active_set_rw);
+        deinitRwMux(&self.ping_cache_rw);
+        deinitMux(&self.push_msg_queue_mux);
+        deinitMux(&self.failed_pull_hashes_mux);
     }
 
     /// these threads should run forever - so if they join - somethings wrong
     /// and we should shutdown
-    fn join_and_exit(self: *Self, handle: *std.Thread) void {
+    fn joinAndExit(self: *Self, handle: *std.Thread) void {
         handle.join();
         self.exit.store(true, std.atomic.Ordering.Unordered);
     }
@@ -216,44 +221,39 @@ pub const GossipService = struct {
     ///     and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self) !void {
         var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        defer self.join_and_exit(&ip_echo_server_listener_handle);
+        defer self.joinAndExit(&ip_echo_server_listener_handle);
 
-        var receiver_handle = try Thread.spawn(.{}, socket_utils.read_socket, .{
+        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             &self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
-        });
-        defer self.join_and_exit(&receiver_handle);
-
-        var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
-            self, self.logger,
-        });
-        defer self.join_and_exit(&packet_verifier_handle);
-
-        var packet_handle = try Thread.spawn(.{}, Self.process_messages, .{
-            self, self.logger,
-        });
-        defer self.join_and_exit(&packet_handle);
-
-        var build_messages_handle = try Thread.spawn(.{}, Self.build_messages, .{
-            self,
             self.logger,
         });
-        defer self.join_and_exit(&build_messages_handle);
+        defer self.joinAndExit(&receiver_handle);
+
+        var packet_verifier_handle = try Thread.spawn(.{}, Self.verifyPackets, .{self});
+        defer self.joinAndExit(&packet_verifier_handle);
+
+        var packet_handle = try Thread.spawn(.{}, Self.processMessages, .{self});
+        defer self.joinAndExit(&packet_handle);
+
+        var build_messages_handle = try Thread.spawn(.{}, Self.buildMessages, .{self});
+        defer self.joinAndExit(&build_messages_handle);
 
         // outputer thread
-        var responder_handle = try Thread.spawn(.{}, socket_utils.send_socket, .{
+        var responder_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
             &self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
+            self.logger,
         });
-        defer self.join_and_exit(&responder_handle);
+        defer self.joinAndExit(&responder_handle);
     }
 
     /// main logic for deserializing Packets into Protocol messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified Protocol messages are then sent to the verified_channel.
-    fn verify_packets(self: *Self, logger: Logger) !void {
+    fn verifyPackets(self: *Self) !void {
         var failed_protocol_msgs: usize = 0;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
@@ -275,24 +275,18 @@ pub const GossipService = struct {
                     bincode.Params.standard,
                 ) catch {
                     failed_protocol_msgs += 1;
-                    logger.debugf("failed to deserialize protocol message: {d}\n", .{std.mem.readIntLittle(u32, packet.data[0..4])});
-                    // // print the packet data
-                    // std.debug.print("[", .{});
-                    // for (packet.data[0..packet.size]) |byte| {
-                    //     std.debug.print("{d}, ", .{byte});
-                    // }
-                    // std.debug.print("]\n", .{});
+                    self.logger.debugf("failed to deserialize protocol message: {d}\n", .{std.mem.readIntLittle(u32, packet.data[0..4])});
                     continue;
                 };
 
                 protocol_message.sanitize() catch |err| {
-                    logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
+                    self.logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
                     bincode.free(self.allocator, protocol_message);
                     continue;
                 };
 
-                protocol_message.verify_signature() catch |err| {
-                    logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
+                protocol_message.verifySignature() catch |err| {
+                    self.logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
                     bincode.free(self.allocator, protocol_message);
                     continue;
                 };
@@ -303,11 +297,12 @@ pub const GossipService = struct {
             }
         }
 
-        logger.debugf("verify_packets loop closed\n", .{});
+        self.logger.debugf("verify_packets loop closed\n", .{});
     }
 
     /// main logic for recieving and processing `Protocol` messages.
-    pub fn process_messages(self: *Self, logger: Logger) !void {
+    pub fn processMessages(self: *Self) !void {
+        var msg_count: usize = 0;
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
             if (maybe_protocol_messages == null) {
@@ -328,11 +323,11 @@ pub const GossipService = struct {
                         const push_from: Pubkey = push[0];
                         const push_values: []CrdsValue = push[1];
 
-                        var push_log_entry = logger
+                        var push_log_entry = self.logger
                             .field("num_crds_values", push_values.len)
                             .field("from_address", &push_from.string());
 
-                        var failed_insert_origins = self.handle_push_message(
+                        var failed_insert_origins = self.handlePushMessage(
                             push_values,
                         ) catch |err| {
                             push_log_entry.field("error", @errorName(err))
@@ -343,7 +338,7 @@ pub const GossipService = struct {
                         _ = push_log_entry.field("num_failed_insert_origins", failed_insert_origins.count());
 
                         if (failed_insert_origins.count() != 0) {
-                            var prune_packets = self.build_prune_message(&failed_insert_origins, push_from) catch |err| {
+                            var prune_packets = self.buildPruneMessage(&failed_insert_origins, push_from) catch |err| {
                                 push_log_entry.field("error", @errorName(err))
                                     .err("error building prune messages");
                                 continue;
@@ -362,11 +357,11 @@ pub const GossipService = struct {
                         const from: Pubkey = pull[0];
                         const crds_values: []CrdsValue = pull[1];
 
-                        var pull_log_entry = logger
+                        var pull_log_entry = self.logger
                             .field("num_crds_values", crds_values.len)
                             .field("from_address", &from.string());
 
-                        self.handle_pull_response(
+                        self.handlePullResponse(
                             crds_values,
                             pull_log_entry,
                         ) catch |err| {
@@ -396,11 +391,11 @@ pub const GossipService = struct {
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
 
-                        var pull_log_entry = logger
+                        var pull_log_entry = self.logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &pull_value.id().string());
 
-                        var maybe_packets = self.handle_pull_request(
+                        var maybe_packets = self.handlePullRequest(
                             pull_value,
                             pull_filter,
                             from_endpoint,
@@ -433,12 +428,12 @@ pub const GossipService = struct {
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
 
-                        var prune_log_entry = logger
+                        var prune_log_entry = self.logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &prune_msg.pubkey.string())
                             .field("num_prunes", prune_msg.prunes.len);
 
-                        self.handle_prune_message(
+                        self.handlePruneMessage(
                             &prune_msg,
                         ) catch |err| {
                             prune_log_entry.field("error", @errorName(err))
@@ -453,11 +448,11 @@ pub const GossipService = struct {
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
 
-                        var ping_log_entry = logger
+                        var ping_log_entry = self.logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &ping.from.string());
 
-                        const packet = self.handle_ping_message(ping, from_endpoint) catch |err| {
+                        const packet = self.handlePingMessage(ping, from_endpoint) catch |err| {
                             ping_log_entry
                                 .field("error", @errorName(err))
                                 .err("error handling ping message");
@@ -481,9 +476,9 @@ pub const GossipService = struct {
 
                             var ping_cache: *PingCache = ping_cache_lock.mut();
                             const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
-                            _ = ping_cache.recevied_pong(pong, SocketAddr.from_endpoint(from_endpoint), now);
+                            _ = ping_cache.receviedPong(pong, SocketAddr.fromEndpoint(from_endpoint), now);
                         }
-                        logger
+                        self.logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &pong.from.string())
                             .info("received pong message");
@@ -495,23 +490,24 @@ pub const GossipService = struct {
                     defer crds_table_lock.unlock();
 
                     var crds_table: *CrdsTable = crds_table_lock.mut();
-                    crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
-                        logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
+                    crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                        self.logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
                     };
                 }
+
+                msg_count += 1;
+                self.messages_processed.store(msg_count, std.atomic.Ordering.Unordered);
             }
         }
 
-        logger.debugf("process_messages loop closed\n", .{});
+        self.logger.debugf("process_messages loop closed\n", .{});
     }
 
     /// main gossip loop for periodically sending new protocol messages.
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the crds_table, active_set, and failed_pull_hashes).
-    fn build_messages(
+    fn buildMessages(
         self: *Self,
-        /// logger used for debugging
-        logger: Logger,
     ) !void {
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
@@ -524,10 +520,10 @@ pub const GossipService = struct {
 
             // new pull msgs
             if (should_send_pull_requests) pull_blk: {
-                var pull_packets = self.build_pull_requests(
+                var pull_packets = self.buildPullRequests(
                     pull_request.MAX_BLOOM_SIZE,
                 ) catch |e| {
-                    logger.debugf("failed to generate pull requests: {any}", .{e});
+                    self.logger.debugf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
                 defer pull_packets.deinit();
@@ -541,9 +537,9 @@ pub const GossipService = struct {
             should_send_pull_requests = !should_send_pull_requests;
 
             // new push msgs
-            self.drain_push_queue_to_crds_table(get_wallclock_ms());
-            var maybe_push_packets = self.build_push_messages(&push_cursor) catch |e| blk: {
-                logger.debugf("failed to generate push messages: {any}\n", .{e});
+            self.drainPushQueueToCrdsTable(get_wallclock_ms());
+            var maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
+                self.logger.debugf("failed to generate push messages: {any}\n", .{e});
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
@@ -554,7 +550,7 @@ pub const GossipService = struct {
             }
 
             // trim data
-            self.trim_memory(get_wallclock_ms()) catch @panic("out of memory");
+            self.trimMemory(get_wallclock_ms()) catch @panic("out of memory");
 
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
@@ -573,7 +569,7 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_contact_info_value);
                 }
 
-                self.rotate_active_set() catch @panic("out of memory");
+                self.rotateActiveSet() catch @panic("out of memory");
 
                 last_push_ts = get_wallclock_ms();
             }
@@ -585,15 +581,15 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        logger.infof("build_messages loop closed\n", .{});
+        self.logger.infof("build_messages loop closed\n", .{});
     }
 
-    pub fn rotate_active_set(
+    pub fn rotateActiveSet(
         self: *Self,
     ) error{ OutOfMemory, SerializationError, ChannelClosed }!void {
         const now = get_wallclock_ms();
         var buf: [NUM_ACTIVE_SET_ENTRIES]crds.LegacyContactInfo = undefined;
-        var gossip_peers = self.get_gossip_nodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
+        var gossip_peers = self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
         // filter out peers who have responded to pings
         var ping_cache_result = blk: {
@@ -601,7 +597,7 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, gossip_peers);
+            var result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, gossip_peers);
             break :blk result;
         };
         var valid_gossip_peers = ping_cache_result.valid_peers;
@@ -610,7 +606,7 @@ pub const GossipService = struct {
         // send pings to peers
         var pings_to_send_out = ping_cache_result.pings;
         defer pings_to_send_out.deinit();
-        try self.send_pings(pings_to_send_out);
+        try self.sendPings(pings_to_send_out);
 
         // reset push active set
         var active_set_lock = self.active_set_rw.write();
@@ -621,7 +617,7 @@ pub const GossipService = struct {
 
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
-    fn build_push_messages(self: *Self, push_cursor: *u64) !?std.ArrayList(Packet) {
+    fn buildPushMessages(self: *Self, push_cursor: *u64) !?std.ArrayList(Packet) {
         // TODO: find a better static value?
         var buf: [512]crds.CrdsVersionedValue = undefined;
 
@@ -630,7 +626,7 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             const crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.get_entries_with_cursor(&buf, push_cursor);
+            break :blk crds_table.getEntriesWithCursor(&buf, push_cursor);
         };
 
         if (crds_entries.len == 0) {
@@ -644,92 +640,94 @@ pub const GossipService = struct {
         // TODO: benchmark different approach of HashMapping(origin, value) first
         // then deriving the active set per origin in a batch
         var push_messages = std.AutoHashMap(EndPoint, std.ArrayList(CrdsValue)).init(self.allocator);
-        defer push_messages.deinit();
-
-        var active_set_lock = self.active_set_rw.read();
-        var active_set: *const ActiveSet = active_set_lock.get();
-        errdefer active_set_lock.unlock();
+        defer {
+            var push_iter = push_messages.iterator();
+            while (push_iter.next()) |push_entry| {
+                push_entry.value_ptr.deinit();
+            }
+            push_messages.deinit();
+        }
 
         var num_values_considered: usize = 0;
-        for (crds_entries) |entry| {
-            const value = entry.value;
+        var active_set_lock = self.active_set_rw.read();
+        var active_set: *const ActiveSet = active_set_lock.get();
+        {
+            defer active_set_lock.unlock();
+            for (crds_entries) |entry| {
+                const value = entry.value;
 
-            const entry_time = value.wallclock();
-            const too_old = entry_time < now -| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
-            const too_new = entry_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
-            if (too_old or too_new) {
-                num_values_considered += 1;
-                continue;
-            }
-
-            const byte_size = try bincode.get_serialized_size(self.allocator, value, bincode.Params{});
-            total_byte_size +|= byte_size;
-
-            if (total_byte_size > MAX_BYTES_PER_PUSH) {
-                break;
-            }
-
-            // get the active set for these values *PER ORIGIN* due to prunes
-            const origin = value.id();
-            var active_set_peers = blk: {
-                var crds_table_lock = self.crds_table_rw.read();
-                defer crds_table_lock.unlock();
-                const crds_table: *const CrdsTable = crds_table_lock.get();
-
-                break :blk try active_set.get_fanout_peers(self.allocator, origin, crds_table);
-            };
-            defer active_set_peers.deinit();
-
-            for (active_set_peers.items) |peer| {
-                var maybe_peer_entry = push_messages.getEntry(peer);
-                if (maybe_peer_entry) |peer_entry| {
-                    try peer_entry.value_ptr.append(value);
-                } else {
-                    var peer_entry = try std.ArrayList(CrdsValue).initCapacity(self.allocator, 1);
-                    peer_entry.appendAssumeCapacity(value);
-                    try push_messages.put(peer, peer_entry);
+                const entry_time = value.wallclock();
+                const too_old = entry_time < now -| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
+                const too_new = entry_time > now +| CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS;
+                if (too_old or too_new) {
+                    num_values_considered += 1;
+                    continue;
                 }
+
+                const byte_size = try bincode.getSerializedSize(self.allocator, value, bincode.Params{});
+                total_byte_size +|= byte_size;
+
+                if (total_byte_size > MAX_BYTES_PER_PUSH) {
+                    break;
+                }
+
+                // get the active set for these values *PER ORIGIN* due to prunes
+                const origin = value.id();
+                var active_set_peers = blk: {
+                    var crds_table_lock = self.crds_table_rw.read();
+                    defer crds_table_lock.unlock();
+                    const crds_table: *const CrdsTable = crds_table_lock.get();
+
+                    break :blk try active_set.getFanoutPeers(self.allocator, origin, crds_table);
+                };
+                defer active_set_peers.deinit();
+
+                for (active_set_peers.items) |peer| {
+                    var maybe_peer_entry = push_messages.getEntry(peer);
+                    if (maybe_peer_entry) |peer_entry| {
+                        try peer_entry.value_ptr.append(value);
+                    } else {
+                        var peer_entry = try std.ArrayList(CrdsValue).initCapacity(self.allocator, 1);
+                        peer_entry.appendAssumeCapacity(value);
+                        try push_messages.put(peer, peer_entry);
+                    }
+                }
+                num_values_considered += 1;
             }
-            num_values_considered += 1;
         }
-        active_set_lock.unlock();
 
         // adjust cursor for values not sent this round
         // NOTE: labs client doesnt do this - bug?
         const num_values_not_considered = crds_entries.len - num_values_considered;
         push_cursor.* -= num_values_not_considered;
 
-        // build Push msg packets
-        var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(self.allocator, push_messages.count());
-        var all_endpoints = try std.ArrayList(*const EndPoint).initCapacity(self.allocator, push_messages.count());
-        defer {
-            for (all_crds_values.items) |all_crds_value| {
-                all_crds_value.deinit();
-            }
-            all_crds_values.deinit();
-            all_endpoints.deinit();
-        }
+        var packets = std.ArrayList(Packet).init(self.allocator);
+        errdefer packets.deinit();
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
-            all_crds_values.appendAssumeCapacity(push_entry.value_ptr);
-            all_endpoints.appendAssumeCapacity(push_entry.key_ptr);
+            const crds_values: *const std.ArrayList(CrdsValue) = push_entry.value_ptr;
+            const to_endpoint: *const EndPoint = push_entry.key_ptr;
+
+            // send the values as a pull response
+            var endpoint_packets = try crdsValuesToPackets(
+                self.allocator,
+                &self.my_pubkey,
+                crds_values.items,
+                to_endpoint,
+                ChunkType.PushMessage,
+            );
+            defer endpoint_packets.deinit();
+
+            try packets.appendSlice(endpoint_packets.items);
         }
 
-        const push_packets = try PacketBuilder.PushMessage.build_packets(
-            self.allocator,
-            self.my_pubkey,
-            &all_crds_values,
-            &all_endpoints,
-            PUSH_MESSAGE_MAX_PAYLOAD_SIZE,
-        );
-
-        return push_packets;
+        return packets;
     }
 
     /// builds new pull request messages and serializes it into a list of Packets
     /// to be sent to a random set of gossip nodes.
-    fn build_pull_requests(
+    fn buildPullRequests(
         self: *Self,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
@@ -737,7 +735,7 @@ pub const GossipService = struct {
         // get nodes from crds table
         var buf: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
         const now = get_wallclock_ms();
-        var peers = self.get_gossip_nodes(
+        var peers = self.getGossipNodes(
             &buf,
             MAX_NUM_PULL_REQUESTS,
             now,
@@ -754,7 +752,7 @@ pub const GossipService = struct {
             const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
 
             const crds_table: *const CrdsTable = crds_table_lg.get();
-            const contact_infos = try crds_table.get_all_contact_infos();
+            const contact_infos = try crds_table.getAllContactInfos();
             defer contact_infos.deinit();
 
             for (contact_infos.items) |contact_info| {
@@ -773,7 +771,7 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var result = try ping_cache.filter_valid_peers(self.allocator, self.my_keypair, peers);
+            var result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers);
             break :blk result;
         };
         var valid_gossip_peers = ping_cache_result.valid_peers;
@@ -782,7 +780,7 @@ pub const GossipService = struct {
         // send pings to peers
         var pings_to_send_out = ping_cache_result.pings;
         defer pings_to_send_out.deinit();
-        try self.send_pings(pings_to_send_out);
+        try self.sendPings(pings_to_send_out);
 
         const should_send_to_entrypoint = entrypoint_index != -1;
         const num_peers = valid_gossip_peers.items.len;
@@ -797,19 +795,19 @@ pub const GossipService = struct {
             defer failed_pull_hashes_lock.unlock();
 
             const failed_pull_hashes: *const HashTimeQueue = failed_pull_hashes_lock.get();
-            break :blk try failed_pull_hashes.get_values();
+            break :blk try failed_pull_hashes.getValues();
         };
         defer failed_pull_hashes_array.deinit();
 
         // build crds filters
-        var filters = try pull_request.build_crds_filters(
+        var filters = try pull_request.buildCrdsFilters(
             self.allocator,
             &self.crds_table_rw,
             &failed_pull_hashes_array,
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
         );
-        defer pull_request.deinit_crds_filters(&filters);
+        defer pull_request.deinitCrdsFilters(&filters);
 
         // build packet responses
         var output = try std.ArrayList(Packet).initCapacity(self.allocator, filters.items.len);
@@ -826,7 +824,7 @@ pub const GossipService = struct {
                 // TODO: incorperate stake weight in random sampling
                 const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info = valid_gossip_peers.items[peer_index];
-                const peer_addr = peer_contact_info.gossip.to_endpoint();
+                const peer_addr = peer_contact_info.gossip.toEndpoint();
 
                 const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
@@ -842,7 +840,7 @@ pub const GossipService = struct {
             for (filters.items) |filter| {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
                 var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-                var packet = Packet.init(entrypoint_addr.to_endpoint(), packet_buf, msg_slice.len);
+                var packet = Packet.init(entrypoint_addr.toEndpoint(), packet_buf, msg_slice.len);
                 try output.append(packet);
             }
         }
@@ -853,7 +851,7 @@ pub const GossipService = struct {
     /// logic for handling a pull request message
     /// values which are missing in the pull request filter are returned as a pull response
     /// which are serialized into packets.
-    fn handle_pull_request(
+    fn handlePullRequest(
         self: *Self,
         /// the crds value associated with the pull request
         pull_value: CrdsValue,
@@ -872,12 +870,12 @@ pub const GossipService = struct {
             var crds_table = crds_table_lock.mut();
 
             crds_table.insert(pull_value, now) catch {};
-            crds_table.update_record_timestamp(pull_value.id(), now);
+            crds_table.updateRecordTimestamp(pull_value.id(), now);
         }
 
         // filter out valid peers and send ping messages to peers
         var now_instant = std.time.Instant.now() catch @panic("time is not supported on this OS!");
-        var puller_socket_addr = SocketAddr.from_endpoint(pull_from_endpoint);
+        var puller_socket_addr = SocketAddr.fromEndpoint(pull_from_endpoint);
 
         var ping_cache_lock = self.ping_cache_rw.write();
         var ping_cache: *PingCache = ping_cache_lock.mut();
@@ -907,45 +905,42 @@ pub const GossipService = struct {
 
         const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 100; // TODO: tune
         var crds_table_lock = self.crds_table_rw.read();
-        errdefer crds_table_lock.unlock();
-        const crds_values = try pull_response.filter_crds_values(
-            self.allocator,
-            crds_table_lock.get(),
-            &pull_filter,
-            pull_value.wallclock(),
-            MAX_NUM_CRDS_VALUES_PULL_RESPONSE,
-        );
+        const crds_values = blk: {
+            defer crds_table_lock.unlock();
+            break :blk try pull_response.filterCrdsValues(
+                self.allocator,
+                crds_table_lock.get(),
+                &pull_filter,
+                pull_value.wallclock(),
+                MAX_NUM_CRDS_VALUES_PULL_RESPONSE,
+            );
+        };
         defer crds_values.deinit();
-        crds_table_lock.unlock();
 
         if (maybe_log_entry) |log_entry| {
             _ = log_entry.field("num_crds_values_resp", crds_values.items.len);
         }
 
-        // send the values as a pull response
-        var all_crds_values = try std.ArrayList(*const std.ArrayList(CrdsValue)).initCapacity(self.allocator, 1);
-        var all_to_endpoints = try std.ArrayList(*const EndPoint).initCapacity(self.allocator, 1);
-        all_crds_values.appendAssumeCapacity(&crds_values);
-        all_to_endpoints.appendAssumeCapacity(&pull_from_endpoint);
-        defer {
-            all_crds_values.deinit();
-            all_to_endpoints.deinit();
+        if (crds_values.items.len == 0) {
+            return null;
         }
 
-        return try PacketBuilder.PullResponse.build_packets(
+        // send the values as a pull response
+        const packets = try crdsValuesToPackets(
             self.allocator,
-            self.my_pubkey,
-            &all_crds_values,
-            &all_to_endpoints,
-            PUSH_MESSAGE_MAX_PAYLOAD_SIZE,
+            &self.my_pubkey,
+            crds_values.items,
+            &pull_from_endpoint,
+            ChunkType.PullResponse,
         );
+        return packets;
     }
 
     /// logic for handling a pull response message.
     /// successful inserted values, have their origin value timestamps updated.
     /// failed inserts (ie, too old or duplicate values) are added to the failed pull hashes so that they can be
     /// included in the next pull request (so we dont receive them again).
-    fn handle_pull_response(
+    fn handlePullResponse(
         self: *Self,
         /// the array of values to insert into the crds table
         crds_values: []CrdsValue,
@@ -957,7 +952,7 @@ pub const GossipService = struct {
         var crds_table_lock = self.crds_table_rw.write();
         var crds_table: *CrdsTable = crds_table_lock.mut();
 
-        const insert_results = try crds_table.insert_values(
+        const insert_results = try crds_table.insertValues(
             crds_values,
             CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
             true,
@@ -981,7 +976,7 @@ pub const GossipService = struct {
         defer successful_insert_indexs.deinit();
         for (successful_insert_indexs.items) |index| {
             const origin = crds_values[index].id();
-            crds_table.update_record_timestamp(origin, now);
+            crds_table.updateRecordTimestamp(origin, now);
         }
         crds_table_lock.unlock();
 
@@ -1021,7 +1016,7 @@ pub const GossipService = struct {
     /// logic for handling a prune message. verifies the prune message
     /// is not too old, and that the destination pubkey is the local node,
     /// then updates the active set to prune the list of origin Pubkeys.
-    fn handle_prune_message(
+    fn handlePruneMessage(
         self: *Self,
         /// the prune message to process
         prune_data: *const PruneData,
@@ -1055,7 +1050,7 @@ pub const GossipService = struct {
 
     /// builds a prune message for a list of origin Pubkeys and serializes the values
     /// into packets to send to the prune_destination.
-    fn build_prune_message(
+    fn buildPruneMessage(
         self: *Self,
         /// origin Pubkeys which will be pruned
         failed_origins: *const std.AutoArrayHashMap(Pubkey, void),
@@ -1072,8 +1067,8 @@ pub const GossipService = struct {
             };
         };
         const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
-        crds.sanitize_socket(&from_gossip_addr) catch return error.InvalidGossipAddress;
-        const from_gossip_endpoint = from_gossip_addr.to_endpoint();
+        crds.sanitizeSocket(&from_gossip_addr) catch return error.InvalidGossipAddress;
+        const from_gossip_endpoint = from_gossip_addr.toEndpoint();
 
         const failed_origin_len = failed_origins.keys().len;
         var n_packets = failed_origins.keys().len / MAX_PRUNE_DATA_NODES;
@@ -1115,7 +1110,7 @@ pub const GossipService = struct {
     /// logic for handling push messages. crds values from the push message
     /// are inserted into the crds table. the origin pubkeys of values which
     /// fail the insertion are returned to generate prune messages.
-    fn handle_push_message(
+    fn handlePushMessage(
         self: *Self,
         push_values: []CrdsValue,
     ) error{OutOfMemory}!std.AutoArrayHashMap(Pubkey, void) {
@@ -1124,7 +1119,7 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             var crds_table: *CrdsTable = crds_table_lock.mut();
-            var result = try crds_table.insert_values(
+            var result = try crds_table.insertValues(
                 push_values,
                 CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
                 false,
@@ -1152,7 +1147,7 @@ pub const GossipService = struct {
 
     /// builds a corresponding Pong message for a given Ping message and serializes the
     /// protocol message into a Packet.
-    fn handle_ping_message(
+    fn handlePingMessage(
         self: *Self,
         /// the ping message to build a Pong message for
         ping: *const Ping,
@@ -1176,7 +1171,7 @@ pub const GossipService = struct {
     /// based on the current time. This includes triming the purged values from the
     /// crds table, triming the max number of pubkeys in the crds table, and removing
     /// old labels from the crds table.
-    fn trim_memory(
+    fn trimMemory(
         self: *Self,
         /// the current time
         now: u64,
@@ -1188,8 +1183,8 @@ pub const GossipService = struct {
             var crds_table: *CrdsTable = crds_table_lock.mut();
 
             try crds_table.purged.trim(purged_cutoff_timestamp);
-            try crds_table.attempt_trim(CRDS_UNIQUE_PUBKEY_CAPACITY);
-            try crds_table.remove_old_labels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+            try crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY);
+            try crds_table.removeOldLabels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
         }
 
         const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
@@ -1204,7 +1199,7 @@ pub const GossipService = struct {
 
     /// drains values from the push queue and inserts them into the crds table.
     /// when inserting values in the crds table, any errors are ignored.
-    fn drain_push_queue_to_crds_table(
+    fn drainPushQueueToCrdsTable(
         self: *Self,
         /// the current time to insert the values with
         now: u64,
@@ -1223,7 +1218,7 @@ pub const GossipService = struct {
     }
 
     /// serializes a list of ping messages into Packets and sends them out
-    pub fn send_pings(
+    pub fn sendPings(
         self: *Self,
         pings: std.ArrayList(PingAndSocketAddr),
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
@@ -1233,7 +1228,7 @@ pub const GossipService = struct {
             const protocol_msg = Protocol{ .PingMessage = ping_and_addr.ping };
             var serialized_ping = bincode.writeToSlice(&packet_buf, protocol_msg, .{}) catch return error.SerializationError;
 
-            var to_endpoint = ping_and_addr.socket.to_endpoint();
+            var to_endpoint = ping_and_addr.socket.toEndpoint();
             var packet = Packet.init(to_endpoint, packet_buf, serialized_ping.len);
             try self.packet_outgoing_channel.send(packet);
         }
@@ -1243,7 +1238,7 @@ pub const GossipService = struct {
     /// the contact infos from the crds table and filtering out
     /// nodes that are 1) too old, 2) have a different shred version, or 3) have
     /// an invalid gossip address.
-    pub fn get_gossip_nodes(
+    pub fn getGossipNodes(
         self: *Self,
         /// the output slice which will be filled with gossip nodes
         nodes: []crds.LegacyContactInfo,
@@ -1261,7 +1256,7 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             var crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.get_contact_infos(&buf);
+            break :blk crds_table.getContactInfos(&buf);
         };
 
         if (contact_infos.len == 0) {
@@ -1290,7 +1285,7 @@ pub const GossipService = struct {
                 continue;
             }
             // filter on valid gossip address
-            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
             nodes[node_index] = peer_info;
             node_index += 1;
@@ -1304,69 +1299,82 @@ pub const GossipService = struct {
     }
 };
 
-const PacketBuilder = enum {
-    PullResponse,
+pub const ChunkType = enum(u8) {
     PushMessage,
-
-    fn build_packets(
-        self: PacketBuilder,
-        allocator: std.mem.Allocator,
-        my_pubkey: Pubkey,
-        to_crds_values: *const std.ArrayList(*const std.ArrayList(CrdsValue)),
-        to_endpoints: *const std.ArrayList(*const EndPoint),
-        max_chunk_bytes: usize,
-    ) error{ SerializationError, OutOfMemory }!std.ArrayList(Packet) {
-        var packets = try std.ArrayList(Packet).initCapacity(allocator, MAX_PACKETS_PER_PUSH);
-        errdefer packets.deinit();
-
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        var buf_byte_size: u64 = 0;
-
-        var protocol_msg_values = std.ArrayList(CrdsValue).init(allocator);
-        defer protocol_msg_values.deinit();
-
-        for (to_crds_values.items, to_endpoints.items) |crds_values, to_endpoint| {
-            const crds_value_len = crds_values.items.len;
-
-            for (crds_values.items, 0..) |crds_value, i| {
-                const data_byte_size = bincode.get_serialized_size_with_slice(&packet_buf, crds_value, bincode.Params{}) catch {
-                    return error.SerializationError;
-                };
-
-                // should never have a chunk larger than the max
-                if (data_byte_size > max_chunk_bytes) {
-                    unreachable;
-                }
-                const new_chunk_size = buf_byte_size + data_byte_size;
-                const is_last_iter = i == crds_value_len - 1;
-
-                if (new_chunk_size > max_chunk_bytes or is_last_iter) {
-                    // write message to packet
-                    const protocol_message = switch (self) {
-                        PacketBuilder.PullResponse => Protocol{ .PullResponse = .{ my_pubkey, protocol_msg_values.items } },
-                        PacketBuilder.PushMessage => Protocol{ .PushMessage = .{ my_pubkey, protocol_msg_values.items } },
-                    };
-                    const packet_slice = bincode.writeToSlice(&packet_buf, protocol_message, bincode.Params{}) catch {
-                        return error.SerializationError;
-                    };
-                    const packet = Packet.init(to_endpoint.*, packet_buf, packet_slice.len);
-                    try packets.append(packet);
-
-                    // reset array
-                    buf_byte_size = data_byte_size;
-                    protocol_msg_values.clearRetainingCapacity();
-                    try protocol_msg_values.append(crds_value);
-                } else {
-                    // add it to the current chunk
-                    buf_byte_size = new_chunk_size;
-                    try protocol_msg_values.append(crds_value);
-                }
-            }
-        }
-
-        return packets;
-    }
+    PullResponse,
 };
+
+pub fn crdsValuesToPackets(
+    allocator: std.mem.Allocator,
+    my_pubkey: *const Pubkey,
+    crds_values: []CrdsValue,
+    to_endpoint: *const EndPoint,
+    chunk_type: ChunkType,
+) error{ OutOfMemory, SerializationError }!std.ArrayList(Packet) {
+    const indexs = try chunkValuesIntoPacketIndexs(
+        allocator,
+        crds_values,
+        MAX_PUSH_MESSAGE_PAYLOAD_SIZE,
+    );
+    defer indexs.deinit();
+    var chunk_iter = std.mem.window(usize, indexs.items, 2, 1);
+
+    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+    var packets = try std.ArrayList(Packet).initCapacity(allocator, indexs.items.len -| 1);
+    errdefer packets.deinit();
+
+    while (chunk_iter.next()) |window| {
+        const start_index = window[0];
+        const end_index = window[1];
+        const values = crds_values[start_index..end_index];
+
+        const protocol_msg = switch (chunk_type) {
+            .PushMessage => Protocol{ .PushMessage = .{ my_pubkey.*, values } },
+            .PullResponse => Protocol{ .PullResponse = .{ my_pubkey.*, values } },
+        };
+        var msg_slice = bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{}) catch {
+            return error.SerializationError;
+        };
+        var packet = Packet.init(to_endpoint.*, packet_buf, msg_slice.len);
+        packets.appendAssumeCapacity(packet);
+    }
+
+    return packets;
+}
+
+pub fn chunkValuesIntoPacketIndexs(
+    allocator: std.mem.Allocator,
+    crds_values: []CrdsValue,
+    max_chunk_bytes: usize,
+) error{ OutOfMemory, SerializationError }!std.ArrayList(usize) {
+    var packet_indexs = try std.ArrayList(usize).initCapacity(allocator, 1);
+    errdefer packet_indexs.deinit();
+    packet_indexs.appendAssumeCapacity(0);
+
+    if (crds_values.len == 0) {
+        return packet_indexs;
+    }
+
+    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+    var buf_byte_size: u64 = 0;
+
+    for (crds_values, 0..) |crds_value, i| {
+        const data_byte_size = bincode.getSerializedSizeWithSlice(&packet_buf, crds_value, bincode.Params{}) catch {
+            return error.SerializationError;
+        };
+        const new_chunk_size = buf_byte_size + data_byte_size;
+        const is_last_iter = i == crds_values.len - 1;
+
+        if (new_chunk_size > max_chunk_bytes or is_last_iter) {
+            try packet_indexs.append(i);
+            buf_byte_size = data_byte_size;
+        } else {
+            buf_byte_size = new_chunk_size;
+        }
+    }
+
+    return packet_indexs;
+}
 
 test "gossip.gossip_service: tests handle_prune_messages" {
     var rng = std.rand.DefaultPrng.init(91);
@@ -1377,7 +1385,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1399,7 +1407,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), &rand_keypair, 0); // contact info
+        var value = try CrdsValue.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock_ms());
         try peers.append(value.data.LegacyContactInfo);
     }
@@ -1428,7 +1436,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     };
     try prune_data.sign(&my_keypair);
 
-    try gossip_service.handle_prune_message(&prune_data);
+    try gossip_service.handlePruneMessage(&prune_data);
 
     var as_lock2 = gossip_service.active_set_rw.read();
     var as2: *const ActiveSet = as_lock2.get();
@@ -1445,7 +1453,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1465,12 +1473,12 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var crds_values: [5]CrdsValue = undefined;
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
-        var value = try CrdsValue.random_with_index(rng.random(), &kp, 0);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         crds_values[i] = value;
     }
 
-    try gossip_service.handle_pull_response(&crds_values, null);
+    try gossip_service.handlePullResponse(&crds_values, null);
 
     // make sure values are inserted
     var crds_table_lock = gossip_service.crds_table_rw.read();
@@ -1481,7 +1489,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     crds_table_lock.unlock();
 
     // try inserting again with same values (should all fail)
-    try gossip_service.handle_pull_response(&crds_values, null);
+    try gossip_service.handlePullResponse(&crds_values, null);
 
     var lg = gossip_service.failed_pull_hashes_mux.lock();
     var failed_pull_hashes: *HashTimeQueue = lg.mut();
@@ -1498,7 +1506,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1524,13 +1532,13 @@ test "gossip.gossip_service: tests handle_pull_request" {
     while (!done) {
         count += 1;
         for (0..5) |_| {
-            var value = try CrdsValue.random_with_index(rng.random(), &my_keypair, 0);
+            var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
             value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
             try crds_table.insert(value, get_wallclock_ms());
 
             // make sure well get a response from the request
             const vers_value = crds_table.get(value.label()).?;
-            const hash_bits = pull_request.hash_to_u64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
+            const hash_bits = pull_request.hashToU64(&vers_value.value_hash) >> (64 - N_FILTER_BITS);
             if (hash_bits == 0) {
                 done = true;
             }
@@ -1547,14 +1555,14 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    var ci_data = crds.CrdsData.random_from_index(rng.random(), 0);
+    var ci_data = crds.CrdsData.randomFromIndex(rng.random(), 0);
     ci_data.LegacyContactInfo.id = my_pubkey;
     const crds_value = try CrdsValue.initSigned(ci_data, &my_keypair);
 
     const addr = SocketAddr.random(rng.random());
     var ping_lock = gossip_service.ping_cache_rw.write();
     var ping_cache: *PingCache = ping_lock.mut();
-    ping_cache._set_pong(my_pubkey, addr);
+    ping_cache._setPong(my_pubkey, addr);
     ping_lock.unlock();
 
     const filter = CrdsFilter{
@@ -1563,10 +1571,10 @@ test "gossip.gossip_service: tests handle_pull_request" {
         .mask_bits = N_FILTER_BITS,
     };
 
-    var packets = try gossip_service.handle_pull_request(
+    var packets = try gossip_service.handlePullRequest(
         crds_value,
         filter,
-        addr.to_endpoint(),
+        addr.toEndpoint(),
         null,
     );
     defer packets.?.deinit();
@@ -1582,7 +1590,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1602,7 +1610,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var values = std.ArrayList(CrdsValue).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        var value = try CrdsValue.random_with_index(rng.random(), &my_keypair, 0);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         try values.append(value);
     }
@@ -1611,7 +1619,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var send_contact_info = crds.LegacyContactInfo.random(rng.random());
     send_contact_info.id = push_from;
     // valid socket addr
-    var gossip_socket = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 20);
+    var gossip_socket = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20);
     send_contact_info.gossip = gossip_socket;
 
     var ci_value = try CrdsValue.initSigned(crds.CrdsData{
@@ -1621,15 +1629,15 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     try lg.mut().insert(ci_value, get_wallclock_ms());
     lg.unlock();
 
-    var forigins = try gossip_service.handle_push_message(values.items);
+    var forigins = try gossip_service.handlePushMessage(values.items);
     defer forigins.deinit();
     try std.testing.expect(forigins.keys().len == 0);
 
-    var failed_origins = try gossip_service.handle_push_message(values.items);
+    var failed_origins = try gossip_service.handlePushMessage(values.items);
     defer failed_origins.deinit();
     try std.testing.expect(failed_origins.keys().len > 0);
 
-    var prune_packets = try gossip_service.build_prune_message(&failed_origins, push_from);
+    var prune_packets = try gossip_service.buildPruneMessage(&failed_origins, push_from);
     defer prune_packets.deinit();
 
     var packet = prune_packets.items[0];
@@ -1655,7 +1663,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1676,15 +1684,15 @@ test "gossip.gossip_service: test build_pull_requests" {
     var ping_lock = gossip_service.ping_cache_rw.write();
     var lg = gossip_service.crds_table_rw.write();
     for (0..20) |_| {
-        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0);
         try lg.mut().insert(value, get_wallclock_ms());
         var pc: *PingCache = ping_lock.mut();
-        pc._set_pong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
+        pc._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
     }
     lg.unlock();
     ping_lock.unlock();
 
-    var packets = try gossip_service.build_pull_requests(2);
+    var packets = try gossip_service.buildPullRequests(2);
     defer packets.deinit();
 
     try std.testing.expect(packets.items.len > 1);
@@ -1699,7 +1707,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1721,7 +1729,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var lg = gossip_service.crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.random_with_index(rng.random(), &keypair, 0); // contact info
+        var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, get_wallclock_ms());
         try peers.append(value.data.LegacyContactInfo);
     }
@@ -1746,19 +1754,19 @@ test "gossip.gossip_service: test build_push_messages" {
         try push_queue.append(value);
         pqlg.unlock();
     }
-    gossip_service.drain_push_queue_to_crds_table(get_wallclock_ms());
+    gossip_service.drainPushQueueToCrdsTable(get_wallclock_ms());
 
     var clg = gossip_service.crds_table_rw.read();
     try std.testing.expect(clg.get().len() == 11);
     clg.unlock();
 
     var cursor: u64 = 0;
-    var msgs = (try gossip_service.build_push_messages(&cursor)).?;
+    var msgs = (try gossip_service.buildPushMessages(&cursor)).?;
     try std.testing.expectEqual(cursor, 11);
     try std.testing.expect(msgs.items.len > 0);
     msgs.deinit();
 
-    var msgs2 = try gossip_service.build_push_messages(&cursor);
+    var msgs2 = try gossip_service.buildPushMessages(&cursor);
     try std.testing.expectEqual(cursor, 11);
     try std.testing.expect(msgs2 == null);
 }
@@ -1770,7 +1778,7 @@ test "gossip.gossip_service: test packet verification" {
     var id = Pubkey.fromPublicKey(&keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(id);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1790,10 +1798,10 @@ test "gossip.gossip_service: test packet verification" {
     var packet_channel = gossip_service.packet_incoming_channel;
     var verified_channel = gossip_service.verified_incoming_channel;
 
-    var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{ &gossip_service, logger });
+    var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verifyPackets, .{&gossip_service});
 
     var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
-    var data = crds.CrdsData.random_from_index(rng.random(), 0);
+    var data = crds.CrdsData.randomFromIndex(rng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
     var value = try CrdsValue.initSigned(data, &keypair);
@@ -1805,8 +1813,8 @@ test "gossip.gossip_service: test packet verification" {
         .PushMessage = .{ id, &values },
     };
 
-    var peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
-    var from = peer.to_endpoint();
+    var peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    var from = peer.toEndpoint();
 
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
@@ -1817,7 +1825,7 @@ test "gossip.gossip_service: test packet verification" {
     }
 
     // send one which fails sanitization
-    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 2), &keypair);
+    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 2), &keypair);
     value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
     var values_v2 = [_]crds.CrdsValue{value_v2};
     const protocol_msg_v2 = Protocol{
@@ -1830,7 +1838,7 @@ test "gossip.gossip_service: test packet verification" {
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
-    var value2 = try CrdsValue.initSigned(crds.CrdsData.random_from_index(rng.random(), 0), &rand_keypair);
+    var value2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 0), &rand_keypair);
     var values2 = [_]crds.CrdsValue{value2};
     const protocol_msg2 = Protocol{
         .PushMessage = .{ id, &values2 },
@@ -1898,7 +1906,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
 
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1922,10 +1930,9 @@ test "gossip.gossip_service: process contact_info push packet" {
 
     var packet_handle = try Thread.spawn(
         .{},
-        GossipService.process_messages,
+        GossipService.processMessages,
         .{
             &gossip_service,
-            logger,
         },
     );
 
@@ -1944,7 +1951,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     };
 
     // packet
-    const peer = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 8000).to_endpoint();
+    const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
     const protocol_msg = ProtocolMessage{
         .from_endpoint = peer,
         .message = msg,
@@ -1966,7 +1973,7 @@ test "gossip.gossip_service: process contact_info push packet" {
 
     {
         var lg = gossip_service.crds_table_rw.read();
-        var res = lg.get().get_contact_infos(&buf2);
+        var res = lg.get().getContactInfos(&buf2);
         try std.testing.expect(res.len == 1);
         lg.unlock();
     }
@@ -1980,7 +1987,7 @@ test "gossip.gossip_service: process contact_info push packet" {
 }
 
 test "gossip.gossip_service: init, exit, and deinit" {
-    var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
+    var gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     var my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
     var contact_info = crds.LegacyContactInfo.random(rng.random());
@@ -2010,3 +2017,117 @@ test "gossip.gossip_service: init, exit, and deinit" {
     handle.join();
     gossip_service.deinit();
 }
+
+const fuzz = @import("./fuzz.zig");
+pub const BenchmarkMessageProcessing = struct {
+    pub const min_iterations = 1;
+    pub const max_iterations = 5;
+
+    pub const args = [_]usize{
+        10,
+        100,
+    };
+
+    pub const arg_names = [_][]const u8{
+        "10_msg_iters", "100_msg_iters",
+    };
+
+    pub fn benchmarkGossipService(num_message_iterations: usize) !void {
+        const allocator = std.heap.page_allocator;
+        var keypair = try KeyPair.create(null);
+        var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+
+        var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+        var contact_info = crds.LegacyContactInfo.default(pubkey);
+        contact_info.shred_version = 19;
+        contact_info.gossip = address;
+
+        var exit = AtomicBool.init(false);
+        var gossip_service = try GossipService.init(
+            allocator,
+            contact_info,
+            keypair,
+            null,
+            &exit,
+            .noop,
+        );
+        defer gossip_service.deinit();
+
+        var logger = Logger.init(allocator, .debug);
+        defer logger.deinit();
+        logger.spawn();
+
+        var packet_handle = try Thread.spawn(.{}, GossipService.processMessages, .{
+            &gossip_service,
+        });
+
+        var rand = std.rand.DefaultPrng.init(19);
+        var rng = rand.random();
+
+        const Sender = struct {
+            const Self = @This();
+
+            gs: *GossipService,
+            to_endpoint: EndPoint,
+
+            pub fn send(self: *Self, msg: Protocol) void {
+                self.gs.verified_incoming_channel.send(ProtocolMessage{
+                    .message = msg,
+                    .from_endpoint = self.to_endpoint,
+                }) catch @panic("ahhhh");
+            }
+        };
+        var sender = Sender{
+            .gs = &gossip_service,
+            .to_endpoint = address.toEndpoint(),
+        };
+
+        // send a ping message
+        var msg_sent: usize = 0;
+        for (0..num_message_iterations) |_| {
+            {
+                var msg = try fuzz.randomPing(rng, &keypair);
+                sender.send(msg);
+                msg_sent += 1;
+            }
+            // send a pong message
+            {
+                var msg = try fuzz.randomPong(rng, &keypair);
+                sender.send(msg);
+                msg_sent += 1;
+            }
+            // send a push message
+            {
+                var packets = try fuzz.randomPushMessage(rng, &keypair, address.toEndpoint());
+                defer packets.deinit();
+
+                for (packets.items) |packet| {
+                    var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                    sender.send(msg);
+                    msg_sent += 1;
+                }
+            }
+            // send a pull message
+            {
+                var packets = try fuzz.randomPullResponse(rng, &keypair, address.toEndpoint());
+                defer packets.deinit();
+
+                for (packets.items) |packet| {
+                    var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                    sender.send(msg);
+                    msg_sent += 1;
+                }
+            }
+        }
+
+        while (true) {
+            const v = gossip_service.messages_processed.load(std.atomic.Ordering.Unordered);
+            if (v == msg_sent) {
+                break;
+            }
+        }
+
+        exit.store(true, std.atomic.Ordering.Unordered);
+        packet_handle.join();
+    }
+};

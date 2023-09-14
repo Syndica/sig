@@ -36,7 +36,9 @@ pub const Protocol = union(enum(u32)) {
     PingMessage: Ping,
     PongMessage: Pong,
 
-    pub fn verify_signature(self: *Protocol) !void {
+    const Self = @This();
+
+    pub fn verifySignature(self: *Protocol) !void {
         switch (self.*) {
             .PullRequest => |*pull| {
                 var value = pull[1];
@@ -93,7 +95,7 @@ pub const Protocol = union(enum(u32)) {
                 if (!from.equals(&value.pubkey)) {
                     return error.InvalidValue;
                 }
-                try sanitize_wallclock(value.wallclock);
+                try sanitizeWallclock(value.wallclock);
             },
             // do nothing
             .PingMessage => {},
@@ -102,7 +104,7 @@ pub const Protocol = union(enum(u32)) {
     }
 };
 
-pub fn sanitize_wallclock(wallclock: u64) !void {
+pub fn sanitizeWallclock(wallclock: u64) !void {
     if (wallclock >= MAX_WALLCLOCK) {
         return error.InvalidValue;
     }
@@ -145,7 +147,7 @@ pub const PruneData = struct {
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
             .destination = Pubkey.random(rng, .{}),
-            .wallclock = crds.get_wallclock_ms(),
+            .wallclock = crds.getWallclockMs(),
         };
         try self.sign(keypair);
 
@@ -183,20 +185,20 @@ pub const PruneData = struct {
 };
 
 test "gossip.protocol: push message serialization is predictable" {
-    var rng = DefaultPrng.init(crds.get_wallclock_ms());
+    var rng = DefaultPrng.init(crds.getWallclockMs());
     var pubkey = Pubkey.random(rng.random(), .{});
     var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
     defer values.deinit();
 
     var msg = Protocol{ .PushMessage = .{ pubkey, values.items } };
-    const empty_size = try bincode.get_serialized_size(
+    const empty_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg,
         bincode.Params{},
     );
 
     var value = try CrdsValue.random(rng.random(), &(try KeyPair.create(null)));
-    const value_size = try bincode.get_serialized_size(
+    const value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         value,
         bincode.Params{},
@@ -205,7 +207,7 @@ test "gossip.protocol: push message serialization is predictable" {
     try std.testing.expect(values.items.len == 1);
 
     var msg_with_value = Protocol{ .PushMessage = .{ pubkey, values.items } };
-    const msg_value_size = try bincode.get_serialized_size(
+    const msg_value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg_with_value,
         bincode.Params{},
@@ -222,7 +224,7 @@ test "gossip.protocol: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(crds.get_wallclock_ms());
+    var rng = DefaultPrng.init(crds.getWallclockMs());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();
@@ -245,7 +247,9 @@ test "gossip.protocol: test prune data sig verify" {
 test "gossip.protocol: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var original = Protocol{ .PingMessage = try Ping.random(&keypair) };
+    var rng = std.rand.DefaultPrng.init(0);
+
+    var original = Protocol{ .PingMessage = try Ping.random(rng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
 
     var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
@@ -260,12 +264,13 @@ test "gossip.protocol: ping message serializes and deserializes correctly" {
 test "gossip.protocol: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
-    var ping = try Ping.random(&keypair);
+    var rng = std.rand.DefaultPrng.init(0);
+    var ping = try Ping.random(rng.random(), &keypair);
     var msg = Protocol{ .PingMessage = ping };
-    try msg.verify_signature();
+    try msg.verifySignature();
 
     var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
-    try pong.verify_signature();
+    try pong.verifySignature();
 }
 
 test "gossip.protocol: pull request serializes and deserializes" {
@@ -279,7 +284,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
 
     // pull requests only use ContactInfo CRDS data
-    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
+    const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
     var legacy_contact_info = LegacyContactInfo{
         .id = pubkey,
@@ -323,7 +328,7 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk, true);
 
-    const gossip_addr = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 1234);
+    const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
 
     var buf = [_]u8{0} ** 1024;

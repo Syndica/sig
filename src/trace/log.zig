@@ -159,7 +159,7 @@ pub const StandardErrLogger = struct {
     }
 
     fn run(self: *Self) void {
-        var stdErrConsumer = BasicStdErrSink{};
+        const sink = StdErrSink{};
 
         while (!self.exit_sig.load(.SeqCst)) {
             std.time.sleep(std.time.ns_per_ms * 5);
@@ -170,7 +170,7 @@ pub const StandardErrLogger = struct {
             };
             defer self.channel.allocator.free(entries);
 
-            stdErrConsumer.consumeEntries(entries);
+            sink.consumeEntries(entries);
 
             // deinit entries
             for (entries) |e| {
@@ -225,7 +225,7 @@ pub const StandardErrLogger = struct {
     }
 };
 
-const BasicStdErrSink = struct {
+pub const StdErrSink = struct {
     const Self = @This();
 
     pub fn consumeEntries(_: Self, entries: []*StandardEntry) void {
@@ -237,15 +237,6 @@ const BasicStdErrSink = struct {
         for (entries) |e| {
             logfmt.formatter(e, std_err_writer) catch unreachable;
         }
-    }
-
-    pub fn consumeEntry(_: Self, e: *StandardEntry) void {
-        var std_err_writer = std.io.getStdErr().writer();
-        var std_err_mux = std.debug.getStderrMutex();
-        std_err_mux.lock();
-        defer std_err_mux.unlock();
-
-        logfmt.formatter(e, std_err_writer) catch unreachable;
     }
 };
 

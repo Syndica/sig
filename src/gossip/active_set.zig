@@ -10,7 +10,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("../gossip/crds.zig").get_wallclock_ms;
+const get_wallclock_ms = @import("../gossip/crds.zig").getWallclockMs;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -67,7 +67,7 @@ pub const ActiveSet = struct {
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
         var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
-        pull_request.shuffle_first_n(rng.random(), crds.LegacyContactInfo, crds_peers, size);
+        pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
@@ -96,7 +96,7 @@ pub const ActiveSet = struct {
     /// get a set of CRDS_GOSSIP_PUSH_FANOUT peers to send push messages to
     /// while accounting for peers that have been pruned from
     /// the given origin Pubkey
-    pub fn get_fanout_peers(
+    pub fn getFanoutPeers(
         self: *const Self,
         allocator: std.mem.Allocator,
         origin: Pubkey,
@@ -113,7 +113,7 @@ pub const ActiveSet = struct {
             }) orelse continue; // peer pubkey could have been removed from the crds table
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
-            crds.sanitize_socket(&peer_gossip_addr) catch continue;
+            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
             // check if peer has been pruned
             const entry = self.pruned_peers.getEntry(peer_pubkey) orelse unreachable;
@@ -122,7 +122,7 @@ pub const ActiveSet = struct {
                 continue;
             }
 
-            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.to_endpoint());
+            active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
             if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
                 break;
             }
@@ -162,7 +162,7 @@ test "gossip.active_set: init/deinit" {
 
     const origin = Pubkey.random(rng.random(), .{});
 
-    var fanout = try active_set.get_fanout_peers(alloc, origin, &crds_table);
+    var fanout = try active_set.getFanoutPeers(alloc, origin, &crds_table);
     defer fanout.deinit();
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
@@ -170,7 +170,7 @@ test "gossip.active_set: init/deinit" {
     const peer_pubkey = active_set.peers[0];
     active_set.prune(peer_pubkey, origin);
 
-    var fanout_with_prune = try active_set.get_fanout_peers(alloc, origin, &crds_table);
+    var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &crds_table);
     defer fanout_with_prune.deinit();
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
 }

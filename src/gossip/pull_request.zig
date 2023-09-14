@@ -24,7 +24,7 @@ pub const KEYS: f64 = 8;
 
 /// parses all the values in the crds table and returns a list of
 /// corresponding filters. Note: make sure to call deinit_crds_filters.
-pub fn build_crds_filters(
+pub fn buildCrdsFilters(
     alloc: std.mem.Allocator,
     crds_table_rw: *RwMux(CrdsTable),
     failed_pull_hashes: *const ArrayList(Hash),
@@ -48,7 +48,7 @@ pub fn build_crds_filters(
             filter_set.add(&hash);
         }
         // add purged values
-        const purged_values = try crds_table.purged.get_values();
+        const purged_values = try crds_table.purged.getValues();
         for (purged_values.items) |hash| {
             filter_set.add(&hash);
         }
@@ -62,18 +62,18 @@ pub fn build_crds_filters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consume_for_crds_filters(alloc, max_n_filters);
+    const filters = try filter_set.consumeForCrdsFilters(alloc, max_n_filters);
     return filters;
 }
 
-pub fn deinit_crds_filters(filters: *ArrayList(CrdsFilter)) void {
+pub fn deinitCrdsFilters(filters: *ArrayList(CrdsFilter)) void {
     for (filters.items) |*filter| {
         filter.deinit();
     }
     filters.deinit();
 }
 
-pub fn shuffle_first_n(rng: std.rand.Random, comptime T: type, buf: []T, n: usize) void {
+pub fn shuffleFirstN(rng: std.rand.Random, comptime T: type, buf: []T, n: usize) void {
     for (0..n) |i| {
         const j = rng.intRangeLessThan(usize, 0, buf.len);
         std.mem.swap(T, &buf[i], &buf[j]);
@@ -92,11 +92,11 @@ pub const CrdsFilterSet = struct {
     pub fn init(alloc: std.mem.Allocator, num_items: usize, bloom_size_bytes: usize) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
         var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
-        var mask_bits = CrdsFilter.compute_mask_bits(@floatFromInt(num_items), bloom_size_bits);
+        var mask_bits = CrdsFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         // TODO; add errdefer handling here
-        var max_items = CrdsFilter.compute_max_items(bloom_size_bits, FALSE_RATE, KEYS);
+        var max_items = CrdsFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
             var filter = try Bloom.random(alloc, @intFromFloat(max_items), FALSE_RATE, @intFromFloat(bloom_size_bits));
@@ -109,7 +109,7 @@ pub const CrdsFilterSet = struct {
         };
     }
 
-    pub fn init_test(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
@@ -129,7 +129,7 @@ pub const CrdsFilterSet = struct {
         self.filters.deinit();
     }
 
-    pub fn hash_index(mask_bits: u32, hash: *const Hash) usize {
+    pub fn hashIndex(mask_bits: u32, hash: *const Hash) usize {
         if (mask_bits == 0) {
             return 0;
         }
@@ -137,12 +137,12 @@ pub const CrdsFilterSet = struct {
         const shift_bits: u6 = @intCast(64 - mask_bits);
         // only look at the first `mask_bits` bits
         // which represents `n_filters` number of indexs
-        const index = @as(usize, hash_to_u64(hash) >> shift_bits);
+        const index = @as(usize, hashToU64(hash) >> shift_bits);
         return index;
     }
 
     pub fn add(self: *Self, hash: *const Hash) void {
-        const index = CrdsFilterSet.hash_index(self.mask_bits, hash);
+        const index = CrdsFilterSet.hashIndex(self.mask_bits, hash);
         self.filters.items[index].add(&hash.data);
     }
 
@@ -151,7 +151,7 @@ pub const CrdsFilterSet = struct {
     }
 
     /// returns a list of CrdsFilters and consumes Self by calling deinit.
-    pub fn consume_for_crds_filters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
+    pub fn consumeForCrdsFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -167,8 +167,8 @@ pub const CrdsFilterSet = struct {
         if (!can_consume_all) {
 
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(crds.get_wallclock_ms());
-            shuffle_first_n(rng.random(), usize, indexs.items, output_size);
+            var rng = std.rand.DefaultPrng.init(crds.getWallclockMs());
+            shuffleFirstN(rng.random(), usize, indexs.items, output_size);
 
             // release others
             for (output_size..set_size) |i| {
@@ -183,7 +183,7 @@ pub const CrdsFilterSet = struct {
 
             var output_item = CrdsFilter{
                 .filter = self.filters.items[index], // take ownership of filter
-                .mask = CrdsFilter.compute_mask(index, self.mask_bits),
+                .mask = CrdsFilter.computeMask(index, self.mask_bits),
                 .mask_bits = self.mask_bits,
             };
             output.appendAssumeCapacity(output_item);
@@ -209,7 +209,7 @@ pub const CrdsFilter = struct {
         };
     }
 
-    pub fn compute_mask(index: u64, mask_bits: u32) u64 {
+    pub fn computeMask(index: u64, mask_bits: u32) u64 {
         if (mask_bits == 0) {
             return ~@as(u64, 0);
         }
@@ -227,11 +227,11 @@ pub const CrdsFilter = struct {
         return shifted_index | (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
     }
 
-    pub fn compute_mask_bits(num_items: f64, max: f64) u32 {
+    pub fn computeMaskBits(num_items: f64, max: f64) u32 {
         return @intFromFloat(@max(0, (std.math.ceil(std.math.log2(num_items / max)))));
     }
 
-    pub fn compute_max_items(max_bits: f64, false_rate: f64, num_keys: f64) f64 {
+    pub fn computeMaxItems(max_bits: f64, false_rate: f64, num_keys: f64) f64 {
         const m = max_bits;
         const p = false_rate;
         const k = num_keys;
@@ -243,7 +243,7 @@ pub const CrdsFilter = struct {
     }
 };
 
-pub fn hash_to_u64(hash: *const Hash) u64 {
+pub fn hashToU64(hash: *const Hash) u64 {
     const buf = hash.data[0..8];
     return std.mem.readIntLittle(u64, buf);
 }
@@ -277,14 +277,14 @@ test "gossip.pull: test build_crds_filters" {
     var crds_table_rw = RwMux(CrdsTable).init(crds_table);
 
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try build_crds_filters(
+    var filters = try buildCrdsFilters(
         std.testing.allocator,
         &crds_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer deinit_crds_filters(&filters);
+    defer deinitCrdsFilters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;
 
@@ -294,7 +294,7 @@ test "gossip.pull: test build_crds_filters" {
         const versioned_value = crds_values[i];
         const hash = versioned_value.value_hash;
 
-        const index = CrdsFilterSet.hash_index(mask_bits, &hash);
+        const index = CrdsFilterSet.hashIndex(mask_bits, &hash);
         const filter = filters.items[index].filter;
         try std.testing.expect(filter.contains(&hash.data));
     }
@@ -306,14 +306,14 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
     const hash = Hash.random();
     filter_set.add(&hash);
 
-    const index = CrdsFilterSet.hash_index(filter_set.mask_bits, &hash);
+    const index = CrdsFilterSet.hashIndex(filter_set.mask_bits, &hash);
     var bloom = filter_set.filters.items[index];
 
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consume_for_crds_filters(std.testing.allocator, 10);
-    defer deinit_crds_filters(&f);
+    var f = try filter_set.consumeForCrdsFilters(std.testing.allocator, 10);
+    defer deinitCrdsFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
 
@@ -323,22 +323,22 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
 
 test "gossip.pull: helper functions are correct" {
     {
-        const v = CrdsFilter.compute_max_items(100.5, 0.1, 10.0);
+        const v = CrdsFilter.computeMaxItems(100.5, 0.1, 10.0);
         try std.testing.expectEqual(@as(f64, 16), v);
     }
 
     {
-        const v = CrdsFilter.compute_mask_bits(800, 100);
+        const v = CrdsFilter.computeMaskBits(800, 100);
         try std.testing.expectEqual(@as(usize, 3), v);
     }
 
     {
         const v = Hash{ .data = .{1} ++ .{0} ** 31 };
-        try std.testing.expectEqual(@as(u64, 1), hash_to_u64(&v));
+        try std.testing.expectEqual(@as(u64, 1), hashToU64(&v));
     }
 
     {
-        const v = CrdsFilter.compute_mask(2, 3);
+        const v = CrdsFilter.computeMask(2, 3);
         // 101111111111111111111111111111111111111111111111111111111111111
         try std.testing.expectEqual(@as(u64, 6917529027641081855), v);
     }

@@ -162,3 +162,29 @@ test "sync.channel: channel works properly" {
 
     try testing.expectEqual(send_count, recv_count.value);
 }
+
+pub const BenchmarkChannel = struct {
+    pub const min_iterations = 10;
+    pub const max_iterations = 20;
+
+    pub fn benchmarkChannel() !void {
+        const T: type = Block;
+
+        const allocator = std.heap.page_allocator;
+        var channel = Channel(T).init(allocator, 100);
+        defer channel.deinit();
+
+        var recv_count: Atomic(usize) = Atomic(usize).init(0);
+        var send_count: usize = 100_000;
+
+        var join1 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 1 });
+        var join2 = try std.Thread.spawn(.{}, testSender, .{ channel, send_count });
+        var join3 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 2 });
+        var join4 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 3 });
+
+        join1.join();
+        join2.join();
+        join3.join();
+        join4.join();
+    }
+};

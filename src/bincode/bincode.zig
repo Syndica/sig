@@ -45,7 +45,7 @@ pub fn Deserializer(comptime Reader: type) type {
         pub usingnamespace getty.Deserializer(
             *Self,
             Error,
-            custom_dser,
+            CustomDeser,
             null,
             .{
                 .deserializeBool = deserializeBool,
@@ -123,7 +123,7 @@ pub fn Deserializer(comptime Reader: type) type {
             return try visitor.visitBool(ally, De, value);
         }
 
-        const custom_dser = struct {
+        const CustomDeser = struct {
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,
@@ -329,7 +329,7 @@ pub fn Serializer(
             *Self,
             Ok,
             Error,
-            custom_ser,
+            CustomSer,
             null,
             null,
             Aggregate,
@@ -417,7 +417,7 @@ pub fn Serializer(
             }
         }
 
-        const custom_ser = struct {
+        const CustomSer = struct {
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,
@@ -569,12 +569,12 @@ pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: 
     try getty.serialize(alloc, data, ss);
 }
 
-pub fn get_serialized_size_with_slice(slice: []u8, data: anytype, params: Params) !usize {
+pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !usize {
     var ser_slice = try writeToSlice(slice, data, params);
     return ser_slice.len;
 }
 
-pub fn get_serialized_size(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
+pub fn getSerializedSize(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
     var list = try writeToArray(alloc, data, params);
     defer list.deinit();
 
@@ -605,7 +605,7 @@ pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params
 // ** Tests **//
 fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     const S = struct {
-        fn deserialize_test_slice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
+        fn deserializeTestSlice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
             var ally = allocator.?;
             var len = try bincode.read(ally, u16, reader, params);
             var elems = try ally.alloc(Child, len);
@@ -615,7 +615,7 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
             return elems;
         }
 
-        pub fn serilaize_test_slice(writer: anytype, data: anytype, params: bincode.Params) !void {
+        pub fn serilaizeTestSlice(writer: anytype, data: anytype, params: bincode.Params) !void {
             var len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
             try bincode.write(null, writer, len, params);
             for (data) |item| {
@@ -626,8 +626,8 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     };
 
     return FieldConfig([]Child){
-        .serializer = S.serilaize_test_slice,
-        .deserializer = S.deserialize_test_slice,
+        .serializer = S.serilaizeTestSlice,
+        .deserializer = S.deserializeTestSlice,
     };
 }
 
@@ -653,7 +653,7 @@ test "bincode: custom field serialization" {
     std.debug.print("{any}", .{out});
     try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
-    var size = try get_serialized_size(std.testing.allocator, foo, Params{});
+    var size = try getSerializedSize(std.testing.allocator, foo, Params{});
     try std.testing.expect(size > 0);
 
     var r = try readFromSlice(std.testing.allocator, Foo, out, Params{});

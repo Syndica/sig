@@ -3,9 +3,14 @@
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
-const GossipService = @import("gossip_service.zig").GossipService;
-const Logger = @import("../trace/log.zig").Logger;
 
+const _gossip_service = @import("./gossip_service.zig");
+const GossipService = _gossip_service.GossipService;
+const ChunkType = _gossip_service.ChunkType;
+const crds_values_to_packets = _gossip_service.crdsValuesToPackets;
+const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
+
+const Logger = @import("../trace/log.zig").Logger;
 const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -13,7 +18,7 @@ const AtomicBool = std.atomic.Atomic(bool);
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("crds.zig").get_wallclock_ms;
+const get_wallclock_ms = @import("crds.zig").getWallclockMs;
 
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
@@ -45,42 +50,46 @@ const pull_request = @import("../gossip/pull_request.zig");
 const CrdsFilter = pull_request.CrdsFilter;
 const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 
-const pull_response = @import("../gossip/pull_response.zig");
-
 const Hash = @import("../core/hash.zig").Hash;
 
 const PacketChannel = NonBlockingChannel(Packet);
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = NonBlockingChannel(ProtocolMessage);
 
-pub fn random_ping(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    var ping_buf: [32]u8 = undefined;
-    rng.bytes(&ping_buf);
+pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
+    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+    var msg_slice = try bincode.writeToSlice(&packet_buf, d, bincode.Params{});
+    var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
+    return packet;
+}
+
+pub fn randomPing(rng: std.rand.Random, keypair: *const KeyPair) !Protocol {
     const ping = Protocol{
-        .PingMessage = try Ping.init(ping_buf, keypair),
+        .PingMessage = try Ping.random(rng, keypair),
     };
+    return ping;
+}
 
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var msg_slice = try bincode.writeToSlice(&packet_buf, ping, bincode.Params{});
-    var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
+pub fn randomPingPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+    const ping = try randomPing(rng, keypair);
+    const packet = try serializeToPacket(ping, to_addr);
     return packet;
 }
 
-pub fn random_pong(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
-    var ping_buf: [32]u8 = undefined;
-    rng.bytes(&ping_buf);
-    const ping = try Ping.init(ping_buf, keypair);
-
+pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !Protocol {
     const pong = Protocol{
-        .PongMessage = try Pong.init(&ping, keypair),
+        .PongMessage = try Pong.random(rng, keypair),
     };
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var msg_slice = try bincode.writeToSlice(&packet_buf, pong, bincode.Params{});
-    var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
+    return pong;
+}
+
+pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+    const pong = try randomPong(rng, keypair);
+    const packet = try serializeToPacket(pong, to_addr);
     return packet;
 }
 
-pub fn random_crds_value(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !CrdsValue {
+pub fn randomCrdsValue(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !CrdsValue {
     var keypair = try KeyPair.create(null);
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
 
@@ -89,78 +98,54 @@ pub fn random_crds_value(rng: std.rand.Random, maybe_should_pass_sig_verificatio
 
     const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
     if (should_pass_sig_verification) {
-        value.data.set_id(pubkey);
+        value.data.setId(pubkey);
         try value.sign(&keypair);
     }
 
     return value;
 }
 
-pub fn random_push_message(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var crds_values: [size]CrdsValue = undefined;
     var should_pass_sig_verification = rng.boolean();
     for (0..size) |i| {
-        var value = try random_crds_value(rng, should_pass_sig_verification);
+        var value = try randomCrdsValue(rng, should_pass_sig_verification);
         crds_values[i] = value;
     }
 
-    // serialize and send as packet
-    var size_for_packet = @as(usize, size);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    while (size_for_packet > 0) {
-        var msg = Protocol{ .PushMessage = .{ pubkey, crds_values[0..size_for_packet] } };
-        var msg_slice = bincode.writeToSlice(&packet_buf, msg, bincode.Params{}) catch |err| {
-            if (err == error.OutOfMemory) {
-                // TODO: optimize
-                size_for_packet -= 1;
-                continue;
-            } else {
-                return err;
-            }
-        };
-
-        var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
-        return packet;
-    }
-
-    return error.FailedToBuildRandomPushPacket;
+    const allocator = std.heap.page_allocator;
+    const packets = try crds_values_to_packets(
+        allocator,
+        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &crds_values,
+        &to_addr,
+        ChunkType.PushMessage,
+    );
+    return packets;
 }
 
-pub fn random_pull_response(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
     var crds_values: [size]CrdsValue = undefined;
     var should_pass_sig_verification = rng.boolean();
     for (0..size) |i| {
-        var value = try random_crds_value(rng, should_pass_sig_verification);
+        var value = try randomCrdsValue(rng, should_pass_sig_verification);
         crds_values[i] = value;
     }
 
-    // serialize and send as packet
-    var size_for_packet = @as(usize, size);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    while (size_for_packet > 0) {
-        var msg = Protocol{ .PullResponse = .{ pubkey, crds_values[0..size_for_packet] } };
-        var msg_slice = bincode.writeToSlice(&packet_buf, msg, bincode.Params{}) catch |err| {
-            if (err == error.OutOfMemory) {
-                // TODO: optimize
-                size_for_packet -= 1;
-                continue;
-            } else {
-                return err;
-            }
-        };
-
-        var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
-        return packet;
-    }
-
-    return error.FailedToBuildRandomPullResponsePacket;
+    const allocator = std.heap.page_allocator;
+    const packets = try crds_values_to_packets(
+        allocator,
+        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &crds_values,
+        &to_addr,
+        ChunkType.PullResponse,
+    );
+    return packets;
 }
 
-pub fn random_pull_request(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
     const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
@@ -184,7 +169,7 @@ pub fn random_pull_request(allocator: std.mem.Allocator, rng: std.rand.Random, k
 
         // add more random hashes
         for (0..5) |_| {
-            var value = try random_crds_value(rng, true);
+            var value = try randomCrdsValue(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
@@ -192,16 +177,16 @@ pub fn random_pull_request(allocator: std.mem.Allocator, rng: std.rand.Random, k
         }
     } else {
         // add some valid hashes
-        var filter_set = try pull_request.CrdsFilterSet.init_test(allocator, filter.mask_bits);
+        var filter_set = try pull_request.CrdsFilterSet.initTest(allocator, filter.mask_bits);
         for (0..5) |_| {
-            var value = try random_crds_value(rng, true);
+            var value = try randomCrdsValue(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
             filter_set.add(&value_hash);
         }
 
-        var filters = try filter_set.consume_for_crds_filters(allocator, 1);
+        var filters = try filter_set.consumeForCrdsFilters(allocator, 1);
         filter.filter = filters.items[0].filter;
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
@@ -217,7 +202,7 @@ pub fn random_pull_request(allocator: std.mem.Allocator, rng: std.rand.Random, k
     return packet;
 }
 
-pub fn wait_for_exit(exit: *AtomicBool) void {
+pub fn waitForExit(exit: *AtomicBool) void {
     const reader = std.io.getStdOut().reader();
     var buf: [1]u8 = undefined;
     _ = reader.read(&buf) catch unreachable;
@@ -234,8 +219,8 @@ pub fn main() !void {
     logger.spawn();
 
     // setup the gossip service
-    var gossip_port: u16 = 8001;
-    var gossip_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, gossip_port);
+    var gossip_port: u16 = 9997;
+    var gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, gossip_port);
 
     var my_keypair = try KeyPair.create(null);
     var exit = AtomicBool.init(false);
@@ -266,7 +251,7 @@ pub fn main() !void {
 
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
-    var fuzz_address = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 9998);
+    var fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
 
     var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
     var fuzz_contact_info = LegacyContactInfo.default(fuzz_pubkey);
@@ -296,38 +281,50 @@ pub fn main() !void {
 
     // wait for keyboard input to exit
     var loop_exit = AtomicBool.init(false);
-    var exit_handle = try std.Thread.spawn(.{}, wait_for_exit, .{&loop_exit});
+    var exit_handle = try std.Thread.spawn(.{}, waitForExit, .{&loop_exit});
 
     while (!loop_exit.load(std.atomic.Ordering.Unordered)) {
         var command = rng.random().intRangeAtMost(u8, 0, 4);
         var packet = switch (command) {
             0 => blk: {
                 // send ping message
-                const packet = random_ping(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packet = randomPingPacket(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
                 break :blk packet;
             },
             1 => blk: {
                 // send pong message
-                const packet = random_pong(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packet = randomPongPacket(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
                 break :blk packet;
             },
             2 => blk: {
                 // send push message
-                const packet = random_push_message(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packets = randomPushMessage(rng.random(), &fuzz_keypair, gossip_address.toEndpoint()) catch |err| {
+                    std.debug.print("ERROR: {s}\n", .{@errorName(err)});
+                    continue;
+                };
+                defer packets.deinit();
+
+                const packet = packets.items[0];
                 break :blk packet;
             },
             3 => blk: {
                 // send pull response
-                const packet = random_pull_response(rng.random(), &fuzz_keypair, gossip_address.to_endpoint());
+                const packets = randomPullResponse(rng.random(), &fuzz_keypair, gossip_address.toEndpoint()) catch |err| {
+                    std.debug.print("ERROR: {s}\n", .{@errorName(err)});
+                    continue;
+                };
+                defer packets.deinit();
+
+                const packet = packets.items[0];
                 break :blk packet;
             },
             4 => blk: {
                 // send pull request
-                var packet = random_pull_request(
+                var packet = randomPullRequest(
                     allocator,
                     rng.random(),
                     &fuzz_keypair,
-                    gossip_address.to_endpoint(),
+                    gossip_address.toEndpoint(),
                 );
                 break :blk packet;
             },
