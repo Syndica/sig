@@ -1,5 +1,5 @@
 const std = @import("std");
-const Entry = @import("./entry.zig").Entry;
+const Entry = @import("./entry.zig").StandardEntry;
 
 pub fn formatter(e: *const Entry, writer: anytype) !void {
     // format time as ISO8601

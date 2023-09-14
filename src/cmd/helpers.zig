@@ -10,7 +10,7 @@ const ArrayList = std.ArrayList;
 const IDENTITY_KEYPAIR_DIR = "/.sig";
 const IDENTITY_KEYPAIR_PATH = "/identity.key";
 
-pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: *Logger) !Keypair {
+pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: Logger) !Keypair {
     const home_dir = try std.process.getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home_dir);
     var path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR, IDENTITY_KEYPAIR_PATH });

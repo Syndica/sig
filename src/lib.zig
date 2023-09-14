@@ -12,13 +12,14 @@ pub const core = struct {
     pub usingnamespace @import("core/hash.zig");
     pub usingnamespace @import("core/signature.zig");
     pub usingnamespace @import("core/slot.zig");
+    pub usingnamespace @import("core/hard_forks.zig");
+    pub usingnamespace @import("core/shred.zig");
 };
 
 pub const gossip = struct {
     pub usingnamespace @import("gossip/crds.zig");
     pub usingnamespace @import("gossip/crds_table.zig");
     pub usingnamespace @import("gossip/gossip_service.zig");
-    pub usingnamespace @import("gossip/net.zig");
     pub usingnamespace @import("gossip/node.zig");
     pub usingnamespace @import("gossip/packet.zig");
     pub usingnamespace @import("gossip/protocol.zig");
@@ -66,4 +67,9 @@ pub const bincode = struct {
 
 pub const cmd = struct {
     pub usingnamespace @import("cmd/helpers.zig");
+};
+
+pub const net = struct {
+    pub usingnamespace @import("net/net.zig");
+    pub usingnamespace @import("net/echo.zig");
 };

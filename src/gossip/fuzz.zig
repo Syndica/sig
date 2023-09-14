@@ -15,7 +15,7 @@ const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
 
-const SocketAddr = @import("net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const get_wallclock_ms = @import("crds.zig").getWallclockMs;
@@ -238,13 +238,14 @@ pub fn main() !void {
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, logger },
+        .{&gossip_service},
     );
     std.debug.print("gossip service started on port {d}\n", .{gossip_port});
 
@@ -264,11 +265,12 @@ pub fn main() !void {
         fuzz_keypair,
         null,
         &fuzz_exit,
+        logger,
     );
     var fuzz_handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service_fuzzer, logger },
+        .{&gossip_service_fuzzer},
     );
 
     // blast it
