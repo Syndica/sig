@@ -2049,6 +2049,7 @@ pub const BenchmarkMessageProcessing = struct {
             keypair,
             null,
             &exit,
+            .noop,
         );
         defer gossip_service.deinit();
 

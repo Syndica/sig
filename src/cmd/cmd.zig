@@ -58,7 +58,7 @@ var app = &cli.App{
 
 // prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, .debug, null);
+    var logger = Logger.init(gpa_allocator, .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -71,7 +71,7 @@ fn identity(_: []const []const u8) !void {
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(gpa_allocator);
-    var logger = Logger.init(arena.allocator(), .debug, null);
+    var logger = Logger.init(arena.allocator(), .debug);
     defer logger.deinit();
     logger.spawn();
 
