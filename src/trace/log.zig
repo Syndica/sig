@@ -246,7 +246,7 @@ pub const StdErrSink = struct {
 };
 
 test "trace.logger: works" {
-    var logger = Logger.init(testing.allocator, .info, null);
+    var logger = Logger.init(testing.allocator, .info);
     logger.spawn();
     defer logger.deinit();
 
@@ -270,15 +270,6 @@ test "trace.logger: works" {
         .field("tmp2", s)
         .info("new push message");
 
-    std.time.sleep(std.time.ns_per_ms * 100);
-
-    std.debug.print("--- \n", .{});
-    var sink = DoNothingSink{};
-    var logger_null = Logger.init(testing.allocator, .info, sink.sink());
-    logger_null.spawn();
-    defer logger_null.deinit();
-
-    logger_null.field("elapsed", 4245).debug("request with id succeeded");
     std.time.sleep(std.time.ns_per_ms * 100);
 }
 

@@ -255,7 +255,7 @@ pub fn handleRequest(
         var addr: std.net.Ip4Address = resp.address.in;
 
         // convert a u32 to Ipv4
-        var socket_addr = SocketAddr.init_ipv4(.{
+        var socket_addr = SocketAddr.initIpv4(.{
             @as(u8, @intCast(addr.sa.addr >> 24 & 0xFF)),
             @as(u8, @intCast(addr.sa.addr >> 16 & 0xFF)),
             @as(u8, @intCast(addr.sa.addr >> 8 & 0xFF)),

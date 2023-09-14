@@ -221,7 +221,7 @@ pub const GossipService = struct {
     ///     and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self) !void {
         var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        defer self.join_and_exit(&ip_echo_server_listener_handle);
+        defer self.joinAndExit(&ip_echo_server_listener_handle);
 
         var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             &self.gossip_socket,
@@ -231,20 +231,13 @@ pub const GossipService = struct {
         });
         defer self.joinAndExit(&receiver_handle);
 
-        var packet_verifier_handle = try Thread.spawn(.{}, Self.verifyPackets, .{
-            self
-        });
+        var packet_verifier_handle = try Thread.spawn(.{}, Self.verifyPackets, .{self});
         defer self.joinAndExit(&packet_verifier_handle);
 
-        var packet_handle = try Thread.spawn(.{}, Self.processMessages, .{
-            self
-        });
+        var packet_handle = try Thread.spawn(.{}, Self.processMessages, .{self});
         defer self.joinAndExit(&packet_handle);
 
-        var build_messages_handle = try Thread.spawn(.{}, Self.buildMessages, .{
-            self,
-            self.logger,
-        });
+        var build_messages_handle = try Thread.spawn(.{}, Self.buildMessages, .{self});
         defer self.joinAndExit(&build_messages_handle);
 
         // outputer thread
@@ -252,7 +245,7 @@ pub const GossipService = struct {
             &self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
-            logger,
+            self.logger,
         });
         defer self.joinAndExit(&responder_handle);
     }
@@ -515,8 +508,6 @@ pub const GossipService = struct {
     /// gossip data (in the crds_table, active_set, and failed_pull_hashes).
     fn buildMessages(
         self: *Self,
-        /// logger used for debugging
-        logger: Logger,
     ) !void {
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
@@ -532,7 +523,7 @@ pub const GossipService = struct {
                 var pull_packets = self.buildPullRequests(
                     pull_request.MAX_BLOOM_SIZE,
                 ) catch |e| {
-                    logger.debugf("failed to generate pull requests: {any}", .{e});
+                    self.logger.debugf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
                 defer pull_packets.deinit();
@@ -548,7 +539,7 @@ pub const GossipService = struct {
             // new push msgs
             self.drainPushQueueToCrdsTable(get_wallclock_ms());
             var maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
-                logger.debugf("failed to generate push messages: {any}\n", .{e});
+                self.logger.debugf("failed to generate push messages: {any}\n", .{e});
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
@@ -590,7 +581,7 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        logger.infof("build_messages loop closed\n", .{});
+        self.logger.infof("build_messages loop closed\n", .{});
     }
 
     pub fn rotateActiveSet(
@@ -1807,7 +1798,7 @@ test "gossip.gossip_service: test packet verification" {
     var packet_channel = gossip_service.packet_incoming_channel;
     var verified_channel = gossip_service.verified_incoming_channel;
 
-    var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{ &gossip_service });
+    var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verifyPackets, .{&gossip_service});
 
     var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
     var data = crds.CrdsData.randomFromIndex(rng.random(), 0);
@@ -1942,7 +1933,6 @@ test "gossip.gossip_service: process contact_info push packet" {
         GossipService.processMessages,
         .{
             &gossip_service,
-            logger,
         },
     );
 
@@ -2062,13 +2052,12 @@ pub const BenchmarkMessageProcessing = struct {
         );
         defer gossip_service.deinit();
 
-        var sink = DoNothingSink{};
-        var logger = Logger.init(allocator, .debug, sink.sink());
+        var logger = Logger.init(allocator, .debug);
         defer logger.deinit();
         logger.spawn();
 
         var packet_handle = try Thread.spawn(.{}, GossipService.processMessages, .{
-            &gossip_service, logger,
+            &gossip_service,
         });
 
         var rand = std.rand.DefaultPrng.init(19);

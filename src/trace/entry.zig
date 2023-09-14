@@ -211,7 +211,7 @@ const A = enum(u8) {
 };
 
 test "trace.entry: should info log correctly" {
-    var logger = Logger.init(testing.allocator, Level.info, null);
+    var logger = Logger.init(testing.allocator, Level.info);
     defer logger.deinit();
     var entry = StandardEntry.init(testing.allocator, logger.standard.channel);
     defer entry.deinit();
