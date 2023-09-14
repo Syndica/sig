@@ -394,7 +394,7 @@ pub const CrdsTable = struct {
 
     pub fn getContactInfos(self: *const Self, buf: []CrdsVersionedValue) []CrdsVersionedValue {
         const store_values = self.store.values();
-        const contact_indexs = self.contact_infos.keys();
+        const contact_indexs = self.contact_infos.iterator().keys;
         const size = @min(self.contact_infos.count(), buf.len);
 
         for (0..size) |i| {

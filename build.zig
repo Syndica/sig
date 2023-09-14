@@ -139,7 +139,7 @@ pub fn build(b: *std.Build) void {
     fuzz_exe.addModule("getty", getty_mod);
     b.installArtifact(fuzz_exe);
     const fuzz_cmd = b.addRunArtifact(fuzz_exe);
-    b.step("fuzz", "fuzz gossip").dependOn(&fuzz_cmd.step);
+    b.step("fuzz_gossip", "fuzz gossip").dependOn(&fuzz_cmd.step);
 
     // benchmarking
     const benchmark_exe = b.addExecutable(.{
@@ -160,5 +160,6 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         benchmark_cmd.addArgs(args);
     }
+
     b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
 }
