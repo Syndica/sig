@@ -126,11 +126,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var logger = Logger.init(allocator, .debug);
-        defer logger.deinit();
-        logger.spawn();
-
-        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, logger });
+        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, .noop });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
