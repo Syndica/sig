@@ -302,6 +302,7 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing `Protocol` messages.
     pub fn processMessages(self: *Self) !void {
+        var timer = std.time.Timer.start() catch unreachable;
         var msg_count: usize = 0;
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
@@ -309,6 +310,9 @@ pub const GossipService = struct {
                 // sleep for 1ms
                 std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
+            }
+            if (msg_count == 0) {
+                timer.reset();
             }
 
             const protocol_messages = maybe_protocol_messages.?;
@@ -495,8 +499,10 @@ pub const GossipService = struct {
                     };
                 }
 
-                msg_count += 1;
+                msg_count += protocol_messages.len;
                 self.messages_processed.store(msg_count, std.atomic.Ordering.Unordered);
+                const elapsed = timer.read();
+                std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             }
         }
 
@@ -903,7 +909,7 @@ pub const GossipService = struct {
             return null;
         }
 
-        const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 100; // TODO: tune
+        const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 20; // TODO: this is approx the rust one -- should tune
         var crds_table_lock = self.crds_table_rw.read();
         const crds_values = blk: {
             defer crds_table_lock.unlock();
