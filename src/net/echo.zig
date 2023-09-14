@@ -52,7 +52,7 @@ const IpEchoServerResponse = struct {
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
-    logger: *Logger,
+    logger: Logger,
     server: http.Server,
     port: u16,
     conns: *Channel(*Response),
@@ -65,7 +65,7 @@ pub const Server = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         port: u16,
-        logger: *Logger,
+        logger: Logger,
     ) Self {
         return Self{
             .allocator = allocator,
@@ -89,7 +89,7 @@ pub const Server = struct {
     ) void {
         self.logger.debug("closing server");
         self.conns.close();
-        // // trigger acceptor loop to get new conn
+        // trigger acceptor loop to get new conn
         const conn = std.net.tcpConnectToAddress(
             std.net.Address.parseIp4("127.0.0.1", self.port) catch unreachable,
         ) catch return;
@@ -209,7 +209,7 @@ pub const Server = struct {
 
 pub fn returnBadRequest(
     resp: *http.Server.Response,
-    logger: *Logger,
+    logger: Logger,
 ) !void {
     resp.status = .bad_request;
     try resp.headers.append("content-type", "application/json");
@@ -222,7 +222,7 @@ pub fn returnBadRequest(
 
 pub fn returnNotFound(
     resp: *http.Server.Response,
-    logger: *Logger,
+    logger: Logger,
 ) !void {
     _ = logger;
     resp.status = .not_found;
@@ -233,7 +233,7 @@ pub fn returnNotFound(
 
 pub fn handleRequest(
     alloc: std.mem.Allocator,
-    logger: *Logger,
+    logger: Logger,
     resp: *http.Server.Response,
 ) !void {
     logger.debug("starting handling request");
