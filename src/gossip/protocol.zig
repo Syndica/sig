@@ -2,7 +2,7 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Signature = @import("../core/signature.zig").Signature;
 const bincode = @import("../bincode/bincode.zig");
-const SocketAddr = @import("net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const crds = @import("crds.zig");
 const CrdsValue = crds.CrdsValue;

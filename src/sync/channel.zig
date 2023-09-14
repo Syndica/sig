@@ -111,6 +111,10 @@ pub fn Channel(comptime T: type) type {
             self.closed.store(true, .SeqCst);
             self.hasValue.broadcast();
         }
+
+        pub fn isClosed(self: *Self) bool {
+            return self.closed.load(.SeqCst);
+        }
     };
 }
 

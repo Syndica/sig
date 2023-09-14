@@ -9,8 +9,8 @@ const var_int_config_u16 = var_int.var_int_config_u16;
 const var_int_config_u64 = var_int.var_int_config_u64;
 
 const ShortVecArrayListConfig = @import("../utils/shortvec.zig").ShortVecArrayListConfig;
-const SocketAddr = @import("net.zig").SocketAddr;
-const IpAddr = @import("net.zig").IpAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
+const IpAddr = @import("../net/net.zig").IpAddr;
 const gossip = @import("sig").gossip;
 const ArrayList = std.ArrayList;
 const testing = std.testing;

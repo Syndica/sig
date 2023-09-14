@@ -3,6 +3,7 @@ const entry = @import("entry.zig");
 const Level = @import("level.zig").Level;
 const logfmt = @import("logfmt.zig");
 const Entry = entry.Entry;
+const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
 const Mutex = std.Thread.Mutex;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -10,13 +11,125 @@ const Channel = @import("../sync/channel.zig").Channel;
 
 const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
 
-pub const Logger = struct {
+pub const Logger = union(enum) {
+    standard: *StandardErrLogger,
+    noop,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, default_level: Level) Self {
+        return .{ .standard = StandardErrLogger.init(allocator, default_level) };
+    }
+
+    pub fn spawn(self: Self) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.spawn();
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn deinit(self: Self) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.deinit();
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn field(self: Self, name: []const u8, value: anytype) Entry {
+        switch (self) {
+            .standard => |logger| {
+                return logger.field(name, value);
+            },
+            .noop => {
+                return .noop;
+            },
+        }
+    }
+
+    pub fn infof(self: Self, comptime fmt: []const u8, args: anytype) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.infof(fmt, args);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn debugf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.debugf(fmt, args);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn warnf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.warnf(fmt, args);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn errf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.errf(fmt, args);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn info(self: Self, msg: []const u8) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.info(msg);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn debug(self: Self, msg: []const u8) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.debug(msg);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn warn(self: Self, msg: []const u8) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.warn(msg);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn err(self: Self, msg: []const u8) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.err(msg);
+            },
+            .noop => {},
+        }
+    }
+};
+
+pub const StandardErrLogger = struct {
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     default_level: Level,
     exit_sig: AtomicBool,
     handle: ?std.Thread,
-    channel: *Channel(*Entry),
+    channel: *Channel(*StandardEntry),
 
     const Self = @This();
 
@@ -29,13 +142,13 @@ pub const Logger = struct {
             .default_level = default_level,
             .exit_sig = AtomicBool.init(false),
             .handle = null,
-            .channel = Channel(*Entry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
+            .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
         };
         return self;
     }
 
     pub fn spawn(self: *Self) void {
-        self.handle = std.Thread.spawn(.{}, Logger.run, .{self}) catch @panic("could not spawn Logger");
+        self.handle = std.Thread.spawn(.{}, StandardErrLogger.run, .{self}) catch @panic("could not spawn Logger");
     }
 
     pub fn deinit(self: *Self) void {
@@ -70,47 +183,56 @@ pub const Logger = struct {
         }
     }
 
-    pub fn field(self: *Self, name: []const u8, value: anytype) *Entry {
-        return Entry.init(self.arena.allocator(), self.channel).field(name, value);
+    pub fn field(self: *Self, name: []const u8, value: anytype) Entry {
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        return e.field(name, value);
     }
 
-    pub fn info(self: *Self, comptime msg: []const u8) void {
-        Entry.init(self.arena.allocator(), self.channel).infof(msg, .{});
+    pub fn info(self: *Self, msg: []const u8) void {
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.info(msg);
     }
 
-    pub fn debug(self: *Self, comptime msg: []const u8) void {
-        Entry.init(self.arena.allocator(), self.channel).debugf(msg, .{});
+    pub fn debug(self: *Self, msg: []const u8) void {
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.debug(msg);
     }
 
-    pub fn warn(self: *Self, comptime msg: []const u8) void {
-        Entry.init(self.arena.allocator(), self.channel).warn(msg, .{});
+    pub fn warn(self: *Self, msg: []const u8) void {
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.warn(msg);
     }
 
-    pub fn err(self: *Self, comptime msg: []const u8) void {
-        Entry.init(self.arena.allocator(), self.channel).err(msg, .{});
+    pub fn err(self: *Self, msg: []const u8) void {
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.err(msg);
     }
 
     pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.arena.allocator(), self.channel).infof(fmt, args);
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.infof(fmt, args);
     }
 
     pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.arena.allocator(), self.channel).debugf(fmt, args);
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.debugf(fmt, args);
     }
 
     pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.arena.allocator(), self.channel).warnf(fmt, args);
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.warnf(fmt, args);
     }
 
     pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        Entry.init(self.arena.allocator(), self.channel).errf(fmt, args);
+        var e = Entry.init(self.arena.allocator(), self.channel);
+        e.errf(fmt, args);
     }
 };
 
 const BasicStdErrSink = struct {
     const Self = @This();
 
-    pub fn consumeEntries(_: Self, entries: []*Entry) void {
+    pub fn consumeEntries(_: Self, entries: []*StandardEntry) void {
         var std_err_writer = std.io.getStdErr().writer();
         var std_err_mux = std.debug.getStderrMutex();
         std_err_mux.lock();
@@ -121,7 +243,7 @@ const BasicStdErrSink = struct {
         }
     }
 
-    pub fn consumeEntry(_: Self, e: *Entry) void {
+    pub fn consumeEntry(_: Self, e: *StandardEntry) void {
         var std_err_writer = std.io.getStdErr().writer();
         var std_err_mux = std.debug.getStderrMutex();
         std_err_mux.lock();
@@ -157,4 +279,16 @@ test "trace.logger: works" {
         .info("new push message");
 
     std.time.sleep(std.time.ns_per_ms * 100);
+}
+
+test "trace.logger: Logger is noop when configured as such" {
+    var logger: Logger = .noop;
+    defer logger.deinit();
+    logger.spawn();
+
+    logger.info("should not log");
+    logger.field("key", "value").info("not logging");
+    logger.err("should not log also");
+
+    std.time.sleep(std.time.ms_per_s * 1);
 }

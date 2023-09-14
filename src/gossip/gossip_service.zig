@@ -8,7 +8,7 @@ const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
-const SocketAddr = @import("net.zig").SocketAddr;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 const _protocol = @import("protocol.zig");
 const Protocol = _protocol.Protocol;
 const PruneData = _protocol.PruneData;
@@ -52,6 +52,7 @@ const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
+const echo = @import("../net/echo.zig");
 
 const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 const CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -73,6 +74,8 @@ const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 6
 /// serialized size of the PruneMessage stays below PACKET_DATA_SIZE.
 const MAX_PRUNE_DATA_NODES: usize = 32;
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
+
+const Config = struct { mode: enum { normal, tests, bench } = .normal };
 
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
@@ -99,6 +102,8 @@ pub const GossipService = struct {
 
     entrypoints: std.ArrayList(SocketAddr),
     ping_cache_rw: RwMux(PingCache),
+    echo_server: echo.Server,
+    logger: Logger,
 
     const Self = @This();
 
@@ -108,6 +113,7 @@ pub const GossipService = struct {
         my_keypair: KeyPair,
         entrypoints: ?std.ArrayList(SocketAddr),
         exit: *AtomicBool,
+        logger: Logger,
     ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_incoming_channel = PacketChannel.init(allocator, 10000);
         var packet_outgoing_channel = PacketChannel.init(allocator, 10000);
@@ -134,6 +140,7 @@ pub const GossipService = struct {
 
         var failed_pull_hashes = HashTimeQueue.init(allocator);
         var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
+        var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger);
 
         return Self{
             .my_contact_info = my_contact_info,
@@ -159,6 +166,8 @@ pub const GossipService = struct {
                     GOSSIP_PING_CACHE_CAPACITY,
                 ),
             ),
+            .echo_server = echo_server,
+            .logger = logger,
         };
     }
 
@@ -176,6 +185,8 @@ pub const GossipService = struct {
 
     pub fn deinit(self: *Self) void {
         // TODO: join and exit threads
+        self.echo_server.deinit();
+        self.gossip_socket.close();
         self.packet_incoming_channel.deinit();
         self.packet_outgoing_channel.deinit();
         self.verified_incoming_channel.deinit();
@@ -203,7 +214,10 @@ pub const GossipService = struct {
     ///     3) packet processor
     ///     4) build message loop (to send outgoing message)
     ///     and 5) a socket responder (to send outgoing packets)
-    pub fn run(self: *Self, logger: *Logger) !void {
+    pub fn run(self: *Self) !void {
+        var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
+        defer self.join_and_exit(&ip_echo_server_listener_handle);
+
         var receiver_handle = try Thread.spawn(.{}, socket_utils.read_socket, .{
             &self.gossip_socket,
             self.packet_incoming_channel,
@@ -212,18 +226,18 @@ pub const GossipService = struct {
         defer self.join_and_exit(&receiver_handle);
 
         var packet_verifier_handle = try Thread.spawn(.{}, Self.verify_packets, .{
-            self, logger,
+            self, self.logger,
         });
         defer self.join_and_exit(&packet_verifier_handle);
 
         var packet_handle = try Thread.spawn(.{}, Self.process_messages, .{
-            self, logger,
+            self, self.logger,
         });
         defer self.join_and_exit(&packet_handle);
 
         var build_messages_handle = try Thread.spawn(.{}, Self.build_messages, .{
             self,
-            logger,
+            self.logger,
         });
         defer self.join_and_exit(&build_messages_handle);
 
@@ -239,7 +253,7 @@ pub const GossipService = struct {
     /// main logic for deserializing Packets into Protocol messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified Protocol messages are then sent to the verified_channel.
-    fn verify_packets(self: *Self, logger: *Logger) !void {
+    fn verify_packets(self: *Self, logger: Logger) !void {
         var failed_protocol_msgs: usize = 0;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
@@ -293,7 +307,7 @@ pub const GossipService = struct {
     }
 
     /// main logic for recieving and processing `Protocol` messages.
-    pub fn process_messages(self: *Self, logger: *Logger) !void {
+    pub fn process_messages(self: *Self, logger: Logger) !void {
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
             if (maybe_protocol_messages == null) {
@@ -361,7 +375,7 @@ pub const GossipService = struct {
                             continue;
                         };
 
-                        pull_log_entry.info("received pull response");
+                        // pull_log_entry.info("received pull response");
                     },
                     .PullRequest => |*pull| {
                         var pull_filter: CrdsFilter = pull[0];
@@ -497,7 +511,7 @@ pub const GossipService = struct {
     fn build_messages(
         self: *Self,
         /// logger used for debugging
-        logger: *Logger,
+        logger: Logger,
     ) !void {
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
@@ -848,7 +862,7 @@ pub const GossipService = struct {
         /// the endpoint of the peer sending the pull request (/who to send the pull response to)
         pull_from_endpoint: EndPoint,
         // logging
-        maybe_log_entry: ?*Entry,
+        maybe_log_entry: ?Entry,
     ) error{ SerializationError, OutOfMemory, ChannelClosed }!?std.ArrayList(Packet) {
         const now = get_wallclock_ms();
 
@@ -936,7 +950,7 @@ pub const GossipService = struct {
         /// the array of values to insert into the crds table
         crds_values: []CrdsValue,
         // logging info
-        maybe_pull_log_entry: ?*Entry,
+        maybe_pull_log_entry: ?Entry,
     ) error{OutOfMemory}!void {
         // TODO: benchmark and compare with labs' preprocessing
         const now = get_wallclock_ms();
@@ -1365,12 +1379,17 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -1428,12 +1447,17 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -1476,12 +1500,17 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -1555,12 +1584,17 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -1572,10 +1606,6 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         try values.append(value);
     }
-
-    var logger = Logger.init(std.testing.allocator, .debug);
-    defer logger.deinit();
-    logger.spawn();
 
     // insert contact info to send prunes to
     var send_contact_info = crds.LegacyContactInfo.random(rng.random());
@@ -1627,18 +1657,19 @@ test "gossip.gossip_service: test build_pull_requests" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
-
-    var logger = Logger.init(std.testing.allocator, .debug);
-    defer logger.deinit();
-    logger.spawn();
 
     // insert peers to send msgs to
     var keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -1670,12 +1701,17 @@ test "gossip.gossip_service: test build_push_messages" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
@@ -1736,15 +1772,23 @@ test "gossip.gossip_service: test packet verification" {
     var contact_info = crds.LegacyContactInfo.default(id);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
-    var gossip_service = try GossipService.init(allocator, contact_info, keypair, null, &exit);
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
+    var gossip_service = try GossipService.init(
+        allocator,
+        contact_info,
+        keypair,
+        null,
+        &exit,
+        logger,
+    );
+
     defer gossip_service.deinit();
 
     var packet_channel = gossip_service.packet_incoming_channel;
     var verified_channel = gossip_service.verified_incoming_channel;
-
-    var logger = Logger.init(std.testing.allocator, .debug);
-    defer logger.deinit();
-    logger.spawn();
 
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verify_packets, .{ &gossip_service, logger });
 
@@ -1856,21 +1900,22 @@ test "gossip.gossip_service: process contact_info push packet" {
     var contact_info = crds.LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.init_ipv4(.{ 127, 0, 0, 1 }, 0);
 
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
     defer gossip_service.deinit();
 
     var verified_channel = gossip_service.verified_incoming_channel;
     var responder_channel = gossip_service.packet_outgoing_channel;
-
-    var logger = Logger.init(allocator, .debug);
-    defer logger.deinit();
-    logger.spawn();
 
     var kp = try KeyPair.create(null);
     var pk = Pubkey.fromPublicKey(&kp.public_key, false);
@@ -1941,24 +1986,26 @@ test "gossip.gossip_service: init, exit, and deinit" {
     var contact_info = crds.LegacyContactInfo.random(rng.random());
     contact_info.gossip = gossip_address;
     var exit = AtomicBool.init(false);
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
     var gossip_service = try GossipService.init(
         std.testing.allocator,
         contact_info,
         my_keypair,
         null,
         &exit,
+        logger,
     );
-
-    var logger = Logger.init(std.testing.allocator, .debug);
-    defer logger.deinit();
-    logger.spawn();
 
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, logger },
+        .{&gossip_service},
     );
 
+    gossip_service.echo_server.kill();
     exit.store(true, std.atomic.Ordering.Unordered);
     handle.join();
     gossip_service.deinit();
