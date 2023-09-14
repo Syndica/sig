@@ -125,7 +125,6 @@ pub const Logger = union(enum) {
 
 pub const StandardErrLogger = struct {
     allocator: std.mem.Allocator,
-    arena: std.heap.ArenaAllocator,
     default_level: Level,
     exit_sig: AtomicBool,
     handle: ?std.Thread,
@@ -135,10 +134,8 @@ pub const StandardErrLogger = struct {
 
     pub fn init(allocator: std.mem.Allocator, default_level: Level) *Self {
         var self = allocator.create(Self) catch @panic("could not allocator.create Logger");
-        var arena = std.heap.ArenaAllocator.init(allocator);
         self.* = .{
             .allocator = allocator,
-            .arena = arena,
             .default_level = default_level,
             .exit_sig = AtomicBool.init(false),
             .handle = null,
@@ -158,7 +155,6 @@ pub const StandardErrLogger = struct {
             handle.join();
         }
         self.channel.deinit();
-        self.arena.deinit();
         self.allocator.destroy(self);
     }
 
@@ -184,47 +180,47 @@ pub const StandardErrLogger = struct {
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) Entry {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         return e.field(name, value);
     }
 
     pub fn info(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.info(msg);
     }
 
     pub fn debug(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.debug(msg);
     }
 
     pub fn warn(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.warn(msg);
     }
 
     pub fn err(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.err(msg);
     }
 
     pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.infof(fmt, args);
     }
 
     pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.debugf(fmt, args);
     }
 
     pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.warnf(fmt, args);
     }
 
     pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.arena.allocator(), self.channel);
+        var e = Entry.init(self.allocator, self.channel);
         e.errf(fmt, args);
     }
 };

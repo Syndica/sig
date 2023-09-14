@@ -10,7 +10,7 @@ const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-var gpa_allocator = gpa.allocator();
+const gpa_allocator = gpa.allocator();
 const base58Encoder = base58.Encoder.init(.{});
 
 var gossip_port_option = cli.Option{
@@ -70,8 +70,7 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var arena = std.heap.ArenaAllocator.init(gpa_allocator);
-    var logger = Logger.init(arena.allocator(), .debug);
+    var logger = Logger.init(gpa_allocator, .debug);
     defer logger.deinit();
     logger.spawn();
 
@@ -121,5 +120,5 @@ fn gossip(_: []const []const u8) !void {
 }
 
 pub fn run() !void {
-    return cli.run(app, gpa.allocator());
+    return cli.run(app, gpa_allocator);
 }
