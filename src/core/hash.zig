@@ -1,6 +1,8 @@
 const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
+const bs58 = @import("base58-zig");
+
 pub const HASH_SIZE: usize = 32;
 
 pub const CompareResult = enum {
@@ -61,5 +63,11 @@ pub const Hash = struct {
         hash_data.appendSliceAssumeCapacity(val);
         const hash = generateSha256Hash(hash_data.items);
         return hash;
+    }
+
+    pub fn encode_bs58(self: *const Self, dest: []u8) !void {
+        var enc = bs58.Encoder.init(.{});
+        @memset(dest, 0);
+        _ = try enc.encode(&self.data, dest);
     }
 };

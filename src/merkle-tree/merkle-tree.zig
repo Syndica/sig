@@ -59,8 +59,8 @@ pub const Proof = struct {
 
     pub fn verify(self: *const Self, candidate: Hash) bool {
         var result: ?Hash = undefined;
-        var accumulator = candidate;
-        for (self.entries.items, 0..) |entry, index| {
+        var accumulator: Hash = candidate;
+        for (self.entries.items) |entry| {
             var lsib: Hash = undefined;
             var rsib: Hash = undefined;
             if (entry.lsib != null) {
@@ -74,15 +74,14 @@ pub const Proof = struct {
                 rsib = accumulator;
             }
             const hash = hash_intermediate(&lsib.data, &rsib.data);
-
+            result = accumulator;
             if (std.mem.eql(u8, &hash.data, &entry.target.data)) {
                 accumulator = hash;
-            }
-            if (index == self.entries.items.len - 1) {
-                result = accumulator;
+            } else {
+                result = null;
+                break;
             }
         }
-
         if (result != null) {
             return true;
         } else {
@@ -199,13 +198,14 @@ pub const MerkleTree = struct {
 
         return path;
     }
-
     pub fn deinit(self: *const Self) void {
         self.nodes.deinit();
     }
 };
 
 const TEST: []const []const u8 = &[_][]const u8{ "my", "very", "eager", "mother", "just", "served", "us", "nine", "pizzas", "make", "prime" };
+
+const BAD: []const []const u8 = &[_][]const u8{ "bad", "missing", "false" };
 
 test "merkle-tree.hash_leaf: Hash a valid leaf" {
     const leaf = "Lorem Ipsum Dolor";
@@ -233,23 +233,43 @@ test "merkle-tree.calculate_list_capacity: Create a merkle tree with capacity" {
     var mt = try MerkleTree.new(testing_allocator, test_items.items);
     defer mt.deinit();
     defer test_items.deinit();
-    var enc = bs58.Encoder.init(.{});
-    var dest: [45]u8 = undefined;
-    @memset(&dest, 0);
-    var res = try enc.encode(&mt.get_root().?.data, &dest);
-    _ = res;
+    var dest: [256]u8 = undefined;
+    const root = &mt.get_root().?;
+    try root.encode_bs58(&dest);
     std.debug.print("root: {?s}\n", .{dest});
 }
-test "merkle-tree.path_verify: Should validly verify a path" {
+test "merkle-tree.path_verify: good path" {
     const testing_allocator = std.testing.allocator;
-    const mt = try MerkleTree.new(testing_allocator, TEST);
+    var mt = try MerkleTree.new(testing_allocator, TEST);
     defer mt.deinit();
-    const k = TEST[0..1];
-    //    print("items: {s}\n", .{k});
-    for (k, 0..) |s, index| {
+    for (TEST[0..], 0..) |s, index| {
         const hash = hash_leaf(s);
         const path = try mt.find_path(testing_allocator, index);
         defer path.?.deinit();
         try expect(path.?.verify(hash));
     }
+}
+
+test "merkle-tree.path_verify: bad path" {
+    const testing_allocator = std.testing.allocator;
+    var mt = try MerkleTree.new(testing_allocator, TEST);
+    defer mt.deinit();
+    for (BAD[0..], 0..) |s, index| {
+        const hash = hash_leaf(s);
+        const path = try mt.find_path(testing_allocator, index);
+        defer path.?.deinit();
+        const result = path.?.verify(hash);
+        try expect(!result);
+    }
+}
+test "merkle-tree.test_from_many" {
+    var dest: [32]u8 = undefined;
+    @memset(&dest, 0);
+    _ = try std.fmt.hexToBytes(&dest, "b40c847546fdceea166f927fc46c5ca33c3638236a36275c1346d3dffb84e1bc");
+
+    const testing_allocator = std.testing.allocator;
+    var mt = try MerkleTree.new(testing_allocator, TEST);
+    defer mt.deinit();
+    print("decoded {any}\nroot: {any}", .{ dest, mt.get_root().?.data });
+    try expect(std.mem.eql(u8, &mt.get_root().?.data, &dest));
 }
