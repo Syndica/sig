@@ -273,3 +273,22 @@ test "merkle-tree.test_from_many" {
     print("decoded {any}\nroot: {any}", .{ dest, mt.get_root().?.data });
     try expect(std.mem.eql(u8, &mt.get_root().?.data, &dest));
 }
+
+fn iteration_count(leaf_count: *usize) usize {
+    var capacity: usize = 0;
+    while (leaf_count.* > 0) {
+        capacity += leaf_count.*;
+        leaf_count.* = MerkleTree.next_level_len(leaf_count.*);
+    }
+    return capacity;
+}
+
+test "merkle-tree.test_max_compute_capacity" {
+    // test max 64k leaf nodes compute
+    for (0..65536) |leaf_count| {
+        var count = leaf_count;
+        const math_count = MerkleTree.calculate_list_capacity(count);
+        const iter_count = iteration_count(&count);
+        try expect(math_count >= iter_count);
+    }
+}
