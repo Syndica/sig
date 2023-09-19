@@ -71,6 +71,9 @@ pub fn filterCrdsValues(
 }
 
 test "gossip.pull: test filter_crds_values batch" {
+    const N_FILTERS = 100;
+    const N_VALUES_IN_TABLE = 10_000;
+
     var crds_table = try CrdsTable.init(std.testing.allocator);
     var crds_table_rw = RwMux(CrdsTable).init(crds_table);
     defer {
@@ -84,7 +87,7 @@ test "gossip.pull: test filter_crds_values batch" {
     // insert a some values
     const keypair = try KeyPair.create([_]u8{1} ** 32);
     var lg = crds_table_rw.write();
-    for (0..100) |_| {
+    for (0..N_VALUES_IN_TABLE) |_| {
         var crds_value = try crds.CrdsValue.random(rng, &keypair);
         try lg.mut().insert(crds_value, 0);
     }
@@ -92,15 +95,155 @@ test "gossip.pull: test filter_crds_values batch" {
 
     const fuzz = @import("fuzz.zig");
     const SocketAddr = @import("../net/net.zig").SocketAddr;
+    const bincode = @import("../bincode/bincode.zig");
+    const Protocol = @import("protocol.zig").Protocol;
 
     // create a pull request 
-    const allocator = std.testing.allocator;
+    // const allocator = std.testing.allocator;
+    const allocator = std.heap.c_allocator;
     const to_addr = SocketAddr.random(rng).toEndpoint();
 
-    const packet = try fuzz.randomPullRequest(allocator, rng, &keypair, to_addr);
-    _ = packet;
-    // var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+    var filters = try std.ArrayList(CrdsFilter).initCapacity(allocator, N_FILTERS);
+    defer {
+        for (filters.items) |*filter| {
+            filter.deinit(); 
+        }
+        filters.deinit();
+    }
+    for (0..N_FILTERS) |_| {
+        const packet = try fuzz.randomPullRequest(allocator, rng, &keypair, to_addr);
+        var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+        var filter: CrdsFilter = msg.PullRequest[0];
+        filters.appendAssumeCapacity(filter);
+    }
 
+    // process them sequentially 
+    var resp_values = std.ArrayList(CrdsValue).init(allocator);
+    defer resp_values.deinit();
+    var read_lg = crds_table_rw.read();
+    var crds_table_read: *const CrdsTable = read_lg.get();
+
+    var seq_timer = try std.time.Timer.start();
+    for (filters.items) |*filter| {
+        const resp = try filterCrdsValues(
+            allocator, 
+            crds_table_read, 
+            filter, 
+            crds.getWallclockMs(),
+            100
+        );
+        defer resp.deinit();
+
+        try resp_values.appendSlice(resp.items);
+    }
+    read_lg.unlock();
+    std.debug.assert(resp_values.items.len > 0);
+    const seq_elapsed = seq_timer.read();
+    std.debug.print("SEQ: elapsed = {}\n", .{seq_elapsed});
+
+    // process them in parallel
+    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+    const Task = ThreadPool.Task;
+
+    var pool = ThreadPool.init(.{
+        .max_threads = @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 2),
+        .stack_size = 2 * 1024 * 1024,
+    });
+
+    const PullRequestContext = struct { 
+        filter: *const CrdsFilter,
+        crds_table: *const CrdsTable,
+        output: ArrayList(CrdsValue), 
+        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+    };
+    
+    const PullRequestTask = struct { 
+        task: Task,
+        context: *PullRequestContext, 
+        allocator: std.mem.Allocator, 
+
+        pub fn callback(task: *Task) void {
+            var self = @fieldParentPtr(@This(), "task", task);
+            const response_crds_values = filterCrdsValues(
+                self.allocator, 
+                self.context.crds_table, 
+                self.context.filter, 
+                crds.getWallclockMs(),
+                100,
+            ) catch { 
+                // std.debug.print("filterCrdsValues failed\n", .{});
+                return;
+            }; 
+            self.context.output.appendSlice(response_crds_values.items) catch {
+                // std.debug.print("append slice failed\n", .{});
+                return;
+            };
+            // std.debug.print("success: len = {}\n", .{ response_crds_values.items.len });
+            self.context.done.store(true, std.atomic.Ordering.Release);
+        }
+    };
+
+    // read lock crds table
+    read_lg = crds_table_rw.read();
+    crds_table_read = read_lg.get();
+    var batch: ThreadPool.Batch = undefined;
+    var parallel_timer = try std.time.Timer.start();
+
+    var tasks = try std.ArrayList(*PullRequestTask).initCapacity(allocator, filters.items.len);
+    for (filters.items, 0..) |*filter_i, i| { 
+        var output = ArrayList(CrdsValue).init(allocator);
+        var context = PullRequestContext {
+            .filter = filter_i,
+            .crds_table = crds_table_read,
+            .output = output,
+        };
+        var context_heap = try allocator.create(PullRequestContext);
+        context_heap.* = context;
+
+        var pull_task = PullRequestTask { 
+            .task = .{ .callback = PullRequestTask.callback },
+            .context = context_heap, 
+            .allocator = allocator,
+        };
+
+        // alloc on heap 
+        var pull_task_heap = try allocator.create(PullRequestTask);
+        pull_task_heap.* = pull_task;
+        tasks.appendAssumeCapacity(pull_task_heap);
+
+        if (i == 0) { 
+            batch = ThreadPool.Batch.from(&pull_task_heap.task);
+        } else { 
+            var tmp_batch = ThreadPool.Batch.from(&pull_task_heap.task);
+            batch.push(tmp_batch);
+        }
+    }
+    // schedule the threadpool
+    ThreadPool.schedule(&pool, batch);
+
+    for (tasks.items) |task| { 
+        while (!task.context.done.load(std.atomic.Ordering.Acquire)) {
+            // wait
+        }
+    }
+    // unlock crds table
+    read_lg.unlock();
+    const parallel_elapsed = parallel_timer.read();
+    std.debug.print("PARALLEL: elapsed: {}\n", .{parallel_elapsed});
+
+    var total_len: usize = 0;
+    for (tasks.items) |task| { 
+        total_len += task.context.output.items.len;
+    }
+    try std.testing.expect(total_len == resp_values.items.len);
+
+   const time_diff: i128 = @as(i128, @intCast(parallel_elapsed)) - @as(i128, @intCast(seq_elapsed)); 
+   std.debug.print("TIME DIFF: {}(ns)\n", .{time_diff});
+   if (time_diff > 0) { 
+       std.debug.print("sequential fast\n", .{});
+   } else { 
+       std.debug.print("parallel fast\n", .{});
+   }
 }
 
 test "gossip.pull: test filter_crds_values" {
