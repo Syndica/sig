@@ -17,7 +17,7 @@ pub fn readSocket(
     while (!exit.load(std.atomic.Ordering.Unordered)) {
         const recv_meta = socket.receiveFrom(&read_buf) catch |err| {
             if (err == error.WouldBlock) {
-                std.time.sleep(std.time.ns_per_ms * 1);
+                // std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             } else {
                 logger.debugf("read_socket error: {s}\n", .{@errorName(err)});
@@ -51,7 +51,7 @@ pub fn sendSocket(
         const maybe_packets = try outgoing_channel.try_drain();
         if (maybe_packets == null) {
             // sleep for 1ms
-            std.time.sleep(std.time.ns_per_ms * 1);
+            // std.time.sleep(std.time.ns_per_ms * 1);
             continue;
         }
         const packets = maybe_packets.?;
