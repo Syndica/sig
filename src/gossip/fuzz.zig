@@ -157,10 +157,8 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     defer bloom.deinit();
 
     var crds_value = try CrdsValue.initSigned(crds.CrdsData{
-        .LegacyContactInfo = LegacyContactInfo.random(rng),
+        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
     }, keypair);
-    crds_value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false));
-    try crds_value.sign(keypair);
 
     var filter = CrdsFilter{
         .filter = bloom,
@@ -262,9 +260,9 @@ pub fn main() !void {
     std.debug.print("using seed: {d}\n", .{seed});
     var rng = std.rand.DefaultPrng.init(seed);
 
-    var logger = Logger.init(gpa.allocator(), .debug);
-    defer logger.deinit();
-    logger.spawn();
+    // var logger = Logger.init(gpa.allocator(), .debug);
+    // defer logger.deinit();
+    // logger.spawn();
 
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
@@ -282,11 +280,11 @@ pub fn main() !void {
         fuzz_keypair,
         entrypoints,
         &fuzz_exit,
-        logger,
+        .noop,
     );
 
     var fuzz_handle = try std.Thread.spawn(
-        .{}, GossipService.run, .{ &gossip_service_fuzzer });
+        .{}, GossipService.runSpy, .{ &gossip_service_fuzzer });
 
     // std.debug.print("setting up", .{}); 
     // while (true) { 

@@ -189,7 +189,6 @@ pub const GossipService = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // TODO: join and exit threads
         self.echo_server.deinit();
         self.gossip_socket.close();
         self.packet_incoming_channel.deinit();
@@ -239,6 +238,34 @@ pub const GossipService = struct {
 
         var build_messages_handle = try Thread.spawn(.{}, Self.buildMessages, .{self});
         defer self.joinAndExit(&build_messages_handle);
+
+        // outputer thread
+        var responder_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
+            &self.gossip_socket,
+            self.packet_outgoing_channel,
+            self.exit,
+            self.logger,
+        });
+        defer self.joinAndExit(&responder_handle);
+    }
+
+    pub fn runSpy(self: *Self) !void {
+        var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
+        defer self.joinAndExit(&ip_echo_server_listener_handle);
+
+        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
+            &self.gossip_socket,
+            self.packet_incoming_channel,
+            self.exit,
+            self.logger,
+        });
+        defer self.joinAndExit(&receiver_handle);
+
+        var packet_verifier_handle = try Thread.spawn(.{}, Self.verifyPackets, .{self});
+        defer self.joinAndExit(&packet_verifier_handle);
+
+        var packet_handle = try Thread.spawn(.{}, Self.processMessages, .{self});
+        defer self.joinAndExit(&packet_handle);
 
         // outputer thread
         var responder_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
@@ -482,28 +509,33 @@ pub const GossipService = struct {
                             const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
                             _ = ping_cache.receviedPong(pong, SocketAddr.fromEndpoint(from_endpoint), now);
                         }
+
                         self.logger
                             .field("from_endpoint", endpoint_buf.items)
                             .field("from_pubkey", &pong.from.string())
                             .info("received pong message");
                     },
                 }
-
-                {
-                    var crds_table_lock = self.crds_table_rw.write();
-                    defer crds_table_lock.unlock();
-
-                    var crds_table: *CrdsTable = crds_table_lock.mut();
-                    crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
-                        self.logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
-                    };
-                }
-
-                msg_count += protocol_messages.len;
-                self.messages_processed.store(msg_count, std.atomic.Ordering.Unordered);
-                const elapsed = timer.read();
-                std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             }
+
+            {
+                // var table_timer = std.time.Timer.start() catch unreachable;
+                // defer { 
+                //     const elapsed = table_timer.read();
+                //     std.debug.print("crds table trim took {}ns\n", .{elapsed});
+                // }
+                var crds_table_lock = self.crds_table_rw.write();
+                defer crds_table_lock.unlock();
+
+                var crds_table: *CrdsTable = crds_table_lock.mut();
+                crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                    self.logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
+                };
+            }
+
+            // const elapsed = timer.read();
+            // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
+            self.messages_processed.store(msg_count, std.atomic.Ordering.Unordered);
         }
 
         self.logger.debugf("process_messages loop closed\n", .{});
@@ -873,7 +905,7 @@ pub const GossipService = struct {
         {
             var crds_table_lock = self.crds_table_rw.write();
             defer crds_table_lock.unlock();
-            var crds_table = crds_table_lock.mut();
+            var crds_table: *CrdsTable = crds_table_lock.mut();
 
             crds_table.insert(pull_value, now) catch {};
             crds_table.updateRecordTimestamp(pull_value.id(), now);
@@ -2035,6 +2067,20 @@ pub const BenchmarkMessageProcessing = struct {
         "10_msg_iters", "100_msg_iters",
     };
 
+    const Sender = struct {
+        const Self = @This();
+
+        gs: *GossipService,
+        to_endpoint: EndPoint,
+
+        pub fn send(self: *Self, msg: Protocol) void {
+            self.gs.verified_incoming_channel.send(ProtocolMessage{
+                .message = msg,
+                .from_endpoint = self.to_endpoint,
+            }) catch @panic("ahhhh");
+        }
+    };
+
     pub fn benchmarkGossipService(num_message_iterations: usize) !void {
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
@@ -2045,6 +2091,11 @@ pub const BenchmarkMessageProcessing = struct {
         contact_info.shred_version = 19;
         contact_info.gossip = address;
 
+        // var logger = Logger.init(allocator, .debug);
+        // defer logger.deinit();
+        // logger.spawn();
+        var logger: Logger = .noop;
+
         var exit = AtomicBool.init(false);
         var gossip_service = try GossipService.init(
             allocator,
@@ -2052,13 +2103,9 @@ pub const BenchmarkMessageProcessing = struct {
             keypair,
             null,
             &exit,
-            .noop,
+            logger,
         );
         defer gossip_service.deinit();
-
-        var logger = Logger.init(allocator, .debug);
-        defer logger.deinit();
-        logger.spawn();
 
         var packet_handle = try Thread.spawn(.{}, GossipService.processMessages, .{
             &gossip_service,
@@ -2066,28 +2113,15 @@ pub const BenchmarkMessageProcessing = struct {
 
         var rand = std.rand.DefaultPrng.init(19);
         var rng = rand.random();
-
-        const Sender = struct {
-            const Self = @This();
-
-            gs: *GossipService,
-            to_endpoint: EndPoint,
-
-            pub fn send(self: *Self, msg: Protocol) void {
-                self.gs.verified_incoming_channel.send(ProtocolMessage{
-                    .message = msg,
-                    .from_endpoint = self.to_endpoint,
-                }) catch @panic("ahhhh");
-            }
-        };
         var sender = Sender{
             .gs = &gossip_service,
             .to_endpoint = address.toEndpoint(),
         };
+        var sender_keypair = try KeyPair.create(null);
 
-        // send a ping message
         var msg_sent: usize = 0;
         for (0..num_message_iterations) |_| {
+            // send a ping message
             {
                 var msg = try fuzz.randomPing(rng, &keypair);
                 sender.send(msg);
@@ -2110,7 +2144,7 @@ pub const BenchmarkMessageProcessing = struct {
                     msg_sent += 1;
                 }
             }
-            // send a pull message
+            // send a pull response
             {
                 var packets = try fuzz.randomPullResponse(rng, &keypair, address.toEndpoint());
                 defer packets.deinit();
@@ -2120,6 +2154,86 @@ pub const BenchmarkMessageProcessing = struct {
                     sender.send(msg);
                     msg_sent += 1;
                 }
+            }
+            // send a pull request
+            {
+                var packet = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
+                var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                sender.send(msg);
+                msg_sent += 1;
+            }
+        }
+
+        while (true) {
+            const v = gossip_service.messages_processed.load(std.atomic.Ordering.Unordered);
+            if (v == msg_sent) {
+                break;
+            }
+        }
+
+        exit.store(true, std.atomic.Ordering.Unordered);
+        packet_handle.join();
+    }
+
+    pub fn benchmarkPullRequests(num_message_iterations: usize) !void {
+        const allocator = std.heap.page_allocator;
+        var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+
+        var keypair = try KeyPair.create(null);
+        var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+        var contact_info = crds.LegacyContactInfo.default(pubkey);
+        contact_info.shred_version = 19;
+        contact_info.gossip = address;
+
+        // var logger = Logger.init(allocator, .debug);
+        // defer logger.deinit();
+        // logger.spawn();
+        var logger: Logger = .noop;
+
+        var exit = AtomicBool.init(false);
+        var gossip_service = try GossipService.init(
+            allocator,
+            contact_info,
+            keypair,
+            null,
+            &exit,
+            logger,
+        );
+        defer gossip_service.deinit();
+
+        var packet_handle = try Thread.spawn(.{}, GossipService.processMessages, .{
+            &gossip_service,
+        });
+
+        var rand = std.rand.DefaultPrng.init(19);
+        var rng = rand.random();
+
+        var sender_keypair = try KeyPair.create(null);
+
+        var sender = Sender{
+            .gs = &gossip_service,
+            .to_endpoint = address.toEndpoint(),
+        };
+
+        var msg_sent: usize = 0;
+        for (0..num_message_iterations) |_| {
+            // send a push message
+            {
+                var packets = try fuzz.randomPushMessage(rng, &sender_keypair, address.toEndpoint());
+                defer packets.deinit();
+
+                for (packets.items) |packet| {
+                    var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                    sender.send(msg);
+                    msg_sent += 1;
+                }
+            }
+            // send a pull request
+            {
+                var packet = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
+                var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+                sender.send(msg);
+                msg_sent += 1;
             }
         }
 
