@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const Packet = @import("packet.zig").Packet;
@@ -67,7 +68,7 @@ pub const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_
 // 4 (enum) + 32 (pubkey) + 8 (len) = 44
 pub const MAX_PUSH_MESSAGE_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
-pub const GOSSIP_SLEEP_MILLIS: u64 = 1 * std.time.ms_per_s;
+pub const GOSSIP_SLEEP_MILLIS: u64 = 100;
 pub const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
 pub const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
 pub const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
@@ -286,8 +287,8 @@ pub const GossipService = struct {
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_packets = try self.packet_incoming_channel.try_drain();
             if (maybe_packets == null) {
-                // sleep for 1ms
-                std.time.sleep(std.time.ns_per_ms * 1);
+                // // sleep for 1ms
+                // std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             }
 
@@ -334,8 +335,8 @@ pub const GossipService = struct {
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
             if (maybe_protocol_messages == null) {
-                // sleep for 1ms
-                std.time.sleep(std.time.ns_per_ms * 1);
+                // // sleep for 1ms
+                // std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             }
             if (msg_count == 0) {
@@ -344,6 +345,7 @@ pub const GossipService = struct {
 
             const protocol_messages = maybe_protocol_messages.?;
             defer self.verified_incoming_channel.allocator.free(protocol_messages);
+            msg_count += protocol_messages.len;
 
             for (protocol_messages) |protocol_message| {
                 var message: Protocol = protocol_message.message;
@@ -351,6 +353,12 @@ pub const GossipService = struct {
 
                 switch (message) {
                     .PushMessage => |*push| {
+                        // var x_timer = std.time.Timer.start() catch unreachable;
+                        // defer { 
+                        //     const elapsed = x_timer.read();
+                        //     std.debug.print("push_message took {}ns\n", .{elapsed});
+                        // }
+
                         const push_from: Pubkey = push[0];
                         const push_values: []CrdsValue = push[1];
 
@@ -385,6 +393,12 @@ pub const GossipService = struct {
                         push_log_entry.info("received push message");
                     },
                     .PullResponse => |*pull| {
+                        // var x_timer = std.time.Timer.start() catch unreachable;
+                        // defer { 
+                        //     const elapsed = x_timer.read();
+                        //     std.debug.print("pull_response took {}ns\n", .{elapsed});
+                        // }
+
                         const from: Pubkey = pull[0];
                         const crds_values: []CrdsValue = pull[1];
 
@@ -404,6 +418,12 @@ pub const GossipService = struct {
                         // pull_log_entry.info("received pull response");
                     },
                     .PullRequest => |*pull| {
+                        // var x_timer = std.time.Timer.start() catch unreachable;
+                        // defer { 
+                        //     const elapsed = x_timer.read();
+                        //     std.debug.print("pull_request took {}ns\n", .{elapsed});
+                        // }
+
                         var pull_filter: CrdsFilter = pull[0];
                         var pull_value: CrdsValue = pull[1]; // contact info
 
@@ -436,6 +456,7 @@ pub const GossipService = struct {
                                 .err("error handling pull request");
                             continue;
                         };
+
                         if (maybe_packets == null) {
                             pull_log_entry.field("num_packets_resp", 0)
                                 .info("received pull request");
@@ -903,6 +924,12 @@ pub const GossipService = struct {
         const now = get_wallclock_ms();
 
         {
+            var x_timer = std.time.Timer.start() catch unreachable;
+            defer { 
+                const elapsed = x_timer.read();
+                std.debug.print("pull_request crds_table_insert took {}ns\n", .{elapsed});
+            }
+
             var crds_table_lock = self.crds_table_rw.write();
             defer crds_table_lock.unlock();
             var crds_table: *CrdsTable = crds_table_lock.mut();
@@ -942,9 +969,16 @@ pub const GossipService = struct {
         }
 
         const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 20; // TODO: this is approx the rust one -- should tune
-        var crds_table_lock = self.crds_table_rw.read();
         const crds_values = blk: {
+            var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
+
+            var x_timer = std.time.Timer.start() catch unreachable;
+            defer { 
+                const elapsed = x_timer.read();
+                std.debug.print("pull_request filterCrdsValues took {}ns\n", .{elapsed});
+            }
+
             break :blk try pull_response.filterCrdsValues(
                 self.allocator,
                 crds_table_lock.get(),

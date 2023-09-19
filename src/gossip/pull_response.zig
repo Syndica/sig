@@ -36,13 +36,13 @@ pub fn filterCrdsValues(
     const jitter = rng.intRangeAtMost(u64, 0, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
-    var output = ArrayList(CrdsValue).init(alloc);
-    errdefer output.deinit();
-
     var bloom = filter.filter;
 
     var match_indexs = try crds_table.getBitmaskMatches(alloc, filter.mask, filter.mask_bits);
     defer match_indexs.deinit();
+
+    var output = try ArrayList(CrdsValue).initCapacity(alloc, match_indexs.items.len);
+    errdefer output.deinit();
 
     for (match_indexs.items) |entry_index| {
         var entry = crds_table.store.iterator().values[entry_index];
@@ -68,6 +68,39 @@ pub fn filterCrdsValues(
     }
 
     return output;
+}
+
+test "gossip.pull: test filter_crds_values batch" {
+    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    defer {
+        var lg = crds_table_rw.write();
+        lg.mut().deinit();
+    }
+    var seed: u64 = 18;
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    // insert a some values
+    const keypair = try KeyPair.create([_]u8{1} ** 32);
+    var lg = crds_table_rw.write();
+    for (0..100) |_| {
+        var crds_value = try crds.CrdsValue.random(rng, &keypair);
+        try lg.mut().insert(crds_value, 0);
+    }
+    lg.unlock();
+
+    const fuzz = @import("fuzz.zig");
+    const SocketAddr = @import("../net/net.zig").SocketAddr;
+
+    // create a pull request 
+    const allocator = std.testing.allocator;
+    const to_addr = SocketAddr.random(rng).toEndpoint();
+
+    const packet = try fuzz.randomPullRequest(allocator, rng, &keypair, to_addr);
+    _ = packet;
+    // var msg = try bincode.readFromSlice(allocator, Protocol, packet.data[0..packet.size], bincode.Params{});
+
 }
 
 test "gossip.pull: test filter_crds_values" {

@@ -183,6 +183,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     } else {
         // add some valid hashes
         var filter_set = try pull_request.CrdsFilterSet.initTest(allocator, filter.mask_bits);
+
         for (0..5) |_| {
             var value = try randomCrdsValue(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -196,6 +197,9 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
 
+        for (filters.items[1..]) |*filter_i| { 
+            filter_i.filter.deinit();
+        }
         filters.deinit();
     }
 
@@ -204,6 +208,11 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
+
+    if (!invalid_filter) { 
+        filter.filter.deinit();
+    }
+
     return packet;
 }
 
@@ -316,9 +325,9 @@ pub fn main() !void {
             }
         }
 
-        // var command = rng.random().intRangeAtMost(u8, 0, 4);
+        var command = rng.random().intRangeAtMost(u8, 0, 4);
         // var command: usize = if (msg_count % 2 == 0) 2 else 4;
-        var command: usize = 3;
+        // var command: usize = 4;
 
         var packet = switch (command) {
             0 => blk: {
@@ -380,6 +389,10 @@ pub fn main() !void {
 
         msg_count +|= 1;
         std.time.sleep(SLEEP_TIME);
+
+        if (msg_count % 1000 == 0) {
+            std.debug.print("{d} messages sent\n", .{msg_count});
+        }
     }
 
     // cleanup
