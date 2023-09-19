@@ -16,8 +16,8 @@ pub const SocketAddr = union(enum(u8)) {
         },
     };
 
-    pub fn parse(bytes: []const u8, ip_port: u16) !Self {
-        return parseIpv4(bytes) catch parse_v6(bytes, ip_port);
+    pub fn parse(bytes: []const u8) !Self {
+        return parseIpv4(bytes) catch parse_v6(bytes);
     }
 
     pub fn parseIpv4(bytes: []const u8) !Self {
@@ -72,7 +72,11 @@ pub const SocketAddr = union(enum(u8)) {
             .port = addr_port,
         } };
     }
-    pub fn parse_v6(buf: []const u8, ip_port: u16) !Self {
+    pub fn parse_v6(buf: []const u8) !Self {
+        if (buf[0] != '[') {
+            return error.Incomplete;
+        }
+        var ip_port: u16 = 0;
         var result = Self{
             .V6 = SocketAddrV6{
                 .scope_id = 0,
@@ -81,16 +85,27 @@ pub const SocketAddr = union(enum(u8)) {
                 .ip = Ipv6Addr{ .octets = undefined },
             },
         };
+        var new_buf = buf[1..];
+        var ip_sep_index: usize = 0;
+        while (ip_sep_index < buf.len) : (ip_sep_index += 1) {
+            if (buf[ip_sep_index] == ']') {
+                new_buf = buf[1..ip_sep_index];
+                ip_port = try std.fmt.parseInt(u16, buf[ip_sep_index + 2 ..], 10);
+                result.V6.port = ip_port;
+                break;
+            } else if (ip_sep_index == buf.len - 1) {
+                return error.Incomplete;
+            }
+        }
         var ip_slice: *[16]u8 = result.V6.ip.octets[0..];
 
         var tail: [16]u8 = undefined;
-
         var x: u16 = 0;
         var saw_any_digits = false;
         var index: u8 = 0;
         var scope_id = false;
         var abbrv = false;
-        for (buf, 0..) |c, i| {
+        for (new_buf, 0..) |c, i| {
             if (scope_id) {
                 if (c >= '0' and c <= '9') {
                     const digit = c - '0';
@@ -453,25 +468,40 @@ test "gossip.net: valid ipv4 socket parsing" {
 }
 
 test "gossip.ipv6 valid ipv6 socket parsing" {
-    var address = "2607:f8b0:4005:810::200e";
-    var port: u16 = 0;
-    var ipv6_addr = try SocketAddr.parse(address, port);
+    var address = "[2001:db8:85a3:8d3:1319:8a2e:370:7348]:443";
+    var ipv6_addr = try SocketAddr.parse(address);
 
     var alloc = std.testing.allocator;
 
     var expected_addr = try ipv6_addr.V6.ip.to_hex(alloc);
     defer alloc.free(expected_addr);
 
-    std.debug.print("ipv6 parse_v6: {!s}\n", .{expected_addr});
-    try std.testing.expect(std.mem.eql(u8, expected_addr, "2607f8b0:40050810:00000000:0000200e"));
+    std.debug.print("ipv6 parse_v6: {!s}\nport: {d}", .{ expected_addr, ipv6_addr.port() });
+    try std.testing.expect(std.mem.eql(u8, expected_addr, "20010db8:85a308d3:13198a2e:03707348"));
+    try std.testing.expectEqual(ipv6_addr.V6.port, 443);
 }
 
 test "gossip.ipv6 invalid ipv6 socket parsing" {
-    var address = "fe80:2030:31:24";
-    var port: u16 = 0;
-    var ipv6_addr = SocketAddr.parse(address, port);
+    {
+        var address = "[fe80:2030:31:24]:8080";
 
-    try std.testing.expectError(error.Incomplete, ipv6_addr);
+        var ipv6_addr = SocketAddr.parse(address);
+
+        try std.testing.expectError(error.Incomplete, ipv6_addr);
+    }
+    {
+        var address = "fe80:2030:31:24]:8080";
+
+        var ipv6_addr = SocketAddr.parse(address);
+
+        try std.testing.expectError(error.Incomplete, ipv6_addr);
+    }
+    {
+        var address = "[fe80:2030:31:24:8080";
+        var ipv6_addr = SocketAddr.parse(address);
+
+        try std.testing.expectError(error.Incomplete, ipv6_addr);
+    }
 }
 
 test "gossip.net: test random" {
