@@ -174,7 +174,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn fromEndpoint(endpoint: network.EndPoint) Self {
+    pub fn fromEndpoint(endpoint: *const network.EndPoint) Self {
         switch (endpoint.address) {
             .ipv4 => |v4| {
                 return Self{

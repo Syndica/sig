@@ -41,7 +41,13 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "gossip", filter)) {
         try benchmark(
-            @import("gossip/gossip_service.zig").BenchmarkMessageProcessing,
+            @import("gossip/gossip_service.zig").BenchmarkGossipServiceGeneral,
+            max_time_per_bench,
+            TimeUnits.milliseconds,
+        );
+
+        try benchmark(
+            @import("gossip/gossip_service.zig").BenchmarkGossipServicePullRequest,
             max_time_per_bench,
             TimeUnits.milliseconds,
         );
@@ -156,7 +162,7 @@ pub fn benchmark(
 
     var timer = try time.Timer.start();
     inline for (functions, 0..) |def, fcni| {
-        if (fcni > 0) 
+        if (fcni > 0)
             std.debug.print("---\n", .{});
 
         inline for (args, 0..) |arg, index| {

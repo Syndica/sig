@@ -19,7 +19,7 @@ const AtomicBool = std.atomic.Atomic(bool);
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("crds.zig").getWallclockMs;
+const getWallclockMs = @import("crds.zig").getWallclockMs;
 
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
@@ -126,7 +126,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
         &to_addr,
         ChunkType.PushMessage,
     );
-    return packets;
+    return packets.?;
 }
 
 pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
@@ -146,7 +146,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
         &to_addr,
         ChunkType.PullResponse,
     );
-    return packets;
+    return packets.?;
 }
 
 pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
@@ -197,7 +197,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
 
-        for (filters.items[1..]) |*filter_i| { 
+        for (filters.items[1..]) |*filter_i| {
             filter_i.filter.deinit();
         }
         filters.deinit();
@@ -209,7 +209,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
 
-    if (!invalid_filter) { 
+    if (!invalid_filter) {
         filter.filter.deinit();
     }
 
@@ -254,7 +254,7 @@ pub fn main() !void {
         if (maybe_seed) |seed_str| {
             break :blk try std.fmt.parseInt(u64, seed_str, 10);
         } else {
-            break :blk get_wallclock_ms();
+            break :blk getWallclockMs();
         }
     };
 
@@ -292,17 +292,16 @@ pub fn main() !void {
         .noop,
     );
 
-    var fuzz_handle = try std.Thread.spawn(
-        .{}, GossipService.runSpy, .{ &gossip_service_fuzzer });
+    var fuzz_handle = try std.Thread.spawn(.{}, GossipService.runSpy, .{&gossip_service_fuzzer});
 
-    // std.debug.print("setting up", .{}); 
-    // while (true) { 
+    // std.debug.print("setting up", .{});
+    // while (true) {
     //     var lg = gossip_service_fuzzer.crds_table_rw.read();
     //     var table: *const CrdsTable = lg.get();
     //     var n_contacts = table.contact_infos.iterator().len;
     //     lg.unlock();
 
-    //     if (n_contacts > 0) { 
+    //     if (n_contacts > 0) {
     //         break;
     //     }
     //     std.debug.print(".", .{});

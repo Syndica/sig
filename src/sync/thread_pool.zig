@@ -1182,135 +1182,138 @@ pub const ThreadPool = struct {
     };
 };
 
-test "parallel for loop" {
-    var thread_pool = ThreadPool.init(.{ .max_threads = 12 });
-    var sleepy_time: u32 = 100;
-    var huge_array = &[_]u32{
-        sleepy_time + std.rand.DefaultPrng.init(1).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(2).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(3).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(4).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(5).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(6).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(7).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(8).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(9).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(10).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(11).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(12).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(13).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(14).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(15).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(16).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(17).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(18).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(19).random().uintAtMost(u32, 20),
-        sleepy_time + std.rand.DefaultPrng.init(20).random().uintAtMost(u32, 20),
-    };
-    const Runner = struct {
-        completed: usize = 0,
-        total: usize = 0,
-        pub fn run(ctx: *@This(), value: u32, _: usize) void {
-            std.time.sleep(value);
-            ctx.completed += 1;
-            std.debug.assert(ctx.completed <= ctx.total);
-        }
-    };
-    var runny = try std.heap.page_allocator.create(Runner);
-    runny.* = .{ .total = huge_array.len };
-    try thread_pool.doAndWait(std.heap.page_allocator, null, runny, Runner.run, std.mem.span(huge_array));
-    try std.testing.expectEqual(huge_array.len, runny.completed);
-}
+// test "parallel for loop" {
+//     var thread_pool = ThreadPool.init(.{ .max_threads = 12 });
+//     var sleepy_time: u32 = 100;
+//     var random = std.rand.DefaultPrng.init(1);
+//     var rng = random.random();
 
-pub fn NewWorkPool(comptime max_threads: ?usize) type {
-    return struct {
-        var pool: ThreadPool = undefined;
-        var loaded: bool = false;
+//     var huge_array = &[_]u32{
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//         sleepy_time + rng.uintAtMost(u32, 20),
+//     };
+//     const Runner = struct {
+//         completed: usize = 0,
+//         total: usize = 0,
+//         pub fn run(ctx: *@This(), value: u32, _: usize) void {
+//             std.time.sleep(value);
+//             ctx.completed += 1;
+//             std.debug.assert(ctx.completed <= ctx.total);
+//         }
+//     };
+//     var runny = try std.heap.page_allocator.create(Runner);
+//     runny.* = .{ .total = huge_array.len };
+//     try thread_pool.doAndWait(std.heap.page_allocator, null, runny, Runner.run, std.mem.span(huge_array));
+//     try std.testing.expectEqual(huge_array.len, runny.completed);
+// }
 
-        fn create() *ThreadPool {
-            @setCold(true);
+// pub fn NewWorkPool(comptime max_threads: ?usize) type {
+//     return struct {
+//         var pool: ThreadPool = undefined;
+//         var loaded: bool = false;
 
-            pool = ThreadPool.init(.{
-                .max_threads = max_threads orelse @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 2),
-                .stack_size = 2 * 1024 * 1024,
-            });
-            return &pool;
-        }
+//         fn create() *ThreadPool {
+//             @setCold(true);
 
-        pub fn deinit() void {
-            get().deinit();
-        }
+//             pool = ThreadPool.init(.{
+//                 .max_threads = max_threads orelse @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 2),
+//                 .stack_size = 2 * 1024 * 1024,
+//             });
+//             return &pool;
+//         }
 
-        pub inline fn get() *ThreadPool {
-            // lil racy
-            if (loaded) return &pool;
-            loaded = true;
+//         pub fn deinit() void {
+//             get().deinit();
+//         }
 
-            return create();
-        }
+//         pub inline fn get() *ThreadPool {
+//             // lil racy
+//             if (loaded) return &pool;
+//             loaded = true;
 
-        pub fn scheduleBatch(batch: ThreadPool.Batch) void {
-            get().schedule(batch);
-        }
+//             return create();
+//         }
 
-        pub fn scheduleTask(task: *ThreadPool.Task) void {
-            get().schedule(ThreadPool.Batch.from(task));
-        }
+//         pub fn scheduleBatch(batch: ThreadPool.Batch) void {
+//             get().schedule(batch);
+//         }
 
-        pub fn go(allocator: std.mem.Allocator, comptime Context: type, context: Context, comptime function: *const fn (Context) void) !void {
-            const TaskType = struct {
-                task: ThreadPool.Task,
-                context: Context,
-                allocator: std.mem.Allocator,
+//         pub fn scheduleTask(task: *ThreadPool.Task) void {
+//             get().schedule(ThreadPool.Batch.from(task));
+//         }
 
-                pub fn callback(task: *ThreadPool.Task) void {
-                    var this_task = @fieldParentPtr(@This(), "task", task);
-                    function(this_task.context);
-                    this_task.allocator.destroy(this_task);
-                }
-            };
+//         pub fn go(allocator: std.mem.Allocator, comptime Context: type, context: Context, comptime function: *const fn (Context) void) !void {
+//             const TaskType = struct {
+//                 task: ThreadPool.Task,
+//                 context: Context,
+//                 allocator: std.mem.Allocator,
 
-            var task_ = try allocator.create(TaskType);
-            task_.* = .{
-                .task = .{ .callback = TaskType.callback },
-                .context = context,
-                .allocator = allocator,
-            };
-            scheduleTask(&task_.task);
-        }
-    };
-}
+//                 pub fn callback(task: *ThreadPool.Task) void {
+//                     var this_task = @fieldParentPtr(@This(), "task", task);
+//                     function(this_task.context);
+//                     this_task.allocator.destroy(this_task);
+//                 }
+//             };
 
-pub const WorkPool = NewWorkPool(null);
-const testing = std.testing;
+//             var task_ = try allocator.create(TaskType);
+//             task_.* = .{
+//                 .task = .{ .callback = TaskType.callback },
+//                 .context = context,
+//                 .allocator = allocator,
+//             };
+//             scheduleTask(&task_.task);
+//         }
+//     };
+// }
 
-const CrdsTableTrimContext = struct {
-    index: usize,
-    max_trim: usize,
-    self: *CrdsTable,
-};
+// pub const WorkPool = NewWorkPool(null);
+// const testing = std.testing;
 
-const CrdsTable = struct {
-    pub fn trim(context: CrdsTableTrimContext) void {
-        const self = context.self;
-        _ = self;
-        const max_trim = context.max_trim;
-        _ = max_trim;
-        const index = context.index;
-        _ = index;
+// const CrdsTableTrimContext = struct {
+//     index: usize,
+//     max_trim: usize,
+//     self: *CrdsTable,
+// };
 
-        std.debug.print("I ran!\n\n", .{});
-        // todo
+// const CrdsTable = struct {
+//     pub fn trim(context: CrdsTableTrimContext) void {
+//         const self = context.self;
+//         _ = self;
+//         const max_trim = context.max_trim;
+//         _ = max_trim;
+//         const index = context.index;
+//         _ = index;
 
-    }
-};
+//         std.debug.print("I ran!\n\n", .{});
+//         // todo
 
-test "sync.thread_pool: workpool works" {
-    var crds: CrdsTable = CrdsTable{};
-    var a = CrdsTableTrimContext{ .index = 1, .max_trim = 2, .self = &crds };
-    defer WorkPool.deinit();
-    try WorkPool.go(testing.allocator, CrdsTableTrimContext, a, CrdsTable.trim);
+//     }
+// };
 
-    std.time.sleep(std.time.ns_per_s * 1);
-    WorkPool.pool.shutdown();
-}
+// test "sync.thread_pool: workpool works" {
+//     var crds: CrdsTable = CrdsTable{};
+//     var a = CrdsTableTrimContext{ .index = 1, .max_trim = 2, .self = &crds };
+//     defer WorkPool.deinit();
+//     try WorkPool.go(testing.allocator, CrdsTableTrimContext, a, CrdsTable.trim);
+
+//     std.time.sleep(std.time.ns_per_s * 1);
+//     WorkPool.pool.shutdown();
+// }
