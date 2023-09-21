@@ -54,7 +54,7 @@ pub const ThreadPool = struct {
     /// TODO: add CPU core affinity?
     pub const Config = struct {
         stack_size: u32 = (std.Thread.SpawnConfig{}).stack_size,
-        max_threads: u32,
+        max_threads: u32 = 1,
     };
 
     /// Statically initialize the thread pool using the configuration.

@@ -136,7 +136,7 @@ pub const Server = struct {
     ) !void {
         self.logger.debug("accepting new connections");
         while (!self.conns.isClosed() and !self.exit.load(std.atomic.Ordering.Unordered)) {
-            // TODO: change to non-blocking socket 
+            // TODO: change to non-blocking socket
             var response = self.server.accept(.{
                 .allocator = self.allocator,
                 .header_strategy = .{ .dynamic = MAX_REQ_HEADER_SIZE },

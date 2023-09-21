@@ -71,7 +71,9 @@ pub fn filterCrdsValues(
 }
 
 test "gossip.pull: test filter_crds_values" {
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     var crds_table_rw = RwMux(CrdsTable).init(crds_table);
     defer {
         var lg = crds_table_rw.write();

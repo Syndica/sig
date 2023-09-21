@@ -138,7 +138,13 @@ pub const GossipService = struct {
             verified_incoming_channel.deinit();
         }
 
-        var crds_table = try CrdsTable.init(allocator);
+        var thread_pool = try allocator.create(ThreadPool);
+        thread_pool.* = ThreadPool.init(.{
+            .max_threads = @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 2),
+            .stack_size = 2 * 1024 * 1024,
+        });
+
+        var crds_table = try CrdsTable.init(allocator, thread_pool);
         errdefer crds_table.deinit();
         var crds_table_rw = RwMux(CrdsTable).init(crds_table);
         var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
@@ -154,12 +160,6 @@ pub const GossipService = struct {
         var failed_pull_hashes = HashTimeQueue.init(allocator);
         var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
         var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
-
-        var thread_pool = try allocator.create(ThreadPool);
-        thread_pool.* = ThreadPool.init(.{
-            .max_threads = @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 2),
-            .stack_size = 2 * 1024 * 1024,
-        });
 
         return Self{
             .my_contact_info = my_contact_info,
@@ -443,13 +443,6 @@ pub const GossipService = struct {
                         // pull_log_entry.info("received pull response");
                     },
                     .PullRequest => |*pull| {
-                        // var x_timer = std.time.Timer.start() catch unreachable;
-                        // defer {
-                        //     const elapsed = x_timer.read();
-                        //     std.debug.print("pull_request took {}ns\n", .{elapsed});
-                        // }
-
-                        // var pull_filter: CrdsFilter = pull[0];
                         var pull_value: CrdsValue = pull[1]; // contact info
                         switch (pull_value.data) {
                             .LegacyContactInfo => |*info| {
@@ -467,41 +460,6 @@ pub const GossipService = struct {
                             .value = pull[1],
                             .from_endpoint = from_endpoint,
                         });
-
-                        // var endpoint_buf = std.ArrayList(u8).init(self.allocator);
-                        // try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
-                        // defer endpoint_buf.deinit();
-
-                        // var pull_log_entry = self.logger
-                        //     .field("from_endpoint", endpoint_buf.items)
-                        //     .field("from_pubkey", &pull_value.id().string());
-
-                        // var maybe_packets = self.handlePullRequest(
-                        //     pull_value,
-                        //     pull_filter,
-                        //     from_endpoint,
-                        //     pull_log_entry,
-                        // ) catch |err| {
-                        //     pull_log_entry.field("error", @errorName(err))
-                        //         .err("error handling pull request");
-                        //     continue;
-                        // };
-
-                        // if (maybe_packets == null) {
-                        //     pull_log_entry.field("num_packets_resp", 0)
-                        //         .info("received pull request");
-                        //     continue;
-                        // }
-
-                        // var packets = maybe_packets.?;
-                        // defer packets.deinit();
-
-                        // pull_log_entry.field("num_packets_resp", packets.items.len)
-                        //     .info("received pull request");
-
-                        // for (packets.items) |packet| {
-                        //     try self.packet_outgoing_channel.send(packet);
-                        // }
                     },
                     .PruneMessage => |*prune| {
                         const prune_msg: PruneData = prune[1];
@@ -570,18 +528,28 @@ pub const GossipService = struct {
             }
 
             // handle batch messages
-            self.handleBatchPullRequest(pull_requests);
-            for (pull_requests.items) |*pr| {
-                pr.filter.deinit();
+            if (pull_requests.items.len > 0) {
+                // var pull_req_timer = std.time.Timer.start() catch unreachable;
+                // defer {
+                // std.debug.print("filter_crds_values elapsed {any} for {any} filters\n", .{
+                //     pull_req_timer.read(),
+                //     pull_requests.items.len
+                // });
+                // }
+
+                self.handleBatchPullRequest(pull_requests);
+                for (pull_requests.items) |*pr| {
+                    pr.filter.deinit();
+                }
+                pull_requests.clearRetainingCapacity();
             }
-            pull_requests.clearRetainingCapacity();
 
             {
-                // var table_timer = std.time.Timer.start() catch unreachable;
-                // defer {
-                //     const elapsed = table_timer.read();
-                //     std.debug.print("crds table trim took {}ns\n", .{elapsed});
-                // }
+                var table_timer = std.time.Timer.start() catch unreachable;
+                defer {
+                    const elapsed = table_timer.read();
+                    std.debug.print("crds table trim took {}ns\n", .{elapsed});
+                }
                 var crds_table_lock = self.crds_table_rw.write();
                 defer crds_table_lock.unlock();
 
@@ -956,12 +924,17 @@ pub const GossipService = struct {
     }
 
     const PullRequestTask = struct {
-        task: Task,
         allocator: std.mem.Allocator,
         filter: CrdsFilter,
         crds_table: *const CrdsTable,
         output: std.ArrayList(CrdsValue),
+
+        task: Task,
         done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+
+        pub fn deinit(this: *PullRequestTask) void {
+            this.output.deinit();
+        }
 
         pub fn callback(task: *Task) void {
             var this = @fieldParentPtr(@This(), "task", task);
@@ -1047,10 +1020,15 @@ pub const GossipService = struct {
         }
 
         // create the pull requests
-
         const n_valid_requests = valid_indexs.items.len;
         var tasks = try std.ArrayList(*PullRequestTask).initCapacity(self.allocator, n_valid_requests);
-        defer tasks.deinit();
+        defer {
+            for (tasks.items) |task| {
+                task.deinit();
+                self.allocator.destroy(task);
+            }
+            tasks.deinit();
+        }
 
         {
             var crds_table_lock = self.crds_table_rw.read();
@@ -1078,11 +1056,6 @@ pub const GossipService = struct {
                 ThreadPool.schedule(self.thread_pool, batch);
             }
 
-            // _ = pool;
-            // for (tasks.items) |task| {
-            //     task.task.callback(&task.task);
-            // }
-
             // wait for them to be done to release the lock
             for (tasks.items) |task| {
                 while (!task.done.load(std.atomic.Ordering.Acquire)) {
@@ -1093,11 +1066,6 @@ pub const GossipService = struct {
 
         for (tasks.items, valid_indexs.items) |task, message_i| {
             const from_endpoint = pull_requests.items[message_i].from_endpoint;
-            defer {
-                task.output.deinit();
-                self.allocator.destroy(task);
-            }
-
             const maybe_packets = try crdsValuesToPackets(
                 self.allocator,
                 &self.my_pubkey,
@@ -1120,9 +1088,9 @@ pub const GossipService = struct {
     ) !void {
         for (pull_requests.items) |*pr| {
             const maybe_resp_packets = try self.handlePullRequest(
-                pr.value.*,
-                pr.filter.*,
-                pr.from_endpoint.*,
+                pr.value,
+                pr.filter,
+                pr.from_endpoint,
                 null,
             );
             if (maybe_resp_packets) |*resp_packets| {

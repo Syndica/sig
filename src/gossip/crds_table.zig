@@ -17,6 +17,10 @@ const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
+const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+const Task = ThreadPool.Task;
+const Batch = ThreadPool.Batch;
+
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -95,10 +99,11 @@ pub const CrdsTable = struct {
     cursor: usize = 0,
 
     allocator: std.mem.Allocator,
+    thread_pool: *ThreadPool,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
+    pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool) !Self {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
@@ -111,6 +116,7 @@ pub const CrdsTable = struct {
             .shards = try CrdsShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
+            .thread_pool = thread_pool,
         };
     }
 
@@ -565,25 +571,35 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn getOldLabels(
-        self: *Self,
-        now: u64,
-        timeout: u64,
-    ) error{OutOfMemory}!std.ArrayList(CrdsValueLabel) {
-        var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
+    const GetOldLabelsTask = struct {
+        // context
+        key: Pubkey,
+        crds_table: *const CrdsTable,
+        cutoff_timestamp: u64,
+        old_labels: std.ArrayList(CrdsValueLabel),
 
-        const cutoff_timestamp = now -| timeout;
-        const n_pubkeys = self.pubkey_to_values.count();
-        for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
-            const entry = self.pubkey_to_values.getEntry(key).?;
+        // standard
+        task: Task = .{ .callback = callback },
+        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+
+        pub fn deinit(self: *GetOldLabelsTask) void {
+            self.old_labels.deinit();
+        }
+
+        pub fn callback(task: *Task) void {
+            var this = @fieldParentPtr(@This(), "task", task);
+            defer this.done.store(true, std.atomic.Ordering.Release);
+
+            // get assocaited entries
+            const entry = this.crds_table.pubkey_to_values.getEntry(this.key).?;
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
             const label = CrdsValueLabel{ .LegacyContactInfo = pubkey.* };
-            if (self.get(label)) |*contact_info| {
+            if (this.crds_table.get(label)) |*contact_info| {
                 const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
-                if (value_timestamp > cutoff_timestamp) {
-                    continue;
+                if (value_timestamp > this.cutoff_timestamp) {
+                    return;
                 }
             }
 
@@ -592,15 +608,68 @@ pub const CrdsTable = struct {
             const count = entry_indexs.count();
 
             for (entry_indexs.iterator().keys[0..count]) |entry_index| {
-                const versioned_value = self.store.values()[entry_index];
+                const versioned_value = this.crds_table.store.values()[entry_index];
                 const value_timestamp = @min(versioned_value.value.wallclock(), versioned_value.timestamp_on_insertion);
-                if (value_timestamp <= cutoff_timestamp) {
-                    try old_labels.append(versioned_value.value.label());
+                if (value_timestamp <= this.cutoff_timestamp) {
+                    this.old_labels.append(versioned_value.value.label()) catch unreachable;
                 }
             }
         }
+    };
 
-        return old_labels;
+    pub fn getOldLabels(
+        self: *Self,
+        now: u64,
+        timeout: u64,
+    ) error{OutOfMemory}!std.ArrayList(CrdsValueLabel) {
+        const cutoff_timestamp = now -| timeout;
+        const n_pubkeys = self.pubkey_to_values.count();
+
+        var tasks = try std.ArrayList(*GetOldLabelsTask).initCapacity(self.allocator, n_pubkeys);
+        defer {
+            for (tasks.items) |task| {
+                task.deinit();
+                self.allocator.destroy(task);
+            }
+            tasks.deinit();
+        }
+
+        // run this loop in parallel
+        for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
+            var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
+            var task = GetOldLabelsTask{
+                .key = key,
+                .crds_table = self,
+                .cutoff_timestamp = cutoff_timestamp,
+                .old_labels = old_labels,
+            };
+
+            // alloc on heap
+            var task_heap = try self.allocator.create(GetOldLabelsTask);
+            task_heap.* = task;
+            tasks.appendAssumeCapacity(task_heap);
+
+            // run it
+            const batch = Batch.from(&task_heap.task);
+            ThreadPool.schedule(self.thread_pool, batch);
+        }
+
+        // wait for them to be done to release the lock
+        var output_length: u64 = 0;
+        for (tasks.items) |task| {
+            while (!task.done.load(std.atomic.Ordering.Acquire)) {
+                // wait
+            }
+            output_length += task.old_labels.items.len;
+        }
+
+        // move labels to one big array
+        var output = try std.ArrayList(CrdsValueLabel).initCapacity(self.allocator, output_length);
+        for (tasks.items) |task| {
+            output.appendSliceAssumeCapacity(task.old_labels.items);
+        }
+
+        return output;
     }
 };
 
@@ -687,7 +756,8 @@ test "gossip.crds_table: remove old values" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     for (0..5) |_| {
@@ -714,7 +784,8 @@ test "gossip.crds_table: insert and remove value" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     const value = try CrdsValue.initSigned(CrdsData.randomFromIndex(rng.random(), 0), &keypair);
@@ -730,7 +801,8 @@ test "gossip.crds_table: trim pruned values" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     const N_VALUES = 10;
@@ -793,7 +865,8 @@ test "gossip.HashTimeQueue: trim pruned values" {
     };
     var value = try CrdsValue.initSigned(data, &keypair);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // timestamp = 100
@@ -825,7 +898,8 @@ test "gossip.crds_table: insert and get" {
     const rng = rand.random();
     var value = try CrdsValue.random(rng, &keypair);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     try crds_table.insert(value, 0);
@@ -846,7 +920,8 @@ test "gossip.crds_table: insert and get votes" {
         .Vote = .{ 0, vote },
     }, &kp);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
     try crds_table.insert(crds_value, 0);
 
@@ -885,7 +960,8 @@ test "gossip.crds_table: insert and get contact_info" {
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // test insertion

@@ -132,10 +132,13 @@ pub const ActiveSet = struct {
     }
 };
 
+const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+
 test "gossip.active_set: init/deinit" {
     var alloc = std.testing.allocator;
 
-    var crds_table = try CrdsTable.init(alloc);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(alloc, &tp);
     defer crds_table.deinit();
 
     // insert some contacts
