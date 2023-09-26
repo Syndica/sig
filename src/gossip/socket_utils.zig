@@ -5,6 +5,9 @@ const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
 const Logger = @import("../trace/log.zig").Logger;
 
+pub const SOCKET_TIMEOUT: usize = 1000000;
+pub const PACKETS_PER_BATCH: usize = 64;
+
 pub fn readSocket(
     socket: *UdpSocket,
     incoming_channel: *Channel(Packet),
@@ -37,6 +40,103 @@ pub fn readSocket(
         try incoming_channel.send(packet);
     }
     logger.debugf("read_socket loop closed\n", .{});
+}
+
+pub fn readSocketV2(
+    allocator: std.mem.Allocator,
+    socket: *UdpSocket,
+    incoming_channel: *Channel(std.ArrayList(Packet)),
+    exit: *const std.atomic.Atomic(bool),
+    // logger: Logger,
+) !void {
+    //Performance out of the IO without poll
+    //  * block on the socket until it's readable
+    //  * set the socket to non blocking
+    //  * read until it fails
+    //  * set it back to blocking before returning
+
+    const MAX_WAIT_NS = std.time.ns_per_ms; // 1ms
+
+    while (!exit.load(std.atomic.Ordering.Unordered)) {
+        // init a new batch
+        var count: usize = 0;
+        const capacity = PACKETS_PER_BATCH;
+        var packet_batch = try std.ArrayList(Packet).initCapacity(
+            allocator,
+            capacity,
+        );
+        for (0..capacity) |_| { 
+            packet_batch.appendAssumeCapacity(Packet.default());
+        }
+
+        // set socket to block
+        try socket.setReadTimeout(null);
+        var timer = std.time.Timer.start() catch unreachable;
+
+        // recv packets into batch
+        while (true) { 
+            var n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity]) catch |err| { 
+                if (count > 0 and err == error.WouldBlock) { 
+                    if (timer.read() > MAX_WAIT_NS) { 
+                        break;
+                    }
+                    continue;
+                } else { 
+                    return err;
+                }
+            };
+
+            if (count == 0) { 
+                // set to nonblocking mode
+                try socket.setReadTimeout(SOCKET_TIMEOUT);
+            }
+            count += n_packets_read;
+            if (timer.read() > MAX_WAIT_NS or count >= capacity) { 
+                break;
+            }
+        }
+
+        if (count < capacity) { 
+            packet_batch.shrinkAndFree(count);
+        }
+        try incoming_channel.send(packet_batch);
+    }
+}
+
+pub fn recvMmsg(
+    socket: *UdpSocket,
+    /// pre-allocated array of packets to fill up
+    packet_batch: []Packet,
+) !usize {
+    const max_size = packet_batch.len;
+    var count: usize = 0;
+
+    while (count < max_size) {
+        var packet = &packet_batch[count];
+        const recv_meta = socket.receiveFrom(&packet.data) catch |err| {
+            // would block then return
+            if (count > 0 and err == error.WouldBlock) {
+                break;
+            } else {
+                return err;
+            }
+        };
+
+        const bytes_read = recv_meta.numberOfBytes;
+        if (bytes_read == 0) {
+            return error.SocketClosed;
+        }
+        packet.addr = recv_meta.sender;
+        packet.size = bytes_read;
+
+        if (count == 0) {
+            // nonblocking mode
+            try socket.setReadTimeout(SOCKET_TIMEOUT);
+        }
+        count += 1;
+    }
+
+    return count;
 }
 
 pub fn sendSocket(
@@ -114,6 +214,47 @@ pub const BenchmarkPacketProcessing = struct {
         handle.join();
     }
 
+    pub fn benchmarkReadSocketV2() !void {
+        const allocator = std.heap.page_allocator;
+
+        var channel = Channel(std.ArrayList(Packet)).init(allocator, N_ITERS);
+        defer channel.deinit();
+
+        var socket = try UdpSocket.create(.ipv4, .udp);
+        try socket.bindToPort(0);
+        try socket.setReadTimeout(1000000); // 1 second
+
+        const to_endpoint = try socket.getLocalEndPoint();
+
+        var exit = std.atomic.Atomic(bool).init(false);
+
+        var handle = try std.Thread.spawn(.{}, readSocketV2, .{ allocator, &socket, channel, &exit });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecvV2, .{ channel, N_ITERS });
+
+        var rand = std.rand.DefaultPrng.init(0);
+        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+        var timer = std.time.Timer.start() catch unreachable;
+
+        for (1..(N_ITERS * 2 + 1)) |i| {
+            rand.fill(&packet_buf);
+            _ = try socket.sendTo(to_endpoint, &packet_buf);
+
+            // 10Kb per second
+            // each packet is 1k bytes
+            // = 10 packets per second
+            if (i % 10 == 0) {
+                const elapsed = timer.read();
+                if (elapsed < std.time.ns_per_s) {
+                    std.time.sleep(std.time.ns_per_s - elapsed);
+                }
+            }
+        }
+
+        recv_handle.join();
+        exit.store(true, std.atomic.Ordering.Unordered);
+        handle.join();
+    }
+
     pub fn benchmarkSendSocket() !void {
         const allocator = std.heap.page_allocator;
 
@@ -146,6 +287,24 @@ pub const BenchmarkPacketProcessing = struct {
         handle.join();
     }
 };
+
+pub fn benchmarkChannelRecvV2(
+    channel: *Channel(std.ArrayList(Packet)),
+    n_values_to_receive: usize,
+) !void {
+    var count: usize = 0;
+    while (true) {
+        const values = (try channel.try_drain()) orelse {
+            continue;
+        };
+        for (values) |packet_batch| { 
+            count += packet_batch.items.len;
+        }
+        if (count >= n_values_to_receive) {
+            break;
+        }
+    }
+}
 
 pub fn benchmarkChannelRecv(
     channel: *Channel(Packet),

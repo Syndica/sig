@@ -163,7 +163,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         }
 
         pub fn peek(self: *Self, key: K) ?V {
-
             if (self.hashmap.get(key)) |node| {
                 return node.data.value;
             }
@@ -174,7 +173,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
         /// the key's value and returns the old value. Otherwise, `null` is returned.
         pub fn put(self: *Self, key: K, value: V) ?V {
-
             if (self.hashmap.getEntry(key)) |existing_entry| {
                 var existing_node: *Node = existing_entry.value_ptr.*;
                 var old_value = existing_node.data.value;
@@ -189,7 +187,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
 
         /// Removes key from cache. Returns true if found, false if not.
         pub fn remove(self: *Self, key: K) bool {
-
             if (self.hashmap.fetchSwapRemove(key)) |kv| {
                 var node = kv.value;
                 self.dbl_link_list.remove(node);
