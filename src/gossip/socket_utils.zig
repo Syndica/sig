@@ -73,8 +73,9 @@ pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 3;
     pub const max_iterations = 5;
 
+    const N_ITERS = 100_000;
+
     pub fn benchmarkReadSocket() !void {
-        const N_ITERS = 10;
         const allocator = std.heap.page_allocator;
 
         var channel = Channel(Packet).init(allocator, N_ITERS);
@@ -89,31 +90,31 @@ pub const BenchmarkPacketProcessing = struct {
         var exit = std.atomic.Atomic(bool).init(false);
 
         var handle = try std.Thread.spawn(.{}, readSocket, .{ &socket, channel, &exit, .noop });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, N_ITERS });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        for (0..N_ITERS) |_| {
+        var timer = std.time.Timer.start() catch unreachable;
+        for (1..(N_ITERS * 2 + 1)) |i| {
             rand.fill(&packet_buf);
             _ = try socket.sendTo(to_endpoint, &packet_buf);
-        }
-
-        var count: usize = 0;
-        while (true) {
-            const values = channel.drain() orelse {
-                continue;
-            };
-            count += values.len;
-            if (count == N_ITERS) {
-                break;
+            // 10Kb per second
+            // each packet is 1k bytes
+            // = 10 packets per second
+            if (i % 10 == 0) {
+                const elapsed = timer.read();
+                if (elapsed < std.time.ns_per_s) {
+                    std.time.sleep(std.time.ns_per_s - elapsed);
+                }
             }
         }
 
+        recv_handle.join();
         exit.store(true, std.atomic.Ordering.Unordered);
         handle.join();
     }
 
     pub fn benchmarkSendSocket() !void {
-        const N_ITERS = 10;
         const allocator = std.heap.page_allocator;
 
         var channel = Channel(Packet).init(allocator, N_ITERS);
@@ -126,8 +127,9 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, .noop });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkSocketRecv, .{ &socket, N_ITERS });
 
+        var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, .noop });
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
         for (0..N_ITERS) |_| {
@@ -139,28 +141,52 @@ pub const BenchmarkPacketProcessing = struct {
             ));
         }
 
-        var count: usize = 0;
-        while (true) {
-            const recv_meta = socket.receiveFrom(&packet_buf) catch |err| {
-                if (err == error.WouldBlock) {
-                    continue;
-                } else {
-                    return error.SocketRecvError;
-                }
-            };
-
-            const bytes_read = recv_meta.numberOfBytes;
-            if (bytes_read == 0) {
-                return error.SocketClosed;
-            }
-
-            count += 1;
-            if (count == N_ITERS) {
-                break;
-            }
-        }
-
+        recv_handle.join();
         exit.store(true, std.atomic.Ordering.Unordered);
         handle.join();
     }
 };
+
+pub fn benchmarkChannelRecv(
+    channel: *Channel(Packet),
+    N_ITERS: usize,
+) !void {
+    var count: usize = 0;
+    while (true) {
+        const values = (try channel.try_drain()) orelse {
+            continue;
+        };
+        count += values.len;
+        if (count >= N_ITERS) {
+            break;
+        }
+    }
+}
+
+pub fn benchmarkSocketRecv(
+    socket: *UdpSocket,
+    total: usize,
+) !void {
+    var count: usize = 0;
+    var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+
+    while (true) {
+        const recv_meta = socket.receiveFrom(&packet_buf) catch |err| {
+            if (err == error.WouldBlock) {
+                continue;
+            } else {
+                return error.SocketRecvError;
+            }
+        };
+
+        const bytes_read = recv_meta.numberOfBytes;
+        if (bytes_read == 0) {
+            return error.SocketClosed;
+        }
+
+        count += 1;
+        if (count == total) {
+            break;
+        }
+    }
+}

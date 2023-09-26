@@ -139,10 +139,12 @@ pub const GossipService = struct {
         }
 
         var thread_pool = try allocator.create(ThreadPool);
+        var n_threads = @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 8);
         thread_pool.* = ThreadPool.init(.{
-            .max_threads = @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 2),
+            .max_threads = n_threads,
             .stack_size = 2 * 1024 * 1024,
         });
+        std.debug.print("using n_threads in gossip: {}\n", .{n_threads});
 
         var crds_table = try CrdsTable.init(allocator, thread_pool);
         errdefer crds_table.deinit();
@@ -373,16 +375,18 @@ pub const GossipService = struct {
             defer self.verified_incoming_channel.allocator.free(protocol_messages);
             msg_count += protocol_messages.len;
 
+            // TODO: filter messages based on_shred_version
+
             for (protocol_messages) |*protocol_message| {
                 var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
                 switch (protocol_message.message) {
                     .PushMessage => |*push| {
-                        // var x_timer = std.time.Timer.start() catch unreachable;
-                        // defer {
-                        //     const elapsed = x_timer.read();
-                        //     std.debug.print("push_message took {}ns\n", .{elapsed});
-                        // }
+                        var x_timer = std.time.Timer.start() catch unreachable;
+                        defer {
+                            const elapsed = x_timer.read();
+                            std.debug.print("handle batch push took {} with {} items\n", .{ elapsed, 1 });
+                        }
 
                         const push_from: Pubkey = push[0];
                         const push_values: []CrdsValue = push[1];
@@ -418,11 +422,11 @@ pub const GossipService = struct {
                         push_log_entry.info("received push message");
                     },
                     .PullResponse => |*pull| {
-                        // var x_timer = std.time.Timer.start() catch unreachable;
-                        // defer {
-                        //     const elapsed = x_timer.read();
-                        //     std.debug.print("pull_response took {}ns\n", .{elapsed});
-                        // }
+                        var x_timer = std.time.Timer.start() catch unreachable;
+                        defer {
+                            const elapsed = x_timer.read();
+                            std.debug.print("handle batch pull_resp took {} with {} items\n", .{ elapsed, 1 });
+                        }
 
                         const from: Pubkey = pull[0];
                         const crds_values: []CrdsValue = pull[1];
@@ -462,6 +466,11 @@ pub const GossipService = struct {
                         });
                     },
                     .PruneMessage => |*prune| {
+                        var x_timer = std.time.Timer.start() catch unreachable;
+                        defer {
+                            const elapsed = x_timer.read();
+                            std.debug.print("handle batch prune took {} with {} items\n", .{ elapsed, 1 });
+                        }
                         const prune_msg: PruneData = prune[1];
 
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
@@ -484,6 +493,12 @@ pub const GossipService = struct {
                         prune_log_entry.info("received prune message");
                     },
                     .PingMessage => |*ping| {
+                        var x_timer = std.time.Timer.start() catch unreachable;
+                        defer {
+                            const elapsed = x_timer.read();
+                            std.debug.print("handle batch ping took {} with {} items\n", .{ elapsed, 1 });
+                        }
+
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
@@ -506,6 +521,12 @@ pub const GossipService = struct {
                             .info("received ping message");
                     },
                     .PongMessage => |*pong| {
+                        var x_timer = std.time.Timer.start() catch unreachable;
+                        defer {
+                            const elapsed = x_timer.read();
+                            std.debug.print("handle batch pong took {} with {} items\n", .{ elapsed, 1 });
+                        }
+
                         var endpoint_buf = std.ArrayList(u8).init(self.allocator);
                         try from_endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
                         defer endpoint_buf.deinit();
@@ -529,27 +550,25 @@ pub const GossipService = struct {
 
             // handle batch messages
             if (pull_requests.items.len > 0) {
-                // var pull_req_timer = std.time.Timer.start() catch unreachable;
-                // defer {
-                // std.debug.print("filter_crds_values elapsed {any} for {any} filters\n", .{
-                //     pull_req_timer.read(),
-                //     pull_requests.items.len
-                // });
-                // }
-
+                var x_timer = std.time.Timer.start() catch unreachable;
+                const length = pull_requests.items.len;
                 self.handleBatchPullRequest(pull_requests);
+                const elapsed = x_timer.read();
+                std.debug.print("handle batch pull_req took {} with {} items\n", .{ elapsed, length });
+
                 for (pull_requests.items) |*pr| {
                     pr.filter.deinit();
                 }
-                pull_requests.clearRetainingCapacity();
             }
+            pull_requests.clearRetainingCapacity();
 
             {
-                var table_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = std.time.Timer.start() catch unreachable;
                 defer {
-                    const elapsed = table_timer.read();
-                    std.debug.print("crds table trim took {}ns\n", .{elapsed});
+                    const elapsed = x_timer.read();
+                    std.debug.print("handle batch crds_trim took {} with {} items\n", .{ elapsed, 1 });
                 }
+
                 var crds_table_lock = self.crds_table_rw.write();
                 defer crds_table_lock.unlock();
 
@@ -2323,7 +2342,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         "10_msg_iters", "100_msg_iters",
     };
 
-    pub fn benchmarkGossipService(num_message_iterations: usize) !void {
+    pub fn benchmarkGossipServiceProcessMessages(num_message_iterations: usize) !void {
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
