@@ -173,12 +173,18 @@ pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 3;
     pub const max_iterations = 5;
 
-    const N_ITERS = 100_000;
+    pub const args = [_]usize{
+        100_000,
+    };
 
-    pub fn benchmarkReadSocket() !void {
+    pub const arg_names = [_][]const u8{
+        "100k_msgs",
+    };
+
+    pub fn benchmarkReadSocket(n_packets: usize) !void {
         const allocator = std.heap.page_allocator;
 
-        var channel = Channel(Packet).init(allocator, N_ITERS);
+        var channel = Channel(Packet).init(allocator, n_packets);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);
@@ -190,12 +196,12 @@ pub const BenchmarkPacketProcessing = struct {
         var exit = std.atomic.Atomic(bool).init(false);
 
         var handle = try std.Thread.spawn(.{}, readSocket, .{ &socket, channel, &exit, .noop });
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, N_ITERS });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
         var timer = std.time.Timer.start() catch unreachable;
-        for (1..(N_ITERS * 2 + 1)) |i| {
+        for (1..(n_packets * 2 + 1)) |i| {
             rand.fill(&packet_buf);
             _ = try socket.sendTo(to_endpoint, &packet_buf);
             // 10Kb per second
@@ -214,10 +220,10 @@ pub const BenchmarkPacketProcessing = struct {
         handle.join();
     }
 
-    pub fn benchmarkReadSocketV2() !void {
+    pub fn benchmarkReadSocketV2(n_packets: usize) !void {
         const allocator = std.heap.page_allocator;
 
-        var channel = Channel(std.ArrayList(Packet)).init(allocator, N_ITERS);
+        var channel = Channel(std.ArrayList(Packet)).init(allocator, n_packets);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);
@@ -229,13 +235,13 @@ pub const BenchmarkPacketProcessing = struct {
         var exit = std.atomic.Atomic(bool).init(false);
 
         var handle = try std.Thread.spawn(.{}, readSocketV2, .{ allocator, &socket, channel, &exit });
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecvV2, .{ channel, N_ITERS });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecvV2, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
         var timer = std.time.Timer.start() catch unreachable;
 
-        for (1..(N_ITERS * 2 + 1)) |i| {
+        for (1..(n_packets * 2 + 1)) |i| {
             rand.fill(&packet_buf);
             _ = try socket.sendTo(to_endpoint, &packet_buf);
 
@@ -255,10 +261,10 @@ pub const BenchmarkPacketProcessing = struct {
         handle.join();
     }
 
-    pub fn benchmarkSendSocket() !void {
+    pub fn benchmarkSendSocket(n_packets: usize) !void {
         const allocator = std.heap.page_allocator;
 
-        var channel = Channel(Packet).init(allocator, N_ITERS);
+        var channel = Channel(Packet).init(allocator, n_packets);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);
@@ -268,12 +274,12 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkSocketRecv, .{ &socket, N_ITERS });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkSocketRecv, .{ &socket, n_packets });
 
         var handle = try std.Thread.spawn(.{}, sendSocket, .{ &socket, channel, &exit, .noop });
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        for (0..N_ITERS) |_| {
+        for (0..n_packets) |_| {
             rand.fill(&packet_buf);
             try channel.send(Packet.init(
                 to_endpoint,
@@ -308,7 +314,7 @@ pub fn benchmarkChannelRecvV2(
 
 pub fn benchmarkChannelRecv(
     channel: *Channel(Packet),
-    N_ITERS: usize,
+    n_values_to_receive: usize,
 ) !void {
     var count: usize = 0;
     while (true) {
@@ -316,7 +322,7 @@ pub fn benchmarkChannelRecv(
             continue;
         };
         count += values.len;
-        if (count >= N_ITERS) {
+        if (count >= n_values_to_receive) {
             break;
         }
     }
