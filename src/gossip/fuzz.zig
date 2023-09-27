@@ -378,15 +378,20 @@ pub fn main() !void {
             continue;
         };
 
-        try gossip_service_fuzzer.packet_outgoing_channel.send(send_packet);
+        // batch it
+        var packet_batch = std.ArrayList(Packet).init(allocator);
+        try packet_batch.append(send_packet);
+        msg_count +|= 1;
 
         var send_duplicate = rng.random().boolean();
         if (send_duplicate) {
             msg_count +|= 1;
-            try gossip_service_fuzzer.packet_outgoing_channel.send(send_packet);
+            try packet_batch.append(send_packet);
         }
 
-        msg_count +|= 1;
+        // send it
+        try gossip_service_fuzzer.packet_outgoing_channel.send(packet_batch);
+
         std.time.sleep(SLEEP_TIME);
 
         if (msg_count % 1000 == 0) {

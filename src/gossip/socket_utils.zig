@@ -139,6 +139,43 @@ pub fn recvMmsg(
     return count;
 }
 
+pub fn sendSocketV2(
+    socket: *UdpSocket,
+    outgoing_channel: *Channel(std.ArrayList(Packet)),
+    exit: *const std.atomic.Atomic(bool),
+    logger: Logger,
+) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
+    var packets_sent: u64 = 0;
+
+    while (!exit.load(std.atomic.Ordering.Unordered)) {
+        const maybe_packet_batches = try outgoing_channel.try_drain();
+        if (maybe_packet_batches == null) {
+            // sleep for 1ms
+            // std.time.sleep(std.time.ns_per_ms * 1);
+            continue;
+        }
+        const packet_batches = maybe_packet_batches.?;
+        defer {
+            for (packet_batches) |*packet_batch| {
+                packet_batch.deinit();
+            }
+            outgoing_channel.allocator.free(packet_batches);
+        }
+
+        for (packet_batches) |*packet_batch| {
+            for (packet_batch.items) |*p| {
+                const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
+                    logger.debugf("send_socket error: {s}\n", .{@errorName(e)});
+                    continue;
+                };
+                packets_sent +|= 1;
+                std.debug.assert(bytes_sent == p.size);
+            }
+        }
+    }
+    logger.debugf("send_socket loop closed\n", .{});
+}
+
 pub fn sendSocket(
     socket: *UdpSocket,
     outgoing_channel: *Channel(Packet),
