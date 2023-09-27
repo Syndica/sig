@@ -70,10 +70,11 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    // var logger = Logger.init(gpa_allocator, .debug);
-    // defer logger.deinit();
-    // logger.spawn();
-    var logger: Logger = .noop;
+    var logger = Logger.init(gpa_allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
+    // var logger: Logger = .noop;
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 

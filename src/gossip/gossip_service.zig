@@ -55,6 +55,8 @@ const socket_utils = @import("socket_utils.zig");
 
 const Channel = @import("../sync/channel.zig").Channel;
 const PacketChannel = Channel(Packet);
+const PacketBatchChannel = Channel(std.ArrayList(Packet));
+
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
 const PingCache = @import("./ping_pong.zig").PingCache;
@@ -99,7 +101,7 @@ pub const GossipService = struct {
     exit: *AtomicBool,
 
     // communication between threads
-    packet_incoming_channel: *PacketChannel,
+    packet_incoming_channel: *PacketBatchChannel,
     packet_outgoing_channel: *PacketChannel,
     verified_incoming_channel: *ProtocolChannel,
 
@@ -129,7 +131,7 @@ pub const GossipService = struct {
         exit: *AtomicBool,
         logger: Logger,
     ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
-        var packet_incoming_channel = PacketChannel.init(allocator, 10000);
+        var packet_incoming_channel = PacketBatchChannel.init(allocator, 10000);
         var packet_outgoing_channel = PacketChannel.init(allocator, 10000);
         var verified_incoming_channel = ProtocolChannel.init(allocator, 10000);
 
@@ -242,14 +244,21 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message)
     ///     and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self) !void {
-        var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        defer self.joinAndExit(&ip_echo_server_listener_handle);
+        // var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
+        // defer self.joinAndExit(&ip_echo_server_listener_handle);
 
-        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
+        // var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
+        //     &self.gossip_socket,
+        //     self.packet_incoming_channel,
+        //     self.exit,
+        //     self.logger,
+        // });
+
+        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocketV2, .{
+            self.allocator,
             &self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
-            self.logger,
         });
         defer self.joinAndExit(&receiver_handle);
 
@@ -276,11 +285,19 @@ pub const GossipService = struct {
         // var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
         // defer self.joinAndExit(&ip_echo_server_listener_handle);
 
-        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
+        // var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
+        //     &self.gossip_socket,
+        //     self.packet_incoming_channel,
+        //     self.exit,
+        //     self.logger,
+        // });
+        // defer self.joinAndExit(&receiver_handle);
+
+        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocketV2, .{
+            self.allocator,
             &self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
-            self.logger,
         });
         defer self.joinAndExit(&receiver_handle);
 
@@ -300,11 +317,62 @@ pub const GossipService = struct {
         defer self.joinAndExit(&responder_handle);
     }
 
+    const VerifyMessageTask = struct {
+        packet: *const Packet,
+        allocator: std.mem.Allocator,
+        verified_incoming_channel: *Channel(ProtocolMessage),
+
+        task: Task,
+        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+
+        pub fn callback(task: *Task) void {
+            var this = @fieldParentPtr(@This(), "task", task);
+            defer this.done.store(true, std.atomic.Ordering.Release);
+
+            var protocol_message = bincode.readFromSlice(
+                this.allocator,
+                Protocol,
+                this.packet.data[0..this.packet.size],
+                bincode.Params.standard,
+            ) catch {
+                return;
+            };
+
+            protocol_message.sanitize() catch {
+                bincode.free(this.allocator, protocol_message);
+                return;
+            };
+
+            protocol_message.verifySignature() catch {
+                bincode.free(this.allocator, protocol_message);
+                return;
+            };
+
+            const msg = ProtocolMessage{
+                .from_endpoint = this.packet.addr,
+                .message = protocol_message,
+            };
+            this.verified_incoming_channel.send(msg) catch unreachable;
+        }
+    };
+
     /// main logic for deserializing Packets into Protocol messages
     /// and verifing they have valid values, and have valid signatures.
     /// Verified Protocol messages are then sent to the verified_channel.
     fn verifyPackets(self: *Self) !void {
-        var failed_protocol_msgs: usize = 0;
+        var tasks: [socket_utils.PACKETS_PER_BATCH]*VerifyMessageTask = undefined;
+        // pre-allocate all the tasks
+        for (0..tasks.len) |i| { 
+            const verify_task = VerifyMessageTask{
+                .task = .{ .callback = VerifyMessageTask.callback },
+                .allocator = self.allocator,
+                .verified_incoming_channel = self.verified_incoming_channel,
+                .packet = &Packet.default(),
+            };
+            var verify_task_heap = try self.allocator.create(VerifyMessageTask);
+            verify_task_heap.* = verify_task;
+            tasks[i] = verify_task_heap;
+        }
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_packets = try self.packet_incoming_channel.try_drain();
@@ -314,36 +382,32 @@ pub const GossipService = struct {
                 continue;
             }
 
-            const packets = maybe_packets.?;
-            defer self.packet_incoming_channel.allocator.free(packets);
+            const packet_batches = maybe_packets.?;
+            defer self.packet_incoming_channel.allocator.free(packet_batches);
+            defer { 
+                for (packet_batches) |*packet_batch| {
+                    packet_batch.deinit();
+                }
+            }
 
-            for (packets) |*packet| {
-                var protocol_message = bincode.readFromSlice(
-                    self.allocator,
-                    Protocol,
-                    packet.data[0..packet.size],
-                    bincode.Params.standard,
-                ) catch {
-                    failed_protocol_msgs += 1;
-                    self.logger.debugf("failed to deserialize protocol message: {d}\n", .{std.mem.readIntLittle(u32, packet.data[0..4])});
-                    continue;
-                };
+            // verify in parallel using the threadpool
+            var count: usize = 0;
+            for (packet_batches) |*packet_batch| {
+                for (packet_batch.items) |*packet| {
+                    var task = tasks[count];
+                    task.packet = packet;
+                    const batch = Batch.from(&task.task);
+                    ThreadPool.schedule(self.thread_pool, batch);
 
-                protocol_message.sanitize() catch |err| {
-                    self.logger.debugf("failed to sanitize protocol message: {s}\n", .{@errorName(err)});
-                    bincode.free(self.allocator, protocol_message);
-                    continue;
-                };
+                    count += 1;
+                }
+            }
 
-                protocol_message.verifySignature() catch |err| {
-                    self.logger.debugf("failed to verify protocol message signature {s}\n", .{@errorName(err)});
-                    bincode.free(self.allocator, protocol_message);
-                    continue;
-                };
-
-                // TODO: send the pointers over the channel (similar to PinnedVec) vs item copy
-                const msg = ProtocolMessage{ .from_endpoint = packet.addr, .message = protocol_message };
-                try self.verified_incoming_channel.send(msg);
+            for (tasks[0..count]) |task| {
+                while (!task.done.load(std.atomic.Ordering.Acquire)) {
+                    // wait
+                }
+                task.done.store(false, std.atomic.Ordering.Release);
             }
         }
 
@@ -2117,10 +2181,13 @@ test "gossip.gossip_service: test packet verification" {
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
     var packet = Packet.init(from, buf, out.len);
-
+    var packet_batch = std.ArrayList(Packet).init(allocator);
     for (0..3) |_| {
-        try packet_channel.send(packet);
+        try packet_batch.append(packet);
     }
+    try packet_channel.send(packet_batch);
+
+    var packet_batch_2 = std.ArrayList(Packet).init(allocator);
 
     // send one which fails sanitization
     var value_v2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 2), &keypair);
@@ -2132,7 +2199,7 @@ test "gossip.gossip_service: test packet verification" {
     var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
     var out_v2 = try bincode.writeToSlice(buf_v2[0..], protocol_msg_v2, bincode.Params{});
     var packet_v2 = Packet.init(from, buf_v2, out_v2.len);
-    try packet_channel.send(packet_v2);
+    try packet_batch_2.append(packet_v2);
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
@@ -2144,7 +2211,7 @@ test "gossip.gossip_service: test packet verification" {
     var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
     var out2 = try bincode.writeToSlice(buf2[0..], protocol_msg2, bincode.Params{});
     var packet2 = Packet.init(from, buf2, out2.len);
-    try packet_channel.send(packet2);
+    try packet_batch_2.append(packet2);
 
     // send it with a CrdsValue which hash a slice
     {
@@ -2164,8 +2231,9 @@ test "gossip.gossip_service: test packet verification" {
         var buf3 = [_]u8{0} ** PACKET_DATA_SIZE;
         var out3 = try bincode.writeToSlice(buf3[0..], protocol_msg3, bincode.Params{});
         var packet3 = Packet.init(from, buf3, out3.len);
-        try packet_channel.send(packet3);
+        try packet_batch_2.append(packet3);
     }
+    try packet_channel.send(packet_batch_2);
 
     var msg_count: usize = 0;
     while (msg_count < 4) {
@@ -2310,7 +2378,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
         .{&gossip_service},
     );
 
-    gossip_service.echo_server.kill();
+    // gossip_service.echo_server.kill();
     exit.store(true, std.atomic.Ordering.Unordered);
     handle.join();
     gossip_service.deinit();
@@ -2377,10 +2445,11 @@ pub const BenchmarkGossipServiceGeneral = struct {
             socket.close();
         }
 
+        var sender_exit = AtomicBool.init(false);
         var outgoing_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
             &socket,
             outgoing_channel,
-            &exit,
+            &sender_exit,
             logger,
         });
 
@@ -2440,7 +2509,14 @@ pub const BenchmarkGossipServiceGeneral = struct {
         }
 
         exit.store(true, std.atomic.Ordering.Unordered);
+        // send a few more to make sure the socket exits 
+        for (0..5) |_| {
+            var msg = try fuzz.randomPingPacket(rng, &keypair, endpoint);
+            try outgoing_channel.send(msg);
+        }
         packet_handle.join();
+
+        sender_exit.store(true, std.atomic.Ordering.Unordered);
         outgoing_handle.join();
     }
 };

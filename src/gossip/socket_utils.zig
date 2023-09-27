@@ -65,7 +65,7 @@ pub fn readSocketV2(
             allocator,
             capacity,
         );
-        for (0..capacity) |_| { 
+        for (0..capacity) |_| {
             packet_batch.appendAssumeCapacity(Packet.default());
         }
 
@@ -74,29 +74,29 @@ pub fn readSocketV2(
         var timer = std.time.Timer.start() catch unreachable;
 
         // recv packets into batch
-        while (true) { 
-            var n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity]) catch |err| { 
-                if (count > 0 and err == error.WouldBlock) { 
-                    if (timer.read() > MAX_WAIT_NS) { 
+        while (true) {
+            var n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity]) catch |err| {
+                if (count > 0 and err == error.WouldBlock) {
+                    if (timer.read() > MAX_WAIT_NS) {
                         break;
                     }
                     continue;
-                } else { 
+                } else {
                     return err;
                 }
             };
 
-            if (count == 0) { 
+            if (count == 0) {
                 // set to nonblocking mode
                 try socket.setReadTimeout(SOCKET_TIMEOUT);
             }
             count += n_packets_read;
-            if (timer.read() > MAX_WAIT_NS or count >= capacity) { 
+            if (timer.read() > MAX_WAIT_NS or count >= capacity) {
                 break;
             }
         }
 
-        if (count < capacity) { 
+        if (count < capacity) {
             packet_batch.shrinkAndFree(count);
         }
         try incoming_channel.send(packet_batch);
@@ -303,7 +303,7 @@ pub fn benchmarkChannelRecvV2(
         const values = (try channel.try_drain()) orelse {
             continue;
         };
-        for (values) |packet_batch| { 
+        for (values) |packet_batch| {
             count += packet_batch.items.len;
         }
         if (count >= n_values_to_receive) {
