@@ -588,7 +588,6 @@ pub fn readFromSlice(alloc: ?std.mem.Allocator, comptime T: type, slice: []const
     var d = deserializer(reader, params);
     const dd = d.deserializer();
     const v = try getty.deserialize(alloc, T, dd);
-    errdefer getty.de.free(alloc, @TypeOf(dd), v); // !
 
     return v;
 }

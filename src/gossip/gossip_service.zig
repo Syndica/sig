@@ -37,6 +37,7 @@ const CrdsTable = _crds_table.CrdsTable;
 const CrdsError = _crds_table.CrdsError;
 const HashTimeQueue = _crds_table.HashTimeQueue;
 const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
+const AutoArrayHashSet = _crds_table.AutoArrayHashSet;
 
 const Logger = @import("../trace/log.zig").Logger;
 const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
@@ -352,6 +353,7 @@ pub const GossipService = struct {
 
             const msg = ProtocolMessage{
                 .from_endpoint = this.packet.addr,
+                // TODO: remove this copy (its on the heap - should just need a ptr)
                 .message = protocol_message,
             };
             this.verified_incoming_channel.send(msg) catch unreachable;
@@ -433,6 +435,12 @@ pub const GossipService = struct {
         from_endpoint: *EndPoint,
     };
 
+    pub const PushMessage = struct {
+        crds_values: []CrdsValue,
+        from_pubkey: *Pubkey,
+        from_endpoint: *EndPoint,
+    };
+
     /// main logic for recieving and processing `Protocol` messages.
     pub fn processMessages(self: *Self) !void {
         var timer = std.time.Timer.start() catch unreachable;
@@ -441,6 +449,7 @@ pub const GossipService = struct {
 
         // // batching messages can lead to 1) less lock contention and 2) use of packetbatch which
         // // are pre-allocated packets for responses 3) processing messages in parallel
+
         // batch so we can process in parallel
         var pull_requests = try std.ArrayList(PullRequestMessage).initCapacity(self.allocator, init_message_size);
         defer pull_requests.deinit();
@@ -452,6 +461,9 @@ pub const GossipService = struct {
         // batch so we can respond with a packet batch
         var ping_messages = try std.ArrayList(PingMessage).initCapacity(self.allocator, init_message_size);
         defer ping_messages.deinit();
+
+        var push_messages = try std.ArrayList(PushMessage).initCapacity(self.allocator, init_message_size);
+        defer push_messages.deinit();
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
@@ -481,38 +493,44 @@ pub const GossipService = struct {
                             self.logger.debugf("handle batch push took {} with {} items\n", .{ elapsed, 1 });
                         }
 
-                        const push_from: Pubkey = push[0];
-                        const push_values: []CrdsValue = push[1];
+                        try push_messages.append(PushMessage{
+                            .crds_values = push[1],
+                            .from_pubkey = &push[0],
+                            .from_endpoint = &from_endpoint,
+                        });
 
-                        var push_log_entry = self.logger
-                            .field("num_crds_values", push_values.len)
-                            .field("from_address", &push_from.string());
+                        // const push_from: Pubkey = push[0];
+                        // const push_values: []CrdsValue = push[1];
 
-                        var failed_insert_origins = self.handlePushMessage(
-                            push_values,
-                        ) catch |err| {
-                            push_log_entry.field("error", @errorName(err))
-                                .err("error handling push message");
-                            continue;
-                        };
-                        defer failed_insert_origins.deinit();
-                        _ = push_log_entry.field("num_failed_insert_origins", failed_insert_origins.count());
+                        // var push_log_entry = self.logger
+                        //     .field("num_crds_values", push_values.len)
+                        //     .field("from_address", &push_from.string());
 
-                        if (failed_insert_origins.count() != 0) {
-                            var prune_packets = self.buildPruneMessage(&failed_insert_origins, push_from) catch |err| {
-                                push_log_entry.field("error", @errorName(err))
-                                    .err("error building prune messages");
-                                continue;
-                            };
-                            // // TODO: fix this too
-                            // defer prune_packets.deinit();
+                        // var failed_insert_origins = self.handlePushMessage(
+                        //     push_values,
+                        // ) catch |err| {
+                        //     push_log_entry.field("error", @errorName(err))
+                        //         .err("error handling push message");
+                        //     continue;
+                        // };
+                        // defer failed_insert_origins.deinit();
+                        // _ = push_log_entry.field("num_failed_insert_origins", failed_insert_origins.count());
 
-                            _ = push_log_entry.field("num_prune_msgs", prune_packets.items.len);
-                            // TODO: pre-allocate this packet batch
-                            try self.packet_outgoing_channel.send(prune_packets);
-                        }
+                        // if (failed_insert_origins.count() != 0) {
+                        //     var prune_packets = self.buildPruneMessage(&failed_insert_origins, push_from) catch |err| {
+                        //         push_log_entry.field("error", @errorName(err))
+                        //             .err("error building prune messages");
+                        //         continue;
+                        //     };
+                        //     // // TODO: fix this too
+                        //     // defer prune_packets.deinit();
 
-                        push_log_entry.info("received push message");
+                        //     _ = push_log_entry.field("num_prune_msgs", prune_packets.items.len);
+                        //     // TODO: pre-allocate this packet batch
+                        //     try self.packet_outgoing_channel.send(prune_packets);
+                        // }
+
+                        // push_log_entry.info("received push message");
                     },
                     .PullResponse => |*pull| {
                         var x_timer = std.time.Timer.start() catch unreachable;
@@ -584,36 +602,10 @@ pub const GossipService = struct {
                     },
                     .PingMessage => |*ping| {
                         // TODO: filter out endpoints which are unspecificed / port = 0
-
                         try ping_messages.append(PingMessage{
                             .ping = ping,
                             .from_endpoint = &from_endpoint,
                         });
-
-                        // var x_timer = std.time.Timer.start() catch unreachable;
-                        // defer {
-                        //     const elapsed = x_timer.read();
-                        //     self.logger.debugf("handle batch ping took {} with {} items\n", .{ elapsed, 1 });
-                        // }
-
-                        // var endpoint_buf = try endpointToString(self.allocator, &from_endpoint);
-                        // defer endpoint_buf.deinit();
-
-                        // var ping_log_entry = self.logger
-                        //     .field("from_endpoint", endpoint_buf.items)
-                        //     .field("from_pubkey", &ping.from.string());
-
-                        // const packet = self.handlePingMessage(ping, from_endpoint) catch |err| {
-                        //     ping_log_entry
-                        //         .field("error", @errorName(err))
-                        //         .err("error handling ping message");
-                        //     continue;
-                        // };
-                        // try self.packet_outgoing_channel.send(packet);
-
-                        // ping_log_entry
-                        //     .field("pongs sent", 1)
-                        //     .info("received ping message");
                     },
                     .PongMessage => |*pong| {
                         try pong_messages.append(PongMessage{
@@ -625,6 +617,16 @@ pub const GossipService = struct {
             }
 
             // handle batch messages
+            // PUSH
+            if (push_messages.items.len > 0) {
+                var x_timer = std.time.Timer.start() catch unreachable;
+                const length = push_messages.items.len;
+                try self.handleBatchPushMessages(&push_messages, self.logger);
+                const elapsed = x_timer.read();
+                self.logger.debugf("handle batch push took {} with {} items\n", .{ elapsed, length });
+                push_messages.clearRetainingCapacity();
+            }
+
             // PULL REQ
             if (pull_requests.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
@@ -645,10 +647,11 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
 
                 // init a new batch of responses
+                // TODO: figure out a way to re-use this allocation instead of freeing after responder sends it
                 var ping_packet_batch = try std.ArrayList(Packet).initCapacity(self.allocator, n_ping_messages);
-                for (0..n_ping_messages) |_| {
-                    ping_packet_batch.appendAssumeCapacity(Packet.default());
-                }
+                ping_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_ping_messages);
+
+                // TODO: add back logging
 
                 for (ping_messages.items, 0..) |*ping_message, i| {
                     const pong = try Pong.init(ping_message.ping, &self.my_keypair);
@@ -1241,6 +1244,7 @@ pub const GossipService = struct {
 
         for (tasks.items) |task| {
             if (task.output.items.len > 0) {
+                // TODO: should only need one mux lock in this loop
                 try self.packet_outgoing_channel.send(task.output);
             }
         }
@@ -1532,6 +1536,123 @@ pub const GossipService = struct {
         }
 
         return prune_packets;
+    }
+
+    pub fn handleBatchPushMessages(
+        self: *Self,
+        batch_push_messages: *const std.ArrayList(PushMessage),
+        logger: Logger,
+    ) !void {
+        if (batch_push_messages.items.len == 0) {
+            return;
+        }
+        _ = logger;
+
+        var pubkey_to_failed_origins = std.AutoArrayHashMap(
+            Pubkey,
+            AutoArrayHashSet(Pubkey),
+        ).init(self.allocator);
+
+        var pubkey_to_endpoint = std.AutoArrayHashMap(
+            Pubkey,
+            EndPoint,
+        ).init(self.allocator);
+
+        defer {
+            // TODO: figure out a way to re-use these allocs
+            pubkey_to_failed_origins.deinit();
+            pubkey_to_endpoint.deinit();
+        }
+
+        // insert values and track the failed origins per pubkey
+        {
+            var crds_table_lock = self.crds_table_rw.write();
+            defer crds_table_lock.unlock();
+
+            for (batch_push_messages.items) |*push_message| {
+                var crds_table: *CrdsTable = crds_table_lock.mut();
+                var result = try crds_table.insertValues(
+                    push_message.crds_values,
+                    CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
+                    false,
+                    false,
+                );
+                const failed_insert_indexs = result.failed.?;
+                defer failed_insert_indexs.deinit();
+
+                if (failed_insert_indexs.items.len == 0) {
+                    // dont need to build prune messages
+                    continue;
+                }
+
+                // lookup contact info
+                const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_message.from_pubkey.* }) orelse {
+                    // unable to find contact info
+                    continue;
+                };
+                const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
+                crds.sanitizeSocket(&from_gossip_addr) catch {
+                    // invalid gossip socket
+                    continue;
+                };
+
+                // track the endpoint
+                const from_gossip_endpoint = from_gossip_addr.toEndpoint();
+                try pubkey_to_endpoint.put(push_message.from_pubkey.*, from_gossip_endpoint);
+
+                // track failed origins
+                var failed_origins = blk: {
+                    var lookup_result = try pubkey_to_failed_origins.getOrPut(push_message.from_pubkey.*);
+                    if (!lookup_result.found_existing) {
+                        lookup_result.value_ptr.* = AutoArrayHashSet(Pubkey).init(self.allocator);
+                    }
+                    break :blk lookup_result.value_ptr;
+                };
+                for (failed_insert_indexs.items) |failed_index| {
+                    const origin = push_message.crds_values[failed_index].id();
+                    try failed_origins.put(origin, {});
+                }
+            }
+        }
+
+        // build prune packets
+        // TODO: figure out a way to re-use this allocation
+        const now = getWallclockMs();
+        var pubkey_to_failed_origins_iter = pubkey_to_failed_origins.iterator();
+
+        var n_packets = pubkey_to_failed_origins_iter.len;
+        if (n_packets == 0) return;
+
+        var prune_packet_batch = try std.ArrayList(Packet).initCapacity(self.allocator, n_packets);
+        prune_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
+        var count: usize = 0;
+
+        while (pubkey_to_failed_origins_iter.next()) |failed_origin_entry| {
+            const from_pubkey = failed_origin_entry.key_ptr.*;
+            const failed_origins_hashset = failed_origin_entry.value_ptr;
+            defer failed_origins_hashset.deinit();
+            const from_endpoint = pubkey_to_endpoint.get(from_pubkey).?;
+
+            const failed_origins: []Pubkey = failed_origins_hashset.keys();
+            const prune_size = @min(failed_origins.len, MAX_PRUNE_DATA_NODES);
+
+            var prune_data = PruneData.init(
+                self.my_pubkey,
+                failed_origins[0..prune_size],
+                from_pubkey,
+                now,
+            );
+            prune_data.sign(&self.my_keypair) catch return error.SignatureError;
+            var protocol = Protocol{ .PruneMessage = .{ self.my_pubkey, prune_data } };
+
+            var packet = &prune_packet_batch.items[count];
+            var written_slice = bincode.writeToSlice(&packet.data, protocol, bincode.Params{}) catch unreachable;
+            packet.size = written_slice.len;
+            packet.addr = from_endpoint;
+            count += 1;
+        }
+
+        try self.packet_outgoing_channel.send(prune_packet_batch);
     }
 
     /// logic for handling push messages. crds values from the push message
