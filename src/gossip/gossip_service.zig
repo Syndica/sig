@@ -55,8 +55,13 @@ const Hash = @import("../core/hash.zig").Hash;
 const socket_utils = @import("socket_utils.zig");
 
 const Channel = @import("../sync/channel.zig").Channel;
+const RingBuffer = @import("../sync/channel.zig").RingBuffer;
+const RingBufferV2 = @import("../sync/channel.zig").RingBufferV2;
+
 const PacketChannel = Channel(Packet);
 const PacketBatchChannel = Channel(std.ArrayList(Packet));
+
+const ProtocolRingBuffer = RingBufferV2(ProtocolMessage);
 
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
 const ProtocolChannel = Channel(ProtocolMessage);
@@ -135,6 +140,7 @@ pub const GossipService = struct {
         var packet_incoming_channel = PacketBatchChannel.init(allocator, 10000);
         var packet_outgoing_channel = PacketBatchChannel.init(allocator, 10000);
         var verified_incoming_channel = ProtocolChannel.init(allocator, 10000);
+        // var verified_incoming_channel = ProtocolRingBuffer.init(allocator, 100_000);
 
         errdefer {
             packet_incoming_channel.deinit();
@@ -324,6 +330,7 @@ pub const GossipService = struct {
         packet: *const Packet,
         allocator: std.mem.Allocator,
         verified_incoming_channel: *Channel(ProtocolMessage),
+        // verified_incoming_channel: *ProtocolRingBuffer,
 
         task: Task,
         done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
@@ -357,6 +364,12 @@ pub const GossipService = struct {
                 .message = protocol_message,
             };
             this.verified_incoming_channel.send(msg) catch unreachable;
+
+            // TODO: fix
+            // _ = this.verified_incoming_channel.push(msg);
+            // while (!) { 
+            //     std.time.sleep(100);
+            // }
         }
     };
 
@@ -379,7 +392,11 @@ pub const GossipService = struct {
         }
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
+            // var drain_timer = std.time.Timer.start() catch unreachable;
             const maybe_packets = try self.packet_incoming_channel.try_drain();
+            // const drain_elapsed = drain_timer.read();
+            // self.logger.debugf("handle batch packet_drain took {} with {} items\n", .{ drain_elapsed, 1 });
+
             if (maybe_packets == null) {
                 // // sleep for 1ms
                 // std.time.sleep(std.time.ns_per_ms * 1);
@@ -474,23 +491,33 @@ pub const GossipService = struct {
         defer prune_messages.deinit();
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
+            // var drain_timer = std.time.Timer.start() catch unreachable;
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
+            // const drain_elapsed = drain_timer.read();
+            // self.logger.debugf("handle batch msg_drain took {} with {} items\n", .{ drain_elapsed, 1 });
+
             if (maybe_protocol_messages == null) {
                 // // sleep for 1ms
                 // std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             }
+
             if (msg_count == 0) {
                 timer.reset();
             }
 
             const protocol_messages = maybe_protocol_messages.?;
             defer self.verified_incoming_channel.allocator.free(protocol_messages);
+            // defer { 
+            //     // self.verified_incoming_channel.consumeAmount(protocol_messages.items.len);
+            //     protocol_messages.deinit();
+            // }
             msg_count += protocol_messages.len;
 
             // TODO: filter messages based on_shred_version
 
             for (protocol_messages) |*protocol_message| {
+
                 var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
                 switch (protocol_message.message) {
@@ -498,7 +525,7 @@ pub const GossipService = struct {
                         var x_timer = std.time.Timer.start() catch unreachable;
                         defer {
                             const elapsed = x_timer.read();
-                            self.logger.debugf("handle batch push took {} with {} items\n", .{ elapsed, 1 });
+                            self.logger.debugf("handle batch push took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
                         }
 
                         try push_messages.append(PushMessage{
@@ -511,7 +538,7 @@ pub const GossipService = struct {
                         var x_timer = std.time.Timer.start() catch unreachable;
                         defer {
                             const elapsed = x_timer.read();
-                            self.logger.debugf("handle batch pull_resp took {} with {} items\n", .{ elapsed, 1 });
+                            self.logger.debugf("handle batch pull_resp took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
                         }
 
                         try pull_response_messages.append(PullResponseMessage{
@@ -520,18 +547,6 @@ pub const GossipService = struct {
                         });
                     },
                     .PullRequest => |*pull| {
-                        // TODO: parallelize this
-                        var pull_value: CrdsValue = pull[1]; // contact info
-                        switch (pull_value.data) {
-                            .LegacyContactInfo => |*info| {
-                                if (info.id.equals(&self.my_pubkey)) {
-                                    // talking to myself == ignore
-                                    continue;
-                                }
-                            },
-                            // only contact info supported
-                            else => continue,
-                        }
 
                         try pull_requests.append(.{
                             .filter = pull[0],
@@ -578,7 +593,7 @@ pub const GossipService = struct {
                 const length = push_messages.items.len;
                 try self.handleBatchPushMessages(&push_messages, self.logger);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch push took {} with {} items\n", .{ elapsed, length });
+                self.logger.debugf("handle batch push took {} with {} items @{}\n", .{ elapsed, length, msg_count });
                 push_messages.clearRetainingCapacity();
             }
 
@@ -588,7 +603,7 @@ pub const GossipService = struct {
                 const length = prune_messages.items.len;
                 try self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch prune took {} with {} items\n", .{ elapsed, length });
+                self.logger.debugf("handle batch prune took {} with {} items @{}\n", .{ elapsed, length, msg_count });
                 prune_messages.clearRetainingCapacity();
             }
 
@@ -598,7 +613,7 @@ pub const GossipService = struct {
                 const length = pull_requests.items.len;
                 self.handleBatchPullRequest(pull_requests);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_req took {} with {} items\n", .{ elapsed, length });
+                self.logger.debugf("handle batch pull_req took {} with {} items @{}\n", .{ elapsed, length, msg_count });
 
                 for (pull_requests.items) |*pr| {
                     pr.filter.deinit();
@@ -612,7 +627,7 @@ pub const GossipService = struct {
                 const length = pull_response_messages.items.len;
                 try self.handleBatchPullResponses(&pull_response_messages, self.logger);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_resp took {} with {} items\n", .{ elapsed, length });
+                self.logger.debugf("handle batch pull_resp took {} with {} items @{}\n", .{ elapsed, length, msg_count });
                 pull_response_messages.clearRetainingCapacity();
             }
 
@@ -644,7 +659,7 @@ pub const GossipService = struct {
                 }
                 try self.packet_outgoing_channel.send(ping_packet_batch);
 
-                self.logger.debugf("handle batch ping took {} with {} items\n", .{ x_timer.read(), n_ping_messages });
+                self.logger.debugf("handle batch ping took {} with {} items @{}\n", .{ x_timer.read(), n_ping_messages, msg_count });
                 ping_messages.clearRetainingCapacity();
             }
 
@@ -666,7 +681,7 @@ pub const GossipService = struct {
                     );
                 }
 
-                self.logger.debugf("handle batch pong took {} with {} items\n", .{ x_timer.read(), length });
+                self.logger.debugf("handle batch pong took {} with {} items @{}\n", .{ x_timer.read(), length, msg_count });
                 pong_messages.clearRetainingCapacity();
             }
 
@@ -675,7 +690,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 defer {
                     const elapsed = x_timer.read();
-                    self.logger.debugf("handle batch crds_trim took {} with {} items\n", .{ elapsed, 1 });
+                    self.logger.debugf("handle batch crds_trim took {} with {} items @{}\n", .{ elapsed, 1, msg_count});
                 }
 
                 var crds_table_lock = self.crds_table_rw.write();
@@ -688,9 +703,15 @@ pub const GossipService = struct {
             }
 
             const elapsed = timer.read();
-            // self.logger.debugf("{} messages processed in {}ns\n", .{ msg_count, elapsed });
-            std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
+            self.logger.debugf("{} messages processed in {}ns\n", .{ msg_count, elapsed });
+            // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             self.messages_processed.store(msg_count, std.atomic.Ordering.Release);
+            if (msg_count >= 30_000) { 
+            // if (msg_count >= 1_000) { 
+                std.debug.print("exiting...\n", .{});
+                self.exit.store(true, std.atomic.Ordering.Unordered);
+                break;
+            }
         }
 
         self.logger.debugf("process_messages loop closed\n", .{});
@@ -1056,7 +1077,8 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
-        filter: CrdsFilter,
+        filter: *CrdsFilter,
+        value: *CrdsValue,
         crds_table: *const CrdsTable,
         output: std.ArrayList(Packet),
         output_limit: *std.atomic.Atomic(i64),
@@ -1072,6 +1094,17 @@ pub const GossipService = struct {
             var this = @fieldParentPtr(@This(), "task", task);
             defer this.done.store(true, std.atomic.Ordering.Release);
 
+            switch (this.value.data) {
+                .LegacyContactInfo => |*info| {
+                    if (info.id.equals(this.my_pubkey)) {
+                        // talking to myself == ignore
+                        return;
+                    }
+                },
+                // only contact info supported
+                else => return,
+            }
+
             const output_limit = this.output_limit.load(std.atomic.Ordering.Unordered);
             if (output_limit <= 0) {
                 return;
@@ -1080,7 +1113,7 @@ pub const GossipService = struct {
             const response_crds_values = pull_response.filterCrdsValues(
                 this.allocator,
                 this.crds_table,
-                &this.filter,
+                this.filter,
                 crds.getWallclockMs(),
                 @as(usize, @max(output_limit, 0)),
             ) catch {
@@ -1115,6 +1148,8 @@ pub const GossipService = struct {
         self: *Self,
         pull_requests: std.ArrayList(PullRequestMessage),
     ) !void {
+        // TODO: parallelize this
+
         // update the callers
         const now = getWallclockMs();
         {
@@ -1207,7 +1242,8 @@ pub const GossipService = struct {
                     .task = .{ .callback = PullRequestTask.callback },
                     .my_pubkey = &self.my_pubkey,
                     .from_endpoint = &pull_requests.items[i].from_endpoint,
-                    .filter = pull_requests.items[i].filter,
+                    .filter = &pull_requests.items[i].filter,
+                    .value = &pull_requests.items[i].value,
                     .crds_table = crds_table,
                     .output = output,
                     .allocator = self.allocator,

@@ -5,6 +5,174 @@ const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;
 const Mux = @import("mux.zig").Mux;
+const Ordering = std.atomic.Ordering;
+
+pub fn RingBufferV2(comptime T: type) type { 
+    return struct { 
+        buffer: []T,
+        index: usize, 
+        count: Atomic(usize),
+        allocator: std.mem.Allocator, // just used for deinit
+
+        const Self = @This();
+
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) *Self {
+            std.debug.assert(capacity > 0);
+            var self = allocator.create(Self) catch unreachable;
+            const buffer = allocator.alloc(T, capacity) catch unreachable;
+            self.* = RingBufferV2(T){
+                .buffer = buffer,
+                .index = 0,
+                .count = Atomic(usize).init(0),
+                .allocator = allocator,
+            };
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.allocator.free(self.buffer); 
+        }
+
+        pub inline fn isFull(self: *const Self) bool {
+            return self.count.load(Ordering.Acquire) == self.buffer.len;
+        }
+
+        pub inline fn isEmpty(self: *const Self) bool { 
+            return self.count.load(Ordering.Acquire) == 0;
+        }
+
+        // get next free pointer => fill it up => increment count
+        pub inline fn getNextFreePtr(self: *Self) ?*T {
+            if (self.isFull()) return null;
+            const count = self.count.load(Ordering.Acquire);
+            return &self.buffer[(self.index + count) % self.buffer.len];
+        }
+
+        pub inline fn incrementCount(self: *Self) void {
+            const count = self.count.fetchAdd(1, Ordering.Release);
+            _ = count;
+        }
+
+        // get head pointer => process it => increment head
+        pub inline fn getHeadPtr(self: *Self) ?*T {
+            if (self.isEmpty()) return null;
+            return &self.buffer[self.index % self.buffer.len];
+        }
+
+        // higher level functions 
+        pub inline fn push(self: *Self, value: T) bool {
+            if (self.getNextFreePtr()) |ptr| {
+                ptr.* = value;
+                _ = self.count.fetchAdd(1, Ordering.Release);
+                return true;
+            } else { 
+                return false;
+            }
+        }
+
+        pub inline fn try_drain(self: *Self) !?std.ArrayList(T) { 
+            if (self.isEmpty()) return null;
+
+            const count = self.count.load(Ordering.Acquire);
+            var items = try std.ArrayList(T).initCapacity(self.allocator, count);
+            for (0..count) |i| {
+                var ptr = &self.buffer[(self.index + i) % self.buffer.len];
+                items.appendAssumeCapacity(ptr.*);
+            }
+
+            _ = self.count.fetchSub(count, Ordering.Release);
+            self.index += count;
+
+            return items;
+        }
+    };
+}
+
+pub fn RingBuffer(comptime T: type) type { 
+    return struct { 
+        buffer: []T,
+        index: usize, 
+        count: Atomic(usize),
+        allocator: std.mem.Allocator, // just used for deinit
+
+        const Self = @This();
+
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) *Self {
+            std.debug.assert(capacity > 0);
+            var self = allocator.create(Self) catch unreachable;
+            const buffer = allocator.alloc(T, capacity) catch unreachable;
+            self.* = RingBuffer(T){
+                .buffer = buffer,
+                .index = 0,
+                .count = Atomic(usize).init(0),
+                .allocator = allocator,
+            };
+            return self;
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.allocator.free(self.buffer); 
+        }
+
+        pub fn isFull(self: *const Self) bool {
+            return self.count.load(Ordering.Acquire) == self.buffer.len;
+        }
+
+        pub fn isEmpty(self: *const Self) bool { 
+            return self.count.load(Ordering.Acquire) == 0;
+        }
+
+        // get next free pointer => fill it up => increment count
+        pub inline fn getNextFreePtr(self: *Self) ?*T {
+            if (self.isFull()) return null;
+            const count = self.count.load(Ordering.Acquire);
+            return &self.buffer[(self.index + count) % self.buffer.len];
+        }
+
+        pub inline fn incrementCount(self: *Self) void {
+            const count = self.count.fetchAdd(1, Ordering.Release);
+            _ = count;
+            // std.debug.print("count incremented from {} -> {}\n", .{count, count+1});
+        }
+
+        // get head pointer => process it => increment head
+        pub inline fn getHeadPtr(self: *Self) ?*T {
+            if (self.isEmpty()) return null;
+            return &self.buffer[self.index % self.buffer.len];
+        }
+
+        pub inline fn consumeAmount(self: *Self, amount: usize) void {
+            const count = self.count.fetchSub(amount, Ordering.Release);
+            // std.debug.print("consuming {}:  count: {}->{} new index: {}->{}\n", .{amount, count, count - amount, self.index, self.index+amount});
+            _ = count;
+            self.index += amount;
+        }
+
+        // higher level functions 
+        pub fn push(self: *Self, value: T) bool {
+            if (self.getNextFreePtr()) |ptr| {
+                ptr.* = value;
+                self.incrementCount();
+                return true;
+            } else { 
+                return false;
+            }
+        }
+
+        pub fn try_drain(self: *const Self) !?std.ArrayList(*T) { 
+            if (self.isEmpty()) return null;
+
+            const count = self.count.load(Ordering.Acquire);
+            // std.debug.print("reading: {} -> {} (count = {})\n", .{self.index, self.index + count, count});
+            var items = try std.ArrayList(*T).initCapacity(self.allocator, count);
+            for (0..count) |i| {
+                var ptr = &self.buffer[(self.index + i) % self.buffer.len];
+                items.appendAssumeCapacity(ptr);
+            }
+            return items;
+        }
+    };
+}
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
 pub fn Channel(comptime T: type) type {
@@ -145,6 +313,88 @@ fn testSender(chan: *BlockChannel, total_send: usize) void {
     chan.close();
 }
 
+const Packet = @import("../gossip/packet.zig").Packet;
+fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
+    var i: usize = 0;
+    while (i < total_send) : (i += 1) {
+        var packet = Packet.default(); 
+        chan.send(packet) catch unreachable;
+    }
+}
+
+fn testPacketReceiver(chan: *Channel(Packet), total_recv: usize) void {
+    var count: usize = 0;
+    while (count < total_recv) : (count += 1) {
+        const v = chan.receive();
+        _ = v;
+    }
+}
+
+fn testPacketSenderBuffer(ring_buffer: *RingBuffer(Packet), total_send: usize) void {
+    var i: usize = 0;
+    while (i < total_send) {
+        var packet = Packet.default(); 
+        packet.data[2] = @as(u8, @truncate(i));
+        if (ring_buffer.push(packet)) { 
+            i += 1;
+        }
+    }
+}
+
+fn testPacketRecvBuffer(ring_buffer: *RingBuffer(Packet), total_recv: usize) void {
+    var count: usize = 0;
+    while (count < total_recv) {
+        if (ring_buffer.getHeadPtr()) |head| { 
+            defer ring_buffer.consumeAmount(1);
+            _ = head; 
+            count += 1; 
+            // std.debug.print("recv count: {}/{} \n", .{count, total_recv});
+        }
+    }
+}
+
+fn testPacketRecvBufferDrain(ring_buffer: *RingBuffer(Packet), total_recv: usize) void {
+    var count: usize = 0;
+    while (count < total_recv) {
+        if (ring_buffer.try_drain() catch unreachable) |ptrs| { 
+            for (ptrs.items) |ptr| {
+                // std.debug.print("{any}", .{ptr.*.data[2]});
+                _ = ptr;
+                count += 1; 
+            }
+            defer { 
+                ptrs.deinit();
+                ring_buffer.consumeAmount(ptrs.items.len);
+            }
+        }
+    }
+}
+
+fn testPacketSenderBufferV2(ring_buffer: *RingBufferV2(Packet), total_send: usize) void {
+    var i: usize = 0;
+    while (i < total_send) {
+        var packet = Packet.default(); 
+        packet.data[2] = @as(u8, @truncate(i));
+        if (ring_buffer.push(packet)) { 
+            i += 1;
+        }
+    }
+}
+
+fn testPacketRecvBufferDrainV2(ring_buffer: *RingBufferV2(Packet), total_recv: usize) void {
+    var count: usize = 0;
+    while (count < total_recv) {
+        if (ring_buffer.try_drain() catch unreachable) |v| { 
+            for (v.items) |val| {
+                // std.debug.print("{any}", .{val.data[2]});
+                _ = val;
+                count += 1; 
+            }
+            v.deinit();
+        }
+    }
+}
+
 fn testPointerSender(chan: *BlockPointerChannel, total_send: usize) void {
     var allocator = chan.allocator;
     var i: usize = 0;
@@ -165,36 +415,6 @@ fn testPointerReceiver(chan: *BlockPointerChannel, recv_count: *Atomic(usize), i
     }
 }
 
-// pub fn Tunnel(T: type) type {
-//     return struct {
-//         incoming_channel: Channel(T),
-//         outgoing_channel: Channel(T),
-
-//         pub fn init(allocator: std.mem.Allocator) Tunnel(T) {
-//             return Tunnel(T){
-//                 .incoming_channel = Channel(T).init(allocator, 100),
-//                 .outgoing_channel = Channel(T).init(allocator, 100),
-//             };
-//         }
-
-//         pub fn run(self: *Tunnel(T)) void {
-//             while (true) {
-//                 const maybe_packets = try self.incoming_channel.try_drain();
-//                 if (maybe_packets == null) {
-//                     continue;
-//                 }
-//                 const packets = maybe_packets.?;
-//                 defer self.packet_incoming_channel.allocator.free(packets);
-
-//                 for (packets) |*p| {
-//                     _ = p;
-//                     std.time.sleep(100);
-//                 }
-//             }
-//         }
-//     };
-// }
-
 test "sync.channel: channel works properly" {
     var ch = BlockChannel.init(testing.allocator, 100);
     defer ch.deinit();
@@ -212,9 +432,9 @@ test "sync.channel: channel works properly" {
 }
 
 pub const BenchmarkChannel = struct {
-    pub const min_iterations = 10;
-    pub const max_iterations = 20;
-    const send_count: usize = 100_000;
+    pub const min_iterations = 5;
+    pub const max_iterations = 5;
+    const send_count: usize = 500_000;
 
     pub fn benchmarkChannel() !void {
         const allocator = std.heap.page_allocator;
@@ -229,14 +449,49 @@ pub const BenchmarkChannel = struct {
         join2.join();
     }
 
-    pub fn benchmarkPointerChannel() !void {
+    pub fn benchmarkPacketChannel() !void {
         const allocator = std.heap.page_allocator;
-        var channel = BlockPointerChannel.init(allocator, send_count / 2);
+        var channel = Channel(Packet).init(allocator, send_count / 2);
         defer channel.deinit();
 
-        var recv_count: Atomic(usize) = Atomic(usize).init(0);
-        var join2 = try std.Thread.spawn(.{}, testPointerSender, .{ channel, send_count });
-        var join1 = try std.Thread.spawn(.{}, testPointerReceiver, .{ channel, &recv_count, 1 });
+        var join1 = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, send_count });
+        var join2 = try std.Thread.spawn(.{}, testPacketSender, .{ channel, send_count });
+
+        join1.join();
+        join2.join();
+    }
+
+    pub fn benchmarkPacketChannelBuffer() !void {
+        const allocator = std.heap.page_allocator;
+        var buffer = RingBuffer(Packet).init(allocator, send_count / 2);
+        defer buffer.deinit();
+
+        var join1 = try std.Thread.spawn(.{}, testPacketRecvBuffer, .{ buffer, send_count });
+        var join2 = try std.Thread.spawn(.{}, testPacketSenderBuffer, .{ buffer, send_count });
+
+        join1.join();
+        join2.join();
+    }
+
+    pub fn benchmarkPacketChannelBufferDrain() !void {
+        const allocator = std.heap.page_allocator;
+        var buffer = RingBuffer(Packet).init(allocator, send_count / 2);
+        defer buffer.deinit();
+
+        var join1 = try std.Thread.spawn(.{}, testPacketRecvBufferDrain, .{ buffer, send_count });
+        var join2 = try std.Thread.spawn(.{}, testPacketSenderBuffer, .{ buffer, send_count });
+
+        join1.join();
+        join2.join();
+    }
+
+    pub fn benchmarkPacketChannelBufferDrainV2() !void {
+        const allocator = std.heap.page_allocator;
+        var buffer = RingBufferV2(Packet).init(allocator, send_count / 2);
+        defer buffer.deinit();
+
+        var join1 = try std.Thread.spawn(.{}, testPacketRecvBufferDrainV2, .{ buffer, send_count });
+        var join2 = try std.Thread.spawn(.{}, testPacketSenderBufferV2, .{ buffer, send_count });
 
         join1.join();
         join2.join();

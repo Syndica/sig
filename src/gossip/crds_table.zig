@@ -537,7 +537,7 @@ pub const CrdsTable = struct {
         const drop_size = n_pubkeys -| max_pubkey_capacity;
         // TODO: drop based on stake weight
         const drop_pubkeys = self.pubkey_to_values.keys()[0..drop_size];
-        const labels = self.store.iterator().keys;
+        const labels = self.store.keys();
 
         // allocate here so SwapRemove doesnt mess with us
         var labels_to_remove = std.ArrayList(CrdsValueLabel).init(self.allocator);
