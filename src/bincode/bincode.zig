@@ -55,6 +55,7 @@ pub fn Deserializer(comptime Reader: type) type {
                 .deserializeVoid = deserializeVoid,
                 .deserializeSeq = deserializeSeq,
                 .deserializeMap = deserializeMap,
+                .deserializeFloat = deserializeFloat,
             },
         );
 
@@ -109,6 +110,17 @@ pub fn Deserializer(comptime Reader: type) type {
                 return Error.IO;
             };
             return try visitor.visitInt(ally, De, tag);
+        }
+
+        pub fn deserializeFloat(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const T = @TypeOf(visitor).Value;
+            const info = @typeInfo(T).Float;
+            if (info.bits != 32 and info.bits != 64) {
+                @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+            }
+            const bytes = self.reader.readBytesNoEof((info.bits + 7) / 8) catch return Error.IO;
+            const f = @as(T, @bitCast(bytes));
+            return visitor.visitFloat(ally, De, f);
         }
 
         pub fn deserializeInt(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
@@ -387,6 +399,7 @@ pub fn Serializer(
                 .serializeSeq = serializeSeq,
                 .serializeVoid = serializeVoid,
                 .serializeMap = serializeMap,
+                .serializeFloat = serializeFloat,
             },
         );
 
@@ -419,6 +432,22 @@ pub fn Serializer(
 
         fn serializeBool(self: *Self, value: bool) Error!Ok {
             try (self.writer.writeByte(@intFromBool(value)) catch Error.IO);
+        }
+
+        fn serializeFloat(self: *Self, value: anytype) Error!Ok {
+            const T = @TypeOf(value);
+            switch (@typeInfo(T)) {
+                .ComptimeFloat => {
+                    return self.serializeFloat(@as(f64, value));
+                },
+                .Float => |*info| {
+                    if (info.bits != 32 and info.bits != 64) {
+                        @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+                    }
+                    return self.writer.writeAll(std.mem.asBytes(&value)) catch Error.IO;
+                },
+                else => unreachable,
+            }
         }
 
         fn serializeInt(self: *Self, value: anytype) Error!Ok {
@@ -767,6 +796,17 @@ test "bincode: test hashmap/BTree (de)ser" {
 
     const v = de_map.get(20);
     try std.testing.expectEqual(v.?, 10);
+}
+
+test "bincode: test float serialization" {
+    const f: f64 = 1.234;
+    var buf: [1024]u8 = undefined;
+    var bytes = try writeToSlice(&buf, f, .{});
+    const rust_bytes = [_]u8{ 88, 57, 180, 200, 118, 190, 243, 63 };
+    try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
+
+    var f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
+    try std.testing.expect(f2 == f);
 }
 
 test "bincode: test serialization" {
