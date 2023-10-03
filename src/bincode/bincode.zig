@@ -75,8 +75,24 @@ pub fn Deserializer(comptime Reader: type) type {
         fn deserializeSeq(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             // var len = if (self.params.include_fixed_array_length) try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64)) else null;
 
-            const tmp: @TypeOf(visitor).Value = undefined; // TODO: fix without stack alloc?
-            const len = tmp.len;
+            const len = blk: {
+                const visitor_value = @TypeOf(visitor).Value;
+                const tmp: visitor_value = undefined; // TODO: fix without stack alloc?
+                if (@hasField(visitor_value, "len")) {
+                    // a lil hacky but works
+                    break :blk tmp.len;
+                } else {
+                    // try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64){});
+                    const T = u64;
+                    const len = switch (self.params.endian) {
+                        .Little => self.reader.readIntLittle(T),
+                        .Big => self.reader.readIntBig(T),
+                    } catch {
+                        return Error.IO;
+                    };
+                    break :blk len;
+                }
+            };
 
             var s = SeqAccess{ .d = self, .len = len };
             const result = try visitor.visitSeq(allocator.?, De, s.seqAccess());
@@ -155,6 +171,9 @@ pub fn Deserializer(comptime Reader: type) type {
                     .Struct => {
                         // see comments in CustomSer serialization struct
                         if (std.mem.containsAtLeast(u8, @typeName(T), 1, "HashMap")) {
+                            return false;
+                        }
+                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "ArrayList")) {
                             return false;
                         }
                         return true;
@@ -525,6 +544,15 @@ pub fn Serializer(
                         }
                     },
                     .Struct => |*info| {
+                        // note: need comptime here for it to compile
+                        if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                            try getty.serialize(alloc, @as(u64, value.items.len), ss);
+                            for (value.items) |element| {
+                                try getty.serialize(alloc, element, ss);
+                            }
+                            return;
+                        }
+
                         var params = ss.context.params;
                         var writer = ss.context.writer;
 
@@ -539,7 +567,6 @@ pub fn Serializer(
                                         continue;
                                     }
                                 }
-
                                 try getty.serialize(alloc, @field(value, field.name), ss);
                             }
                         }
@@ -775,6 +802,23 @@ test "bincode: custom field serialization" {
     try std.testing.expect(r.accounts.len == foo.accounts.len);
     try std.testing.expect(r.txs.len == foo.txs.len);
     try std.testing.expect(r.skip_me == 20);
+}
+
+test "bincode: test arraylist" {
+    var array = std.ArrayList(u8).init(std.testing.allocator);
+    defer array.deinit();
+
+    try array.append(10);
+    try array.append(11);
+
+    var buf: [1024]u8 = undefined;
+    var bytes = try writeToSlice(&buf, array, .{});
+
+    // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
+    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
+    defer array2.deinit();
+
+    try std.testing.expectEqualSlices(u8, array.items, array2.items);
 }
 
 test "bincode: test hashmap/BTree (de)ser" {

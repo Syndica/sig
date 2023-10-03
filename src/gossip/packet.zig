@@ -21,4 +21,12 @@ pub const Packet = struct {
         };
         return self;
     }
+
+    pub fn default() Self {
+        return .{
+            .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
+            .data = undefined,
+            .size = 0,
+        };
+    }
 };
