@@ -146,12 +146,12 @@ pub const GenesisConfig = struct {
 
 test "core.genesis_config: test" {
     // TODO: change to your genesis file or add genesis to data/genesis.bin
-    const alloc = std.testing.allocator; 
+    const alloc = std.testing.allocator;
     const genesis_path = "./data/genesis.bin";
-    const abs_genesis_path = std.fs.cwd().realpathAlloc(alloc, genesis_path) catch |err| { 
-        if (err == std.fs.File.OpenError.FileNotFound) { 
-            std.debug.print("genesis file not found... skipping test", .{}); 
-            return; 
+    const abs_genesis_path = std.fs.cwd().realpathAlloc(alloc, genesis_path) catch |err| {
+        if (err == std.fs.File.OpenError.FileNotFound) {
+            std.debug.print("genesis file not found... skipping test", .{});
+            return;
         }
         return err;
     };
