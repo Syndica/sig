@@ -7,6 +7,7 @@ const Pubkey = @import("pubkey.zig").Pubkey;
 
 const Slot = @import("clock.zig").Slot;
 const Epoch = @import("clock.zig").Epoch;
+const bincode = @import("../bincode/bincode.zig");
 
 pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);
@@ -31,7 +32,7 @@ pub const PohConfig = struct {
 pub const FeeRateGovernor = struct {
     // The current cost of a signature  This amount may increase/decrease over time based on
     // cluster processing load.
-    lamports_per_signature: u64,
+    lamports_per_signature: u64 = 0,
 
     // The target cost of a signature when the cluster is operating around target_signatures_per_slot
     // signatures
@@ -48,11 +49,7 @@ pub const FeeRateGovernor = struct {
     // What portion of collected fees are to be destroyed, as a fraction of std::u8::MAX
     burn_percent: u8,
 
-    pub const @"getty.sb" = struct {
-        pub const attributes = .{
-            .lamports_per_signature = .{ .skip = true },
-        };
-    };
+    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
 };
 
 pub const Rent = extern struct {
@@ -106,10 +103,10 @@ pub const EpochSchedule = extern struct {
     /// Basically: `log2(slots_per_epoch) - log2(MINIMUM_SLOTS_PER_EPOCH)`.
     first_normal_epoch: Epoch,
 
-    // /// The first slot after the warmup period.
-    // ///
-    // /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
-    // first_normal_slot: Slot,
+    /// The first slot after the warmup period.
+    ///
+    /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
+    first_normal_slot: Slot,
 };
 
 pub const ClusterType = enum(u8) {
@@ -124,7 +121,7 @@ pub const GenesisConfig = struct {
     creation_time: UnixTimestamp,
     // initial accounts
     accounts: AutoHashMap(Pubkey, Account),
-    /// built-in programs
+    // /// built-in programs
     native_instruction_processors: std.ArrayList(struct { String, Pubkey }),
     /// accounts for network rewards, these do not count towards capitalization
     rewards_pools: AutoHashMap(Pubkey, Account),
@@ -157,19 +154,16 @@ pub const GenesisConfig = struct {
 //     try file.seekFromEnd(0);
 //     const file_size = try file.getPos();
 //     try file.seekTo(0);
+//     std.debug.print("length: {d}\n", .{file_size});
 
 //     var buf_reader = std.io.bufferedReader(file.reader());
 //     var in_stream = buf_reader.reader();
 
 //     var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, file_size);
 //     defer buf.deinit();
-
 //     // read all to buf
 //     try in_stream.readAllArrayList(&buf, file_size);
 
-//     std.debug.print("{any}\n", .{buf});
-
-//     const bincode = @import("../bincode/bincode.zig");
 //     const config = try bincode.readFromSlice(
 //         std.testing.allocator,
 //         GenesisConfig,
