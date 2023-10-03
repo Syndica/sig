@@ -144,33 +144,44 @@ pub const GenesisConfig = struct {
     cluster_type: ClusterType,
 };
 
-// test "core.genesis_config: test" {
-//     // TODO: change to your genesis file
-//     const genesis_path = "~/Documents/workspace/solana/data/genesis.bin";
-//     // open file
-//     var file = try std.fs.openFileAbsolute(genesis_path, .{});
-//     defer file.close();
+test "core.genesis_config: test" {
+    // TODO: change to your genesis file or add genesis to data/genesis.bin
+    const alloc = std.testing.allocator; 
+    const genesis_path = "./data/genesis.bin";
+    const abs_genesis_path = std.fs.cwd().realpathAlloc(alloc, genesis_path) catch |err| { 
+        if (err == std.fs.File.OpenError.FileNotFound) { 
+            std.debug.print("genesis file not found... skipping test", .{}); 
+            return; 
+        }
+        return err;
+    };
+    defer alloc.free(abs_genesis_path);
 
-//     try file.seekFromEnd(0);
-//     const file_size = try file.getPos();
-//     try file.seekTo(0);
-//     std.debug.print("length: {d}\n", .{file_size});
+    // open file
+    var file = try std.fs.openFileAbsolute(abs_genesis_path, .{});
+    defer file.close();
 
-//     var buf_reader = std.io.bufferedReader(file.reader());
-//     var in_stream = buf_reader.reader();
+    try file.seekFromEnd(0);
+    const file_size = try file.getPos();
+    try file.seekTo(0);
+    std.debug.print("length: {d}\n", .{file_size});
 
-//     var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, file_size);
-//     defer buf.deinit();
-//     // read all to buf
-//     try in_stream.readAllArrayList(&buf, file_size);
+    var buf_reader = std.io.bufferedReader(file.reader());
+    var in_stream = buf_reader.reader();
 
-//     const config = try bincode.readFromSlice(
-//         std.testing.allocator,
-//         GenesisConfig,
-//         buf.items[0..buf.items.len],
-//         .{},
-//     );
-//     defer bincode.free(std.testing.allocator, config);
+    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, file_size);
+    defer buf.deinit();
 
-//     std.debug.print("{any}", .{config});
-// }
+    // read all to buf
+    try in_stream.readAllArrayList(&buf, file_size);
+
+    const config = try bincode.readFromSlice(
+        std.testing.allocator,
+        GenesisConfig,
+        buf.items[0..buf.items.len],
+        .{},
+    );
+    defer bincode.free(std.testing.allocator, config);
+
+    std.debug.print("{any}", .{config});
+}
