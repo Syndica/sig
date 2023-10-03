@@ -587,18 +587,18 @@ pub const CrdsTable = struct {
         }
 
         pub fn callback(task: *Task) void {
-            var this = @fieldParentPtr(@This(), "task", task);
-            defer this.done.store(true, std.atomic.Ordering.Release);
+            var self = @fieldParentPtr(@This(), "task", task);
+            defer self.done.store(true, std.atomic.Ordering.Release);
 
             // get assocaited entries
-            const entry = this.crds_table.pubkey_to_values.getEntry(this.key).?;
+            const entry = self.crds_table.pubkey_to_values.getEntry(self.key).?;
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
             const label = CrdsValueLabel{ .LegacyContactInfo = pubkey.* };
-            if (this.crds_table.get(label)) |*contact_info| {
+            if (self.crds_table.get(label)) |*contact_info| {
                 const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
-                if (value_timestamp > this.cutoff_timestamp) {
+                if (value_timestamp > self.cutoff_timestamp) {
                     return;
                 }
             }
@@ -608,10 +608,10 @@ pub const CrdsTable = struct {
             const count = entry_indexs.count();
 
             for (entry_indexs.iterator().keys[0..count]) |entry_index| {
-                const versioned_value = this.crds_table.store.values()[entry_index];
+                const versioned_value = self.crds_table.store.values()[entry_index];
                 const value_timestamp = @min(versioned_value.value.wallclock(), versioned_value.timestamp_on_insertion);
-                if (value_timestamp <= this.cutoff_timestamp) {
-                    this.old_labels.append(versioned_value.value.label()) catch unreachable;
+                if (value_timestamp <= self.cutoff_timestamp) {
+                    self.old_labels.append(versioned_value.value.label()) catch unreachable;
                 }
             }
         }
