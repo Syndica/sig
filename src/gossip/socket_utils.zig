@@ -22,35 +22,30 @@ pub fn readSocket(
 
     const MAX_WAIT_NS = std.time.ns_per_ms; // 1ms
 
-    var packet_batch: std.ArrayList(Packet) = undefined;
-
     while (!exit.load(std.atomic.Ordering.Unordered)) {
         // init a new batch
         var count: usize = 0;
         const capacity = PACKETS_PER_BATCH;
-        packet_batch = try std.ArrayList(Packet).initCapacity(
+        var packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
             capacity,
         );
-        for (0..capacity) |_| {
-            packet_batch.appendAssumeCapacity(Packet.default());
-        }
+        packet_batch.appendNTimesAssumeCapacity(Packet.default(), capacity);
 
-        // set socket to block
-        try socket.setReadTimeout(null);
+        // NOTE: usually this would be null (ie, blocking)
+        // but in order to exit cleanly in tests - we set to 1 second
+        try socket.setReadTimeout(std.time.ms_per_s);
         var timer = std.time.Timer.start() catch unreachable;
 
         // recv packets into batch
         while (true) {
-            var n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity]) catch |err| {
+            var n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity], exit) catch |err| {
                 if (count > 0 and err == error.WouldBlock) {
                     if (timer.read() > MAX_WAIT_NS) {
                         break;
                     }
-                    continue;
-                } else {
-                    return err;
                 }
+                continue;
             };
 
             if (count == 0) {
@@ -68,14 +63,14 @@ pub fn readSocket(
         }
         try incoming_channel.send(packet_batch);
     }
-
-    packet_batch.deinit();
+    std.debug.print("recv_socket loop closed.\n", .{});
 }
 
 pub fn recvMmsg(
     socket: *UdpSocket,
     /// pre-allocated array of packets to fill up
     packet_batch: []Packet,
+    exit: *const std.atomic.Atomic(bool),
 ) !usize {
     const max_size = packet_batch.len;
     var count: usize = 0;
@@ -87,7 +82,8 @@ pub fn recvMmsg(
             if (count > 0 and err == error.WouldBlock) {
                 break;
             } else {
-                return err;
+                if (exit.load(std.atomic.Ordering.Unordered)) return 0;
+                continue;
             }
         };
 
