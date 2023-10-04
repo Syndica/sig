@@ -389,14 +389,8 @@ pub const GossipService = struct {
         }
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
-            // var drain_timer = std.time.Timer.start() catch unreachable;
             const maybe_packets = try self.packet_incoming_channel.try_drain();
-            // const drain_elapsed = drain_timer.read();
-            // self.logger.debugf("handle batch packet_drain took {} with {} items\n", .{ drain_elapsed, 1 });
-
             if (maybe_packets == null) {
-                // // sleep for 1ms
-                // std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             }
 
@@ -492,7 +486,6 @@ pub const GossipService = struct {
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
 
             if (maybe_protocol_messages == null) {
-                // // sleep for 1ms
                 // std.time.sleep(std.time.ns_per_ms * 1);
                 continue;
             }
@@ -718,12 +711,7 @@ pub const GossipService = struct {
                     self.logger.debugf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
-                defer pull_packets.deinit();
-
-                // send packets
-                for (pull_packets.items) |packet| {
-                    try self.packet_outgoing_channel.send(packet);
-                }
+                try self.packet_outgoing_channel.send(pull_packets);
             }
             // every other loop
             should_send_pull_requests = !should_send_pull_requests;
@@ -735,9 +723,8 @@ pub const GossipService = struct {
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
-                defer push_packets.deinit();
-                for (push_packets.items) |packet| {
-                    try self.packet_outgoing_channel.send(packet);
+                for (push_packets.items) |packet_batch| { 
+                    try self.packet_outgoing_channel.send(packet_batch);
                 }
             }
 
@@ -809,7 +796,7 @@ pub const GossipService = struct {
 
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
-    fn buildPushMessages(self: *Self, push_cursor: *u64) !?ArrayList(Packet) {
+    fn buildPushMessages(self: *Self, push_cursor: *u64) !?ArrayList(ArrayList(Packet)) {
         // TODO: find a better static value?
         var buf: [512]crds.CrdsVersionedValue = undefined;
 
@@ -893,8 +880,8 @@ pub const GossipService = struct {
         const num_values_not_considered = crds_entries.len - num_values_considered;
         push_cursor.* -= num_values_not_considered;
 
-        var packets = ArrayList(Packet).init(self.allocator);
-        errdefer packets.deinit();
+        var packet_batch = ArrayList(ArrayList(Packet)).init(self.allocator);
+        errdefer packet_batch.deinit();
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
@@ -910,12 +897,10 @@ pub const GossipService = struct {
                 ChunkType.PushMessage,
             );
             if (maybe_endpoint_packets) |endpoint_packets| {
-                defer endpoint_packets.deinit();
-                try packets.appendSlice(endpoint_packets.items);
+                try packet_batch.append(endpoint_packets);
             }
         }
-
-        return packets;
+        return packet_batch;
     }
 
     /// builds new pull request messages and serializes it into a list of Packets
@@ -1003,8 +988,13 @@ pub const GossipService = struct {
         defer pull_request.deinitCrdsFilters(&filters);
 
         // build packet responses
-        var output = try ArrayList(Packet).initCapacity(self.allocator, filters.items.len);
-        var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
+        var n_packets: usize = 0; 
+        if (num_peers != 0) n_packets += filters.items.len;
+        if (should_send_to_entrypoint) n_packets += filters.items.len;
+
+        var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
+        packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
+        var packet_index: usize = 0;
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
@@ -1021,9 +1011,11 @@ pub const GossipService = struct {
 
                 const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
-                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-                var packet = Packet.init(peer_addr, packet_buf, msg_slice.len);
-                output.appendAssumeCapacity(packet);
+                var packet = &packet_batch.items[packet_index];
+                var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
+                packet.size = bytes.len;
+                packet.addr = peer_addr;
+                packet_index += 1; 
             }
         }
 
@@ -1032,13 +1024,16 @@ pub const GossipService = struct {
             const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
-                var msg_slice = try bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{});
-                var packet = Packet.init(entrypoint_addr.toEndpoint(), packet_buf, msg_slice.len);
-                try output.append(packet);
+
+                var packet = &packet_batch.items[packet_index];
+                var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
+                packet.size = bytes.len;
+                packet.addr = entrypoint_addr.toEndpoint();
+                packet_index += 1;
             }
         }
 
-        return output;
+        return packet_batch;
     }
 
     fn handleBatchPullRequest(
@@ -1743,6 +1738,36 @@ pub fn chunkValuesIntoPacketIndexs(
     return packet_indexs;
 }
 
+test "gossip.gossip_service: build messages startup and shutdown" { 
+    const allocator = std.testing.allocator;
+    var exit = AtomicBool.init(false);
+    var my_keypair = try KeyPair.create([_]u8{1} ** 32);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
+
+    var contact_info = crds.LegacyContactInfo.default(my_pubkey);
+    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+
+    var logger = Logger.init(std.testing.allocator, .debug);
+    defer logger.deinit();
+    logger.spawn();
+
+    var gossip_service = try GossipService.init(
+        allocator,
+        contact_info,
+        my_keypair,
+        null,
+        &exit,
+        logger,
+    );
+    defer gossip_service.deinit();
+
+    var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{&gossip_service});
+    std.time.sleep(std.time.ns_per_s * 3);
+
+    exit.store(true, std.atomic.Ordering.Unordered);
+    build_messages_handle.join();
+}
+
 test "gossip.gossip_service: tests handle_prune_messages" {
     var rng = std.rand.DefaultPrng.init(91);
 
@@ -2168,6 +2193,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var msgs = (try gossip_service.buildPushMessages(&cursor)).?;
     try std.testing.expectEqual(cursor, 11);
     try std.testing.expect(msgs.items.len > 0);
+    for (msgs.items) |*msg| msg.deinit();
     msgs.deinit();
 
     var msgs2 = try gossip_service.buildPushMessages(&cursor);
