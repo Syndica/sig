@@ -13,6 +13,7 @@ pub fn readSocket(
     socket: *UdpSocket,
     incoming_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Atomic(bool),
+    logger: Logger,
 ) !void {
     //Performance out of the IO without poll
     //  * block on the socket until it's readable
@@ -63,7 +64,7 @@ pub fn readSocket(
         }
         try incoming_channel.send(packet_batch);
     }
-    std.debug.print("recv_socket loop closed.\n", .{});
+    logger.debugf("readSocket loop closed\n", .{});
 }
 
 pub fn recvMmsg(
@@ -138,7 +139,7 @@ pub fn sendSocket(
             }
         }
     }
-    logger.debugf("send_socket loop closed\n", .{});
+    logger.debugf("sendSocket loop closed\n", .{});
 }
 
 pub const BenchmarkPacketProcessing = struct {
@@ -167,7 +168,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Atomic(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, &socket, channel, &exit });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, &socket, channel, &exit, .noop });
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);

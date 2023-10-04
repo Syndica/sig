@@ -170,7 +170,6 @@ pub const GossipService = struct {
         var failed_pull_hashes = HashTimeQueue.init(allocator);
         var push_msg_q = ArrayList(CrdsValue).init(allocator);
 
-        // TODO: figure out how to properly shut this guy down on exit
         var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
 
         return Self{
@@ -275,6 +274,7 @@ pub const GossipService = struct {
             &self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
+            self.logger,
         });
         defer self.joinAndExit(&receiver_handle);
 
@@ -306,6 +306,7 @@ pub const GossipService = struct {
             &self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
+            self.logger,
         });
         defer self.joinAndExit(&receiver_handle);
 
@@ -2464,13 +2465,13 @@ pub const BenchmarkGossipServiceGeneral = struct {
     pub const args = [_]usize{
         1_000,
         5_000,
-        // 10_000,
+        10_000,
     };
 
     pub const arg_names = [_][]const u8{
         "1k_msgs",
         "5k_msgs",
-        // "10k_msg_iters",
+        "10k_msg_iters",
     };
 
     pub fn benchmarkGossipServiceProcessMessages(num_message_iterations: usize) !void {
@@ -2499,6 +2500,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             &exit,
             logger,
         );
+        gossip_service.echo_server.kill(); // we dont need this rn 
         defer gossip_service.deinit();
 
         var packet_handle = try Thread.spawn(.{}, GossipService.runSpy, .{
@@ -2532,18 +2534,18 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var msg_sent: usize = 0;
 
         while (msg_sent < num_message_iterations) {
-            var packet_output = try ArrayList(Packet).initCapacity(allocator, 10);
+            var packet_batch = try ArrayList(Packet).initCapacity(allocator, 10);
 
             // send a ping message
             {
-                var msg = try fuzz.randomPingPacket(rng, &keypair, endpoint);
-                try packet_output.append(msg);
+                var packet = try fuzz.randomPingPacket(rng, &keypair, endpoint);
+                try packet_batch.append(packet);
                 msg_sent += 1;
             }
             // send a pong message
             {
-                var msg = try fuzz.randomPongPacket(rng, &keypair, endpoint);
-                try packet_output.append(msg);
+                var packet = try fuzz.randomPongPacket(rng, &keypair, endpoint);
+                try packet_batch.append(packet);
                 msg_sent += 1;
             }
             // send a push message
@@ -2560,12 +2562,12 @@ pub const BenchmarkGossipServiceGeneral = struct {
             }
             // send a pull request
             {
-                var msg = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
-                try packet_output.append(msg);
+                var packet = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
+                try packet_batch.append(packet);
                 msg_sent += 1;
             }
 
-            try outgoing_channel.send(packet_output);
+            try outgoing_channel.send(packet_batch);
         }
 
         // wait for all messages to be processed
@@ -2577,15 +2579,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
         }
 
         exit.store(true, std.atomic.Ordering.Unordered);
-        // send a few more to make sure the socket exits
-        for (0..5) |_| {
-            var msg = try fuzz.randomPingPacket(rng, &keypair, endpoint);
-
-            var packet_output = try ArrayList(Packet).initCapacity(allocator, 1);
-            packet_output.appendAssumeCapacity(msg);
-
-            try outgoing_channel.send(packet_output);
-        }
         packet_handle.join();
 
         sender_exit.store(true, std.atomic.Ordering.Unordered);
