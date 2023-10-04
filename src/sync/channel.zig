@@ -27,9 +27,10 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            var buff = self.buffer.lock();
-            buff.mut().deinit();
-            buff.unlock();
+            var buff_lock = self.buffer.lock();
+            var buff: *std.ArrayList(T) = buff_lock.mut();
+            buff.deinit();
+            buff_lock.unlock();
 
             self.allocator.destroy(self);
         }
@@ -150,7 +151,7 @@ const Packet = @import("../gossip/packet.zig").Packet;
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
-        var packet = Packet.default(); 
+        var packet = Packet.default();
         chan.send(packet) catch unreachable;
     }
 }

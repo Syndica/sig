@@ -166,7 +166,7 @@ pub fn Deserializer(comptime Reader: type) type {
                     .Struct => |*info| {
                         inline for (info.fields) |field| {
                             // std.debug.print("freeing {s} on {s}\n", .{ field.name, @typeName(T) });
-                            if (get_field_config(T, field)) |config| {
+                            if (getFieldConfig(T, field)) |config| {
                                 if (config.free) |free_fcn| {
                                     // std.debug.print("found free fcn...\n", .{});
                                     var field_value = @field(value, field.name);
@@ -229,7 +229,7 @@ pub fn Deserializer(comptime Reader: type) type {
 
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
-                                if (get_field_config(T, field)) |config| {
+                                if (getFieldConfig(T, field)) |config| {
                                     if (shouldUseDefaultValue(field, config)) |default_val| {
                                         @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_val))).*;
                                         continue;
@@ -446,7 +446,7 @@ pub fn Serializer(
 
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
-                                if (get_field_config(T, field)) |config| {
+                                if (getFieldConfig(T, field)) |config| {
                                     if (config.skip) {
                                         continue;
                                     }
@@ -517,7 +517,7 @@ pub fn FieldConfig(comptime T: type) type {
     };
 }
 
-pub fn get_field_config(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
+pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
     const bincode_field = "!bincode-config:" ++ field.name;
     if (@hasDecl(struct_type, bincode_field)) {
         const config = @field(struct_type, bincode_field);

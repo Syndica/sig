@@ -22,11 +22,13 @@ pub fn readSocket(
 
     const MAX_WAIT_NS = std.time.ns_per_ms; // 1ms
 
+    var packet_batch: std.ArrayList(Packet) = undefined;
+
     while (!exit.load(std.atomic.Ordering.Unordered)) {
         // init a new batch
         var count: usize = 0;
         const capacity = PACKETS_PER_BATCH;
-        var packet_batch = try std.ArrayList(Packet).initCapacity(
+        packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
             capacity,
         );
@@ -66,6 +68,8 @@ pub fn readSocket(
         }
         try incoming_channel.send(packet_batch);
     }
+
+    packet_batch.deinit();
 }
 
 pub fn recvMmsg(

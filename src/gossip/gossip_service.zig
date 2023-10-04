@@ -8,6 +8,7 @@ const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
+const ArrayList = std.ArrayList;
 
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -56,10 +57,12 @@ const socket_utils = @import("socket_utils.zig");
 
 const Channel = @import("../sync/channel.zig").Channel;
 
+const PacketBatch = ArrayList(Packet);
 const PacketChannel = Channel(Packet);
-const PacketBatchChannel = Channel(std.ArrayList(Packet));
+const PacketBatchChannel = Channel(PacketBatch);
 
 const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
+
 const ProtocolChannel = Channel(ProtocolMessage);
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
@@ -110,15 +113,15 @@ pub const GossipService = struct {
     crds_table_rw: RwMux(CrdsTable),
     // push message things
     active_set_rw: RwMux(ActiveSet),
-    push_msg_queue_mux: Mux(std.ArrayList(CrdsValue)),
+    push_msg_queue_mux: Mux(ArrayList(CrdsValue)),
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
-    entrypoints: std.ArrayList(SocketAddr),
+    entrypoints: ArrayList(SocketAddr),
     ping_cache_rw: RwMux(PingCache),
     logger: Logger,
     thread_pool: *ThreadPool,
-    echo_server: ?echo.Server,
+    echo_server: echo.Server,
 
     // used for benchmarking
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
@@ -129,7 +132,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_contact_info: crds.LegacyContactInfo,
         my_keypair: KeyPair,
-        entrypoints: ?std.ArrayList(SocketAddr),
+        entrypoints: ?ArrayList(SocketAddr),
         exit: *AtomicBool,
         logger: Logger,
     ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
@@ -165,10 +168,10 @@ pub const GossipService = struct {
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT) catch return error.SocketSetTimeoutFailed; // 1 second
 
         var failed_pull_hashes = HashTimeQueue.init(allocator);
-        var push_msg_q = std.ArrayList(CrdsValue).init(allocator);
+        var push_msg_q = ArrayList(CrdsValue).init(allocator);
 
-        // // TODO: figure out how to properly shut this guy down on exit
-        // var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
+        // TODO: figure out how to properly shut this guy down on exit
+        var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
 
         return Self{
             .my_contact_info = my_contact_info,
@@ -182,10 +185,10 @@ pub const GossipService = struct {
             .verified_incoming_channel = verified_incoming_channel,
             .crds_table_rw = crds_table_rw,
             .allocator = allocator,
-            .push_msg_queue_mux = Mux(std.ArrayList(CrdsValue)).init(push_msg_q),
+            .push_msg_queue_mux = Mux(ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
-            .entrypoints = entrypoints orelse std.ArrayList(SocketAddr).init(allocator),
+            .entrypoints = entrypoints orelse ArrayList(SocketAddr).init(allocator),
             .ping_cache_rw = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
@@ -194,7 +197,7 @@ pub const GossipService = struct {
                     GOSSIP_PING_CACHE_CAPACITY,
                 ),
             ),
-            .echo_server = null,
+            .echo_server = echo_server,
             .logger = logger,
             .thread_pool = thread_pool,
         };
@@ -213,13 +216,30 @@ pub const GossipService = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // self.echo_server.deinit();
-
+        self.echo_server.deinit();
         self.gossip_socket.close();
 
-        self.packet_incoming_channel.deinit();
-        self.packet_outgoing_channel.deinit();
-        self.verified_incoming_channel.deinit();
+        { 
+            var buff_lock = self.packet_incoming_channel.buffer.lock();
+            var buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
+            for (buff.items) |*item| item.deinit();
+            buff_lock.unlock();
+            self.packet_incoming_channel.deinit();
+        }
+        { 
+            var buff_lock = self.packet_outgoing_channel.buffer.lock();
+            var buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
+            for (buff.items) |*item| item.deinit();
+            buff_lock.unlock();
+            self.packet_outgoing_channel.deinit();
+        }
+        { 
+            var buff_lock = self.verified_incoming_channel.buffer.lock();
+            var buff: *std.ArrayList(ProtocolMessage) = buff_lock.mut();
+            for (buff.items) |*item| bincode.free(self.allocator, &item.message);
+            buff_lock.unlock();
+            self.verified_incoming_channel.deinit();
+        }
 
         self.entrypoints.deinit();
 
@@ -247,8 +267,8 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message)
     ///     and 5) a socket responder (to send outgoing packets)
     pub fn run(self: *Self) !void {
-        // var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        // defer self.joinAndExit(&ip_echo_server_listener_handle);
+        var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
+        defer self.joinAndExit(&ip_echo_server_listener_handle);
 
         var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
@@ -278,8 +298,8 @@ pub const GossipService = struct {
     }
 
     pub fn runSpy(self: *Self) !void {
-        // var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        // defer self.joinAndExit(&ip_echo_server_listener_handle);
+        var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
+        defer self.joinAndExit(&ip_echo_server_listener_handle);
 
         var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
@@ -309,7 +329,6 @@ pub const GossipService = struct {
         packet: *const Packet,
         allocator: std.mem.Allocator,
         verified_incoming_channel: *Channel(ProtocolMessage),
-        // verified_incoming_channel: *ProtocolRingBuffer,
 
         task: Task,
         done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
@@ -343,12 +362,6 @@ pub const GossipService = struct {
                 .message = protocol_message,
             };
             self.verified_incoming_channel.send(msg) catch unreachable;
-
-            // TODO: fix
-            // _ = self.verified_incoming_channel.push(msg);
-            // while (!) { 
-            //     std.time.sleep(100);
-            // }
         }
     };
 
@@ -415,6 +428,7 @@ pub const GossipService = struct {
         self.logger.debugf("verify_packets loop closed\n", .{});
     }
 
+    // structs used in process_messages loop
     pub const PullRequestMessage = struct {
         filter: CrdsFilter,
         value: CrdsValue,
@@ -437,43 +451,40 @@ pub const GossipService = struct {
         from_endpoint: *EndPoint,
     };
 
-    pub const PullResponseMessage = struct { crds_values: []CrdsValue, from_pubkey: *Pubkey };
+    pub const PullResponseMessage = struct {
+        crds_values: []CrdsValue,
+        from_pubkey: *Pubkey,
+    };
 
     /// main logic for recieving and processing `Protocol` messages.
     pub fn processMessages(self: *Self) !void {
         var timer = std.time.Timer.start() catch unreachable;
         var msg_count: usize = 0;
-        const init_message_size = socket_utils.PACKETS_PER_BATCH;
 
-        // // batching messages can lead to 1) less lock contention and 2) use of packetbatch which
-        // // are pre-allocated packets for responses 3) processing messages in parallel
+        // we batch messages bc:
+        // 1) less lock contention
+        // 2) can use packetbatchs (ie, pre-allocated packets)
+        // 3) processing read-heavy messages in parallel (specifically pull-requests)
 
-        // batch so we can process in parallel
-        var pull_requests = try std.ArrayList(PullRequestMessage).initCapacity(self.allocator, init_message_size);
-        defer pull_requests.deinit();
+        const init_capacity = socket_utils.PACKETS_PER_BATCH;
+        var push_messages = try ArrayList(PushMessage).initCapacity(self.allocator, init_capacity);
+        var pull_requests = try ArrayList(PullRequestMessage).initCapacity(self.allocator, init_capacity);
+        var pull_response_messages = try ArrayList(PullResponseMessage).initCapacity(self.allocator, init_capacity);
+        var ping_messages = try ArrayList(PingMessage).initCapacity(self.allocator, init_capacity);
+        var pong_messages = try ArrayList(PongMessage).initCapacity(self.allocator, init_capacity);
+        var prune_messages = try ArrayList(*PruneData).initCapacity(self.allocator, init_capacity);
 
-        // batch so we can reduce the ping_cache locks
-        var pong_messages = try std.ArrayList(PongMessage).initCapacity(self.allocator, init_message_size);
-        defer pong_messages.deinit();
-
-        // batch so we can respond with a packet batch
-        var ping_messages = try std.ArrayList(PingMessage).initCapacity(self.allocator, init_message_size);
-        defer ping_messages.deinit();
-
-        var push_messages = try std.ArrayList(PushMessage).initCapacity(self.allocator, init_message_size);
-        defer push_messages.deinit();
-
-        var pull_response_messages = try std.ArrayList(PullResponseMessage).initCapacity(self.allocator, init_message_size);
-        defer pull_response_messages.deinit();
-
-        var prune_messages = try std.ArrayList(*PruneData).initCapacity(self.allocator, init_message_size);
-        defer prune_messages.deinit();
+        defer {
+            pull_response_messages.deinit();
+            ping_messages.deinit();
+            pong_messages.deinit();
+            prune_messages.deinit();
+            pull_requests.deinit();
+            push_messages.deinit();
+        }
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
-            // var drain_timer = std.time.Timer.start() catch unreachable;
             const maybe_protocol_messages = try self.verified_incoming_channel.try_drain();
-            // const drain_elapsed = drain_timer.read();
-            // self.logger.debugf("handle batch msg_drain took {} with {} items\n", .{ drain_elapsed, 1 });
 
             if (maybe_protocol_messages == null) {
                 // // sleep for 1ms
@@ -487,26 +498,15 @@ pub const GossipService = struct {
 
             const protocol_messages = maybe_protocol_messages.?;
             defer self.verified_incoming_channel.allocator.free(protocol_messages);
-            // defer { 
-            //     // self.verified_incoming_channel.consumeAmount(protocol_messages.items.len);
-            //     protocol_messages.deinit();
-            // }
             msg_count += protocol_messages.len;
 
             // TODO: filter messages based on_shred_version
 
             for (protocol_messages) |*protocol_message| {
-
                 var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
                 switch (protocol_message.message) {
                     .PushMessage => |*push| {
-                        var x_timer = std.time.Timer.start() catch unreachable;
-                        defer {
-                            const elapsed = x_timer.read();
-                            self.logger.debugf("handle batch push took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
-                        }
-
                         try push_messages.append(PushMessage{
                             .crds_values = push[1],
                             .from_pubkey = &push[0],
@@ -514,19 +514,12 @@ pub const GossipService = struct {
                         });
                     },
                     .PullResponse => |*pull| {
-                        var x_timer = std.time.Timer.start() catch unreachable;
-                        defer {
-                            const elapsed = x_timer.read();
-                            self.logger.debugf("handle batch pull_resp took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
-                        }
-
                         try pull_response_messages.append(PullResponseMessage{
                             .from_pubkey = &pull[0],
                             .crds_values = pull[1],
                         });
                     },
                     .PullRequest => |*pull| {
-
                         try pull_requests.append(.{
                             .filter = pull[0],
                             .value = pull[1],
@@ -617,7 +610,7 @@ pub const GossipService = struct {
 
                 // init a new batch of responses
                 // TODO: figure out a way to re-use this allocation instead of freeing after responder sends it
-                var ping_packet_batch = try std.ArrayList(Packet).initCapacity(self.allocator, n_ping_messages);
+                var ping_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_ping_messages);
                 ping_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_ping_messages);
 
                 // TODO: add back logging
@@ -669,7 +662,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 defer {
                     const elapsed = x_timer.read();
-                    self.logger.debugf("handle batch crds_trim took {} with {} items @{}\n", .{ elapsed, 1, msg_count});
+                    self.logger.debugf("handle batch crds_trim took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
                 }
 
                 var crds_table_lock = self.crds_table_rw.write();
@@ -685,8 +678,8 @@ pub const GossipService = struct {
             self.logger.debugf("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             self.messages_processed.store(msg_count, std.atomic.Ordering.Release);
-            // if (msg_count >= 30_000) { 
-            // // if (msg_count >= 1_000) { 
+            // if (msg_count >= 30_000) {
+            // // if (msg_count >= 1_000) {
             //     std.debug.print("exiting...\n", .{});
             //     self.exit.store(true, std.atomic.Ordering.Unordered);
             //     break;
@@ -757,7 +750,7 @@ pub const GossipService = struct {
                 {
                     var push_msg_queue_lock = self.push_msg_queue_mux.lock();
                     defer push_msg_queue_lock.unlock();
-                    var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lock.mut();
+                    var push_msg_queue: *ArrayList(CrdsValue) = push_msg_queue_lock.mut();
 
                     try push_msg_queue.append(my_contact_info_value);
                 }
@@ -810,7 +803,7 @@ pub const GossipService = struct {
 
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
-    fn buildPushMessages(self: *Self, push_cursor: *u64) !?std.ArrayList(Packet) {
+    fn buildPushMessages(self: *Self, push_cursor: *u64) !?ArrayList(Packet) {
         // TODO: find a better static value?
         var buf: [512]crds.CrdsVersionedValue = undefined;
 
@@ -832,7 +825,7 @@ pub const GossipService = struct {
         // find new values in crds table
         // TODO: benchmark different approach of HashMapping(origin, value) first
         // then deriving the active set per origin in a batch
-        var push_messages = std.AutoHashMap(EndPoint, std.ArrayList(CrdsValue)).init(self.allocator);
+        var push_messages = std.AutoHashMap(EndPoint, ArrayList(CrdsValue)).init(self.allocator);
         defer {
             var push_iter = push_messages.iterator();
             while (push_iter.next()) |push_entry| {
@@ -880,7 +873,7 @@ pub const GossipService = struct {
                     if (maybe_peer_entry) |peer_entry| {
                         try peer_entry.value_ptr.append(value);
                     } else {
-                        var peer_entry = try std.ArrayList(CrdsValue).initCapacity(self.allocator, 1);
+                        var peer_entry = try ArrayList(CrdsValue).initCapacity(self.allocator, 1);
                         peer_entry.appendAssumeCapacity(value);
                         try push_messages.put(peer, peer_entry);
                     }
@@ -894,12 +887,12 @@ pub const GossipService = struct {
         const num_values_not_considered = crds_entries.len - num_values_considered;
         push_cursor.* -= num_values_not_considered;
 
-        var packets = std.ArrayList(Packet).init(self.allocator);
+        var packets = ArrayList(Packet).init(self.allocator);
         errdefer packets.deinit();
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
-            const crds_values: *const std.ArrayList(CrdsValue) = push_entry.value_ptr;
+            const crds_values: *const ArrayList(CrdsValue) = push_entry.value_ptr;
             const to_endpoint: *const EndPoint = push_entry.key_ptr;
 
             // send the values as a pull response
@@ -925,7 +918,7 @@ pub const GossipService = struct {
         self: *Self,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
-    ) !std.ArrayList(Packet) {
+    ) !ArrayList(Packet) {
         // get nodes from crds table
         var buf: [MAX_NUM_PULL_REQUESTS]crds.LegacyContactInfo = undefined;
         const now = getWallclockMs();
@@ -1004,7 +997,7 @@ pub const GossipService = struct {
         defer pull_request.deinitCrdsFilters(&filters);
 
         // build packet responses
-        var output = try std.ArrayList(Packet).initCapacity(self.allocator, filters.items.len);
+        var output = try ArrayList(Packet).initCapacity(self.allocator, filters.items.len);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
         // update wallclock and sign
@@ -1044,7 +1037,7 @@ pub const GossipService = struct {
 
     fn handleBatchPullRequest(
         self: *Self,
-        pull_requests: std.ArrayList(PullRequestMessage),
+        pull_requests: ArrayList(PullRequestMessage),
     ) void {
         // self.handleBatchPullRequestSequential(pull_requests) catch {};
         self.handleBatchPullRequestParallel(pull_requests) catch |err| {
@@ -1059,7 +1052,7 @@ pub const GossipService = struct {
         filter: *CrdsFilter,
         value: *CrdsValue,
         crds_table: *const CrdsTable,
-        output: std.ArrayList(Packet),
+        output: ArrayList(Packet),
         output_limit: *std.atomic.Atomic(i64),
 
         task: Task,
@@ -1125,7 +1118,7 @@ pub const GossipService = struct {
 
     fn handleBatchPullRequestParallel(
         self: *Self,
-        pull_requests: std.ArrayList(PullRequestMessage),
+        pull_requests: ArrayList(PullRequestMessage),
     ) !void {
         // TODO: parallelize this
 
@@ -1144,7 +1137,7 @@ pub const GossipService = struct {
         }
 
         const n_requests = pull_requests.items.len;
-        var valid_indexs = try std.ArrayList(usize).initCapacity(self.allocator, n_requests);
+        var valid_indexs = try ArrayList(usize).initCapacity(self.allocator, n_requests);
         defer valid_indexs.deinit();
 
         {
@@ -1153,7 +1146,7 @@ pub const GossipService = struct {
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
             // TODO: only allocate this once
-            var ping_packets = try std.ArrayList(Packet).initCapacity(self.allocator, n_requests);
+            var ping_packets = try ArrayList(Packet).initCapacity(self.allocator, n_requests);
             var count: usize = 0;
 
             for (pull_requests.items, 0..) |req, i| {
@@ -1198,7 +1191,7 @@ pub const GossipService = struct {
 
         // create the pull requests
         const n_valid_requests = valid_indexs.items.len;
-        var tasks = try std.ArrayList(*PullRequestTask).initCapacity(self.allocator, n_valid_requests);
+        var tasks = try ArrayList(*PullRequestTask).initCapacity(self.allocator, n_valid_requests);
         defer {
             for (tasks.items) |task| {
                 self.allocator.destroy(task);
@@ -1216,7 +1209,7 @@ pub const GossipService = struct {
             for (valid_indexs.items) |i| {
                 // TODO: pre-allocate these tasks
                 // create the thread task
-                var output = std.ArrayList(Packet).init(self.allocator);
+                var output = ArrayList(Packet).init(self.allocator);
                 var task = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
                     .my_pubkey = &self.my_pubkey,
@@ -1257,7 +1250,7 @@ pub const GossipService = struct {
 
     fn handleBatchPullRequestSequential(
         self: *Self,
-        pull_requests: std.ArrayList(PullRequestMessage),
+        pull_requests: ArrayList(PullRequestMessage),
     ) !void {
         for (pull_requests.items) |*pr| {
             const maybe_resp_packets = try self.handlePullRequest(
@@ -1287,7 +1280,7 @@ pub const GossipService = struct {
         pull_from_endpoint: EndPoint,
         // logging
         maybe_log_entry: ?Entry,
-    ) error{ SerializationError, OutOfMemory, ChannelClosed }!?std.ArrayList(Packet) {
+    ) error{ SerializationError, OutOfMemory, ChannelClosed }!?ArrayList(Packet) {
         const now = getWallclockMs();
 
         {
@@ -1376,7 +1369,7 @@ pub const GossipService = struct {
 
     pub fn handleBatchPullResponses(
         self: *Self,
-        pull_response_messages: *const std.ArrayList(PullResponseMessage),
+        pull_response_messages: *const ArrayList(PullResponseMessage),
         logger: Logger,
     ) !void {
         if (pull_response_messages.items.len == 0) {
@@ -1385,7 +1378,7 @@ pub const GossipService = struct {
         _ = logger;
 
         const now = getWallclockMs();
-        var failed_insert_ptrs = std.ArrayList(*CrdsValue).init(self.allocator);
+        var failed_insert_ptrs = ArrayList(*CrdsValue).init(self.allocator);
         {
             var crds_table_lock = self.crds_table_rw.write();
             var crds_table: *CrdsTable = crds_table_lock.mut();
@@ -1525,7 +1518,7 @@ pub const GossipService = struct {
 
     pub fn handleBatchPruneMessages(
         self: *Self,
-        prune_messages: *const std.ArrayList(*PruneData),
+        prune_messages: *const ArrayList(*PruneData),
     ) !void {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
@@ -1587,7 +1580,7 @@ pub const GossipService = struct {
         failed_origins: *const std.AutoArrayHashMap(Pubkey, void),
         /// the pubkey of the node which we will send the prune message to
         prune_destination: Pubkey,
-    ) error{ CantFindContactInfo, InvalidGossipAddress, OutOfMemory, SignatureError }!std.ArrayList(Packet) {
+    ) error{ CantFindContactInfo, InvalidGossipAddress, OutOfMemory, SignatureError }!ArrayList(Packet) {
         const from_contact_info = blk: {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
@@ -1603,7 +1596,7 @@ pub const GossipService = struct {
 
         const failed_origin_len = failed_origins.keys().len;
         var n_packets = failed_origins.keys().len / MAX_PRUNE_DATA_NODES;
-        var prune_packets = try std.ArrayList(Packet).initCapacity(self.allocator, n_packets);
+        var prune_packets = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
         errdefer prune_packets.deinit();
 
         const now = getWallclockMs();
@@ -1637,7 +1630,7 @@ pub const GossipService = struct {
 
     pub fn handleBatchPushMessages(
         self: *Self,
-        batch_push_messages: *const std.ArrayList(PushMessage),
+        batch_push_messages: *const ArrayList(PushMessage),
         logger: Logger,
     ) !void {
         if (batch_push_messages.items.len == 0) {
@@ -1720,7 +1713,7 @@ pub const GossipService = struct {
         var n_packets = pubkey_to_failed_origins_iter.len;
         if (n_packets == 0) return;
 
-        var prune_packet_batch = try std.ArrayList(Packet).initCapacity(self.allocator, n_packets);
+        var prune_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
         prune_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
         var count: usize = 0;
 
@@ -1851,7 +1844,7 @@ pub const GossipService = struct {
     ) void {
         var push_msg_queue_lock = self.push_msg_queue_mux.lock();
         defer push_msg_queue_lock.unlock();
-        var push_msg_queue: *std.ArrayList(CrdsValue) = push_msg_queue_lock.mut();
+        var push_msg_queue: *ArrayList(CrdsValue) = push_msg_queue_lock.mut();
 
         var crds_table_lock = self.crds_table_rw.write();
         defer crds_table_lock.unlock();
@@ -1865,7 +1858,7 @@ pub const GossipService = struct {
     /// serializes a list of ping messages into Packets and sends them out
     pub fn sendPings(
         self: *Self,
-        pings: std.ArrayList(PingAndSocketAddr),
+        pings: ArrayList(PingAndSocketAddr),
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
 
@@ -1955,7 +1948,7 @@ pub fn crdsValuesToPackets(
     crds_values: []CrdsValue,
     to_endpoint: *const EndPoint,
     chunk_type: ChunkType,
-) error{ OutOfMemory, SerializationError }!?std.ArrayList(Packet) {
+) error{ OutOfMemory, SerializationError }!?ArrayList(Packet) {
     if (crds_values.len == 0) return null;
 
     const indexs = try chunkValuesIntoPacketIndexs(
@@ -1967,7 +1960,7 @@ pub fn crdsValuesToPackets(
     var chunk_iter = std.mem.window(usize, indexs.items, 2, 1);
 
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-    var packets = try std.ArrayList(Packet).initCapacity(allocator, indexs.items.len -| 1);
+    var packets = try ArrayList(Packet).initCapacity(allocator, indexs.items.len -| 1);
     errdefer packets.deinit();
 
     while (chunk_iter.next()) |window| {
@@ -1993,8 +1986,8 @@ pub fn chunkValuesIntoPacketIndexs(
     allocator: std.mem.Allocator,
     crds_values: []CrdsValue,
     max_chunk_bytes: usize,
-) error{ OutOfMemory, SerializationError }!std.ArrayList(usize) {
-    var packet_indexs = try std.ArrayList(usize).initCapacity(allocator, 1);
+) error{ OutOfMemory, SerializationError }!ArrayList(usize) {
+    var packet_indexs = try ArrayList(usize).initCapacity(allocator, 1);
     errdefer packet_indexs.deinit();
     packet_indexs.appendAssumeCapacity(0);
 
@@ -2050,7 +2043,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
 
     // add some peers
     var lg = gossip_service.crds_table_rw.write();
-    var peers = std.ArrayList(crds.LegacyContactInfo).init(allocator);
+    var peers = ArrayList(crds.LegacyContactInfo).init(allocator);
     defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
@@ -2227,7 +2220,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     defer packets.?.deinit();
     try std.testing.expect(packets.?.items.len > 0);
 
-    var batch_requests = std.ArrayList(GossipService.PullRequestMessage).init(allocator);
+    var batch_requests = ArrayList(GossipService.PullRequestMessage).init(allocator);
     defer batch_requests.deinit();
 
     var from_endpoint = addr.toEndpoint();
@@ -2265,7 +2258,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     defer gossip_service.deinit();
 
     var push_from = Pubkey.random(rng.random(), .{});
-    var values = std.ArrayList(CrdsValue).init(allocator);
+    var values = ArrayList(CrdsValue).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
         var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
@@ -2382,7 +2375,7 @@ test "gossip.gossip_service: test build_push_messages" {
     defer gossip_service.deinit();
 
     // add some peers
-    var peers = std.ArrayList(crds.LegacyContactInfo).init(allocator);
+    var peers = ArrayList(crds.LegacyContactInfo).init(allocator);
     defer peers.deinit();
     var lg = gossip_service.crds_table_rw.write();
     for (0..10) |_| {
@@ -2477,13 +2470,13 @@ test "gossip.gossip_service: test packet verification" {
     var buf = [_]u8{0} ** PACKET_DATA_SIZE;
     var out = try bincode.writeToSlice(buf[0..], protocol_msg, bincode.Params{});
     var packet = Packet.init(from, buf, out.len);
-    var packet_batch = std.ArrayList(Packet).init(allocator);
+    var packet_batch = ArrayList(Packet).init(allocator);
     for (0..3) |_| {
         try packet_batch.append(packet);
     }
     try packet_channel.send(packet_batch);
 
-    var packet_batch_2 = std.ArrayList(Packet).init(allocator);
+    var packet_batch_2 = ArrayList(Packet).init(allocator);
 
     // send one which fails sanitization
     var value_v2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 2), &keypair);
@@ -2670,12 +2663,16 @@ test "gossip.gossip_service: init, exit, and deinit" {
 
     var handle = try std.Thread.spawn(
         .{},
-        GossipService.run,
+        GossipService.runSpy,
         .{&gossip_service},
     );
 
-    // gossip_service.echo_server.kill();
+    gossip_service.echo_server.kill();
     exit.store(true, std.atomic.Ordering.Unordered);
+
+    const buf: [10]u8 = undefined;
+    _ = try gossip_service.gossip_socket.sendTo(gossip_address.toEndpoint(), &buf);
+
     handle.join();
     gossip_service.deinit();
 }
@@ -2731,7 +2728,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         });
 
         // send incomign packets/messages
-        var outgoing_channel = Channel(std.ArrayList(Packet)).init(allocator, 10_000);
+        var outgoing_channel = Channel(ArrayList(Packet)).init(allocator, 10_000);
         defer outgoing_channel.deinit();
 
         var socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
@@ -2757,7 +2754,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var msg_sent: usize = 0;
 
         while (msg_sent < num_message_iterations) {
-            var packet_output = try std.ArrayList(Packet).initCapacity(allocator, 10);
+            var packet_output = try ArrayList(Packet).initCapacity(allocator, 10);
 
             // send a ping message
             {
@@ -2806,7 +2803,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         for (0..5) |_| {
             var msg = try fuzz.randomPingPacket(rng, &keypair, endpoint);
 
-            var packet_output = try std.ArrayList(Packet).initCapacity(allocator, 1);
+            var packet_output = try ArrayList(Packet).initCapacity(allocator, 1);
             packet_output.appendAssumeCapacity(msg);
 
             try outgoing_channel.send(packet_output);
@@ -2815,88 +2812,5 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
         sender_exit.store(true, std.atomic.Ordering.Unordered);
         outgoing_handle.join();
-    }
-};
-
-pub const BenchmarkGossipServicePullRequest = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
-
-    pub const args = [_]usize{
-        1_000,
-    };
-
-    pub const arg_names = [_][]const u8{
-        "1_000",
-    };
-
-    pub fn benchmarkPullRequests(num_message_iterations: usize) !void {
-        const allocator = std.heap.page_allocator;
-        var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
-
-        var keypair = try KeyPair.create(null);
-        var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-        var contact_info = crds.LegacyContactInfo.default(pubkey);
-        contact_info.shred_version = 19;
-        contact_info.gossip = address;
-
-        // var logger = Logger.init(allocator, .debug);
-        // defer logger.deinit();
-        // logger.spawn();
-        var logger: Logger = .noop;
-
-        var exit = AtomicBool.init(false);
-        var gossip_service = try GossipService.init(
-            allocator,
-            contact_info,
-            keypair,
-            null,
-            &exit,
-            logger,
-        );
-        defer gossip_service.deinit();
-
-        // var packet_handle = try Thread.spawn(.{}, GossipService.processMessages, .{
-        //     &gossip_service,
-        // });
-
-        var packet_handle = try Thread.spawn(.{}, GossipService.runSpy, .{
-            &gossip_service,
-        });
-
-        var rand = std.rand.DefaultPrng.init(19);
-        var rng = rand.random();
-
-        var sender_keypair = try KeyPair.create(null);
-
-        var msg_sent: usize = 0;
-        for (0..num_message_iterations) |i| {
-            // send a push message
-            if (i % 2 == 0) {
-                var packets = try fuzz.randomPushMessage(rng, &sender_keypair, address.toEndpoint());
-                defer packets.deinit();
-
-                for (packets.items) |packet| {
-                    try gossip_service.packet_incoming_channel.send(packet);
-                    msg_sent += 1;
-                }
-            } else {
-                // send a pull request
-                var packet = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
-                try gossip_service.packet_incoming_channel.send(packet);
-                msg_sent += 1;
-            }
-        }
-
-        while (true) {
-            const v = gossip_service.messages_processed.load(std.atomic.Ordering.Unordered);
-            if (v == msg_sent) {
-                break;
-            }
-            std.time.sleep(std.time.ns_per_s);
-        }
-
-        exit.store(true, std.atomic.Ordering.Unordered);
-        packet_handle.join();
     }
 };
