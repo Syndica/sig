@@ -102,7 +102,7 @@ pub const GossipService = struct {
     my_contact_info: crds.LegacyContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
-    my_shred_version: u64,
+    my_shred_version: u16,
     exit: *AtomicBool,
 
     // communication between threads
@@ -147,7 +147,7 @@ pub const GossipService = struct {
         }
 
         var thread_pool = try allocator.create(ThreadPool);
-        var n_threads = @max(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 8);
+        var n_threads = @min(@as(u32, @truncate(std.Thread.getCpuCount() catch 0)), 8);
         thread_pool.* = ThreadPool.init(.{
             .max_threads = n_threads,
             .stack_size = 2 * 1024 * 1024,
@@ -264,7 +264,8 @@ pub const GossipService = struct {
     ///     2) packet verifier
     ///     3) packet processor
     ///     4) build message loop (to send outgoing message)
-    ///     and 5) a socket responder (to send outgoing packets)
+    ///     5) a socket responder (to send outgoing packets)
+    ///     6) echo server
     pub fn run(self: *Self) !void {
         var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
         defer self.joinAndExit(&ip_echo_server_listener_handle);
@@ -373,14 +374,13 @@ pub const GossipService = struct {
         var tasks: [socket_utils.PACKETS_PER_BATCH]*VerifyMessageTask = undefined;
         // pre-allocate all the tasks
         for (0..tasks.len) |i| {
-            const verify_task = VerifyMessageTask{
+            var verify_task_heap = try self.allocator.create(VerifyMessageTask);
+            verify_task_heap.* = VerifyMessageTask{
                 .task = .{ .callback = VerifyMessageTask.callback },
                 .allocator = self.allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = &Packet.default(),
             };
-            var verify_task_heap = try self.allocator.create(VerifyMessageTask);
-            verify_task_heap.* = verify_task;
             tasks[i] = verify_task_heap;
         }
         defer {
@@ -447,13 +447,27 @@ pub const GossipService = struct {
 
     pub const PushMessage = struct {
         crds_values: []CrdsValue,
-        from_pubkey: *Pubkey,
-        from_endpoint: *EndPoint,
+        from_pubkey: *const Pubkey,
+        from_endpoint: *const EndPoint,
     };
 
     pub const PullResponseMessage = struct {
         crds_values: []CrdsValue,
         from_pubkey: *Pubkey,
+    };
+
+    pub const ShredVersionTask = struct {
+        protocol_message: *const ProtocolMessage,
+        allocator: std.mem.Allocator,
+
+        task: Task,
+        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+        is_valid: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+
+        pub fn callback(task: *Task) void {
+            var self = @fieldParentPtr(@This(), "task", task);
+            defer self.done.store(true, std.atomic.Ordering.Release);
+        }
     };
 
     /// main logic for recieving and processing `Protocol` messages.
@@ -519,9 +533,26 @@ pub const GossipService = struct {
                         });
                     },
                     .PullRequest => |*pull| {
+                        const value: CrdsValue = pull[1];
+                        switch (value.data) {
+                            .LegacyContactInfo => |*data| {
+                                if (data.id.equals(&self.my_pubkey)) {
+                                    // talking to myself == ignore
+                                    continue;
+                                }
+                                // Allow spy nodes with shred-verion == 0 to pull from other nodes.
+                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version) {
+                                    // non-matching shred version
+                                    continue;
+                                }
+                            },
+                            // only contact info supported
+                            else => continue,
+                        }
+
                         try pull_requests.append(.{
                             .filter = pull[0],
-                            .value = pull[1],
+                            .value = value,
                             .from_endpoint = from_endpoint,
                         });
                     },
@@ -724,7 +755,7 @@ pub const GossipService = struct {
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
-                for (push_packets.items) |packet_batch| { 
+                for (push_packets.items) |packet_batch| {
                     try self.packet_outgoing_channel.send(packet_batch);
                 }
             }
@@ -989,7 +1020,7 @@ pub const GossipService = struct {
         defer pull_request.deinitCrdsFilters(&filters);
 
         // build packet responses
-        var n_packets: usize = 0; 
+        var n_packets: usize = 0;
         if (num_peers != 0) n_packets += filters.items.len;
         if (should_send_to_entrypoint) n_packets += filters.items.len;
 
@@ -1016,7 +1047,7 @@ pub const GossipService = struct {
                 var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
                 packet.size = bytes.len;
                 packet.addr = peer_addr;
-                packet_index += 1; 
+                packet_index += 1;
             }
         }
 
@@ -1066,17 +1097,6 @@ pub const GossipService = struct {
         pub fn callback(task: *Task) void {
             var self = @fieldParentPtr(@This(), "task", task);
             defer self.done.store(true, std.atomic.Ordering.Release);
-
-            switch (self.value.data) {
-                .LegacyContactInfo => |*info| {
-                    if (info.id.equals(self.my_pubkey)) {
-                        // talking to myself == ignore
-                        return;
-                    }
-                },
-                // only contact info supported
-                else => return,
-            }
 
             const output_limit = self.output_limit.load(std.atomic.Ordering.Unordered);
             if (output_limit <= 0) {
@@ -1440,8 +1460,14 @@ pub const GossipService = struct {
 
             for (batch_push_messages.items) |*push_message| {
                 var crds_table: *CrdsTable = crds_table_lock.mut();
-                var result = try crds_table.insertValues(
+                const valid_len = self.filterCrdsValuesBasedOnShredVersion(
+                    crds_table,
                     push_message.crds_values,
+                    push_message.from_pubkey.*,
+                );
+
+                var result = try crds_table.insertValues(
+                    push_message.crds_values[0..valid_len],
                     CRDS_GOSSIP_PUSH_MSG_TIMEOUT_MS,
                     false,
                     false,
@@ -1658,6 +1684,48 @@ pub const GossipService = struct {
 
         return nodes[0..node_index];
     }
+
+    pub fn filterCrdsValuesBasedOnShredVersion(
+        self: *Self,
+        crds_table: *const CrdsTable,
+        crds_values: []CrdsValue,
+        from_pubkey: Pubkey,
+    ) usize {
+        // we use swap remove which just reorders the array
+        // (order dm), so we just track the new len -- ie, no allocations/frees
+        var crds_values_array = ArrayList(CrdsValue).fromOwnedSlice(self.allocator, crds_values);
+        if (crds_table.check_matching_shred_version(from_pubkey, self.my_shred_version)) {
+            for (crds_values, 0..) |*crds_value, i| {
+                switch (crds_value.data) {
+                    // always allow contact info + node instance to update shred versions
+                    .LegacyContactInfo => {},
+                    .NodeInstance => {},
+                    else => {
+                        // only allow other values with matching shred versions
+                        if (!crds_table.check_matching_shred_version(
+                            crds_value.id(),
+                            self.my_shred_version,
+                        )) {
+                            _ = crds_values_array.swapRemove(i);
+                        }
+                    },
+                }
+            }
+        } else {
+            for (crds_values, 0..) |*crds_value, i| {
+                switch (crds_value.data) {
+                    // always allow contact info + node instance to update shred versions
+                    .LegacyContactInfo => {},
+                    .NodeInstance => {},
+                    else => {
+                        // dont update any other values
+                        _ = crds_values_array.swapRemove(i);
+                    },
+                }
+            }
+        }
+        return crds_values_array.items.len;
+    }
 };
 
 pub const ChunkType = enum(u8) {
@@ -1739,7 +1807,7 @@ pub fn chunkValuesIntoPacketIndexs(
     return packet_indexs;
 }
 
-test "gossip.gossip_service: build messages startup and shutdown" { 
+test "gossip.gossip_service: build messages startup and shutdown" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2500,7 +2568,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
             &exit,
             logger,
         );
-        gossip_service.echo_server.kill(); // we dont need this rn 
+        gossip_service.echo_server.kill(); // we dont need this rn
         defer gossip_service.deinit();
 
         var packet_handle = try Thread.spawn(.{}, GossipService.runSpy, .{

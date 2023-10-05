@@ -422,6 +422,16 @@ pub const CrdsTable = struct {
         return indexs;
     }
 
+    // ** helper functions **
+    pub fn check_matching_shred_version(self: *const Self, pubkey: Pubkey, expected_shred_version: u16) bool {
+        if (self.shred_versions.get(pubkey)) |pubkey_shred_version| {
+            if (pubkey_shred_version == expected_shred_version) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ** triming values in the crdstable **
     pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
         const now = crds.getWallclockMs();
