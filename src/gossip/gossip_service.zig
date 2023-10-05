@@ -613,7 +613,9 @@ pub const GossipService = struct {
             if (pull_requests.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = pull_requests.items.len;
-                self.handleBatchPullRequest(pull_requests);
+                self.handleBatchPullRequest(pull_requests) catch |err| {
+                    std.debug.print("handleBatchPullRequest failed: {}\n", .{err});
+                };
                 const elapsed = x_timer.read();
                 self.logger.debugf("handle batch pull_req took {} with {} items @{}\n", .{ elapsed, length, msg_count });
 
@@ -627,7 +629,9 @@ pub const GossipService = struct {
             if (pull_responses.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = pull_responses.items.len;
-                try self.handleBatchPullResponses(&pull_responses, self.logger);
+                self.handleBatchPullResponses(&pull_responses, self.logger) catch |err| {
+                    std.debug.print("handleBatchPullResponses failed: {}\n", .{err});
+                };
                 const elapsed = x_timer.read();
                 self.logger.debugf("handle batch pull_resp took {} with {} items @{}\n", .{ elapsed, length, msg_count });
                 pull_responses.clearRetainingCapacity();
@@ -1068,15 +1072,6 @@ pub const GossipService = struct {
         return packet_batch;
     }
 
-    fn handleBatchPullRequest(
-        self: *Self,
-        pull_requests: ArrayList(PullRequestMessage),
-    ) void {
-        self.handleBatchPullRequestParallel(pull_requests) catch |err| {
-            std.debug.print("handleBatchPullRequestParallel failed: {}\n", .{err});
-        };
-    }
-
     const PullRequestTask = struct {
         allocator: std.mem.Allocator,
         my_pubkey: *const Pubkey,
@@ -1137,7 +1132,7 @@ pub const GossipService = struct {
         }
     };
 
-    fn handleBatchPullRequestParallel(
+    fn handleBatchPullRequest(
         self: *Self,
         pull_requests: ArrayList(PullRequestMessage),
     ) !void {
@@ -1294,10 +1289,14 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             for (pull_response_messages.items) |*pull_message| {
-                const crds_values = pull_message.crds_values;
+                const valid_len = self.filterCrdsValuesBasedOnShredVersion(
+                    crds_table,
+                    pull_message.crds_values,
+                    pull_message.from_pubkey.*,
+                );
 
                 const insert_results = try crds_table.insertValues(
-                    crds_values,
+                    pull_message.crds_values[0..valid_len],
                     CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
                     true,
                     true,
@@ -1309,7 +1308,7 @@ pub const GossipService = struct {
                 defer timeout_indexs.deinit();
                 for (timeout_indexs.items) |index| {
                     crds_table.insert(
-                        crds_values[index],
+                        pull_message.crds_values[index],
                         now,
                     ) catch {};
                 }
@@ -1319,7 +1318,7 @@ pub const GossipService = struct {
                 const successful_insert_indexs = insert_results.inserted.?;
                 defer successful_insert_indexs.deinit();
                 for (successful_insert_indexs.items) |index| {
-                    const origin = crds_values[index].id();
+                    const origin = pull_message.crds_values[index].id();
                     crds_table.updateRecordTimestamp(origin, now);
                 }
                 crds_table.updateRecordTimestamp(pull_message.from_pubkey.*, now);
@@ -1327,7 +1326,7 @@ pub const GossipService = struct {
                 var failed_insert_indexs = insert_results.failed.?;
                 defer failed_insert_indexs.deinit();
                 for (failed_insert_indexs.items) |index| {
-                    try failed_insert_ptrs.append(&crds_values[index]);
+                    try failed_insert_ptrs.append(&pull_message.crds_values[index]);
                 }
             }
         }
@@ -2055,7 +2054,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
         .value = crds_value,
     });
 
-    gossip_service.handleBatchPullRequest(pull_requests);
+    try gossip_service.handleBatchPullRequest(pull_requests);
     {
         var packet_lg = gossip_service.packet_outgoing_channel.buffer.lock();
         defer packet_lg.unlock();
