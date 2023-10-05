@@ -513,8 +513,6 @@ pub const GossipService = struct {
             defer self.verified_incoming_channel.allocator.free(protocol_messages);
             msg_count += protocol_messages.len;
 
-            // TODO: filter messages based on_shred_version
-
             for (protocol_messages) |*protocol_message| {
                 var from_endpoint: EndPoint = protocol_message.from_endpoint;
 
@@ -1137,7 +1135,7 @@ pub const GossipService = struct {
         pull_requests: ArrayList(PullRequestMessage),
     ) !void {
         // update the callers
-        // TODO: parallelize this
+        // TODO: parallelize this?
         const now = getWallclockMs();
         {
             var crds_table_lock = self.crds_table_rw.write();
@@ -1225,23 +1223,20 @@ pub const GossipService = struct {
 
             for (valid_indexs.items) |i| {
                 // TODO: pre-allocate these tasks
+
                 // create the thread task
-                var output = ArrayList(Packet).init(self.allocator);
-                var task = PullRequestTask{
+                var task_heap = try self.allocator.create(PullRequestTask);
+                task_heap.* = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
                     .my_pubkey = &self.my_pubkey,
                     .from_endpoint = &pull_requests.items[i].from_endpoint,
                     .filter = &pull_requests.items[i].filter,
                     .value = &pull_requests.items[i].value,
                     .crds_table = crds_table,
-                    .output = output,
+                    .output = ArrayList(Packet).init(self.allocator),
                     .allocator = self.allocator,
                     .output_limit = &output_limit,
                 };
-
-                // alloc on heap
-                var task_heap = try self.allocator.create(PullRequestTask);
-                task_heap.* = task;
                 tasks.appendAssumeCapacity(task_heap);
 
                 // run it
@@ -1510,13 +1505,13 @@ pub const GossipService = struct {
         }
 
         // build prune packets
-        // TODO: figure out a way to re-use this allocation
         const now = getWallclockMs();
         var pubkey_to_failed_origins_iter = pubkey_to_failed_origins.iterator();
 
         var n_packets = pubkey_to_failed_origins_iter.len;
         if (n_packets == 0) return;
 
+        // TODO: figure out a way to re-use this allocation
         var prune_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
         prune_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
         var count: usize = 0;
