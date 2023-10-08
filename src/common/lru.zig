@@ -65,6 +65,7 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
             while (self.dbl_link_list.pop()) |node| {
                 self.deinitNode(node);
             }
+            std.debug.assert(self.len == 0); // no leaks
             self.hashmap.deinit();
         }
 
@@ -156,8 +157,10 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
 
         pub fn pop(self: *Self, k: K) ?V {
             if (self.hashmap.fetchSwapRemove(k)) |kv| {
-                self.dbl_link_list.remove(kv.value);
-                return kv.value.data.value;
+                var node = kv.value;
+                self.dbl_link_list.remove(node);
+                self.deinitNode(node);
+                return node.data.value;
             }
             return null;
         }

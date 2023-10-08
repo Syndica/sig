@@ -225,13 +225,7 @@ pub const GossipService = struct {
             buff_lock.unlock();
             self.packet_incoming_channel.deinit();
         }
-        {
-            var buff_lock = self.verified_incoming_channel.buffer.lock();
-            var buff: *std.ArrayList(ProtocolMessage) = buff_lock.mut();
-            for (buff.items) |*item| bincode.free(self.allocator, &item.message);
-            buff_lock.unlock();
-            self.verified_incoming_channel.deinit();
-        }
+        self.verified_incoming_channel.deinit();
         {
             var buff_lock = self.packet_outgoing_channel.buffer.lock();
             var buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
@@ -360,7 +354,6 @@ pub const GossipService = struct {
 
             const msg = ProtocolMessage{
                 .from_endpoint = self.packet.addr,
-                // TODO: remove self copy (its on the heap - should just need a ptr)
                 .message = protocol_message,
             };
             self.verified_incoming_channel.send(msg) catch unreachable;
@@ -510,7 +503,13 @@ pub const GossipService = struct {
             }
 
             const protocol_messages = maybe_protocol_messages.?;
-            defer self.verified_incoming_channel.allocator.free(protocol_messages);
+            defer {
+                for (protocol_messages) |*msg| {
+                    bincode.free(self.allocator, msg.message);
+                }
+                self.verified_incoming_channel.allocator.free(protocol_messages);
+            }
+
             msg_count += protocol_messages.len;
 
             for (protocol_messages) |*protocol_message| {
@@ -616,10 +615,6 @@ pub const GossipService = struct {
                 };
                 const elapsed = x_timer.read();
                 self.logger.debugf("handle batch pull_req took {} with {} items @{}\n", .{ elapsed, length, msg_count });
-
-                for (pull_requests.items) |*pr| {
-                    pr.filter.deinit();
-                }
                 pull_requests.clearRetainingCapacity();
             }
 
@@ -1166,8 +1161,8 @@ pub const GossipService = struct {
                 // filter out valid peers and send ping messages to peers
                 var now_instant = std.time.Instant.now() catch @panic("time is not supported on this OS!");
                 var puller_socket_addr = SocketAddr.fromEndpoint(&req.from_endpoint);
-
                 const caller = req.value.id();
+
                 var result = ping_cache.check(
                     now_instant,
                     .{ caller, puller_socket_addr },
