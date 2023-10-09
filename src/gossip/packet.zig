@@ -28,4 +28,12 @@ pub const Packet = struct {
             .size = 0,
         };
     }
+
+    pub fn default() Self {
+        return .{
+            .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
+            .data = undefined,
+            .size = 0,
+        };
+    }
 };

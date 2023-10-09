@@ -54,16 +54,47 @@ pub fn Deserializer(comptime Reader: type) type {
                 .deserializeOptional = deserializeOptional,
                 .deserializeVoid = deserializeVoid,
                 .deserializeSeq = deserializeSeq,
+                .deserializeMap = deserializeMap,
+                .deserializeFloat = deserializeFloat,
             },
         );
+
+        fn deserializeMap(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const T = u64;
+            const len = switch (self.params.endian) {
+                .Little => self.reader.readIntLittle(T),
+                .Big => self.reader.readIntBig(T),
+            } catch {
+                return Error.IO;
+            };
+
+            var ma = MapAccess{ .d = self, .len = len };
+            return visitor.visitMap(allocator, De, ma.mapAccess());
+        }
 
         fn deserializeSeq(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             // var len = if (self.params.include_fixed_array_length) try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64)) else null;
 
-            const tmp: @TypeOf(visitor).Value = undefined; // TODO: fix without stack alloc?
-            const len = tmp.len;
+            const len = blk: {
+                const visitor_value = @TypeOf(visitor).Value;
+                const tmp: visitor_value = undefined; // TODO: fix without stack alloc?
+                if (@hasField(visitor_value, "len")) {
+                    // a lil hacky but works
+                    break :blk tmp.len;
+                } else {
+                    // try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64){});
+                    const T = u64;
+                    const len = switch (self.params.endian) {
+                        .Little => self.reader.readIntLittle(T),
+                        .Big => self.reader.readIntBig(T),
+                    } catch {
+                        return Error.IO;
+                    };
+                    break :blk len;
+                }
+            };
 
-            var s = SeqAccess(Self){ .d = self, .len = len };
+            var s = SeqAccess{ .d = self, .len = len };
             const result = try visitor.visitSeq(allocator.?, De, s.seqAccess());
             errdefer getty.de.free(allocator.?, De, result);
 
@@ -97,6 +128,17 @@ pub fn Deserializer(comptime Reader: type) type {
             return try visitor.visitInt(ally, De, tag);
         }
 
+        pub fn deserializeFloat(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
+            const T = @TypeOf(visitor).Value;
+            const info = @typeInfo(T).Float;
+            if (info.bits != 32 and info.bits != 64) {
+                @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+            }
+            const bytes = self.reader.readBytesNoEof((info.bits + 7) / 8) catch return Error.IO;
+            const f = @as(T, @bitCast(bytes));
+            return visitor.visitFloat(ally, De, f);
+        }
+
         pub fn deserializeInt(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             const T = @TypeOf(visitor).Value;
 
@@ -106,7 +148,6 @@ pub fn Deserializer(comptime Reader: type) type {
             } catch {
                 return Error.IO;
             };
-
             return try visitor.visitInt(ally, De, value);
         }
 
@@ -127,7 +168,16 @@ pub fn Deserializer(comptime Reader: type) type {
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,
-                    .Struct => true,
+                    .Struct => {
+                        // see comments in CustomSer serialization struct
+                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "HashMap")) {
+                            return false;
+                        }
+                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "ArrayList")) {
+                            return false;
+                        }
+                        return true;
+                    },
                     .Pointer => |*info| {
                         // should never be called but compiler complains
                         if (info.size == .Many) {
@@ -165,7 +215,6 @@ pub fn Deserializer(comptime Reader: type) type {
                     },
                     .Struct => |*info| {
                         inline for (info.fields) |field| {
-                            // std.debug.print("freeing {s} on {s}\n", .{ field.name, @typeName(T) });
                             if (getFieldConfig(T, field)) |config| {
                                 if (config.free) |free_fcn| {
                                     // std.debug.print("found free fcn...\n", .{});
@@ -266,31 +315,56 @@ pub fn Deserializer(comptime Reader: type) type {
             }
         };
 
-        fn SeqAccess(comptime D: type) type {
-            return struct {
-                d: *D,
-                len: usize,
-                idx: usize = 0,
+        const SeqAccess = struct {
+            d: *Self,
+            len: usize,
+            idx: usize = 0,
 
-                const Seq = @This();
+            const Seq = @This();
 
-                pub usingnamespace getty.de.SeqAccess(
-                    *Seq,
-                    Error,
-                    .{ .nextElementSeed = nextElementSeed },
-                );
+            pub usingnamespace getty.de.SeqAccess(
+                *Seq,
+                Error,
+                .{ .nextElementSeed = nextElementSeed },
+            );
 
-                fn nextElementSeed(self: *Seq, ally: ?std.mem.Allocator, seed: anytype) Error!?@TypeOf(seed).Value {
-                    if (self.idx == self.len) {
-                        return null;
-                    }
-                    const element = try seed.deserialize(ally, self.d.deserializer());
-                    self.idx += 1;
-
-                    return element;
+            fn nextElementSeed(self: *Seq, ally: ?std.mem.Allocator, seed: anytype) Error!?@TypeOf(seed).Value {
+                if (self.idx == self.len) {
+                    return null;
                 }
-            };
-        }
+                const element = try seed.deserialize(ally, self.d.deserializer());
+                self.idx += 1;
+
+                return element;
+            }
+        };
+
+        const MapAccess = struct {
+            d: *Self,
+            len: usize,
+            count: usize = 0,
+
+            pub usingnamespace getty.de.MapAccess(
+                *@This(),
+                Self.Error,
+                .{
+                    .nextKeySeed = nextKeySeed,
+                    .nextValueSeed = nextValueSeed,
+                },
+            );
+
+            fn nextKeySeed(self: *@This(), allocator: ?std.mem.Allocator, seed: anytype) Self.Error!?@TypeOf(seed).Value {
+                if (self.count == self.len) return null;
+
+                const key = try seed.deserialize(allocator, self.d.deserializer());
+                self.count += 1;
+                return key;
+            }
+
+            fn nextValueSeed(self: *@This(), allocator: ?std.mem.Allocator, seed: anytype) Self.Error!@TypeOf(seed).Value {
+                return try seed.deserialize(allocator, self.d.deserializer());
+            }
+        };
     };
 }
 
@@ -331,7 +405,7 @@ pub fn Serializer(
             Error,
             CustomSer,
             null,
-            null,
+            Map,
             Aggregate,
             null,
             .{
@@ -342,6 +416,8 @@ pub fn Serializer(
                 .serializeNull = serializeNull,
                 .serializeSeq = serializeSeq,
                 .serializeVoid = serializeVoid,
+                .serializeMap = serializeMap,
+                .serializeFloat = serializeFloat,
             },
         );
 
@@ -349,7 +425,7 @@ pub fn Serializer(
             if (self.params.include_fixed_array_length) {
                 try self.serializeInt(@as(u64, len.?));
             }
-            return try self.serializeMap(len);
+            return Aggregate{ .ser = self };
         }
 
         fn serializeVoid(self: *Self) Error!Ok {
@@ -366,13 +442,30 @@ pub fn Serializer(
             return try getty.serialize(null, value, ss);
         }
 
-        fn serializeMap(self: *Self, len: ?usize) Error!Aggregate {
-            _ = len;
-            return Aggregate{ .ser = self };
+        fn serializeMap(self: *Self, len: ?usize) Error!Map {
+            // should always have a len
+            try self.serializeInt(@as(u64, len.?));
+            return Map{ .ser = self };
         }
 
         fn serializeBool(self: *Self, value: bool) Error!Ok {
             try (self.writer.writeByte(@intFromBool(value)) catch Error.IO);
+        }
+
+        fn serializeFloat(self: *Self, value: anytype) Error!Ok {
+            const T = @TypeOf(value);
+            switch (@typeInfo(T)) {
+                .ComptimeFloat => {
+                    return self.serializeFloat(@as(f64, value));
+                },
+                .Float => |*info| {
+                    if (info.bits != 32 and info.bits != 64) {
+                        @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+                    }
+                    return self.writer.writeAll(std.mem.asBytes(&value)) catch Error.IO;
+                },
+                else => unreachable,
+            }
         }
 
         fn serializeInt(self: *Self, value: anytype) Error!Ok {
@@ -421,7 +514,16 @@ pub fn Serializer(
             pub fn is(comptime T: type) bool {
                 return switch (@typeInfo(T)) {
                     .Union => true,
-                    .Struct => true,
+                    .Struct => {
+                        // we want to use Map{} to ser HashMaps and want to use custom logic
+                        // for structs -- but, getty's HashMap is processed as a struct
+                        // so we use this kinda hack
+                        // TODO: figure out a better way to do this
+                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "HashMap")) {
+                            return false;
+                        }
+                        return true;
+                    },
                     .Pointer => |*info| {
                         return info.size == .Slice;
                     },
@@ -441,6 +543,15 @@ pub fn Serializer(
                         }
                     },
                     .Struct => |*info| {
+                        // note: need comptime here for it to compile
+                        if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                            try getty.serialize(alloc, @as(u64, value.items.len), ss);
+                            for (value.items) |element| {
+                                try getty.serialize(alloc, element, ss);
+                            }
+                            return;
+                        }
+
                         var params = ss.context.params;
                         var writer = ss.context.writer;
 
@@ -455,7 +566,6 @@ pub fn Serializer(
                                         continue;
                                     }
                                 }
-
                                 try getty.serialize(alloc, @field(value, field.name), ss);
                             }
                         }
@@ -471,6 +581,34 @@ pub fn Serializer(
                     else => unreachable,
                 }
             }
+        };
+
+        const Map = struct {
+            pub usingnamespace getty.ser.Map(
+                Context,
+                Ok,
+                Error,
+                .{
+                    .serializeKey = serializeKey,
+                    .serializeValue = serializeValue,
+                    .end = end,
+                },
+            );
+
+            ser: *Self,
+            const Context = *@This();
+
+            fn serializeKey(c: Context, value: anytype) Error!void {
+                const ss = c.ser.serializer();
+                try getty.serialize(null, value, ss);
+            }
+
+            fn serializeValue(c: Context, value: anytype) Error!void {
+                const ss = c.ser.serializer();
+                try getty.serialize(null, value, ss);
+            }
+
+            fn end(_: Context) Error!Ok {}
         };
 
         const Aggregate = struct {
@@ -662,6 +800,55 @@ test "bincode: custom field serialization" {
     try std.testing.expect(r.accounts.len == foo.accounts.len);
     try std.testing.expect(r.txs.len == foo.txs.len);
     try std.testing.expect(r.skip_me == 20);
+}
+
+test "bincode: test arraylist" {
+    var array = std.ArrayList(u8).init(std.testing.allocator);
+    defer array.deinit();
+
+    try array.append(10);
+    try array.append(11);
+
+    var buf: [1024]u8 = undefined;
+    var bytes = try writeToSlice(&buf, array, .{});
+
+    // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
+    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
+    defer array2.deinit();
+
+    try std.testing.expectEqualSlices(u8, array.items, array2.items);
+}
+
+test "bincode: test hashmap/BTree (de)ser" {
+    // 20 => 10
+    const rust_bytes = [_]u8{ 1, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 10, 0, 0, 0 };
+
+    var map = std.AutoHashMap(u32, u32).init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.put(20, 10);
+
+    var buf: [1024]u8 = undefined;
+    var bytes = try writeToSlice(&buf, map, .{});
+
+    try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
+
+    var de_map = try readFromSlice(std.testing.allocator, std.AutoHashMap(u32, u32), bytes, .{});
+    defer de_map.deinit();
+
+    const v = de_map.get(20);
+    try std.testing.expectEqual(v.?, 10);
+}
+
+test "bincode: test float serialization" {
+    const f: f64 = 1.234;
+    var buf: [1024]u8 = undefined;
+    var bytes = try writeToSlice(&buf, f, .{});
+    const rust_bytes = [_]u8{ 88, 57, 180, 200, 118, 190, 243, 63 };
+    try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
+
+    var f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
+    try std.testing.expect(f2 == f);
 }
 
 test "bincode: test serialization" {
