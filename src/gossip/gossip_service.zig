@@ -491,6 +491,9 @@ pub const GossipService = struct {
             const protocol_messages = maybe_protocol_messages.?;
             defer {
                 for (protocol_messages) |*msg| {
+                    const msg_type = @intFromEnum(msg.message);
+                    std.debug.print("msg_type: {}\n", .{msg_type});
+
                     bincode.free(self.allocator, msg.message);
                 }
                 self.verified_incoming_channel.allocator.free(protocol_messages);
@@ -2412,9 +2415,10 @@ test "gossip.gossip_service: process contact_info push packet" {
         .LegacyContactInfo = legacy_contact_info,
     };
     var crds_value = try crds.CrdsValue.initSigned(crds_data, &kp);
-    var values = [_]crds.CrdsValue{crds_value};
+    var heap_values = try allocator.alloc(crds.CrdsValue, 1);
+    heap_values[0] = crds_value;
     const msg = Protocol{
-        .PushMessage = .{ id, &values },
+        .PushMessage = .{ id, heap_values },
     };
 
     // packet
