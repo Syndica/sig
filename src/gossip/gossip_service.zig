@@ -449,20 +449,6 @@ pub const GossipService = struct {
         from_pubkey: *Pubkey,
     };
 
-    pub const ShredVersionTask = struct {
-        protocol_message: *const ProtocolMessage,
-        allocator: std.mem.Allocator,
-
-        task: Task,
-        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
-        is_valid: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
-
-        pub fn callback(task: *Task) void {
-            var self = @fieldParentPtr(@This(), "task", task);
-            defer self.done.store(true, std.atomic.Ordering.Release);
-        }
-    };
-
     /// main logic for recieving and processing `Protocol` messages.
     pub fn processMessages(self: *Self) !void {
         var timer = std.time.Timer.start() catch unreachable;
@@ -687,31 +673,22 @@ pub const GossipService = struct {
 
             // TRIM crds-table
             {
-                var x_timer = std.time.Timer.start() catch unreachable;
-                defer {
-                    const elapsed = x_timer.read();
-                    self.logger.debugf("handle batch crds_trim took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
-                }
-
                 var crds_table_lock = self.crds_table_rw.write();
                 defer crds_table_lock.unlock();
-
                 var crds_table: *CrdsTable = crds_table_lock.mut();
+
+                var x_timer = std.time.Timer.start() catch unreachable;
                 crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
                     self.logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
                 };
+                const elapsed = x_timer.read();
+                self.logger.debugf("handle batch crds_trim took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
             }
 
             const elapsed = timer.read();
             self.logger.debugf("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             self.messages_processed.store(msg_count, std.atomic.Ordering.Release);
-            // if (msg_count >= 30_000) {
-            // // if (msg_count >= 1_000) {
-            //     std.debug.print("exiting...\n", .{});
-            //     self.exit.store(true, std.atomic.Ordering.Unordered);
-            //     break;
-            // }
         }
 
         self.logger.debugf("process_messages loop closed\n", .{});

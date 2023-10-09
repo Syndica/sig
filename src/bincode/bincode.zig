@@ -217,7 +217,6 @@ pub fn Deserializer(comptime Reader: type) type {
                         inline for (info.fields) |field| {
                             if (getFieldConfig(T, field)) |config| {
                                 if (config.free) |free_fcn| {
-                                    // std.debug.print("found free fcn...\n", .{});
                                     var field_value = @field(value, field.name);
                                     switch (@typeInfo(field.type)) {
                                         .Pointer => |*field_info| {
