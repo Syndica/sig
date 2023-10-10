@@ -624,8 +624,7 @@ pub const GossipService = struct {
             if (n_ping_messages > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
 
-                // init a new batch of responses
-                // TODO: figure out a way to re-use this allocation instead of freeing after responder sends it
+                // init a new batch of pong responses
                 var ping_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_ping_messages);
                 ping_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_ping_messages);
                 errdefer ping_packet_batch.deinit();
@@ -751,7 +750,6 @@ pub const GossipService = struct {
                 }
 
                 self.rotateActiveSet() catch @panic("out of memory");
-
                 last_push_ts = getWallclockMs();
             }
 
@@ -1167,8 +1165,6 @@ pub const GossipService = struct {
             var output_limit = std.atomic.Atomic(i64).init(MAX_NUM_CRDS_VALUES_PULL_RESPONSE);
 
             for (valid_indexs.items) |i| {
-                // TODO: pre-allocate these tasks
-
                 // create the thread task
                 var task_heap = try self.allocator.create(PullRequestTask);
                 task_heap.* = PullRequestTask{
@@ -1456,7 +1452,6 @@ pub const GossipService = struct {
         var n_packets = pubkey_to_failed_origins_iter.len;
         if (n_packets == 0) return;
 
-        // TODO: figure out a way to re-use this allocation
         var prune_packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_packets);
         prune_packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_packets);
         var count: usize = 0;
