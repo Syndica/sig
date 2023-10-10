@@ -491,9 +491,6 @@ pub const GossipService = struct {
             const protocol_messages = maybe_protocol_messages.?;
             defer {
                 for (protocol_messages) |*msg| {
-                    const msg_type = @intFromEnum(msg.message);
-                    std.debug.print("msg_type: {}\n", .{msg_type});
-
                     bincode.free(self.allocator, msg.message);
                 }
                 self.verified_incoming_channel.allocator.free(protocol_messages);
@@ -536,6 +533,12 @@ pub const GossipService = struct {
                             else => continue,
                         }
 
+                        const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
+                        if (from_addr.isUnspecified() or from_addr.port() == 0) {
+                            // unable to respond to these messages
+                            continue;
+                        }
+
                         try pull_requests.append(.{
                             .filter = pull[0],
                             .value = value,
@@ -559,7 +562,12 @@ pub const GossipService = struct {
                         try prune_messages.append(&prune[1]);
                     },
                     .PingMessage => |*ping| {
-                        // TODO: filter out endpoints which are unspecificed / port = 0
+                        const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
+                        if (from_addr.isUnspecified() or from_addr.port() == 0) {
+                            // unable to respond to these messages
+                            continue;
+                        }
+
                         try ping_messages.append(PingMessage{
                             .ping = ping,
                             .from_endpoint = &from_endpoint,
