@@ -706,17 +706,15 @@ pub const GossipService = struct {
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const top_of_loop_ts = getWallclockMs();
 
-            // TODO: send ping messages based on PingCache
-
-            // new pull msgs
             if (should_send_pull_requests) pull_blk: {
-                var pull_packets = self.buildPullRequests(
+                // this also includes sending ping messages to other peers
+                var packets = self.buildPullRequests(
                     pull_request.MAX_BLOOM_SIZE,
                 ) catch |e| {
                     self.logger.debugf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
-                try self.packet_outgoing_channel.send(pull_packets);
+                try self.packet_outgoing_channel.send(packets);
             }
             // every other loop
             should_send_pull_requests = !should_send_pull_requests;
@@ -1138,24 +1136,9 @@ pub const GossipService = struct {
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
-            const ping_and_addrs = result.pings;
-            defer ping_and_addrs.deinit();
+            defer result.pings.deinit();
+            try self.sendPings(result.pings);
 
-            const n_pings = ping_and_addrs.items.len;
-            if (n_pings > 0) {
-                var ping_packets = try ArrayList(Packet).initCapacity(self.allocator, n_pings);
-                ping_packets.appendNTimesAssumeCapacity(Packet.default(), n_pings);
-
-                for (ping_and_addrs.items, ping_packets.items) |*ping_and_addr, *packet| {
-                    const ping = ping_and_addr.ping;
-                    const protocol_msg = Protocol{ .PingMessage = ping };
-
-                    var serialized_ping = bincode.writeToSlice(&packet.data, protocol_msg, .{}) catch return error.SerializationError;
-                    packet.addr = ping_and_addr.socket.toEndpoint();
-                    packet.size = serialized_ping.len;
-                }
-                try self.packet_outgoing_channel.send(ping_packets);
-            }
             break :blk result.valid_peers;
         };
         defer valid_indexs.deinit();
@@ -1560,6 +1543,8 @@ pub const GossipService = struct {
         pings: ArrayList(PingAndSocketAddr),
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
         const n_pings = pings.items.len;
+        if (n_pings == 0) return;
+
         var packet_batch = try ArrayList(Packet).initCapacity(self.allocator, n_pings);
         errdefer packet_batch.deinit();
         packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_pings);
