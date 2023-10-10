@@ -11,7 +11,7 @@ const Ordering = std.atomic.Ordering;
 pub fn Channel(comptime T: type) type {
     return struct {
         buffer: Mux(std.ArrayList(T)),
-        hasValue: Condition = .{},
+        has_value: Condition = .{},
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: std.mem.Allocator,
 
@@ -39,10 +39,26 @@ pub fn Channel(comptime T: type) type {
             if (self.closed.load(.Monotonic)) {
                 return error.ChannelClosed;
             }
-            var buffer = self.buffer.lock();
-            defer buffer.unlock();
-            try buffer.mut().append(value);
-            self.hasValue.signal();
+            var buffer_lock = self.buffer.lock();
+            defer buffer_lock.unlock();
+
+            var buffer: *std.ArrayList(T) = buffer_lock.mut();
+            try buffer.append(value);
+
+            self.has_value.signal();
+        }
+
+        pub fn sendBatch(self: *Self, value: std.ArrayList(T)) error{ OutOfMemory, ChannelClosed }!void {
+            if (self.closed.load(.Monotonic)) {
+                return error.ChannelClosed;
+            }
+            var buffer_lock = self.buffer.lock();
+            defer buffer_lock.unlock();
+
+            var buffer: *std.ArrayList(T) = buffer_lock.mut();
+            try buffer.appendSlice(value.items);
+
+            self.has_value.signal();
         }
 
         pub fn receive(self: *Self) ?T {
@@ -50,7 +66,7 @@ pub fn Channel(comptime T: type) type {
             defer buffer.unlock();
 
             while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
-                buffer.condition(&self.hasValue);
+                buffer.condition(&self.has_value);
             }
 
             // channel closed so return null to signal no more items
@@ -69,7 +85,7 @@ pub fn Channel(comptime T: type) type {
             defer buffer.unlock();
 
             while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
-                buffer.condition(&self.hasValue);
+                buffer.condition(&self.has_value);
             }
 
             // channel closed so return null to signal no more items
@@ -111,7 +127,7 @@ pub fn Channel(comptime T: type) type {
 
         pub fn close(self: *Self) void {
             self.closed.store(true, .SeqCst);
-            self.hasValue.broadcast();
+            self.has_value.broadcast();
         }
 
         pub fn isClosed(self: *Self) bool {

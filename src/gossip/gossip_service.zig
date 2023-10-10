@@ -726,9 +726,8 @@ pub const GossipService = struct {
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
-                for (push_packets.items) |packet_batch| {
-                    try self.packet_outgoing_channel.send(packet_batch);
-                }
+                try self.packet_outgoing_channel.sendBatch(push_packets);
+                push_packets.deinit();
             }
 
             // trim data
@@ -836,10 +835,13 @@ pub const GossipService = struct {
         }
 
         var num_values_considered: usize = 0;
-        var active_set_lock = self.active_set_rw.read();
-        var active_set: *const ActiveSet = active_set_lock.get();
         {
+            var active_set_lock = self.active_set_rw.read();
+            var active_set: *const ActiveSet = active_set_lock.get();
             defer active_set_lock.unlock();
+
+            if (active_set.len == 0) return null;
+
             for (crds_entries) |entry| {
                 const value = entry.value;
 
@@ -1770,6 +1772,29 @@ test "gossip.gossip_service: build messages startup and shutdown" {
     defer gossip_service.deinit();
 
     var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{&gossip_service});
+
+    // add some crds values to push
+    var rng = std.rand.DefaultPrng.init(91);
+    var lg = gossip_service.crds_table_rw.write();
+    var ping_lock = gossip_service.ping_cache_rw.write();
+    var ping_cache: *PingCache = ping_lock.mut();
+
+    var peers = ArrayList(LegacyContactInfo).init(allocator);
+    defer peers.deinit();
+
+    for (0..10) |_| {
+        var rand_keypair = try KeyPair.create(null);
+        var value = try CrdsValue.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        // make gossip valid
+        value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
+        try lg.mut().insert(value, getWallclockMs());
+        try peers.append(value.data.LegacyContactInfo);
+        // set the pong status as OK so they included in active set
+        ping_cache._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
+    }
+    lg.unlock();
+    ping_lock.unlock();
+
     std.time.sleep(std.time.ns_per_s * 3);
 
     exit.store(true, std.atomic.Ordering.Unordered);
