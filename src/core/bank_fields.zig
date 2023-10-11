@@ -94,7 +94,6 @@ pub const BlockhashQueue = struct {
 
     /// last hash to be registered
     last_hash: ?Hash,
-
     ages: HashMap(Hash, HashAge),
 
     /// hashes older than `max_age` will be dropped from the queue
@@ -111,7 +110,7 @@ pub const UnusedAccounts = struct {
     unused3: HashMap(Pubkey, u64),
 };
 
-pub const AncestorsForSerialization = HashMap(Slot, usize);
+pub const Ancestors = HashMap(Slot, usize);
 
 pub const HardForks = struct {
     hard_forks: std.ArrayList(struct { Slot, usize }),
@@ -174,9 +173,9 @@ pub const EpochRewardStatus = union(enum) {
     Inactive: void,
 };
 
-pub const BankFieldsToDeserialize = struct {
+pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
-    ancestors: AncestorsForSerialization,
+    ancestors: Ancestors,
     hash: Hash,
     parent_hash: Hash,
     parent_slot: Slot,
@@ -204,7 +203,7 @@ pub const BankFieldsToDeserialize = struct {
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
     stakes: Stakes(Delegation),
-    unused_accounts: UnusedAccounts,
+    unused_accounts: UnusedAccounts, // required for deserialization
     epoch_stakes: HashMap(Epoch, EpochStakes),
     is_delta: bool,
 
@@ -216,6 +215,36 @@ pub const BankFieldsToDeserialize = struct {
     pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .skip = true };
     pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .skip = true };
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
+};
+
+pub const SerializableAccountStorageEntry = struct { 
+    id: usize,
+    accounts_current_len: usize,
+};
+
+pub const BankHashInfo = struct {
+    accounts_delta_hash: Hash,
+    accounts_hash: Hash,
+    stats: BankHashStats,
+};
+
+pub const BankHashStats = struct {
+    num_updated_accounts: u64,
+    num_removed_accounts: u64,
+    num_lamports_stored: u64,
+    total_data_len: u64,
+    num_executable_accounts: u64,
+};
+
+pub const AccountsDbFields = struct { 
+    map: HashMap(Slot, ArrayList(SerializableAccountStorageEntry)),
+    stored_meta_write_version: u64, 
+    slot: Slot, 
+    bank_hash_info: BankHashInfo,
+
+    // TODO: serde: "default on EOF"
+    rooted_slots: ArrayList(Slot), 
+    rooted_slot_hashes: ArrayList(struct { Slot, Hash }),
 };
 
 test "core.bank_fields: tmp" {
@@ -244,7 +273,7 @@ test "core.bank_fields: tmp" {
     var buf = try std.ArrayList(u8).initCapacity(alloc, file_size);
     defer buf.deinit();
 
-    const bank_fields = try bincode.read(alloc, BankFieldsToDeserialize, in_stream, .{});
+    const bank_fields = try bincode.read(alloc, BankFields, in_stream, .{});
     defer bincode.free(alloc, bank_fields);
 
     std.debug.print("{any}\n", .{bank_fields});
