@@ -85,11 +85,14 @@ pub const SocketAddr = union(enum(u8)) {
                 .ip = Ipv6Addr{ .octets = undefined },
             },
         };
-        var new_buf = buf[1..];
+
+        // the new buffer stores just the ip part of the ipv6 without the port
+        var ip_address_buf = buf[1..];
         var ip_sep_index: usize = 0;
         while (ip_sep_index < buf.len) : (ip_sep_index += 1) {
             if (buf[ip_sep_index] == ']') {
-                new_buf = buf[1..ip_sep_index];
+                // loop until it finds the index where the ip ends and port starts
+                ip_address_buf = buf[1..ip_sep_index];
                 ip_port = try std.fmt.parseInt(u16, buf[ip_sep_index + 2 ..], 10);
                 result.V6.port = ip_port;
                 break;
@@ -105,7 +108,7 @@ pub const SocketAddr = union(enum(u8)) {
         var index: u8 = 0;
         var scope_id = false;
         var abbrv = false;
-        for (new_buf, 0..) |c, i| {
+        for (ip_address_buf, 0..) |c, i| {
             if (scope_id) {
                 if (c >= '0' and c <= '9') {
                     const digit = c - '0';
