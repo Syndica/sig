@@ -1,18 +1,18 @@
 const std = @import("std");
-const Hash = @import("./hash.zig").Hash;
+const ArrayList = std.ArrayList;
+const HashMap = std.AutoHashMap;
+
 const _genesis_config = @import("./genesis_config.zig");
 const UnixTimestamp = _genesis_config.UnixTimestamp;
 const FeeRateGovernor = _genesis_config.FeeRateGovernor;
 const EpochSchedule = _genesis_config.EpochSchedule;
 const Rent = _genesis_config.Rent;
 const Inflation = _genesis_config.Inflation;
-const ArrayList = std.ArrayList;
 
 const Account = @import("./account.zig").Account;
-
+const Hash = @import("./hash.zig").Hash;
 const Slot = @import("./clock.zig").Slot;
 const Epoch = @import("./clock.zig").Epoch;
-const HashMap = std.AutoHashMap;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 
@@ -218,15 +218,15 @@ pub const BankFieldsToDeserialize = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
 };
 
-test "core.bank: tmp" {
+test "core.bank_fields: tmp" {
     // steps:
     // 1) download a snapshot
     // 2) decompress snapshot
     // 3) untar snapshot to get accounts/ dir + other metdata files
     // 4) run this
 
-    // const alloc = std.testing.allocator;
-    const alloc = std.heap.c_allocator;
+    const alloc = std.testing.allocator;
+    // const alloc = std.heap.c_allocator;
 
 
     // open file
