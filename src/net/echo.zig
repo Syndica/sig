@@ -45,7 +45,7 @@ const IpEchoServerResponse = struct {
     pub fn init(addr: net.IpAddr) Self {
         return Self{
             .address = addr,
-            .shred_version = ShredVersion.init_manually_set(0),
+            .shred_version = ShredVersion{ .value = 0 },
         };
     }
 };

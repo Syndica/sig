@@ -100,6 +100,10 @@ pub const Pubkey = struct {
         return Self.fromBytes(public_key.bytes[0..], .{ .skip_encoding = skip_bs58_encoding }) catch unreachable;
     }
 
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
+        return writer.print("{s}", .{self.string()});
+    }
+
     pub const @"!bincode-config:cached_str" = bincode.FieldConfig(?[44]u8){ .skip = true };
 };
 

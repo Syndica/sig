@@ -15,6 +15,7 @@ pub const core = struct {
     pub usingnamespace @import("core/hard_forks.zig");
     pub usingnamespace @import("core/shred.zig");
     pub usingnamespace @import("core/genesis_config.zig");
+    pub usingnamespace @import("core/bank.zig");
 };
 
 pub const gossip = struct {
