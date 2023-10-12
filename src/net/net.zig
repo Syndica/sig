@@ -261,7 +261,7 @@ pub const Ipv6Addr = struct {
     }
 
     pub fn eql(self: *const Self, other: *const Self) bool {
-        return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
+        return std.mem.eql(u8, &self.octets, &other.octets);
     }
 
     /// defined in https://tools.ietf.org/html/rfc4291
