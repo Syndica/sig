@@ -32,7 +32,7 @@ pub fn Deserializer(comptime Reader: type) type {
 
         const Self = @This();
         const Error = getty.de.Error || error{
-            IO,
+            EOF,
         };
 
         const De = Self.@"getty.Deserializer";
@@ -65,7 +65,7 @@ pub fn Deserializer(comptime Reader: type) type {
                 .Little => self.reader.readIntLittle(T),
                 .Big => self.reader.readIntBig(T),
             } catch {
-                return Error.IO;
+                return Error.EOF;
             };
 
             var ma = MapAccess{ .d = self, .len = len };
@@ -73,8 +73,6 @@ pub fn Deserializer(comptime Reader: type) type {
         }
 
         fn deserializeSeq(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            // var len = if (self.params.include_fixed_array_length) try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64)) else null;
-
             const len = blk: {
                 const visitor_value = @TypeOf(visitor).Value;
                 const tmp: visitor_value = undefined; // TODO: fix without stack alloc?
@@ -88,7 +86,7 @@ pub fn Deserializer(comptime Reader: type) type {
                         .Little => self.reader.readIntLittle(T),
                         .Big => self.reader.readIntBig(T),
                     } catch {
-                        return Error.IO;
+                        return Error.EOF;
                     };
                     break :blk len;
                 }
@@ -96,7 +94,6 @@ pub fn Deserializer(comptime Reader: type) type {
 
             var s = SeqAccess{ .d = self, .len = len };
             const result = try visitor.visitSeq(allocator.?, De, s.seqAccess());
-            errdefer getty.de.free(allocator.?, De, result);
 
             return result;
         }
@@ -108,7 +105,7 @@ pub fn Deserializer(comptime Reader: type) type {
 
         pub fn deserializeOptional(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             const byte = self.reader.readByte() catch {
-                return Error.IO;
+                return Error.EOF;
             };
             return switch (byte) {
                 0 => try visitor.visitNull(ally, De),
@@ -123,7 +120,7 @@ pub fn Deserializer(comptime Reader: type) type {
                 .Little => self.reader.readIntLittle(T),
                 .Big => self.reader.readIntBig(T),
             } catch {
-                return Error.IO;
+                return Error.EOF;
             };
             return try visitor.visitInt(ally, De, tag);
         }
@@ -134,7 +131,7 @@ pub fn Deserializer(comptime Reader: type) type {
             if (info.bits != 32 and info.bits != 64) {
                 @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
             }
-            const bytes = self.reader.readBytesNoEof((info.bits + 7) / 8) catch return Error.IO;
+            const bytes = self.reader.readBytesNoEof((info.bits + 7) / 8) catch return Error.EOF;
             const f = @as(T, @bitCast(bytes));
             return visitor.visitFloat(ally, De, f);
         }
@@ -146,19 +143,19 @@ pub fn Deserializer(comptime Reader: type) type {
                 .Little => self.reader.readIntLittle(T),
                 .Big => self.reader.readIntBig(T),
             } catch {
-                return Error.IO;
+                return Error.EOF;
             };
             return try visitor.visitInt(ally, De, value);
         }
 
         pub fn deserializeBool(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             const byte = self.reader.readByte() catch {
-                return Error.IO;
+                return Error.EOF;
             };
             const value = switch (byte) {
                 0 => false,
                 1 => true,
-                else => return getty.de.Error.InvalidValue,
+                else => return Error.InvalidValue,
             };
 
             return try visitor.visitBool(ally, De, value);
@@ -217,7 +214,6 @@ pub fn Deserializer(comptime Reader: type) type {
                         inline for (info.fields) |field| {
                             if (get_field_config(T, field)) |config| {
                                 if (config.free) |free_fcn| {
-                                    // std.debug.print("found free fcn...\n", .{});
                                     var field_value = @field(value, field.name);
                                     switch (@typeInfo(field.type)) {
                                         .Pointer => |*field_info| {
@@ -279,8 +275,8 @@ pub fn Deserializer(comptime Reader: type) type {
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
                                 if (get_field_config(T, field)) |config| {
-                                    if (shouldUseDefaultValue(field, config)) |default_val| {
-                                        @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_val))).*;
+                                    if (shouldUseDefaultValue(field, config)) |default_value| {
+                                        @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
                                         continue;
                                     }
 
@@ -288,8 +284,35 @@ pub fn Deserializer(comptime Reader: type) type {
                                         @field(data, field.name) = deser_fcn(alloc, reader, params) catch return getty.de.Error.InvalidValue;
                                         continue;
                                     }
-                                }
 
+                                    if (config.default_on_eof) { 
+                                        const field_type = comptime blk: { 
+                                            // if optional then get the inner type
+                                            if (@typeInfo(field.type) == .Optional) { 
+                                                break :blk @typeInfo(field.type).Optional.child;
+                                            } else { 
+                                                break :blk field.type;
+                                            }
+                                        };
+
+                                        @field(data, field.name) = getty.deserialize(alloc, field_type, dd) catch |err| blk: {
+                                            if (err == Error.EOF) { 
+                                                if (config.default_fn) |default_fn| { 
+                                                    break :blk default_fn(alloc.?);
+                                                } else { 
+                                                    if (field.default_value) |default_value| { 
+                                                        break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
+                                                    } else { 
+                                                        @compileError("field " ++ field.name ++ " has no default value");
+                                                    }
+                                                }
+                                            } else { 
+                                                return err;
+                                            }
+                                        };
+                                        continue;
+                                    }
+                                }
                                 @field(data, field.name) = try getty.deserialize(alloc, field.type, dd);
                             }
                         }
@@ -652,6 +675,8 @@ pub fn FieldConfig(comptime T: type) type {
         serializer: ?SerializeFunction = null,
         free: ?FreeFunction = null,
         skip: bool = false,
+        default_on_eof: bool = false,
+        default_fn: ?fn (alloc: std.mem.Allocator) T = null,
     };
 }
 
@@ -769,15 +794,45 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     };
 }
 
+test "bincode: default on eof" { 
+    const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
+    const Foo = struct {
+        value: u8 = 0,
+        accounts: std.ArrayList(u64),
+        pub const @"!bincode-config:accounts" = defaultArrayListOnEOFConfig(u64);
+        pub const @"!bincode-config:value" = .{ 
+            .default_on_eof = true
+        };
+    };
+
+    var buf: [1]u8 = .{ 1 };
+    var r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
+    // std.debug.print("{any}", .{r});
+    try std.testing.expect(r.value == 1);
+
+    var buf2: [1024]u8 = undefined;
+    const slice = try writeToSlice(&buf2, Foo{
+        .value = 10,
+        .accounts = std.ArrayList(u64).init(std.testing.allocator),
+    }, .{});
+
+    var r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
+    try std.testing.expect(r2.value == 10);
+}
+
 test "bincode: custom field serialization" {
     const Foo = struct {
         accounts: []u8,
         txs: []u32,
         skip_me: u8 = 20,
+        skip_me_null: ?u8 = null,
 
         pub const @"!bincode-config:accounts" = TestSliceConfig(u8);
         pub const @"!bincode-config:txs" = TestSliceConfig(u32);
         pub const @"!bincode-config:skip_me" = FieldConfig(u8){
+            .skip = true,
+        };
+        pub const @"!bincode-config:skip_me_null" = FieldConfig(?u8){
             .skip = true,
         };
     };

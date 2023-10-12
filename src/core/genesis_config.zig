@@ -176,5 +176,5 @@ test "core.genesis_config: test" {
     );
     defer bincode.free(std.testing.allocator, config);
 
-    std.debug.print("{any}", .{config});
+    try std.testing.expect(config.cluster_type == ClusterType.MainnetBeta);
 }
