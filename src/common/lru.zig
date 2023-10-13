@@ -4,8 +4,6 @@ const TailQueue = std.TailQueue;
 const testing = std.testing;
 const assert = std.debug.assert;
 
-/// A thread-safe LRU Cache
-///
 // TODO: allow for passing custom hash context to use in std.ArrayHashMap for performance.
 pub fn LruCache(comptime K: type, comptime V: type) type {
     return struct {
