@@ -272,18 +272,23 @@ pub const SnapshotFields = struct {
     accounts_db_fields: AccountsDbFields,
 
     // incremental snapshot fields (to be added to bank_fields)
+    lamports_per_signature: u64 = 0,
     incremental_snapshot_persistence: BankIncrementalSnapshotPersistence = BankIncrementalSnapshotPersistence.default(),
     epoch_accounts_hash: Hash = Hash.default(),
     epoch_reward_status: EpochRewardStatus = EpochRewardStatus.default(),
 
+    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
     pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(BankIncrementalSnapshotPersistence){ .default_on_eof = true };
     pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(Hash){ .default_on_eof = true };
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .default_on_eof = true };
 
+    /// NOTE: should call this to get the correct bank_fields instead of accessing it directly
+    /// due to the way snapshot deserialization works
     pub fn getFields(self: *@This()) struct {bank_fields: BankFields, accounts_db_fields: AccountsDbFields} {
         var bank_fields = &self.bank_fields;
         // if these are availabel they will be parsed (and likely not the default values)
         // so, we push them on the bank fields here 
+        bank_fields.fee_rate_governor.lamports_per_signature = self.lamports_per_signature;
         bank_fields.incremental_snapshot_persistence = self.incremental_snapshot_persistence;
         bank_fields.epoch_accounts_hash = self.epoch_accounts_hash;
         bank_fields.epoch_reward_status = self.epoch_reward_status;
@@ -299,8 +304,8 @@ test "core.bank_fields: tmp" {
     // 3) untar snapshot to get accounts/ dir + other metdata files
     // 4) run this
 
-    // const alloc = std.testing.allocator;
-    const alloc = std.heap.c_allocator;
+    const alloc = std.testing.allocator;
+    // const alloc = std.heap.c_allocator;
 
 
     // open file
@@ -311,6 +316,7 @@ test "core.bank_fields: tmp" {
     // const file_size = try file.getPos();
     // try file.seekTo(0);
     // std.debug.print("length: {d}\n", .{file_size});
+
     const file_size = 530356075; 
 
     var buf_reader = std.io.bufferedReader(file.reader());
@@ -321,7 +327,7 @@ test "core.bank_fields: tmp" {
 
     var snapshot_fields = try bincode.read(alloc, SnapshotFields, in_stream, .{});
     defer bincode.free(alloc, snapshot_fields);
-    const fields = snapshot_fields.getFields();
 
+    const fields = snapshot_fields.getFields();
     std.debug.print("{any}", .{fields});
 }
