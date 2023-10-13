@@ -292,7 +292,7 @@ pub fn main() !void {
         .noop,
     );
 
-    var fuzz_handle = try std.Thread.spawn(.{}, GossipService.runSpy, .{&gossip_service_fuzzer});
+    var fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service_fuzzer, true });
 
     // std.debug.print("setting up", .{});
     // while (true) {
