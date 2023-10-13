@@ -562,7 +562,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = push_messages.items.len;
                 self.handleBatchPushMessages(&push_messages) catch |err| {
-                    std.debug.print("handleBatchPushMessages failed: {}\n", .{err});
+                    self.logger.debugf("handleBatchPushMessages failed: {}\n", .{err});
                 };
                 const elapsed = x_timer.read();
                 self.logger.debugf("handle batch push took {} with {} items @{}\n", .{ elapsed, length, msg_count });
@@ -582,7 +582,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = pull_requests.items.len;
                 self.handleBatchPullRequest(pull_requests) catch |err| {
-                    std.debug.print("handleBatchPullRequest failed: {}\n", .{err});
+                    self.logger.debugf("handleBatchPullRequest failed: {}\n", .{err});
                 };
                 const elapsed = x_timer.read();
                 self.logger.debugf("handle batch pull_req took {} with {} items @{}\n", .{ elapsed, length, msg_count });
@@ -593,7 +593,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = pull_responses.items.len;
                 self.handleBatchPullResponses(&pull_responses) catch |err| {
-                    std.debug.print("handleBatchPullResponses failed: {}\n", .{err});
+                    self.logger.debugf("handleBatchPullResponses failed: {}\n", .{err});
                 };
                 const elapsed = x_timer.read();
                 self.logger.debugf("handle batch pull_resp took {} with {} items @{}\n", .{ elapsed, length, msg_count });
@@ -604,7 +604,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const n_ping_messages = ping_messages.items.len;
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
-                    std.debug.print("handleBatchPingMessages failed: {}\n", .{err});
+                    self.logger.debugf("handleBatchPingMessages failed: {}\n", .{err});
                 };
                 self.logger.debugf("handle batch ping took {} with {} items @{}\n", .{ x_timer.read(), n_ping_messages, msg_count });
                 ping_messages.clearRetainingCapacity();
