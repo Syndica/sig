@@ -302,7 +302,7 @@ test "core.bank_fields: tmp" {
     // 3) untar snapshot to get accounts/ dir + other metdata files
     // 4) set the `root_snapshot_path` to point to the file with metadata
     // 4) run this
-    const root_snapshot_path = "";
+    const root_snapshot_path = "/test_data/slot/slot";
     const alloc = std.testing.allocator;
 
     // open file
