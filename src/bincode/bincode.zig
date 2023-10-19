@@ -285,28 +285,28 @@ pub fn Deserializer(comptime Reader: type) type {
                                         continue;
                                     }
 
-                                    if (config.default_on_eof) { 
-                                        const field_type = comptime blk: { 
+                                    if (config.default_on_eof) {
+                                        const field_type = comptime blk: {
                                             // if optional then get the inner type
-                                            if (@typeInfo(field.type) == .Optional) { 
+                                            if (@typeInfo(field.type) == .Optional) {
                                                 break :blk @typeInfo(field.type).Optional.child;
-                                            } else { 
+                                            } else {
                                                 break :blk field.type;
                                             }
                                         };
 
                                         @field(data, field.name) = getty.deserialize(alloc, field_type, dd) catch |err| blk: {
-                                            if (err == Error.EOF) { 
-                                                if (config.default_fn) |default_fn| { 
+                                            if (err == Error.EOF) {
+                                                if (config.default_fn) |default_fn| {
                                                     break :blk default_fn(alloc.?);
-                                                } else { 
-                                                    if (field.default_value) |default_value| { 
+                                                } else {
+                                                    if (field.default_value) |default_value| {
                                                         break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-                                                    } else { 
+                                                    } else {
                                                         @compileError("field " ++ field.name ++ " has no default value");
                                                     }
                                                 }
-                                            } else { 
+                                            } else {
                                                 return err;
                                             }
                                         };
@@ -794,18 +794,16 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     };
 }
 
-test "bincode: default on eof" { 
+test "bincode: default on eof" {
     const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
     const Foo = struct {
         value: u8 = 0,
         accounts: std.ArrayList(u64),
         pub const @"!bincode-config:accounts" = defaultArrayListOnEOFConfig(u64);
-        pub const @"!bincode-config:value" = .{ 
-            .default_on_eof = true
-        };
+        pub const @"!bincode-config:value" = .{ .default_on_eof = true };
     };
 
-    var buf: [1]u8 = .{ 1 };
+    var buf: [1]u8 = .{1};
     var r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
     try std.testing.expect(r.value == 1);
 

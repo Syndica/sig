@@ -36,7 +36,7 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
     };
 }
 
-pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayList(T)) { 
+pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayList(T)) {
     const S = struct {
         fn defaultEOF(allocator: std.mem.Allocator) std.ArrayList(T) {
             return std.ArrayList(T).init(allocator);

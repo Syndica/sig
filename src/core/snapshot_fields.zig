@@ -139,7 +139,7 @@ pub const BankIncrementalSnapshotPersistence = struct {
     /// capitalization of the accounts in the incremental snapshot slot range
     incremental_capitalization: u64,
 
-    pub fn default() @This() { 
+    pub fn default() @This() {
         return .{
             .full_slot = 0,
             .full_hash = Hash.default(),
@@ -181,7 +181,7 @@ pub const EpochRewardStatus = union(enum) {
     Active: StartBlockHeightAndRewards,
     Inactive: void,
 
-    pub fn default() @This() { 
+    pub fn default() @This() {
         return @This().Inactive;
     }
 };
@@ -220,7 +220,7 @@ pub const BankFields = struct {
     epoch_stakes: HashMap(Epoch, EpochStakes),
     is_delta: bool,
 
-    // we skip these values now because they may be at 
+    // we skip these values now because they may be at
     // the end of the snapshot (after account_db_fields)
     incremental_snapshot_persistence: BankIncrementalSnapshotPersistence = BankIncrementalSnapshotPersistence.default(),
     epoch_accounts_hash: Hash = Hash.default(),
@@ -231,7 +231,7 @@ pub const BankFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .skip = true };
 };
 
-pub const SerializableAccountStorageEntry = struct { 
+pub const SerializableAccountStorageEntry = struct {
     id: usize,
     accounts_current_len: usize,
 };
@@ -250,10 +250,10 @@ pub const BankHashStats = struct {
     num_executable_accounts: u64,
 };
 
-pub const AccountsDbFields = struct { 
+pub const AccountsDbFields = struct {
     map: HashMap(Slot, ArrayList(SerializableAccountStorageEntry)),
-    stored_meta_write_version: u64, 
-    slot: Slot, 
+    stored_meta_write_version: u64,
+    slot: Slot,
     bank_hash_info: BankHashInfo,
 
     // default on EOF
@@ -282,10 +282,10 @@ pub const SnapshotFields = struct {
 
     /// NOTE: should call this to get the correct bank_fields instead of accessing it directly
     /// due to the way snapshot deserialization works
-    pub fn getFields(self: *@This()) struct {bank_fields: BankFields, accounts_db_fields: AccountsDbFields} {
+    pub fn getFields(self: *@This()) struct { bank_fields: BankFields, accounts_db_fields: AccountsDbFields } {
         var bank_fields = &self.bank_fields;
         // if these are availabel they will be parsed (and likely not the default values)
-        // so, we push them on the bank fields here 
+        // so, we push them on the bank fields here
         bank_fields.fee_rate_governor.lamports_per_signature = self.lamports_per_signature;
         bank_fields.incremental_snapshot_persistence = self.incremental_snapshot_persistence;
         bank_fields.epoch_accounts_hash = self.epoch_accounts_hash;
