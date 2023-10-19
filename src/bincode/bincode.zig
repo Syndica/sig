@@ -807,7 +807,6 @@ test "bincode: default on eof" {
 
     var buf: [1]u8 = .{ 1 };
     var r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
-    // std.debug.print("{any}", .{r});
     try std.testing.expect(r.value == 1);
 
     var buf2: [1024]u8 = undefined;

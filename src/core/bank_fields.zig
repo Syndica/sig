@@ -25,24 +25,22 @@ pub const StakeHistoryEntry = struct {
 
 const StakeHistory = ArrayList(struct { Epoch, StakeHistoryEntry });
 
-pub fn Stakes(comptime T: type) type {
-    return struct {
-        /// vote accounts
-        vote_accounts: VoteAccounts,
+pub const Stakes = struct {
+    /// vote accounts
+    vote_accounts: VoteAccounts,
 
-        /// stake_delegations
-        stake_delegations: HashMap(Pubkey, T),
+    /// stake_delegations
+    stake_delegations: HashMap(Pubkey, Delegation),
 
-        /// unused
-        unused: u64,
+    /// unused
+    unused: u64,
 
-        /// current epoch, used to calculate current stake
-        epoch: Epoch,
+    /// current epoch, used to calculate current stake
+    epoch: Epoch,
 
-        /// history of staking levels
-        stake_history: StakeHistory,
-    };
-}
+    /// history of staking levels
+    stake_history: StakeHistory,
+};
 
 pub const VoteAccounts = struct {
     vote_accounts: HashMap(Pubkey, struct { u64, Account }),
@@ -123,7 +121,7 @@ pub const NodeVoteAccounts = struct {
 };
 
 pub const EpochStakes = struct {
-    stakes: Stakes(Delegation),
+    stakes: Stakes,
     total_stake: u64,
     node_id_to_vote_accounts: HashMap(Pubkey, NodeVoteAccounts),
     epoch_authorized_voters: HashMap(Pubkey, Pubkey),
@@ -217,7 +215,7 @@ pub const BankFields = struct {
     rent_collector: RentCollector,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: Stakes(Delegation),
+    stakes: Stakes,
     unused_accounts: UnusedAccounts, // required for deserialization
     epoch_stakes: HashMap(Epoch, EpochStakes),
     is_delta: bool,
