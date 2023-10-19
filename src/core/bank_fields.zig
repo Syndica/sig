@@ -302,22 +302,21 @@ test "core.bank_fields: tmp" {
     // 1) download a snapshot
     // 2) decompress snapshot
     // 3) untar snapshot to get accounts/ dir + other metdata files
+    // 4) set the `root_snapshot_path` to point to the file with metadata
     // 4) run this
-
+    const root_snapshot_path = "";
     const alloc = std.testing.allocator;
-    // const alloc = std.heap.c_allocator;
-
 
     // open file
-    var file = try std.fs.openFileAbsolute(root_snapshot_path, .{});
+    var file = std.fs.openFileAbsolute(root_snapshot_path, .{}) catch |err| {
+        std.debug.print("failed to open bank/accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
+        return;
+    };
     defer file.close();
 
-    // try file.seekFromEnd(0);
-    // const file_size = try file.getPos();
-    // try file.seekTo(0);
-    // std.debug.print("length: {d}\n", .{file_size});
-
-    const file_size = 530356075; 
+    try file.seekFromEnd(0);
+    const file_size = try file.getPos();
+    try file.seekTo(0);
 
     var buf_reader = std.io.bufferedReader(file.reader());
     var in_stream = buf_reader.reader();
@@ -329,5 +328,5 @@ test "core.bank_fields: tmp" {
     defer bincode.free(alloc, snapshot_fields);
 
     const fields = snapshot_fields.getFields();
-    std.debug.print("{any}", .{fields});
+    _ = fields;
 }
