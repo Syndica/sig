@@ -17,6 +17,8 @@ const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
 
+pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
+
 pub const StakeHistoryEntry = struct {
     effective: u64, // effective stake at this epoch
     activating: u64, // sum of portion of stakes not fully warmed up
@@ -231,9 +233,19 @@ pub const BankFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .skip = true };
 };
 
-pub const SerializableAccountStorageEntry = struct {
+pub const AppendVecInfo = struct {
     id: usize,
-    accounts_current_len: usize,
+    accounts_len: usize,
+
+    pub fn sanitize(self: *const AppendVecInfo, file_size: usize) !void {
+        if (file_size == 0) {
+            return error.FileSizeTooSmall;
+        } else if (file_size > @as(usize, MAXIMUM_APPEND_VEC_FILE_SIZE)) {
+            return error.FileSizeTooLarge;
+        } else if (self.accounts_len > file_size) {
+            return error.OffsetOutOfBounds;
+        }
+    }
 };
 
 pub const BankHashInfo = struct {
@@ -251,7 +263,7 @@ pub const BankHashStats = struct {
 };
 
 pub const AccountsDbFields = struct {
-    map: HashMap(Slot, ArrayList(SerializableAccountStorageEntry)),
+    map: HashMap(Slot, ArrayList(AppendVecInfo)),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,
@@ -302,7 +314,8 @@ test "core.bank_fields: tmp" {
     // 3) untar snapshot to get accounts/ dir + other metdata files
     // 4) set the `root_snapshot_path` to point to the file with metadata
     // 4) run this
-    const root_snapshot_path = "/test_data/slot/slot";
+    // const root_snapshot_path = "/test_data/slot/slot";
+    const root_snapshot_path = "/Users/tmp/Documents/workspace/solana/data/full_snapshots/remote/snapshots/189662221/189662221";
     const alloc = std.testing.allocator;
 
     // open file
@@ -312,19 +325,26 @@ test "core.bank_fields: tmp" {
     };
     defer file.close();
 
-    try file.seekFromEnd(0);
-    const file_size = try file.getPos();
-    try file.seekTo(0);
-
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
+    var file_reader = std.io.bufferedReader(file.reader());
+    const file_size = (try file.stat()).size;
 
     var buf = try std.ArrayList(u8).initCapacity(alloc, file_size);
     defer buf.deinit();
 
-    var snapshot_fields = try bincode.read(alloc, SnapshotFields, in_stream, .{});
+    var snapshot_fields = try bincode.read(alloc, SnapshotFields, file_reader.reader(), .{});
     defer bincode.free(alloc, snapshot_fields);
 
     const fields = snapshot_fields.getFields();
     _ = fields;
+
+    // // rewrite the accounts_db_fields seperate
+    // var db_buf = try bincode.writeToArray(alloc, fields.accounts_db_fields, .{});
+    // defer db_buf.deinit();
+
+    // // write buf to a file
+    // const accounts_db_path = "/Users/brennan/Documents/workspace/solana/data/full_snapshots/remote/accounts_db.bincode";
+    // const db_file = try std.fs.createFileAbsolute(accounts_db_path, .{});
+    // defer db_file.close();
+
+    // _ = try db_file.write(db_buf.items);
 }
