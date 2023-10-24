@@ -740,8 +740,29 @@ pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !u
 pub fn getSerializedSize(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
     var list = try writeToArray(alloc, data, params);
     defer list.deinit();
-
     return list.items.len;
+}
+
+pub fn getComptimeSize(comptime T: type) usize {
+    const U = @typeInfo(T);
+    var size: usize = 0;
+    switch (U) {
+        .Struct => |*info| {
+            inline for (info.fields) |field| {
+                if (get_field_config(T, field)) |config| {
+                    if (config.skip or config.default_on_eof) {
+                        continue;
+                    }
+                }
+                size += getComptimeSize(field.type);
+            }
+        },
+        else => {
+            // TODO: support other types better
+            size += @sizeOf(T);
+        },
+    }
+    return size;
 }
 
 // can call if dont require an allocator
@@ -792,6 +813,22 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
         .serializer = S.serilaizeTestSlice,
         .deserializer = S.deserializeTestSlice,
     };
+}
+
+test "bincode: comptime size with skip" {
+    const Foo = struct {
+        value: u8 = 0,
+        pub const @"!bincode-config:value" = .{ .skip = true };
+    };
+
+    const size = try getComptimeSize(Foo);
+    try std.testing.expect(size == 0);
+
+    const Foo2 = struct {
+        value: u8,
+    };
+    const size2 = try getComptimeSize(Foo2);
+    try std.testing.expect(size2 == 1);
 }
 
 test "bincode: default on eof" {

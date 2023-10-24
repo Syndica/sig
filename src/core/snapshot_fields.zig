@@ -235,14 +235,14 @@ pub const BankFields = struct {
 
 pub const AppendVecInfo = struct {
     id: usize,
-    accounts_len: usize,
+    length: usize, // amount of bytes used
 
     pub fn sanitize(self: *const AppendVecInfo, file_size: usize) !void {
         if (file_size == 0) {
             return error.FileSizeTooSmall;
         } else if (file_size > @as(usize, MAXIMUM_APPEND_VEC_FILE_SIZE)) {
             return error.FileSizeTooLarge;
-        } else if (self.accounts_len > file_size) {
+        } else if (self.length > file_size) {
             return error.OffsetOutOfBounds;
         }
     }
@@ -315,7 +315,7 @@ test "core.bank_fields: tmp" {
     // 4) set the `root_snapshot_path` to point to the file with metadata
     // 4) run this
     // const root_snapshot_path = "/test_data/slot/slot";
-    const root_snapshot_path = "/Users/tmp/Documents/workspace/solana/data/full_snapshots/remote/snapshots/189662221/189662221";
+    const root_snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
     const alloc = std.testing.allocator;
 
     // open file
@@ -335,16 +335,16 @@ test "core.bank_fields: tmp" {
     defer bincode.free(alloc, snapshot_fields);
 
     const fields = snapshot_fields.getFields();
-    _ = fields;
+    // _ = fields;
 
-    // // rewrite the accounts_db_fields seperate
-    // var db_buf = try bincode.writeToArray(alloc, fields.accounts_db_fields, .{});
-    // defer db_buf.deinit();
+    // rewrite the accounts_db_fields seperate
+    var db_buf = try bincode.writeToArray(alloc, fields.accounts_db_fields, .{});
+    defer db_buf.deinit();
 
-    // // write buf to a file
-    // const accounts_db_path = "/Users/brennan/Documents/workspace/solana/data/full_snapshots/remote/accounts_db.bincode";
-    // const db_file = try std.fs.createFileAbsolute(accounts_db_path, .{});
-    // defer db_file.close();
+    // write buf to a file
+    const accounts_db_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
+    const db_file = try std.fs.createFileAbsolute(accounts_db_path, .{});
+    defer db_file.close();
 
-    // _ = try db_file.write(db_buf.items);
+    _ = try db_file.write(db_buf.items);
 }
