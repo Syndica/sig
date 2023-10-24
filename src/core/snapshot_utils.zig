@@ -14,7 +14,6 @@ const AccountsDbFields = @import("./snapshot_fields.zig").AccountsDbFields;
 const AppendVecInfo = @import("./snapshot_fields.zig").AppendVecInfo;
 
 const base58 = @import("base58-zig");
-const encoder = base58.Encoder.init(.{});
 
 pub const TmpPubkey = struct {
     data: [32]u8,
@@ -23,6 +22,8 @@ pub const TmpPubkey = struct {
     pub fn base58_encode(self: *const TmpPubkey) error{EncodingError}![44]u8 {
         var dest: [44]u8 = undefined;
         @memset(&dest, 0);
+
+        const encoder = base58.Encoder.init(.{});
         var written = encoder.encode(&self.data, &dest) catch return error.EncodingError;
         if (written > 44) {
             std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, self.data });
@@ -33,6 +34,10 @@ pub const TmpPubkey = struct {
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
         const str = self.base58_encode() catch unreachable;
         return writer.print("{s}", .{str});
+    }
+
+    pub fn isDefault(self: *const TmpPubkey) bool {
+        return std.mem.eql(u8, &self.data, &[_]u8{0} ** 32);
     }
 };
 
@@ -71,7 +76,7 @@ pub const AppendVecAccountInfo = struct {
         var valid_lamports = self.account_info.lamports != 0 or (
         // ie, is default account
             self.data.len == 0 and
-            // self.account_info.owner.equals(&Pubkey.default()) and
+            self.account_info.owner.isDefault() and
             self.account_info.executable == false and
             self.account_info.rent_epoch == 0);
         if (!valid_lamports) {
@@ -89,7 +94,7 @@ pub const AppendVec = struct {
     // file contents
     mmap_ptr: []align(std.mem.page_size) u8,
     id: usize,
-    // number of bytes used 
+    // number of bytes used
     length: usize,
     // total bytes available
     file_size: usize,
