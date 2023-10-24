@@ -19,7 +19,7 @@ pub const TmpPubkey = struct {
     data: [32]u8,
     // note: need to remove cached string to have correct ptr casting
 
-    pub fn base58_encode(self: *const TmpPubkey) error{EncodingError}![44]u8 {
+    pub fn toString(self: *const TmpPubkey) error{EncodingError}![44]u8 {
         var dest: [44]u8 = undefined;
         @memset(&dest, 0);
 
@@ -32,7 +32,7 @@ pub const TmpPubkey = struct {
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
-        const str = self.base58_encode() catch unreachable;
+        const str = self.toString() catch unreachable;
         return writer.print("{s}", .{str});
     }
 
@@ -98,6 +98,8 @@ pub const AppendVec = struct {
     length: usize,
     // total bytes available
     file_size: usize,
+    file: std.fs.File,
+
     // number of accounts stored in the file
     n_accounts: usize = 0,
 
@@ -123,25 +125,32 @@ pub const AppendVec = struct {
             .length = append_vec_info.length,
             .id = append_vec_info.id,
             .file_size = file_size,
+            .file = file,
         };
     }
 
-    pub fn getSlice(self: *const Self, start_index_ptr: *usize, length: usize) error{EOF}![]u8 {
-        const start_index = start_index_ptr.*;
-        const result = @addWithOverflow(start_index, length);
-        const end_index = result[0];
-        const overflow_flag = result[1];
-
-        if (overflow_flag == 1 or end_index > self.length) {
-            return error.EOF;
-        }
-        start_index_ptr.* = alignToU64(end_index);
-        return @ptrCast(self.mmap_ptr[start_index..end_index]);
+    pub fn deinit(self: *Self) void {
+        std.os.munmap(self.mmap_ptr);
+        self.file.close();
     }
 
-    pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
-        const length = bincode.getComptimeSize(T);
-        return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
+    pub fn sanitize(self: *Self) !void {
+        var offset: usize = 0;
+        var n_accounts: usize = 0;
+
+        // parse all the accounts out of the append vec
+        while (true) {
+            const account = self.getAccount(offset) catch break;
+            try account.sanitize();
+            offset = offset + account.len;
+            n_accounts += 1;
+        }
+
+        if (offset != alignToU64(self.length)) {
+            return error.InvalidAppendVecLength;
+        }
+
+        self.n_accounts = n_accounts;
     }
 
     pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AppendVecAccountInfo {
@@ -164,71 +173,51 @@ pub const AppendVec = struct {
         };
     }
 
-    pub fn sanitize(self: *Self) !void {
-        var offset: usize = 0;
-        var n_accounts: usize = 0;
+    pub fn getSlice(self: *const Self, start_index_ptr: *usize, length: usize) error{EOF}![]u8 {
+        const start_index = start_index_ptr.*;
+        const result = @addWithOverflow(start_index, length);
+        const end_index = result[0];
+        const overflow_flag = result[1];
 
-        // parse all the accounts out of the append vec
-        while (true) {
-            const account = self.getAccount(offset) catch break;
-            try account.sanitize();
-            offset = offset + account.len;
-            n_accounts += 1;
+        if (overflow_flag == 1 or end_index > self.length) {
+            return error.EOF;
         }
-
-        if (offset != alignToU64(self.length)) {
-            return error.InvalidAppendVecLength;
-        }
-
-        self.n_accounts = n_accounts;
+        start_index_ptr.* = alignToU64(end_index);
+        return @ptrCast(self.mmap_ptr[start_index..end_index]);
     }
 
-    pub fn deinit(self: *Self) void {
-        std.os.munmap(self.mmap_ptr);
+    pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
+        const length = bincode.getComptimeSize(T);
+        return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
 };
 
 test "core.snapshot_utils: tmp" {
     const alloc = std.testing.allocator;
-    const accounts_db_meta_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
+    const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
+    const accounts_db_fields_file = try std.fs.openFileAbsolute(accounts_db_fields_path, .{});
 
-    const file = try std.fs.openFileAbsolute(accounts_db_meta_path, .{});
-    const file_size = (try file.stat()).size;
-    var buf = try std.ArrayList(u8).initCapacity(alloc, file_size);
-    defer buf.deinit();
-
-    var accounts_db_fields = try bincode.read(alloc, AccountsDbFields, file.reader(), .{});
+    var accounts_db_fields = try bincode.read(alloc, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(alloc, accounts_db_fields);
 
-    // // const abs_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts/225272877.1826257";
-    // const abs_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts/225207528.1691286";
-    // const slot = 225207528;
-    // const append_vec_id = 1691286;
+    //
+    var storage = HashMap(Slot, AppendVec).init(alloc);
+    defer {
+        var iter = storage.iterator();
+        while (iter.next()) |*entry| {
+            entry.value_ptr.deinit();
+        }
+        storage.deinit();
+    }
 
-    // const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
-    // // we should only have one entry (in newer snapshots)
-    // std.debug.assert(slot_metas.items.len == 1);
-    // const slot_meta = slot_metas.items[0];
-    // std.debug.assert(slot_meta.id == append_vec_id);
-
-    // std.debug.print("slot_meta {any}\n", .{slot_meta});
-
-    // const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-    // var append_vec = try AppendVec.init(append_vec_file, slot_meta);
-    // defer append_vec.deinit();
-
-    // try append_vec.sanitize();
-
-    // verify fields are correct
-    const accounts_dir = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
-    // iterate over the files in the dir
-    var slot_to_n_appendvec = HashMap(Slot, usize).init(alloc);
-    defer slot_to_n_appendvec.deinit();
-
-    var count: usize = 0;
-    var dir = try std.fs.openIterableDirAbsolute(accounts_dir, .{});
-    var accounts_dir_iter = dir.iterate();
+    var n_appendvec: usize = 0;
     var n_valid_appendvec: usize = 0;
+
+    //
+    const accounts_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
+    var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
+    var accounts_dir_iter = accounts_dir.iterate();
+
     while (try accounts_dir_iter.next()) |entry| {
         var filename: []const u8 = entry.name;
 
@@ -237,34 +226,38 @@ test "core.snapshot_utils: tmp" {
         const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
         const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
-        // this should never fail with a newer snapshot (we only support newer snapshots)
-        slot_to_n_appendvec.putNoClobber(slot, append_vec_id) catch {
-            std.debug.print("clobber occured at slot {d} with id {d}\n", .{ slot, append_vec_id });
-            @panic("");
-        };
-        count += 1;
-
+        // read metadata
         const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
-        // we should only have one entry (in newer snapshots)
         std.debug.assert(slot_metas.items.len == 1);
         const slot_meta = slot_metas.items[0];
         std.debug.assert(slot_meta.id == append_vec_id);
 
-        // file => appendVec
+        // read appendVec from file
         var abs_path_buf: [1024]u8 = undefined;
-        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir, filename });
+        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, filename });
         const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        defer append_vec_file.close();
+        n_appendvec += 1;
 
         var append_vec = AppendVec.init(append_vec_file, slot_meta) catch continue;
-        defer append_vec.deinit();
 
+        // verify its valid
         append_vec.sanitize() catch {
-            // std.debug.print("sanitize failed @ slot {d} with id {d}: {s}\n", .{ slot, append_vec_id, @errorName(err) });
+            append_vec.deinit();
             continue;
         };
-        // std.debug.print("sanitize SUCCESS @ slot {d} with id {d}\n", .{ slot, append_vec_id });
         n_valid_appendvec += 1;
+
+        // note: newer snapshots shouldnt clobber
+        try storage.putNoClobber(slot, append_vec);
+
+        // dont open too many files (just testing)
+        if (n_appendvec == 10) break;
     }
-    std.debug.print("n_valid_appendvec: {d}, total_append_vec: {d}\n", .{ n_valid_appendvec, count });
+
+    // note: didnt untar the full snapshot (bc time)
+    // n_valid_appendvec: 328_811, total_append_vec: 328_812
+    std.debug.print("n_valid_appendvec: {d}, total_append_vec: {d}\n", .{ n_valid_appendvec, n_appendvec });
+
+    //
+
 }
