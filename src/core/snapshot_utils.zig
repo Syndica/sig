@@ -192,10 +192,19 @@ pub const AppendVec = struct {
     }
 };
 
-test "core.snapshot_utils: tmp" {
+test "core.snapshot_utils: parse accounts out of append vec" {
+    // to run this test
+    // 1) run the test `core.snapshot_fields: parse snapshot fields`
+    //     - to build accounts_db.bincode file
+    // 2) change paths for `accounts_db_fields_path` and `accounts_dir_path`
+    // 3) run the test
     const alloc = std.testing.allocator;
+
     const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
-    const accounts_db_fields_file = try std.fs.openFileAbsolute(accounts_db_fields_path, .{});
+    const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
+        std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
+        return;
+    };
 
     var accounts_db_fields = try bincode.read(alloc, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(alloc, accounts_db_fields);
@@ -215,7 +224,10 @@ test "core.snapshot_utils: tmp" {
 
     //
     const accounts_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
-    var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
+    var accounts_dir = std.fs.openIterableDirAbsolute(accounts_dir_path, .{}) catch |err| {
+        std.debug.print("failed to open accounts dir: {s} ... skipping test\n", .{@errorName(err)});
+        return;
+    };
     var accounts_dir_iter = accounts_dir.iterate();
 
     while (try accounts_dir_iter.next()) |entry| {
@@ -257,7 +269,4 @@ test "core.snapshot_utils: tmp" {
     // note: didnt untar the full snapshot (bc time)
     // n_valid_appendvec: 328_811, total_append_vec: 328_812
     std.debug.print("n_valid_appendvec: {d}, total_append_vec: {d}\n", .{ n_valid_appendvec, n_appendvec });
-
-    //
-
 }

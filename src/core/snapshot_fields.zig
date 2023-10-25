@@ -307,20 +307,21 @@ pub const SnapshotFields = struct {
     }
 };
 
-test "core.bank_fields: tmp" {
+test "core.snapshot_fields: parse snapshot fields" {
     // steps:
     // 1) download a snapshot
     // 2) decompress snapshot
     // 3) untar snapshot to get accounts/ dir + other metdata files
-    // 4) set the `root_snapshot_path` to point to the file with metadata
+    // 4) set the `snapshot_path` to point to the file with metadata
     // 4) run this
-    // const root_snapshot_path = "/test_data/slot/slot";
-    const root_snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
+    // const snapshot_path = "/test_data/slot/slot";
+
+    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
     const alloc = std.testing.allocator;
 
     // open file
-    var file = std.fs.openFileAbsolute(root_snapshot_path, .{}) catch |err| {
-        std.debug.print("failed to open bank/accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
+    var file = std.fs.openFileAbsolute(snapshot_path, .{}) catch |err| {
+        std.debug.print("failed to open snapshot file: {s} ... skipping test\n", .{@errorName(err)});
         return;
     };
     defer file.close();
@@ -335,7 +336,6 @@ test "core.bank_fields: tmp" {
     defer bincode.free(alloc, snapshot_fields);
 
     const fields = snapshot_fields.getFields();
-    // _ = fields;
 
     // rewrite the accounts_db_fields seperate
     var db_buf = try bincode.writeToArray(alloc, fields.accounts_db_fields, .{});
