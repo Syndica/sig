@@ -187,12 +187,12 @@ pub const AppendVec = struct {
     }
 
     pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
-        const length = bincode.getComptimeSize(T);
+        const length = @sizeOf(T);
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
 };
 
-test "core.snapshot_utils: parse accounts out of append vec" {
+test "core.append_vec: parse accounts out of append vec" {
     // to run this test
     // 1) run the test `core.snapshot_fields: parse snapshot fields`
     //     - to build accounts_db.bincode file
@@ -200,7 +200,7 @@ test "core.snapshot_utils: parse accounts out of append vec" {
     // 3) run the test
     const alloc = std.testing.allocator;
 
-    const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
+    const accounts_db_fields_path = "/Users/tmp2/Documents/zig-solana/snapshots/accounts_db.bincode";
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
         std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
         return;

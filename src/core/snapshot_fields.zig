@@ -316,7 +316,7 @@ test "core.snapshot_fields: parse snapshot fields" {
     // 4) run this
     // const snapshot_path = "/test_data/slot/slot";
 
-    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
+    const snapshot_path = "/Users/tmp2/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
     const alloc = std.testing.allocator;
 
     // open file

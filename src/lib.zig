@@ -16,7 +16,7 @@ pub const core = struct {
     pub usingnamespace @import("core/shred.zig");
     pub usingnamespace @import("core/genesis_config.zig");
     pub usingnamespace @import("core/snapshot_fields.zig");
-    pub usingnamespace @import("core/snapshot_utils.zig");
+    pub usingnamespace @import("core/append_vec.zig");
 };
 
 pub const gossip = struct {
