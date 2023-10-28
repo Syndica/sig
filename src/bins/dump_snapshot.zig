@@ -31,14 +31,8 @@ pub fn parseAccounts(
 ) !void {
     // parse "{slot}.{id}" from the filename
     var fiter = std.mem.tokenizeSequence(u8, filename, ".");
-    const slot = std.fmt.parseInt(Slot, fiter.next() orelse { std.debug.print("{s} is not valid", .{ filename }); unreachable; }, 10) catch |err| { 
-        std.debug.print("{s} is not valid", .{ filename });
-        return err;
-    };
-    const append_vec_id = std.fmt.parseInt(usize, fiter.next() orelse { std.debug.print("{s} is not valid", .{ filename }); unreachable; }, 10) catch |err| { 
-        std.debug.print("{s} is not valid", .{ filename });
-        return err;
-    };
+    const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
+    const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
     // read metadata
     const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
@@ -52,6 +46,7 @@ pub fn parseAccounts(
     const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
 
     var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch return;
+    defer append_vec.deinit();
 
     // verify its valid
     append_vec.sanitize() catch {
@@ -63,7 +58,6 @@ pub fn parseAccounts(
     defer pubkey_and_refs.deinit();
 
     var result = try ArrayList([]u8).initCapacity(alloc, pubkey_and_refs.items.len);
-    errdefer result.deinit();
 
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const pubkey = pubkey_and_ref.pubkey;
@@ -125,7 +119,10 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
     var maybe_last_time: ?u64 = null;
 
     while (true) {
-        const maybe_csv_rows_slice = channel.try_drain() catch break;
+        const maybe_csv_rows_slice = channel.try_drain() catch { 
+            std.debug.print("recv csv files channel closed\n", .{});
+            break;
+        };
 
         if (maybe_csv_rows_slice == null) continue;
         var csv_rows_slice = maybe_csv_rows_slice.?;
@@ -133,6 +130,8 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
         defer channel.allocator.free(csv_rows_slice);
 
         for (csv_rows_slice) |csv_rows| {
+            defer csv_rows.deinit();
+
             for (csv_rows.items) |csv_row| {
                 writer.print("{s}\n", .{csv_row}) catch unreachable;
                 account_count += 1;
