@@ -160,6 +160,25 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         benchmark_cmd.addArgs(args);
     }
-
     b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
+
+    // dump_snapshot
+    const dump_snapshot_exe = b.addExecutable(.{
+        .name = "dump_snapshot",
+        .root_source_file = .{ .path = "src/bins/dump_snapshot.zig" },
+        .target = target,
+        .optimize = optimize,
+        .main_pkg_path = .{ .path = "src" },
+    });
+    dump_snapshot_exe.addModule("base58-zig", base58_module);
+    dump_snapshot_exe.addModule("zig-network", zig_network_module);
+    dump_snapshot_exe.addModule("zig-cli", zig_cli_module);
+    dump_snapshot_exe.addModule("getty", getty_mod);
+    b.installArtifact(dump_snapshot_exe);
+    const dump_snapshot_cmd = b.addRunArtifact(dump_snapshot_exe);
+    if (b.args) |args| {
+        dump_snapshot_cmd.addArgs(args);
+    }
+    b.step("dump_snapshot", "dump_snapshot").dependOn(&dump_snapshot_cmd.step);
+
 }

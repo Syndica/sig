@@ -85,6 +85,11 @@ pub const AppendVecAccountInfo = struct {
     }
 };
 
+pub const PubkeyAndAccountInAppendVecRef = struct {
+    pubkey: TmpPubkey,
+    account_ref: AccountInAppendVecRef,
+};
+
 const u64_size: usize = @sizeOf(u64);
 inline fn alignToU64(addr: usize) usize {
     return (addr + (u64_size - 1)) & ~(u64_size - 1);
@@ -94,6 +99,7 @@ pub const AppendVec = struct {
     // file contents
     mmap_ptr: []align(std.mem.page_size) u8,
     id: usize,
+    slot: Slot,
     // number of bytes used
     length: usize,
     // total bytes available
@@ -105,7 +111,7 @@ pub const AppendVec = struct {
 
     const Self = @This();
 
-    pub fn init(file: std.fs.File, append_vec_info: AppendVecInfo) !Self {
+    pub fn init(file: std.fs.File, append_vec_info: AppendVecInfo, slot: Slot) !Self {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
 
@@ -126,6 +132,7 @@ pub const AppendVec = struct {
             .id = append_vec_info.id,
             .file_size = file_size,
             .file = file,
+            .slot = slot,
         };
     }
 
@@ -139,6 +146,8 @@ pub const AppendVec = struct {
         var n_accounts: usize = 0;
 
         // parse all the accounts out of the append vec
+        // note: we immediately discard the account (and dont index them)
+        // so if the vec fails sanitization we dont allocate extra memory
         while (true) {
             const account = self.getAccount(offset) catch break;
             try account.sanitize();
@@ -190,6 +199,91 @@ pub const AppendVec = struct {
         const length = @sizeOf(T);
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
+
+    pub fn getAccountsRefs(self: *const Self, allocator: std.mem.Allocator) !ArrayList(PubkeyAndAccountInAppendVecRef) {
+        var accounts = try ArrayList(PubkeyAndAccountInAppendVecRef).initCapacity(allocator, self.n_accounts);
+
+        var offset: usize = 0;
+        while (true) {
+            const account = self.getAccount(offset) catch break;
+            const pubkey = account.store_info.pubkey;
+
+            const pubkey_account_ref = PubkeyAndAccountInAppendVecRef{ .pubkey = pubkey, .account_ref = .{
+                .slot = self.slot,
+                .offset = offset,
+                .append_vec_id = self.id,
+            } };
+
+            accounts.appendAssumeCapacity(pubkey_account_ref);
+            offset = offset + account.len;
+        }
+
+        return accounts;
+    }
+};
+
+pub const AccountInAppendVecRef = struct {
+    slot: usize,
+    append_vec_id: usize,
+    offset: usize,
+};
+
+pub const AccountIndex = struct {
+    // only support RAM for now
+    ram_map: HashMap(TmpPubkey, ArrayList(AccountInAppendVecRef)),
+    // TODO: disk_map
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) AccountIndex {
+        return AccountIndex{
+            .ram_map = HashMap(TmpPubkey, ArrayList(AccountInAppendVecRef)).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        var iter = self.ram_map.iterator();
+        while (iter.next()) |*entry| {
+            entry.value_ptr.deinit();
+        }
+        self.ram_map.deinit();
+    }
+
+    pub fn insertNewAccountRef(
+        self: *Self,
+        pubkey: TmpPubkey,
+        account_ref: AccountInAppendVecRef,
+    ) !void {
+        var maybe_entry = self.ram_map.getEntry(pubkey);
+
+        // if the pubkey already exists
+        if (maybe_entry) |*entry| {
+            var existing_refs: *ArrayList(AccountInAppendVecRef) = entry.value_ptr;
+
+            // search: if slot already exists, replace the value
+            var found_matching_slot = false;
+            for (existing_refs.items) |*existing_ref| {
+                if (existing_ref.slot == account_ref.slot) {
+                    if (!found_matching_slot) {
+                        existing_ref.* = account_ref;
+                        found_matching_slot = true;
+                        break;
+                    }
+                    // TODO: rust impl continues to scan and removes other slot duplicates
+                    // do we need to do this?
+                }
+            }
+
+            // otherwise we append
+            if (!found_matching_slot) {
+                try existing_refs.append(account_ref);
+            }
+        } else {
+            var account_refs = try ArrayList(AccountInAppendVecRef).initCapacity(self.ram_map.allocator, 1);
+            account_refs.appendAssumeCapacity(account_ref);
+            try self.ram_map.putNoClobber(pubkey, account_refs);
+        }
+    }
 };
 
 test "core.append_vec: parse accounts out of append vec" {
@@ -200,7 +294,7 @@ test "core.append_vec: parse accounts out of append vec" {
     // 3) run the test
     const alloc = std.testing.allocator;
 
-    const accounts_db_fields_path = "/Users/tmp2/Documents/zig-solana/snapshots/accounts_db.bincode";
+    const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
         std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
         return;
@@ -210,19 +304,29 @@ test "core.append_vec: parse accounts out of append vec" {
     defer bincode.free(alloc, accounts_db_fields);
 
     //
-    var storage = HashMap(Slot, AppendVec).init(alloc);
-    defer {
-        var iter = storage.iterator();
-        while (iter.next()) |*entry| {
-            entry.value_ptr.deinit();
-        }
-        storage.deinit();
-    }
+    var arena_allocator = std.heap.ArenaAllocator.init(alloc);
+    var storage = HashMap(Slot, AppendVec).init(arena_allocator.allocator());
+    defer arena_allocator.deinit();
 
     var n_appendvec: usize = 0;
     var n_valid_appendvec: usize = 0;
 
     //
+    var account_index = AccountIndex.init(alloc);
+    defer account_index.deinit();
+
+    // where to dump the full account data
+    const dump_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/account_dumps";
+    std.fs.makeDirAbsolute(dump_dir_path) catch {};
+    std.debug.print("dump_dir_path: {s}\n", .{dump_dir_path});
+
+    // const tmp_path = "/Users/tmp/Documents/zig-solana/snapshots/account_dumps/1069";
+    // const tmp_file = try std.fs.openFileAbsolute(tmp_path, .{ .mode = .read_write });
+    // var buf: [254]u8 = undefined;
+    // _ = try tmp_file.readAll(&buf);
+    // const v = bincode.readFromSlice(alloc, AccountAndPubkey, &buf, .{});
+    // std.debug.print("v: {any}\n", .{v});
+
     const accounts_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
     var accounts_dir = std.fs.openIterableDirAbsolute(accounts_dir_path, .{}) catch |err| {
         std.debug.print("failed to open accounts dir: {s} ... skipping test\n", .{@errorName(err)});
@@ -250,7 +354,7 @@ test "core.append_vec: parse accounts out of append vec" {
         const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
         n_appendvec += 1;
 
-        var append_vec = AppendVec.init(append_vec_file, slot_meta) catch continue;
+        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch continue;
 
         // verify its valid
         append_vec.sanitize() catch {
@@ -261,6 +365,18 @@ test "core.append_vec: parse accounts out of append vec" {
 
         // note: newer snapshots shouldnt clobber
         try storage.putNoClobber(slot, append_vec);
+
+        const pubkey_and_refs = try append_vec.getAccountsRefs(alloc);
+        defer pubkey_and_refs.deinit();
+
+        for (pubkey_and_refs.items) |*pubkey_and_ref| {
+            // TODO: can probs not copy here and just store references (we know theyre
+            // heap based allocations)
+            try account_index.insertNewAccountRef(
+                pubkey_and_ref.pubkey,
+                pubkey_and_ref.account_ref,
+            );
+        }
 
         // dont open too many files (just testing)
         if (n_appendvec == 10) break;

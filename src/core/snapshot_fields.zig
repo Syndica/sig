@@ -305,7 +305,39 @@ pub const SnapshotFields = struct {
 
         return .{ .bank_fields = self.bank_fields, .accounts_db_fields = self.accounts_db_fields };
     }
+
+    pub fn readFromFilePath(allocator: std.mem.Allocator, abs_path: []const u8) !SnapshotFields {
+        var file = try std.fs.openFileAbsolute(abs_path, .{});
+        defer file.close();
+
+        var file_reader = std.io.bufferedReader(file.reader());
+        const file_size = (try file.stat()).size;
+
+        var buf = try std.ArrayList(u8).initCapacity(allocator, file_size);
+        defer buf.deinit();
+
+        var snapshot_fields = try bincode.read(allocator, SnapshotFields, file_reader.reader(), .{});
+        return snapshot_fields;
+    }
 };
+
+pub fn writeAccountsDbFields(
+    allocator: std.mem.Allocator,
+    snapshot_abs_path: []const u8,
+    accounts_db_abs_path: []const u8,
+) !void {
+    const snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_abs_path);
+    const fields = snapshot_fields.getFields();
+
+    // rewrite the accounts_db_fields seperate
+    const db_file = try std.fs.createFileAbsolute(accounts_db_abs_path, .{});
+    defer db_file.close();
+
+    var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields, .{});
+    defer db_buf.deinit();
+
+    _ = try db_file.write(db_buf.items);
+}
 
 test "core.snapshot_fields: parse snapshot fields" {
     // steps:
@@ -316,35 +348,12 @@ test "core.snapshot_fields: parse snapshot fields" {
     // 4) run this
     // const snapshot_path = "/test_data/slot/slot";
 
-    const snapshot_path = "/Users/tmp2/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
+    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
     const alloc = std.testing.allocator;
 
-    // open file
-    var file = std.fs.openFileAbsolute(snapshot_path, .{}) catch |err| {
-        std.debug.print("failed to open snapshot file: {s} ... skipping test\n", .{@errorName(err)});
-        return;
-    };
-    defer file.close();
-
-    var file_reader = std.io.bufferedReader(file.reader());
-    const file_size = (try file.stat()).size;
-
-    var buf = try std.ArrayList(u8).initCapacity(alloc, file_size);
-    defer buf.deinit();
-
-    var snapshot_fields = try bincode.read(alloc, SnapshotFields, file_reader.reader(), .{});
+    const snapshot_fields = try SnapshotFields.readFromFilePath(alloc, snapshot_path);
     defer bincode.free(alloc, snapshot_fields);
 
     const fields = snapshot_fields.getFields();
-
-    // rewrite the accounts_db_fields seperate
-    var db_buf = try bincode.writeToArray(alloc, fields.accounts_db_fields, .{});
-    defer db_buf.deinit();
-
-    // write buf to a file
-    const accounts_db_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
-    const db_file = try std.fs.createFileAbsolute(accounts_db_path, .{});
-    defer db_file.close();
-
-    _ = try db_file.write(db_buf.items);
+    _ = fields;
 }
