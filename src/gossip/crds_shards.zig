@@ -157,7 +157,9 @@ fn filter_crds_values(
 }
 
 test "gossip.crds_shards: test shard find" {
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // gen ranndom values

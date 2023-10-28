@@ -4,8 +4,6 @@ const TailQueue = std.TailQueue;
 const testing = std.testing;
 const assert = std.debug.assert;
 
-/// A thread-safe LRU Cache
-///
 // TODO: allow for passing custom hash context to use in std.ArrayHashMap for performance.
 pub fn LruCache(comptime K: type, comptime V: type) type {
     return struct {
@@ -14,7 +12,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         dbl_link_list: TailQueue(LruEntry),
         max_items: usize,
         len: usize = 0,
-        mux: std.Thread.Mutex,
 
         const Self = @This();
 
@@ -53,7 +50,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
                 .hashmap = hashmap,
                 .dbl_link_list = TailQueue(LruEntry){},
                 .max_items = max_items,
-                .mux = std.Thread.Mutex{},
             };
 
             // pre allocate enough capacity for max items since we will use
@@ -64,12 +60,10 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             while (self.dbl_link_list.pop()) |node| {
                 self.deinitNode(node);
             }
+            std.debug.assert(self.len == 0); // no leaks
             self.hashmap.deinit();
         }
 
@@ -117,9 +111,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         /// Inserts key/value if key doesn't exist, updates only value if it does.
         /// In any case, it will affect cache ordering.
         pub fn insert(self: *Self, key: K, value: V) error{OutOfMemory}!void {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             _ = self.internal_insert(key, value);
             return;
         }
@@ -127,17 +118,11 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         /// Whether or not contains key.
         /// NOTE: doesn't affect cache ordering.
         pub fn contains(self: *Self, key: K) bool {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             return self.hashmap.contains(key);
         }
 
         /// Most recently used entry
         pub fn mru(self: *Self) ?LruEntry {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             if (self.dbl_link_list.last) |node| {
                 return node.data;
             }
@@ -146,9 +131,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
 
         /// Least recently used entry
         pub fn lru(self: *Self) ?LruEntry {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             if (self.dbl_link_list.first) |node| {
                 return node.data;
             }
@@ -163,9 +145,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
 
         /// Gets value associated with key if exists
         pub fn get(self: *Self, key: K) ?V {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             if (self.hashmap.get(key)) |node| {
                 self.dbl_link_list.remove(node);
                 self.dbl_link_list.append(node);
@@ -175,19 +154,16 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         }
 
         pub fn pop(self: *Self, k: K) ?V {
-            self.mux.lock();
-            defer self.mux.unlock();
             if (self.hashmap.fetchSwapRemove(k)) |kv| {
-                self.dbl_link_list.remove(kv.value);
-                return kv.value.data.value;
+                var node = kv.value;
+                self.dbl_link_list.remove(node);
+                self.deinitNode(node);
+                return node.data.value;
             }
             return null;
         }
 
         pub fn peek(self: *Self, key: K) ?V {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             if (self.hashmap.get(key)) |node| {
                 return node.data.value;
             }
@@ -198,9 +174,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
         /// Puts a key-value pair into cache. If the key already exists in the cache, then it updates
         /// the key's value and returns the old value. Otherwise, `null` is returned.
         pub fn put(self: *Self, key: K, value: V) ?V {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             if (self.hashmap.getEntry(key)) |existing_entry| {
                 var existing_node: *Node = existing_entry.value_ptr.*;
                 var old_value = existing_node.data.value;
@@ -215,9 +188,6 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
 
         /// Removes key from cache. Returns true if found, false if not.
         pub fn remove(self: *Self, key: K) bool {
-            self.mux.lock();
-            defer self.mux.unlock();
-
             if (self.hashmap.fetchSwapRemove(key)) |kv| {
                 var node = kv.value;
                 self.dbl_link_list.remove(node);

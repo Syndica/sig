@@ -10,7 +10,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("../gossip/crds.zig").getWallclockMs;
+const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -66,7 +66,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
+        var rng = std.rand.DefaultPrng.init(getWallclockMs());
         pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
@@ -132,10 +132,13 @@ pub const ActiveSet = struct {
     }
 };
 
+const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+
 test "gossip.active_set: init/deinit" {
     var alloc = std.testing.allocator;
 
-    var crds_table = try CrdsTable.init(alloc);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(alloc, &tp);
     defer crds_table.deinit();
 
     // insert some contacts
@@ -151,7 +154,7 @@ test "gossip.active_set: init/deinit" {
         var value = try CrdsValue.initSigned(crds.CrdsData{
             .LegacyContactInfo = data,
         }, &keypair);
-        try crds_table.insert(value, get_wallclock_ms());
+        try crds_table.insert(value, getWallclockMs());
     }
 
     var active_set = ActiveSet.init(alloc);
