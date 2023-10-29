@@ -63,15 +63,14 @@ pub fn parseAccounts(
         const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
         const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
 
-        const fmt_count = try std.fmt.count("{s};{s};{any};{d};{any};{d}\n", .{
+        const fmt_count = std.fmt.count("{s};{s};{any};{d};{any};{d}\n", .{
             try pubkey.toString(),
-            try owner_pk.toString(),
+            owner_pk.string(),
             account.data,
             account.account_info.lamports,
             account.account_info.executable,
             account.account_info.rent_epoch,
         });
-
         total_fmt_size += fmt_count;
     }
 
@@ -85,7 +84,7 @@ pub fn parseAccounts(
 
         const fmt_slice_len = (std.fmt.bufPrint(csv_string[csv_string_offset..], "{s};{s};{any};{d};{any};{d}\n", .{
             try pubkey.toString(),
-            try owner_pk.toString(),
+            owner_pk.string(),
             account.data,
             account.account_info.lamports,
             account.account_info.executable,
@@ -114,20 +113,19 @@ const CsvTask = struct {
         defer self.done.store(true, std.atomic.Ordering.Release);
 
         parseAccounts(
+            self.allocator,
             self.filename,
             self.accounts_db_fields,
-            self.allocator,
             self.accounts_dir_path,
             self.channel,
-        ) catch unreachable;
+        ) catch {};
     }
 };
 
 pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, channel: *CsvChannel) void {
-    var account_count: usize = 0;
     var append_vec_count: usize = 0;
     var writer = csv_file.writer();
-    var maybe_last_time: ?u64 = null;
+    const start_time: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
 
     while (true) {
         const maybe_csv_rows = channel.try_drain() catch { 
@@ -140,30 +138,34 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
 
         for (csv_rows) |csv_row| {
             writer.writeAll(csv_row) catch unreachable;
+            channel.allocator.free(csv_row);
             append_vec_count += 1;
 
+            const vecs_left = total_append_vec_count - append_vec_count;
             if (append_vec_count % 100 == 0) {
                 // estimate how long left
                 const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
-                const time_left_mins = blk: {
-                    if (maybe_last_time) |last_time| {
-                        const elapsed = now - last_time;
-                        const ns_per_vec = elapsed / 100;
-                        const vecs_left = total_append_vec_count - append_vec_count;
-                        const time_left = ns_per_vec * vecs_left;
-                        break :blk time_left / std.time.ns_per_min;
-                    } else {
-                        break :blk 0;
-                    }
-                };
+                const elapsed = now - start_time;
+                const ns_per_vec = elapsed / append_vec_count;
+                const time_left = ns_per_vec * vecs_left / std.time.ns_per_min;
 
-                std.debug.print("dumped {d} accounts across {d}/{d} appendvecs (mins left: {d})\r", .{
-                    account_count,
+                std.debug.print("dumped {d}/{d} appendvecs - (mins left: {d})\r", .{
                     append_vec_count,
                     total_append_vec_count,
-                    time_left_mins,
+                    time_left,
                 });
-                maybe_last_time = now;
+            } else if (vecs_left < 100) { 
+                // estimate how long left
+                const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
+                const elapsed = now - start_time;
+                const ns_per_vec = elapsed / append_vec_count;
+                const time_left = ns_per_vec * vecs_left / std.time.ns_per_min;
+
+                std.debug.print("dumped {d}/{d} appendvecs - (mins left: {d})\r", .{
+                    append_vec_count,
+                    total_append_vec_count,
+                    time_left,
+                });
             }
         }
     }
@@ -177,7 +179,7 @@ pub fn spawnParsingTasks(
     thread_pool: *ThreadPool,
     accounts_dir_iter: *std.fs.IterableDir.Iterator,
 ) void {
-    const n_tasks = 100;
+    const n_tasks = 200;
     var tasks: [n_tasks]*CsvTask = undefined;
 
     // pre-allocate all the tasks
@@ -205,15 +207,15 @@ pub fn spawnParsingTasks(
     var scheduled_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
     defer scheduled_tasks.deinit();
 
-    var is_done = false;
-    while (!is_done) {
+    var has_sent_all_accounts = false;
+    while (!has_sent_all_accounts) {
         const n_free_tasks = ready_to_schedule_tasks.items.len;
         for (0..n_free_tasks) |_| {
             const entry = accounts_dir_iter.next() catch {
-                is_done = true;
+                has_sent_all_accounts = true;
                 break;
             } orelse { 
-                is_done = true;
+                has_sent_all_accounts = true;
                 break;
             };
             var filename: []const u8 = entry.name;
@@ -238,8 +240,19 @@ pub fn spawnParsingTasks(
             var task = tasks[task_i];
 
             if (!task.done.load(std.atomic.Ordering.Acquire)) {
-                // check the next task
-                count_with_removes += 1;
+                // these are the last tasks so we wait for them until they are done
+                if (has_sent_all_accounts) { 
+                    while (!task.done.load(std.atomic.Ordering.Acquire)) { }
+                    
+                    // mark out done 
+                    task.done.store(false, std.atomic.Ordering.Release);
+                    alloc.free(task.filename);
+                    ready_to_schedule_tasks.appendAssumeCapacity(task_i);
+                    _ = scheduled_tasks.orderedRemove(count_with_removes);
+                } else { 
+                    // check the next task
+                    count_with_removes += 1;
+                }
             } else { 
                 task.done.store(false, std.atomic.Ordering.Release);
                 alloc.free(task.filename);
@@ -253,6 +266,7 @@ pub fn spawnParsingTasks(
     // done parsing all files
     channel.close();
 }
+
 
 pub fn main() !void {
     const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
