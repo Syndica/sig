@@ -134,6 +134,7 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
 
             for (csv_rows.items) |csv_row| {
                 writer.print("{s}\n", .{csv_row}) catch unreachable;
+                channel.allocator.free(csv_row);
                 account_count += 1;
             }
             append_vec_count += 1;
@@ -195,7 +196,7 @@ pub fn spawnParsingTasks(
 
     var ready_to_schedule_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
     defer ready_to_schedule_tasks.deinit();
-    // start = all ready to schedule
+    // at the start = all ready to schedule
     for (0..n_tasks) |i| ready_to_schedule_tasks.appendAssumeCapacity(i);
 
     var scheduled_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
@@ -203,8 +204,6 @@ pub fn spawnParsingTasks(
 
     var is_done = false;
     while (!is_done) {
-        // var task_count: usize = 0;
-
         const n_free_tasks = ready_to_schedule_tasks.items.len;
         for (0..n_free_tasks) |_| {
             const entry = accounts_dir_iter.next() catch {
@@ -229,19 +228,21 @@ pub fn spawnParsingTasks(
             ThreadPool.schedule(thread_pool, batch);
         }
 
-        // for (tasks[0..task_count]) |task| {
         const n_tasks_running = scheduled_tasks.items.len;
-        for (0..n_tasks_running) |i| { 
-            var task_i = scheduled_tasks.items[i];
+        var count_with_removes: usize = 0;
+        for (0..n_tasks_running) |_| { 
+            var task_i = scheduled_tasks.items[count_with_removes];
             var task = tasks[task_i];
 
             if (!task.done.load(std.atomic.Ordering.Acquire)) {
-                // do nothing
+                // check the next task
+                count_with_removes += 1;
             } else { 
                 task.done.store(false, std.atomic.Ordering.Release);
                 alloc.free(task.filename);
-                ready_to_schedule_tasks.appendAssumeCapacity(i);
-                _ = scheduled_tasks.orderedRemove(i);
+                ready_to_schedule_tasks.appendAssumeCapacity(task_i);
+                _ = scheduled_tasks.orderedRemove(count_with_removes);
+                // removing this task count_with_removes will index the next task
             }
         }
     }
