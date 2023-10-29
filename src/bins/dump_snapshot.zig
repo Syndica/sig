@@ -193,10 +193,20 @@ pub fn spawnParsingTasks(
         for (tasks) |task| alloc.destroy(task);
     }
 
+    var ready_to_schedule_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
+    defer ready_to_schedule_tasks.deinit();
+    // start = all ready to schedule
+    for (0..n_tasks) |i| ready_to_schedule_tasks.appendAssumeCapacity(i);
+
+    var scheduled_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
+    defer scheduled_tasks.deinit();
+
     var is_done = false;
     while (!is_done) {
-        var task_count: usize = 0;
-        for (0..n_tasks) |i| {
+        // var task_count: usize = 0;
+
+        const n_free_tasks = ready_to_schedule_tasks.items.len;
+        for (0..n_free_tasks) |_| {
             const entry = accounts_dir_iter.next() catch {
                 is_done = true;
                 break;
@@ -210,21 +220,29 @@ pub fn spawnParsingTasks(
             @memcpy(heap_filename, filename);
 
             // populate the task 
-            var task = tasks[i];
+            const task_i = ready_to_schedule_tasks.pop();
+            scheduled_tasks.appendAssumeCapacity(task_i);
+            var task = tasks[task_i];
             task.filename = heap_filename;
-
-            task_count += 1;
 
             const batch = Batch.from(&task.task);
             ThreadPool.schedule(thread_pool, batch);
         }
 
-        for (tasks[0..task_count]) |task| {
-            while (!task.done.load(std.atomic.Ordering.Acquire)) {
-                // wait
+        // for (tasks[0..task_count]) |task| {
+        const n_tasks_running = scheduled_tasks.items.len;
+        for (0..n_tasks_running) |i| { 
+            var task_i = scheduled_tasks.items[i];
+            var task = tasks[task_i];
+
+            if (!task.done.load(std.atomic.Ordering.Acquire)) {
+                // do nothing
+            } else { 
+                task.done.store(false, std.atomic.Ordering.Release);
+                alloc.free(task.filename);
+                ready_to_schedule_tasks.appendAssumeCapacity(i);
+                _ = scheduled_tasks.orderedRemove(i);
             }
-            task.done.store(false, std.atomic.Ordering.Release);
-            alloc.free(task.filename);
         }
     }
 
