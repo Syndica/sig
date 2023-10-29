@@ -19,13 +19,13 @@ pub const AccountAndPubkey = struct {
     account: Account,
 };
 
-pub const CsvRows = ArrayList([]u8);
+pub const CsvRows = []u8;
 pub const CsvChannel = Channel(CsvRows);
 
 pub fn parseAccounts(
+    alloc: std.mem.Allocator,
     filename: []const u8,
     accounts_db_fields: *AccountsDbFields,
-    alloc: std.mem.Allocator,
     accounts_dir_path: []const u8,
     channel: *CsvChannel,
 ) !void {
@@ -57,34 +57,45 @@ pub fn parseAccounts(
     const pubkey_and_refs = try append_vec.getAccountsRefs(alloc);
     defer pubkey_and_refs.deinit();
 
-    var result = try ArrayList([]u8).initCapacity(alloc, pubkey_and_refs.items.len);
+    var total_fmt_size: u64 = 0;
+    for (pubkey_and_refs.items) |*pubkey_and_ref| {
+        const pubkey = pubkey_and_ref.pubkey;
+        const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
+        const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
+
+        const fmt_count = try std.fmt.count("{s};{s};{any};{d};{any};{d}\n", .{
+            try pubkey.toString(),
+            try owner_pk.toString(),
+            account.data,
+            account.account_info.lamports,
+            account.account_info.executable,
+            account.account_info.rent_epoch,
+        });
+
+        total_fmt_size += fmt_count;
+    }
+
+    const csv_string = alloc.alloc(u8, total_fmt_size) catch unreachable;
+    var csv_string_offset: usize = 0;
 
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const pubkey = pubkey_and_ref.pubkey;
-        const account_ref = pubkey_and_ref.account_ref;
-
-        const account = try append_vec.getAccount(account_ref.offset);
+        const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
         const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
 
-        const to_dump = AccountAndPubkey{ .pubkey = pubkey, .account = Account{
-            .owner = owner_pk,
-            .data = account.data,
-            .lamports = account.account_info.lamports,
-            .executable = account.account_info.executable,
-            .rent_epoch = account.account_info.rent_epoch,
-        } };
+        const fmt_slice_len = (std.fmt.bufPrint(csv_string[csv_string_offset..], "{s};{s};{any};{d};{any};{d}\n", .{
+            try pubkey.toString(),
+            try owner_pk.toString(),
+            account.data,
+            account.account_info.lamports,
+            account.account_info.executable,
+            account.account_info.rent_epoch,
+        }) catch unreachable).len;
 
-        const csv_row = try std.fmt.allocPrint(alloc, "{s};{s};{any};{d};{any};{d}", .{
-            try to_dump.pubkey.toString(),
-            try account.account_info.owner.toString(),
-            to_dump.account.data,
-            to_dump.account.lamports,
-            to_dump.account.executable,
-            to_dump.account.rent_epoch,
-        });
-        result.appendAssumeCapacity(csv_row);
+        csv_string_offset += fmt_slice_len;
     }
-    _ = channel.send(result) catch unreachable;
+
+    _ = channel.send(csv_string) catch unreachable;
 }
 
 const CsvTask = struct {
@@ -119,24 +130,16 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
     var maybe_last_time: ?u64 = null;
 
     while (true) {
-        const maybe_csv_rows_slice = channel.try_drain() catch { 
+        const maybe_csv_rows = channel.try_drain() catch { 
             std.debug.print("recv csv files channel closed\n", .{});
             break;
         };
 
-        if (maybe_csv_rows_slice == null) continue;
-        var csv_rows_slice = maybe_csv_rows_slice.?;
+        var csv_rows = maybe_csv_rows orelse continue;
+        defer channel.allocator.free(csv_rows);
 
-        defer channel.allocator.free(csv_rows_slice);
-
-        for (csv_rows_slice) |csv_rows| {
-            defer csv_rows.deinit();
-
-            for (csv_rows.items) |csv_row| {
-                writer.print("{s}\n", .{csv_row}) catch unreachable;
-                channel.allocator.free(csv_row);
-                account_count += 1;
-            }
+        for (csv_rows) |csv_row| {
+            writer.writeAll(csv_row) catch unreachable;
             append_vec_count += 1;
 
             if (append_vec_count % 100 == 0) {
