@@ -1,4 +1,5 @@
 const std = @import("std");
+const cli = @import("zig-cli");
 const bincode = @import("../bincode/bincode.zig");
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
 const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
@@ -121,6 +122,11 @@ const CsvTask = struct {
             self.channel,
         ) catch {};
     }
+
+    pub fn reset(self: *@This()) void {
+        self.done.store(false, std.atomic.Ordering.Release);
+        self.allocator.free(self.filename);
+    }
 };
 
 pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, channel: *CsvChannel) void {
@@ -180,13 +186,13 @@ pub fn spawnParsingTasks(
     thread_pool: *ThreadPool,
     accounts_dir_iter: *std.fs.IterableDir.Iterator,
 ) void {
-    const n_tasks = 200;
-    var tasks: [n_tasks]*CsvTask = undefined;
+    const n_tasks = thread_pool.max_threads * 2;
 
     // pre-allocate all the tasks
+    var tasks = try alloc.alloc(CsvTask, n_tasks);
+    defer alloc.free(tasks);
     for (0..tasks.len) |i| {
-        var csv_task = alloc.create(CsvTask) catch unreachable;
-        csv_task.* = CsvTask{
+        tasks[i].* = CsvTask{
             .task = .{ .callback = CsvTask.callback },
             .allocator = alloc,
             .channel = channel,
@@ -194,72 +200,70 @@ pub fn spawnParsingTasks(
             .accounts_dir_path = accounts_dir_path,
             .filename = "",
         };
-        tasks[i] = csv_task;
-    }
-    defer {
-        for (tasks) |task| alloc.destroy(task);
     }
 
-    var ready_to_schedule_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
-    defer ready_to_schedule_tasks.deinit();
+    var ready_indexes = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
+    defer ready_indexes.deinit();
+    var running_indexes = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
+    defer running_indexes.deinit();
+
     // at the start = all ready to schedule
-    for (0..n_tasks) |i| ready_to_schedule_tasks.appendAssumeCapacity(i);
-
-    var scheduled_tasks = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
-    defer scheduled_tasks.deinit();
+    for (0..n_tasks) |i| ready_indexes.appendAssumeCapacity(i);
 
     var has_sent_all_accounts = false;
     while (!has_sent_all_accounts) {
-        const n_free_tasks = ready_to_schedule_tasks.items.len;
-        for (0..n_free_tasks) |_| {
-            const entry = accounts_dir_iter.next() catch {
+
+        // queue the ready tasks
+        const n_ready = ready_indexes.items.len;
+        for (0..n_ready) |_| {
+            const account_path = accounts_dir_iter.next() catch {
                 has_sent_all_accounts = true;
                 break;
             } orelse {
                 has_sent_all_accounts = true;
                 break;
             };
-            var filename: []const u8 = entry.name;
 
+            var filename: []const u8 = account_path.name;
             var heap_filename = alloc.alloc(u8, filename.len) catch unreachable;
             @memcpy(heap_filename, filename);
 
             // populate the task
-            const task_i = ready_to_schedule_tasks.pop();
-            scheduled_tasks.appendAssumeCapacity(task_i);
-            var task = tasks[task_i];
+            const task_idx = ready_indexes.pop();
+
+            const task = &tasks[task_idx];
             task.filename = heap_filename;
 
             const batch = Batch.from(&task.task);
             ThreadPool.schedule(thread_pool, batch);
+
+            running_indexes.appendAssumeCapacity(task_idx);
         }
 
-        const n_tasks_running = scheduled_tasks.items.len;
-        var count_with_removes: usize = 0;
-        for (0..n_tasks_running) |_| {
-            var task_i = scheduled_tasks.items[count_with_removes];
-            var task = tasks[task_i];
+        var current_index: usize = 0;
+        const n_running = running_indexes.items.len;
+        for (0..n_running) |_| {
+            var task_i = running_indexes.items[current_index];
+            const task = &tasks[task_i];
 
             if (!task.done.load(std.atomic.Ordering.Acquire)) {
-                // these are the last tasks so we wait for them until they are done
                 if (has_sent_all_accounts) {
+                    // these are the last tasks so we wait for them until they are done
                     while (!task.done.load(std.atomic.Ordering.Acquire)) {}
 
-                    // mark out done
-                    task.done.store(false, std.atomic.Ordering.Release);
-                    alloc.free(task.filename);
-                    ready_to_schedule_tasks.appendAssumeCapacity(task_i);
-                    _ = scheduled_tasks.orderedRemove(count_with_removes);
+                    // TODO: do we need this?
+                    task.reset();
+                    ready_indexes.appendAssumeCapacity(task_i);
+                    _ = running_indexes.orderedRemove(current_index);
                 } else {
                     // check the next task
-                    count_with_removes += 1;
+                    current_index += 1;
                 }
             } else {
-                task.done.store(false, std.atomic.Ordering.Release);
-                alloc.free(task.filename);
-                ready_to_schedule_tasks.appendAssumeCapacity(task_i);
-                _ = scheduled_tasks.orderedRemove(count_with_removes);
+                ready_indexes.appendAssumeCapacity(task_i);
+                _ = running_indexes.orderedRemove(current_index);
                 // removing this task count_with_removes will index the next task
+                task.reset();
             }
         }
     }
@@ -267,8 +271,6 @@ pub fn spawnParsingTasks(
     // done parsing all files
     channel.close();
 }
-
-const cli = @import("zig-cli");
 
 var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
@@ -291,17 +293,17 @@ var app = &cli.App{
     .description = "utils for snapshot dumping",
     .author = "Syndica & Contributors",
     .subcommands = &.{
+        // requires: dump_account_fields to be run first
         &cli.Command{
-            .name = "run",
+            .name = "dump_snapshot",
             .help = "Dump snapshot accounts to a csv file",
             .action = dumpSnapshot,
             .options = &.{
                 &snapshot_dir_option,
             },
         },
-        // should run first
         &cli.Command{
-            .name = "prepare",
+            .name = "dump_account_fields",
             .help = "dumps account db fields for faster loading (should run first)",
             .options = &.{
                 &snapshot_dir_option,
@@ -314,8 +316,9 @@ var app = &cli.App{
 
 pub fn main() !void {
     // eg,
-    // dump_snapshot prepare -s /Users/tmp/snapshots -m /Users/tmp/snapshots/snapshots/225552163/225552163
-    // dump_snapshot run -s /Users/tmp/Documents/zig-solana/snapshots
+    // zig build snapshot_utils -Doptimize=ReleaseSafe
+    // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots -m /Users/tmp/snapshots/snapshots/225552163/225552163
+    // ./zig-out/bin/snapshot_utils dump_snapshot -s /Users/tmp/Documents/zig-solana/snapshots
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();

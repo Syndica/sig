@@ -167,8 +167,8 @@ pub fn build(b: *std.Build) void {
 
     // dump_snapshot
     const dump_snapshot_exe = b.addExecutable(.{
-        .name = "dump_snapshot",
-        .root_source_file = .{ .path = "src/bins/dump_snapshot.zig" },
+        .name = "snapshot_utils",
+        .root_source_file = .{ .path = "src/cmd/snapshot_utils.zig" },
         .target = target,
         .optimize = optimize,
         .main_pkg_path = .{ .path = "src" },
@@ -182,6 +182,5 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         dump_snapshot_cmd.addArgs(args);
     }
-    b.step("dump_snapshot", "dump_snapshot").dependOn(&dump_snapshot_cmd.step);
-
+    b.step("snapshot_utils", "snapshot utils").dependOn(&dump_snapshot_cmd.step);
 }

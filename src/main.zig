@@ -1,5 +1,5 @@
-const cmd = @import("cmd/cmd.zig");
+const gossip_cmd = @import("cmd/gossip.zig");
 
 pub fn main() !void {
-    try cmd.run();
+    try gossip_cmd.run();
 }
