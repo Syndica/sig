@@ -13,6 +13,7 @@ const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
 const Channel = @import("../sync/channel.zig").Channel;
+const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
 pub const AccountAndPubkey = struct {
     pubkey: TmpPubkey,
@@ -128,7 +129,7 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
     const start_time: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
 
     while (true) {
-        const maybe_csv_rows = channel.try_drain() catch { 
+        const maybe_csv_rows = channel.try_drain() catch {
             std.debug.print("recv csv files channel closed\n", .{});
             break;
         };
@@ -154,7 +155,7 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
                     total_append_vec_count,
                     time_left,
                 });
-            } else if (vecs_left < 100) { 
+            } else if (vecs_left < 100) {
                 // estimate how long left
                 const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
                 const elapsed = now - start_time;
@@ -214,7 +215,7 @@ pub fn spawnParsingTasks(
             const entry = accounts_dir_iter.next() catch {
                 has_sent_all_accounts = true;
                 break;
-            } orelse { 
+            } orelse {
                 has_sent_all_accounts = true;
                 break;
             };
@@ -223,7 +224,7 @@ pub fn spawnParsingTasks(
             var heap_filename = alloc.alloc(u8, filename.len) catch unreachable;
             @memcpy(heap_filename, filename);
 
-            // populate the task 
+            // populate the task
             const task_i = ready_to_schedule_tasks.pop();
             scheduled_tasks.appendAssumeCapacity(task_i);
             var task = tasks[task_i];
@@ -235,25 +236,25 @@ pub fn spawnParsingTasks(
 
         const n_tasks_running = scheduled_tasks.items.len;
         var count_with_removes: usize = 0;
-        for (0..n_tasks_running) |_| { 
+        for (0..n_tasks_running) |_| {
             var task_i = scheduled_tasks.items[count_with_removes];
             var task = tasks[task_i];
 
             if (!task.done.load(std.atomic.Ordering.Acquire)) {
                 // these are the last tasks so we wait for them until they are done
-                if (has_sent_all_accounts) { 
-                    while (!task.done.load(std.atomic.Ordering.Acquire)) { }
-                    
-                    // mark out done 
+                if (has_sent_all_accounts) {
+                    while (!task.done.load(std.atomic.Ordering.Acquire)) {}
+
+                    // mark out done
                     task.done.store(false, std.atomic.Ordering.Release);
                     alloc.free(task.filename);
                     ready_to_schedule_tasks.appendAssumeCapacity(task_i);
                     _ = scheduled_tasks.orderedRemove(count_with_removes);
-                } else { 
+                } else {
                     // check the next task
                     count_with_removes += 1;
                 }
-            } else { 
+            } else {
                 task.done.store(false, std.atomic.Ordering.Release);
                 alloc.free(task.filename);
                 ready_to_schedule_tasks.appendAssumeCapacity(task_i);
@@ -267,30 +268,123 @@ pub fn spawnParsingTasks(
     channel.close();
 }
 
+const cli = @import("zig-cli");
+
+var snapshot_dir_option = cli.Option{
+    .long_name = "snapshot-dir",
+    .short_alias = 's',
+    .help = "absolute path to the snapshot directory",
+    .required = true,
+    .value = .{ .string = null },
+};
+
+var metadata_path_option = cli.Option{
+    .long_name = "metadata-path",
+    .short_alias = 'm',
+    .help = "absolute path to the snapshot metadata file (snapshots/{SLOT}/{SLOT})",
+    .required = true,
+    .value = .{ .string = null },
+};
+
+var app = &cli.App{
+    .name = "dump_snapshot",
+    .description = "utils for snapshot dumping",
+    .author = "Syndica & Contributors",
+    .subcommands = &.{
+        &cli.Command{
+            .name = "run",
+            .help = "Dump snapshot accounts to a csv file",
+            .action = dumpSnapshot,
+            .options = &.{
+                &snapshot_dir_option,
+            },
+        },
+        // should run first
+        &cli.Command{
+            .name = "prepare",
+            .help = "dumps account db fields for faster loading (should run first)",
+            .options = &.{
+                &snapshot_dir_option,
+                &metadata_path_option,
+            },
+            .action = dumpAccountFields,
+        },
+    },
+};
 
 pub fn main() !void {
-    const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
-    const accounts_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
-    const dump_file_csv_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts.csv";
+    // eg,
+    // dump_snapshot prepare -s /Users/tmp/snapshots -m /Users/tmp/snapshots/snapshots/225552163/225552163
+    // dump_snapshot run -s /Users/tmp/Documents/zig-solana/snapshots
 
-    const alloc = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
+    try cli.run(app, allocator);
+}
 
-    const csv_file = try std.fs.createFileAbsolute(dump_file_csv_path, .{});
+/// we do this bc the bank_fields in the snapshot metadata is very large
+pub fn dumpAccountFields(_: []const []const u8) !void {
+    const allocator = std.heap.c_allocator;
+
+    const snapshot_dir = snapshot_dir_option.value.string.?;
+    const metadata_path = metadata_path_option.value.string.?;
+
+    const output_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "accounts_db.bincode" },
+    );
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, metadata_path);
+    const fields = snapshot_fields.getFieldRefs();
+
+    // rewrite the accounts_db_fields seperate
+    const db_file = try std.fs.createFileAbsolute(output_path, .{});
+    defer db_file.close();
+
+    var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields.*, .{});
+    defer db_buf.deinit();
+
+    _ = try db_file.write(db_buf.items);
+}
+
+pub fn dumpSnapshot(_: []const []const u8) !void {
+    const allocator = std.heap.c_allocator;
+
+    const snapshot_dir = snapshot_dir_option.value.string.?;
+    const accounts_db_fields_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "accounts_db.bincode" },
+    );
+    const accounts_dir_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "accounts" },
+    );
+    const dump_csv_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "accounts.csv" },
+    );
+    defer {
+        allocator.free(accounts_db_fields_path);
+        allocator.free(accounts_dir_path);
+        allocator.free(dump_csv_path);
+    }
+
+    const csv_file = try std.fs.createFileAbsolute(dump_csv_path, .{});
     defer csv_file.close();
 
-    const accounts_db_fields_file = try std.fs.openFileAbsolute(accounts_db_fields_path, .{});
-    var accounts_db_fields = try bincode.read(alloc, AccountsDbFields, accounts_db_fields_file.reader(), .{});
-    defer bincode.free(alloc, accounts_db_fields);
+    const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch {
+        std.debug.print("could not open accounts_db.bincode - run `prepare` first\n", .{});
+        return;
+    };
+    var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
+    defer bincode.free(allocator, accounts_db_fields);
 
     var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
     var accounts_dir_iter = accounts_dir.iterate();
-
-    // compute the total size (to compute time left)
-    var total_append_vec_count: usize = 0;
-    while (try accounts_dir_iter.next()) |_| {
-        total_append_vec_count += 1;
-    }
-    accounts_dir_iter = accounts_dir.iterate(); // reset
 
     var n_threads = @as(u32, @truncate(std.Thread.getCpuCount() catch unreachable));
     var thread_pool = ThreadPool.init(.{
@@ -299,11 +393,18 @@ pub fn main() !void {
     });
     std.debug.print("starting with {d} threads\n", .{n_threads});
 
-    var channel = CsvChannel.init(alloc, 1000);
+    // compute the total size (to compute time left)
+    var total_append_vec_count: usize = 0;
+    while (try accounts_dir_iter.next()) |_| {
+        total_append_vec_count += 1;
+    }
+    accounts_dir_iter = accounts_dir.iterate(); // reset
+
+    var channel = CsvChannel.init(allocator, 1000);
     defer channel.deinit();
 
     var handle = std.Thread.spawn(.{}, spawnParsingTasks, .{
-        alloc,
+        allocator,
         channel,
         &accounts_db_fields,
         accounts_dir_path,

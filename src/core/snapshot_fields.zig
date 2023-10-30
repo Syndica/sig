@@ -294,7 +294,7 @@ pub const SnapshotFields = struct {
 
     /// NOTE: should call this to get the correct bank_fields instead of accessing it directly
     /// due to the way snapshot deserialization works
-    pub fn getFields(self: *@This()) struct { bank_fields: BankFields, accounts_db_fields: AccountsDbFields } {
+    pub fn getFieldRefs(self: *@This()) struct { bank_fields: *const BankFields, accounts_db_fields: *const AccountsDbFields } {
         var bank_fields = &self.bank_fields;
         // if these are availabel they will be parsed (and likely not the default values)
         // so, we push them on the bank fields here
@@ -303,7 +303,7 @@ pub const SnapshotFields = struct {
         bank_fields.epoch_accounts_hash = self.epoch_accounts_hash;
         bank_fields.epoch_reward_status = self.epoch_reward_status;
 
-        return .{ .bank_fields = self.bank_fields, .accounts_db_fields = self.accounts_db_fields };
+        return .{ .bank_fields = bank_fields, .accounts_db_fields = &self.accounts_db_fields };
     }
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, abs_path: []const u8) !SnapshotFields {
@@ -321,24 +321,6 @@ pub const SnapshotFields = struct {
     }
 };
 
-pub fn writeAccountsDbFields(
-    allocator: std.mem.Allocator,
-    snapshot_abs_path: []const u8,
-    accounts_db_abs_path: []const u8,
-) !void {
-    const snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_abs_path);
-    const fields = snapshot_fields.getFields();
-
-    // rewrite the accounts_db_fields seperate
-    const db_file = try std.fs.createFileAbsolute(accounts_db_abs_path, .{});
-    defer db_file.close();
-
-    var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields, .{});
-    defer db_buf.deinit();
-
-    _ = try db_file.write(db_buf.items);
-}
-
 test "core.snapshot_fields: parse snapshot fields" {
     // steps:
     // 1) download a snapshot
@@ -354,6 +336,6 @@ test "core.snapshot_fields: parse snapshot fields" {
     const snapshot_fields = try SnapshotFields.readFromFilePath(alloc, snapshot_path);
     defer bincode.free(alloc, snapshot_fields);
 
-    const fields = snapshot_fields.getFields();
+    const fields = snapshot_fields.getFieldRefs();
     _ = fields;
 }
