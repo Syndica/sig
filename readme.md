@@ -53,6 +53,10 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 - **RPC Client** - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions
 
+
+## Contributing
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
+
 ## Installation
 
 Add `Sig` to your Zig project using `build.zig.zon` file (available for Zig >= 0.11).
