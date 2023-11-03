@@ -13,7 +13,7 @@
 
 ## Overview
 
-_Sig_ is a Solana validator client implementation written in Zig.
+_Sig_ is a Solana validator client implementation written in Zig.  For background, see the [introductory blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/).
 <br/>
 <br/>
 
@@ -47,7 +47,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 ## Modules:
 
-- **Gossip** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
+- **[Gossip](src/gossip/readme.md)** - A gossip spy node, run by: `sig gossip -e 86.109.15.59:8001` or `zig build run -- gossip -e 86.109.15.59:8001` where 86.109.15.59 is entrypoint5.mainnet-beta.solana.com
 
 - **Core** - Core data structures shared across modules
 

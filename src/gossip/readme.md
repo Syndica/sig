@@ -6,6 +6,13 @@ For an introduction to Solana's gossip protocol, check out the technical section
 
 Checkout the full associated blog post here: [https://blog.syndica.io/sig-engineering-1-gossip-protocol/](https://blog.syndica.io/sig-engineering-1-gossip-protocol/).
 
+## Running tests for Gossip Module
+To run tests for this module:
+```bash
+cd src/gossip
+zig build test
+```
+
 ## Repository File Outline 
 
 - `gossip_service.zig`: main logic for reading, processing, and sending gossip messages
@@ -453,7 +460,7 @@ Note: The solana-labs rust implementation uses stake weight information to build
 
 #### Solana-Labs' Active Set
 
-For completeness, the solana-labs client's `ActiveSet` implementation is also worth discussing. Their `PushActiveSet` contains multiple `PushActiveSetEntry` structs where each `Entry` corresponds to a different probability distribution over possible nodes to be included in the active set. 
+For completeness, the [solana-labs client's `ActiveSet` implementation](https://github.com/solana-labs/solana/blob/master/gossip/src/push_active_set.rs) is also worth discussing. Their `PushActiveSet` contains multiple `PushActiveSetEntry` structs where each `Entry` corresponds to a different probability distribution over possible nodes to be included in the active set. 
 
 The entries distribution is ordered by decreasing entropy over stake weight. Meaning, entries at the start of the list (with a low index - eg, 0, 1) are a uniform distribution over the possible nodes (with high entropy) and entries at the end of the list (with a large index - eg, 24, 25) have a distribution weighted strongly by a node's stake amount (with low entropy).
 
