@@ -123,64 +123,53 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // gossip fuzz testing
-    // find ./zig-cache/o/* | grep fuzz
-    // lldb $(above path)
-    const fuzz_exe = b.addExecutable(.{
-        .name = "fuzz",
-        .root_source_file = .{ .path = "src/gossip/fuzz.zig" },
-        .target = target,
-        .optimize = optimize,
-        .main_pkg_path = .{ .path = "src" },
-    });
-    fuzz_exe.addModule("base58-zig", base58_module);
-    fuzz_exe.addModule("zig-network", zig_network_module);
-    fuzz_exe.addModule("zig-cli", zig_cli_module);
-    fuzz_exe.addModule("getty", getty_mod);
-    b.installArtifact(fuzz_exe);
-    const fuzz_cmd = b.addRunArtifact(fuzz_exe);
-    if (b.args) |args| {
-        fuzz_cmd.addArgs(args);
-    }
-    b.step("fuzz", "fuzz gossip").dependOn(&fuzz_cmd.step);
+    const ExecCommand = struct { 
+        name: []const u8, 
+        path: []const u8,
+        description: []const u8 = "",
+    };
 
-    // benchmarking
-    const benchmark_exe = b.addExecutable(.{
-        .name = "benchmark",
-        .root_source_file = .{ .path = "src/benchmarks.zig" },
-        .target = target,
-        // TODO: make it work
-        // .optimize = std.builtin.Mode.ReleaseSafe, // to get decent results - but things get optimized away
-        .optimize = optimize,
-        .main_pkg_path = .{ .path = "src" },
-    });
-    benchmark_exe.addModule("base58-zig", base58_module);
-    benchmark_exe.addModule("zig-network", zig_network_module);
-    benchmark_exe.addModule("zig-cli", zig_cli_module);
-    benchmark_exe.addModule("getty", getty_mod);
-    b.installArtifact(benchmark_exe);
-    const benchmark_cmd = b.addRunArtifact(benchmark_exe);
-    if (b.args) |args| {
-        benchmark_cmd.addArgs(args);
-    }
-    b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
+    const exec_commands = [_]ExecCommand{ 
+        // for debugging
+        // find ./zig-cache/o/* | grep fuzz
+        // lldb $(above path)
+        ExecCommand { 
+            .name = "fuzz", 
+            .path = "src/gossip/fuzz.zig",
+            .description = "gossip fuzz testing",
+        },
+        ExecCommand { 
+            .name = "benchmark", 
+            .path = "src/benchmarks.zig",
+            .description = "benchmark client",
+        },
+        ExecCommand { 
+            .name = "snapshot_utils", 
+            .path = "src/cmd/snapshot_utils.zig",
+            .description = "snapshot utils",
+        }
+    };
 
-    // dump_snapshot
-    const dump_snapshot_exe = b.addExecutable(.{
-        .name = "snapshot_utils",
-        .root_source_file = .{ .path = "src/cmd/snapshot_utils.zig" },
-        .target = target,
-        .optimize = optimize,
-        .main_pkg_path = .{ .path = "src" },
-    });
-    dump_snapshot_exe.addModule("base58-zig", base58_module);
-    dump_snapshot_exe.addModule("zig-network", zig_network_module);
-    dump_snapshot_exe.addModule("zig-cli", zig_cli_module);
-    dump_snapshot_exe.addModule("getty", getty_mod);
-    b.installArtifact(dump_snapshot_exe);
-    const dump_snapshot_cmd = b.addRunArtifact(dump_snapshot_exe);
-    if (b.args) |args| {
-        dump_snapshot_cmd.addArgs(args);
+    for (exec_commands) |command_info| { 
+        const exec = b.addExecutable(.{
+            .name = command_info.name,
+            .root_source_file = .{ .path = command_info.path },
+            .target = target,
+            .optimize = optimize,
+            .main_pkg_path = .{ .path = "src" },
+        });
+
+        // TODO: maybe we dont need all these for all bins
+        exec.addModule("base58-zig", base58_module);
+        exec.addModule("zig-network", zig_network_module);
+        exec.addModule("zig-cli", zig_cli_module);
+        exec.addModule("getty", getty_mod);
+        b.installArtifact(exec);
+
+        const cmd = b.addRunArtifact(exec);
+        if (b.args) |args| cmd.addArgs(args);
+        b
+            .step(command_info.name, command_info.description)
+            .dependOn(&cmd.step);
     }
-    b.step("snapshot_utils", "snapshot utils").dependOn(&dump_snapshot_cmd.step);
 }
