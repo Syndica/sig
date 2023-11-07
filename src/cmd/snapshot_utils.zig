@@ -189,10 +189,10 @@ pub fn spawnParsingTasks(
     const n_tasks = thread_pool.max_threads * 2;
 
     // pre-allocate all the tasks
-    var tasks = try alloc.alloc(CsvTask, n_tasks);
+    var tasks = alloc.alloc(CsvTask, n_tasks) catch unreachable;
     defer alloc.free(tasks);
     for (0..tasks.len) |i| {
-        tasks[i].* = CsvTask{
+        tasks[i] = CsvTask{
             .task = .{ .callback = CsvTask.callback },
             .allocator = alloc,
             .channel = channel,
