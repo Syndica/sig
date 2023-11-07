@@ -66,14 +66,17 @@ pub fn parseAccounts(
         const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
         const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
 
-        const fmt_count = std.fmt.count("{s};{s};{any};{d};{any};{d}\n", .{
-            try pubkey.toString(),
-            owner_pk.string(),
-            account.data,
-            account.account_info.lamports,
-            account.account_info.executable,
-            account.account_info.rent_epoch,
-        });
+        const fmt_count = std.fmt.count(
+            "{s};{s};{any};{d};{any};{d}\n",
+            .{
+                try pubkey.toString(),
+                owner_pk.string(),
+                account.data,
+                account.account_info.lamports,
+                account.account_info.executable,
+                account.account_info.rent_epoch,
+            },
+        );
         total_fmt_size += fmt_count;
     }
 
@@ -85,14 +88,18 @@ pub fn parseAccounts(
         const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
         const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
 
-        const fmt_slice_len = (std.fmt.bufPrint(csv_string[csv_string_offset..], "{s};{s};{any};{d};{any};{d}\n", .{
-            try pubkey.toString(),
-            owner_pk.string(),
-            account.data,
-            account.account_info.lamports,
-            account.account_info.executable,
-            account.account_info.rent_epoch,
-        }) catch unreachable).len;
+        const fmt_slice_len = (std.fmt.bufPrint(
+            csv_string[csv_string_offset..],
+            "{s};{s};{any};{d};{any};{d}\n",
+            .{
+                try pubkey.toString(),
+                owner_pk.string(),
+                account.data,
+                account.account_info.lamports,
+                account.account_info.executable,
+                account.account_info.rent_epoch,
+            },
+        ) catch unreachable).len;
 
         csv_string_offset += fmt_slice_len;
     }
