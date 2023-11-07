@@ -343,24 +343,19 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified Protocol messages are then sent to the verified_channel.
     fn verifyPackets(self: *Self) !void {
-        var tasks: [socket_utils.PACKETS_PER_BATCH]*VerifyMessageTask = undefined;
         // pre-allocate all the tasks
-        for (0..tasks.len) |i| {
-            var verify_task_heap = try self.allocator.create(VerifyMessageTask);
-            verify_task_heap.* = VerifyMessageTask{
+        const n_tasks = socket_utils.PACKETS_PER_BATCH; 
+        var tasks = try self.allocator.alloc(VerifyMessageTask, n_tasks);
+        for (tasks) |*task| {
+            task.* = VerifyMessageTask{
                 .task = .{ .callback = VerifyMessageTask.callback },
                 .allocator = self.allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = &Packet.default(),
                 .logger = self.logger,
             };
-            tasks[i] = verify_task_heap;
         }
-        defer {
-            for (tasks) |task| {
-                self.allocator.destroy(task);
-            }
-        }
+        defer self.allocator.free(tasks);
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_packets = try self.packet_incoming_channel.try_drain();
@@ -377,10 +372,11 @@ pub const GossipService = struct {
             }
 
             // verify in parallel using the threadpool
-            var count: usize = 0;
             for (packet_batches) |*packet_batch| {
+                var count: usize = 0;
+
                 for (packet_batch.items) |*packet| {
-                    var task = tasks[count];
+                    var task = &tasks[count];
                     task.packet = packet;
 
                     const batch = Batch.from(&task.task);
@@ -388,14 +384,15 @@ pub const GossipService = struct {
 
                     count += 1;
                 }
+
+                for (tasks[0..count]) |*task| {
+                    while (!task.done.load(std.atomic.Ordering.Acquire)) {
+                        // wait
+                    }
+                    task.done.store(false, std.atomic.Ordering.Release);
+                }
             }
 
-            for (tasks[0..count]) |task| {
-                while (!task.done.load(std.atomic.Ordering.Acquire)) {
-                    // wait
-                }
-                task.done.store(false, std.atomic.Ordering.Release);
-            }
         }
 
         self.logger.debugf("verify_packets loop closed\n", .{});
@@ -1098,13 +1095,8 @@ pub const GossipService = struct {
 
         // create the pull requests
         const n_valid_requests = valid_indexs.items.len;
-        var tasks = try ArrayList(*PullRequestTask).initCapacity(self.allocator, n_valid_requests);
-        defer {
-            for (tasks.items) |task| {
-                self.allocator.destroy(task);
-            }
-            tasks.deinit();
-        }
+        var tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
+        defer self.allocator.free(tasks);
 
         {
             var crds_table_lock = self.crds_table_rw.read();
@@ -1113,10 +1105,8 @@ pub const GossipService = struct {
 
             var output_limit = std.atomic.Atomic(i64).init(MAX_NUM_CRDS_VALUES_PULL_RESPONSE);
 
-            for (valid_indexs.items) |i| {
-                // create the thread task
-                var task_heap = try self.allocator.create(PullRequestTask);
-                task_heap.* = PullRequestTask{
+            for (tasks, valid_indexs.items) |*task, i| {
+                task.* = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
                     .my_pubkey = &self.my_pubkey,
                     .from_endpoint = &pull_requests.items[i].from_endpoint,
@@ -1127,22 +1117,21 @@ pub const GossipService = struct {
                     .allocator = self.allocator,
                     .output_limit = &output_limit,
                 };
-                tasks.appendAssumeCapacity(task_heap);
 
                 // run it
-                const batch = Batch.from(&task_heap.task);
+                const batch = Batch.from(&task.task);
                 ThreadPool.schedule(self.thread_pool, batch);
             }
 
             // wait for them to be done to release the lock
-            for (tasks.items) |task| {
+            for (tasks) |*task| {
                 while (!task.done.load(std.atomic.Ordering.Acquire)) {
                     // wait
                 }
             }
         }
 
-        for (tasks.items) |task| {
+        for (tasks) |*task| {
             if (task.output.items.len > 0) {
                 // TODO: should only need one mux lock in this loop
                 try self.packet_outgoing_channel.send(task.output);
