@@ -59,6 +59,7 @@ pub fn parseAccounts(
     const pubkey_and_refs = try append_vec.getAccountsRefs(alloc);
     defer pubkey_and_refs.deinit();
 
+    // compute the full size to allocate at once
     var total_fmt_size: u64 = 0;
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const pubkey = pubkey_and_ref.pubkey;
@@ -149,19 +150,7 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
             append_vec_count += 1;
 
             const vecs_left = total_append_vec_count - append_vec_count;
-            if (append_vec_count % 100 == 0) {
-                // estimate how long left
-                const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
-                const elapsed = now - start_time;
-                const ns_per_vec = elapsed / append_vec_count;
-                const time_left = ns_per_vec * vecs_left / std.time.ns_per_min;
-
-                std.debug.print("dumped {d}/{d} appendvecs - (mins left: {d})\r", .{
-                    append_vec_count,
-                    total_append_vec_count,
-                    time_left,
-                });
-            } else if (vecs_left < 100) {
+            if (append_vec_count % 100 == 0 or vecs_left < 100) {
                 // estimate how long left
                 const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
                 const elapsed = now - start_time;
@@ -317,7 +306,9 @@ var app = &cli.App{
 pub fn main() !void {
     // eg,
     // zig build snapshot_utils -Doptimize=ReleaseSafe
+    // 1) dump the account fields
     // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots -m /Users/tmp/snapshots/snapshots/225552163/225552163
+    // 2) dump the snapshot info
     // ./zig-out/bin/snapshot_utils dump_snapshot -s /Users/tmp/Documents/zig-solana/snapshots
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

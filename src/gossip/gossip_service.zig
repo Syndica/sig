@@ -262,6 +262,10 @@ pub const GossipService = struct {
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
     pub fn run(self: *Self, spy_node: bool) !void {
+        if (spy_node) {
+            self.my_contact_info.gossip = SocketAddr.UNSPECIFIED;
+        }
+
         var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
         defer self.joinAndExit(&ip_echo_server_listener_handle);
 
@@ -344,7 +348,7 @@ pub const GossipService = struct {
     /// Verified Protocol messages are then sent to the verified_channel.
     fn verifyPackets(self: *Self) !void {
         // pre-allocate all the tasks
-        const n_tasks = socket_utils.PACKETS_PER_BATCH; 
+        const n_tasks = socket_utils.PACKETS_PER_BATCH;
         var tasks = try self.allocator.alloc(VerifyMessageTask, n_tasks);
         for (tasks) |*task| {
             task.* = VerifyMessageTask{
@@ -392,7 +396,6 @@ pub const GossipService = struct {
                     task.done.store(false, std.atomic.Ordering.Release);
                 }
             }
-
         }
 
         self.logger.debugf("verify_packets loop closed\n", .{});
