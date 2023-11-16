@@ -24,12 +24,13 @@ pub const AccountAndPubkey = struct {
 pub const CsvRows = []u8;
 pub const CsvChannel = Channel(CsvRows);
 
-pub fn parseAccounts(
+pub fn accountsToCsvRowAndSend(
     alloc: std.mem.Allocator,
-    filename: []const u8,
     accounts_db_fields: *AccountsDbFields,
     accounts_dir_path: []const u8,
     channel: *CsvChannel,
+    // !
+    filename: []const u8,
 ) !void {
     // parse "{slot}.{id}" from the filename
     var fiter = std.mem.tokenizeSequence(u8, filename, ".");
@@ -107,13 +108,18 @@ pub fn parseAccounts(
     _ = channel.send(csv_string) catch unreachable;
 }
 
-const CsvTask = struct {
+// what all the tasks will need
+const CsvTaskContext = struct {
     allocator: std.mem.Allocator,
-    channel: *CsvChannel,
     accounts_db_fields: *AccountsDbFields,
     accounts_dir_path: []const u8,
+    channel: *CsvChannel,
+};
 
-    filename: []const u8, // !
+const CsvTask = struct {
+    context: CsvTaskContext,
+
+    file_names: [][]const u8, // must be heap alloc slice
 
     task: Task,
     done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
@@ -122,20 +128,134 @@ const CsvTask = struct {
         var self = @fieldParentPtr(@This(), "task", task);
         defer self.done.store(true, std.atomic.Ordering.Release);
 
-        parseAccounts(
-            self.allocator,
-            self.filename,
-            self.accounts_db_fields,
-            self.accounts_dir_path,
-            self.channel,
-        ) catch {};
+        for (self.file_names) |file_name| {
+            accountsToCsvRowAndSend(
+                self.context.allocator,
+                self.context.accounts_db_fields,
+                self.context.accounts_dir_path,
+                self.context.channel,
+                file_name,
+            ) catch {};
+        }
     }
 
     pub fn reset(self: *@This()) void {
         self.done.store(false, std.atomic.Ordering.Release);
-        self.allocator.free(self.filename);
+        for (self.file_names) |file_name| {
+            self.context.allocator.free(file_name);
+        }
+        self.context.allocator.free(self.file_names);
     }
 };
+
+pub fn spawnParsingTasks(
+    alloc: std.mem.Allocator,
+    channel: *CsvChannel,
+    accounts_db_fields: *AccountsDbFields,
+    accounts_dir_path: []const u8,
+    thread_pool: *ThreadPool,
+    accounts_dir_iter: *std.fs.IterableDir.Iterator,
+) void {
+    const n_tasks = thread_pool.max_threads * 2;
+
+    // pre-allocate all the tasks
+    var tasks = alloc.alloc(CsvTask, n_tasks) catch unreachable;
+    defer alloc.free(tasks);
+
+    const csv_task_context = CsvTaskContext{
+        .accounts_db_fields = accounts_db_fields,
+        .accounts_dir_path = accounts_dir_path,
+        .allocator = alloc,
+        .channel = channel,
+    };
+    for (0..tasks.len) |i| {
+        tasks[i] = CsvTask{
+            .task = .{ .callback = CsvTask.callback },
+            .context = csv_task_context,
+            // to be filled
+            .file_names = undefined,
+        };
+    }
+
+    var ready_indexes = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
+    defer ready_indexes.deinit();
+    var running_indexes = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
+    defer running_indexes.deinit();
+
+    // at the start = all ready to schedule
+    for (0..n_tasks) |i| ready_indexes.appendAssumeCapacity(i);
+
+    const min_chunk_size = 20;
+    var account_name_buf: [min_chunk_size][]const u8 = undefined;
+    var has_sent_all_accounts = false;
+    while (!has_sent_all_accounts) {
+
+        // queue the ready tasks
+        var batch = Batch{};
+        const n_ready = ready_indexes.items.len;
+        for (0..n_ready) |_| {
+            var i: usize = 0;
+            while (i < min_chunk_size) : (i += 1) {
+                const account_path = accounts_dir_iter.next() catch {
+                    has_sent_all_accounts = true;
+                    break;
+                } orelse {
+                    has_sent_all_accounts = true;
+                    break;
+                };
+
+                account_name_buf[i] = account_path.name;
+            }
+            if (i == 0) break;
+
+            // populate the task
+            const task_index = ready_indexes.pop();
+            const task = &tasks[task_index];
+
+            // fill out the filename
+            var file_names = alloc.alloc([]const u8, i) catch unreachable;
+            for (0..i) |idx| {
+                var filename: []const u8 = account_name_buf[idx];
+                var heap_filename = alloc.alloc(u8, filename.len) catch unreachable;
+                @memcpy(heap_filename, filename);
+                file_names[idx] = heap_filename;
+            }
+            task.file_names = file_names[0..i];
+
+            const task_batch = Batch.from(&task.task);
+            batch.push(task_batch);
+
+            running_indexes.appendAssumeCapacity(task_index);
+
+            if (has_sent_all_accounts) break;
+        }
+        ThreadPool.schedule(thread_pool, batch);
+
+        var current_index: usize = 0;
+        const n_running = running_indexes.items.len;
+        for (0..n_running) |_| {
+            const task_index = running_indexes.items[current_index];
+            const task = &tasks[task_index];
+
+            if (!task.done.load(std.atomic.Ordering.Acquire)) {
+                if (has_sent_all_accounts) {
+                    // these are the last tasks so we wait for them until they are done
+                    while (!task.done.load(std.atomic.Ordering.Acquire)) {}
+                }
+                // check the next task
+                current_index += 1;
+            } else {
+                ready_indexes.appendAssumeCapacity(task_index);
+                // removing so next task can be checked without changing current_index
+                _ = running_indexes.orderedRemove(current_index);
+                task.reset();
+            }
+        }
+    }
+
+    // done parsing all files
+    channel.close();
+}
 
 pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, channel: *CsvChannel) void {
     var append_vec_count: usize = 0;
@@ -172,100 +292,6 @@ pub fn recvAndWriteCsv(total_append_vec_count: usize, csv_file: std.fs.File, cha
             }
         }
     }
-}
-
-pub fn spawnParsingTasks(
-    alloc: std.mem.Allocator,
-    channel: *CsvChannel,
-    accounts_db_fields: *AccountsDbFields,
-    accounts_dir_path: []const u8,
-    thread_pool: *ThreadPool,
-    accounts_dir_iter: *std.fs.IterableDir.Iterator,
-) void {
-    const n_tasks = thread_pool.max_threads * 2;
-
-    // pre-allocate all the tasks
-    var tasks = alloc.alloc(CsvTask, n_tasks) catch unreachable;
-    defer alloc.free(tasks);
-    for (0..tasks.len) |i| {
-        tasks[i] = CsvTask{
-            .task = .{ .callback = CsvTask.callback },
-            .allocator = alloc,
-            .channel = channel,
-            .accounts_db_fields = accounts_db_fields,
-            .accounts_dir_path = accounts_dir_path,
-            .filename = "",
-        };
-    }
-
-    var ready_indexes = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
-    defer ready_indexes.deinit();
-    var running_indexes = std.ArrayList(usize).initCapacity(alloc, n_tasks) catch unreachable;
-    defer running_indexes.deinit();
-
-    // at the start = all ready to schedule
-    for (0..n_tasks) |i| ready_indexes.appendAssumeCapacity(i);
-
-    var has_sent_all_accounts = false;
-    while (!has_sent_all_accounts) {
-
-        // queue the ready tasks
-        const n_ready = ready_indexes.items.len;
-        for (0..n_ready) |_| {
-            const account_path = accounts_dir_iter.next() catch {
-                has_sent_all_accounts = true;
-                break;
-            } orelse {
-                has_sent_all_accounts = true;
-                break;
-            };
-
-            var filename: []const u8 = account_path.name;
-            var heap_filename = alloc.alloc(u8, filename.len) catch unreachable;
-            @memcpy(heap_filename, filename);
-
-            // populate the task
-            const task_idx = ready_indexes.pop();
-
-            const task = &tasks[task_idx];
-            task.filename = heap_filename;
-
-            const batch = Batch.from(&task.task);
-            ThreadPool.schedule(thread_pool, batch);
-
-            running_indexes.appendAssumeCapacity(task_idx);
-        }
-
-        var current_index: usize = 0;
-        const n_running = running_indexes.items.len;
-        for (0..n_running) |_| {
-            var task_i = running_indexes.items[current_index];
-            const task = &tasks[task_i];
-
-            if (!task.done.load(std.atomic.Ordering.Acquire)) {
-                if (has_sent_all_accounts) {
-                    // these are the last tasks so we wait for them until they are done
-                    while (!task.done.load(std.atomic.Ordering.Acquire)) {}
-
-                    // TODO: do we need this?
-                    task.reset();
-                    ready_indexes.appendAssumeCapacity(task_i);
-                    _ = running_indexes.orderedRemove(current_index);
-                } else {
-                    // check the next task
-                    current_index += 1;
-                }
-            } else {
-                ready_indexes.appendAssumeCapacity(task_i);
-                _ = running_indexes.orderedRemove(current_index);
-                // removing this task count_with_removes will index the next task
-                task.reset();
-            }
-        }
-    }
-
-    // done parsing all files
-    channel.close();
 }
 
 var snapshot_dir_option = cli.Option{
@@ -392,6 +418,9 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
         .max_threads = n_threads,
         .stack_size = 2 * 1024 * 1024,
     });
+    // clean up threadpool once done
+    defer thread_pool.shutdown();
+
     std.debug.print("starting with {d} threads\n", .{n_threads});
 
     // compute the total size (to compute time left)
