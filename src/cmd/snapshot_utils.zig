@@ -63,21 +63,22 @@ pub fn accountsToCsvRowAndSend(
     // compute the full size to allocate at once
     var total_fmt_size: u64 = 0;
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
-        const pubkey = pubkey_and_ref.pubkey;
         const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
-        const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
 
-        const fmt_count = std.fmt.count(
-            "{s};{s};{any};{d};{any};{d}\n",
-            .{
-                try pubkey.toString(),
-                owner_pk.string(),
-                account.data,
-                account.account_info.lamports,
-                account.account_info.executable,
-                account.account_info.rent_epoch,
-            },
-        );
+        // 5 seperators = 5 bytes 
+        // new line = 1 byte
+        // pubkey string = 44 bytes
+        // owner string = 44 bytes
+        // data = { 1, 2, 3, 4 }
+            // ?? (assume 255 = 3 bytes per u8 == 3*data.len) 
+            // + comma per datapoint ( 1*data.len)
+            //+ whitespace ( 2*data.len ) + '{' '}' = 6 * data.len + 2 
+        // lamports = 8 bytes
+        // executable = "true" or "false" = 4 bytes
+        // rent_epoch = 3 bytes 
+
+        // estimate? 
+        const fmt_count = 120 + 7 * account.data.len;
         total_fmt_size += fmt_count;
     }
 
