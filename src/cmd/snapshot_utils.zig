@@ -70,15 +70,15 @@ pub fn accountsToCsvRowAndSend(
         // pubkey string = 44 bytes
         // owner string = 44 bytes
         // data = { 1, 2, 3, 4 }
-            // ?? (assume 255 = 3 bytes per u8 == 3*data.len) 
+            // ?? the number themeselves (1*data.len bytes) 
             // + comma per datapoint ( 1*data.len)
-            //+ whitespace ( 2*data.len ) + '{' '}' = 6 * data.len + 2 
+            // + whitespace ( ~2*data.len ) + '{' '}' = ~4 * data.len + 2 
         // lamports = 8 bytes
-        // executable = "true" or "false" = 4 bytes
-        // rent_epoch = 3 bytes 
+        // executable = "true" or "false" = 5 bytes
+        // rent_epoch = 8 bytes 
 
         // estimate? 
-        const fmt_count = 120 + 7 * account.data.len;
+        const fmt_count = 120 + 5 * account.data.len;
         total_fmt_size += fmt_count;
     }
 
