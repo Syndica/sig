@@ -147,6 +147,11 @@ pub fn build(b: *std.Build) void {
             .name = "snapshot_utils", 
             .path = "src/cmd/snapshot_utils.zig",
             .description = "snapshot utils",
+        },
+        ExecCommand { 
+            .name = "verify", 
+            .path = "src/cmd/verify.zig",
+            .description = "verify account hashes",
         }
     };
 
@@ -164,6 +169,8 @@ pub fn build(b: *std.Build) void {
         exec.addModule("zig-network", zig_network_module);
         exec.addModule("zig-cli", zig_cli_module);
         exec.addModule("getty", getty_mod);
+
+        // this lets us run it as an exec
         b.installArtifact(exec);
 
         const cmd = b.addRunArtifact(exec);
