@@ -93,11 +93,11 @@ pub const AppendVecAccountInfo = struct {
 pub const PubkeyAndAccountInAppendVecRef = struct {
     pubkey: TmpPubkey,
     account_ref: AccountInAppendVecRef,
-    hash: Hash,
+    // hash: Hash,
 };
 
 const u64_size: usize = @sizeOf(u64);
-inline fn alignToU64(addr: usize) usize {
+pub inline fn alignToU64(addr: usize) usize {
     return (addr + (u64_size - 1)) & ~(u64_size - 1);
 }
 
@@ -165,52 +165,6 @@ pub const AppendVec = struct {
         self.n_accounts = n_accounts;
     }
 
-    pub fn sanitizeWithRefs(self: *Self, refs: *ArrayList(PubkeyAndAccountInAppendVecRef)) !void {
-        var offset: usize = 0;
-        var n_accounts: usize = 0;
-
-        // if sanitization fails revert the refs
-        const init_len = refs.items.len;
-        errdefer refs.shrinkRetainingCapacity(init_len);
-
-        while (true) {
-            const account = self.getAccount(offset) catch break;
-            try account.sanitize();
-
-            const pubkey = account.store_info.pubkey;
-            const hash = hashAccount(
-                account.account_info.lamports,
-                account.data,
-                &account.account_info.owner.data,
-                account.account_info.executable,
-                account.account_info.rent_epoch,
-                &pubkey.data,
-            );
-            const pubkey_account_ref = PubkeyAndAccountInAppendVecRef{
-                .pubkey = pubkey,
-                .account_ref = .{
-                    .slot = self.slot,
-                    .offset = offset,
-                    .append_vec_id = self.id,
-                },
-                .hash = hash,
-            };
-
-            // NOTE: the refs array should mostly be pre-allocated
-            // so this shouldnt be expensive
-            try refs.append(pubkey_account_ref);
-
-            offset = offset + account.len;
-            n_accounts += 1;
-        }
-
-        if (offset != alignToU64(self.length)) {
-            return error.InvalidAppendVecLength;
-        }
-
-        self.n_accounts = n_accounts;
-    }
-
     pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AppendVecAccountInfo {
         var offset = start_offset;
 
@@ -264,7 +218,7 @@ pub const AppendVec = struct {
                     .offset = offset,
                     .append_vec_id = self.id,
                 },
-                .hash = Hash.default(),
+                // .hash = Hash.default(),
             };
 
             accounts.appendAssumeCapacity(pubkey_account_ref);
