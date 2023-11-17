@@ -79,157 +79,61 @@ pub fn sanitizeWithRefs(append_vec: *AppendVec, refs: *ArrayList(PubkeyAndHash))
     append_vec.n_accounts = n_accounts;
 }
 
-// what all the tasks will need
-const LoadAccountsTask = struct {
+pub fn parseAccounts(
     allocator: std.mem.Allocator,
     channel: *AccountLoadChannel,
     accounts_db_fields: *const AccountsDbFields,
     accounts_dir_path: []const u8,
-
     // task specific
     file_names: [][]const u8,
+) !void {
+    var pubkey_hashes = try ArrayList(PubkeyAndHash).initCapacity(
+        allocator,
+        1_500 * file_names.len,
+    );
+    errdefer pubkey_hashes.deinit();
 
-    task: Task,
-    done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+    // TODO: might need to be longer depending on abs path length
+    var abs_path_buf: [1024]u8 = undefined;
 
-    // callback must be void so push errors in run()
-    pub fn callback(task: *Task) void {
-        var self = @fieldParentPtr(@This(), "task", task);
-        defer self.done.store(true, Release);
+    for (file_names) |file_name| {
+        // parse "{slot}.{id}" from the file_name
+        var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
+        const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
+        const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
-        self.run() catch {};
-    }
+        // read metadata
+        const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
+        std.debug.assert(slot_metas.items.len == 1);
+        const slot_meta = slot_metas.items[0];
+        std.debug.assert(slot_meta.id == append_vec_id);
 
-    pub fn run(self: *@This()) !void {
-        var pubkey_hashes = try ArrayList(PubkeyAndHash).initCapacity(
-            self.allocator,
-            1_500 * self.file_names,
-        );
-        errdefer pubkey_hashes.deinit();
+        // read appendVec from file
+        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
+        const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
+        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch continue;
+        defer append_vec.deinit();
 
-        // TODO: might need to be longer depending on abs path length
-        var abs_path_buf: [1024]u8 = undefined;
+        // each appendVec will have the n_accounts tracked so we can use just a single refs arraylist
+        sanitizeWithRefs(&append_vec, &pubkey_hashes) catch {
+            var buf: [1024]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            var writer = stream.writer();
+            try std.fmt.format(writer, "appendVec failed sanitize: {s}", .{file_name});
 
-        for (self.file_names) |file_name| {
-            // parse "{slot}.{id}" from the file_name
-            var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
-            const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
-            const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+            @panic(stream.getWritten());
+        };
 
-            // read metadata
-            const slot_metas: ArrayList(AppendVecInfo) = self.accounts_db_fields.map.get(slot).?;
-            std.debug.assert(slot_metas.items.len == 1);
-            const slot_meta = slot_metas.items[0];
-            std.debug.assert(slot_meta.id == append_vec_id);
-
-            // read appendVec from file
-            const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ self.accounts_dir_path, file_name });
-            const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-            var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch continue;
-            defer append_vec.deinit();
-
-            // each appendVec will have the n_accounts tracked so we can use just a single refs arraylist
-            sanitizeWithRefs(&append_vec, &pubkey_hashes) catch {
-                var buf: [1024]u8 = undefined;
-                var stream = std.io.fixedBufferStream(&buf);
-                var writer = stream.writer();
-                try std.fmt.format(writer, "appendVec failed sanitize: {s}", .{file_name});
-
-                @panic(stream.getWritten());
-            };
-        }
-
-        try self.channel.send(.{
-            .size = self.file_names.len,
-            .items = pubkey_hashes,
-        });
-    }
-
-    pub fn reset(self: *@This()) void {
-        self.done.store(false, Release);
-        self.allocator.free(self.file_names);
-    }
-};
-
-pub fn runTaskScheduler(
-    allocator: std.mem.Allocator,
-    thread_pool: *ThreadPool,
-    file_names: [][]const u8,
-    tasks_slice: anytype, // []SomeAccountFileTask
-    comptime chunk_size: usize,
-) void {
-    const n_tasks = tasks_slice.len;
-
-    var ready_indexes = std.ArrayList(usize).initCapacity(allocator, n_tasks) catch unreachable;
-    defer ready_indexes.deinit();
-    var running_indexes = std.ArrayList(usize).initCapacity(allocator, n_tasks) catch unreachable;
-    defer running_indexes.deinit();
-
-    // at the start = all ready to schedule
-    for (0..n_tasks) |i| ready_indexes.appendAssumeCapacity(i);
-
-    var index: usize = 0;
-    var has_sent_all_accounts = false;
-    while (!has_sent_all_accounts) {
-        // queue the ready tasks
-        var batch = Batch{};
-        const n_ready = ready_indexes.items.len;
-        for (0..n_ready) |_| {
-            const size = @min(chunk_size, file_names.len - index);
-            if (size == 0) { 
-                // no more to schedule so break here
-                has_sent_all_accounts = true;
-                break;
-            }
-
-            // populate the task
-            const task_index = ready_indexes.pop();
-            const task = &tasks_slice[task_index];
-
-            // fill out the filename
-            var task_file_names = allocator.alloc([]const u8, size) catch unreachable;
-            for (0..size) |idx| {
-                task_file_names[idx] = file_names[index + idx];
-            }
-            task.file_names = task_file_names;
-
-            const task_batch = Batch.from(&task.task);
-            batch.push(task_batch);
-
-            running_indexes.appendAssumeCapacity(task_index);
-
-            index += size;
-            // in this case, we scheduled the last task so break
-            if (has_sent_all_accounts) break;
-        }
-
-        if (batch.len != 0) {
-            ThreadPool.schedule(thread_pool, batch);
-        }
-
-        var current_index: usize = 0;
-        const n_running = running_indexes.items.len;
-        for (0..n_running) |_| {
-            const task_index = running_indexes.items[current_index];
-            const task = &tasks_slice[task_index];
-
-            if (!task.done.load(std.atomic.Ordering.Acquire)) {
-                if (has_sent_all_accounts) {
-                    // these are the last tasks so we wait for them until they are done
-                    while (!task.done.load(std.atomic.Ordering.Acquire)) {}
-                }
-                // check the next task
-                current_index += 1;
-            } else {
-                ready_indexes.appendAssumeCapacity(task_index);
-                // removing so next task can be checked without changing current_index
-                _ = running_indexes.orderedRemove(current_index);
-                task.reset();
-            }
+        // if we ever get to capacity - double it 
+        if (pubkey_hashes.items.len == pubkey_hashes.capacity) { 
+            try pubkey_hashes.ensureTotalCapacity(pubkey_hashes.capacity * 2);
         }
     }
 
-    std.debug.print("scheduler done!\n", .{});
+    try channel.send(.{
+        .size = file_names.len,
+        .items = pubkey_hashes,
+    });
 }
 
 pub const AccountsDB = struct {
@@ -277,14 +181,14 @@ pub fn recvAndLoadAccounts(
     // );
 
     var n_pubkeys: usize = 0;
-    defer { 
+    defer {
         std.debug.print("found {} pubkeys\n", .{n_pubkeys});
         std.debug.assert(361_934_929 == n_pubkeys);
     }
 
     blk: {
         while (true) {
-            const maybe_pubkey_hashes = try incoming_channel.try_drain();
+            const maybe_pubkey_hashes = incoming_channel.drain();
             var slice_array_pubkey_hashes = maybe_pubkey_hashes orelse continue;
             defer incoming_channel.allocator.free(slice_array_pubkey_hashes);
 
@@ -377,50 +281,49 @@ pub fn main() !void {
         std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
         return;
     };
-
     var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(allocator, accounts_db_fields);
 
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
 
-    // setup the threadpool
-    var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var thread_pool = ThreadPool.init(.{
-        .max_threads = n_threads * 2, // two threads per core
-        .stack_size = 2 * 1024 * 1024,
-    });
-    defer thread_pool.shutdown();
-
     // channel for thread output
     var channel = AccountLoadChannel.init(allocator, total_append_vec_count / CHUNK_SIZE);
     defer channel.deinit();
 
-    // pre-allocate the tasks
-    const n_tasks = thread_pool.max_threads * 2;
-    var tasks = try allocator.alloc(LoadAccountsTask, n_tasks);
-    defer allocator.free(tasks);
+    // setup the threads
+    var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+    var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
+    var chunk_size = total_append_vec_count / n_threads;
+    std.debug.print("chunk size {d} across {d} threads\n", .{chunk_size, n_threads});
 
-    for (tasks) |*task| {
-        task.* = LoadAccountsTask{
-            .task = .{ .callback = LoadAccountsTask.callback },
-            .allocator = allocator,
-            .accounts_db_fields = &accounts_db_fields,
-            .accounts_dir_path = accounts_dir_path,
-            .channel = channel,
-            // to be filled
-            .file_names = undefined,
-        };
+    var start_index: usize = 0;
+    var end_index: usize = chunk_size;
+    var rng = std.rand.DefaultPrng.init(19);
+    const random = rng.random();
+
+    for (0..n_threads) |i| {
+        if (end_index == total_append_vec_count) break;
+
+        if (i == (n_threads - 1)) {
+            end_index = total_append_vec_count;
+        } else {
+            end_index = start_index + chunk_size;
+            // add jitter so not all threads end at the same time
+            end_index += random.intRangeAtMost(usize, 100, 500);
+            end_index = @min(end_index, total_append_vec_count);
+        }
+
+        const handle = try std.Thread.spawn(.{}, parseAccounts, .{
+            allocator,
+            channel,
+            &accounts_db_fields,
+            accounts_dir_path,
+            file_names.items[start_index..end_index],
+        });
+        handles.appendAssumeCapacity(handle);
+        start_index = end_index;
     }
-
-    // schedule the iter to tasks
-    var handle = std.Thread.spawn(.{}, runTaskScheduler, .{
-        allocator,
-        &thread_pool,
-        file_names.items,
-        tasks,
-        CHUNK_SIZE,
-    }) catch unreachable;
 
     // recv task output fcn
     try recvAndLoadAccounts(
@@ -429,7 +332,10 @@ pub fn main() !void {
         &accounts_db,
         total_append_vec_count,
     );
-    handle.join();
+
+    for (handles.items) |handle| {
+        handle.join();
+    }
 
     const elapsed = timer.read();
     std.debug.print("ns elapsed: {d}\n", .{elapsed});
