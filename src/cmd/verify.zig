@@ -103,7 +103,7 @@ const LoadAccountsTask = struct {
     pub fn run(self: *@This()) !void {
         var pubkey_hashes = try ArrayList(PubkeyAndHash).initCapacity(
             self.allocator,
-            32_768,
+            1_500 * self.file_names,
         );
         errdefer pubkey_hashes.deinit();
 
@@ -128,13 +128,14 @@ const LoadAccountsTask = struct {
             var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch continue;
             defer append_vec.deinit();
 
-            if (append_vec.file_size > 10_000_000) { // > 10MB
-                std.debug.print("parsing large appendVec: {s} with size {d}MB\n", .{ file_name, append_vec.file_size / 1_000_000 });
-            }
-
             // each appendVec will have the n_accounts tracked so we can use just a single refs arraylist
             sanitizeWithRefs(&append_vec, &pubkey_hashes) catch {
-                continue;
+                var buf: [1024]u8 = undefined;
+                var stream = std.io.fixedBufferStream(&buf);
+                var writer = stream.writer();
+                try std.fmt.format(writer, "appendVec failed sanitize: {s}", .{file_name});
+
+                @panic(stream.getWritten());
             };
         }
 
@@ -154,7 +155,6 @@ pub fn runTaskScheduler(
     allocator: std.mem.Allocator,
     thread_pool: *ThreadPool,
     file_names: [][]const u8,
-    file_order: []usize,
     tasks_slice: anytype, // []SomeAccountFileTask
     comptime chunk_size: usize,
 ) void {
@@ -169,37 +169,27 @@ pub fn runTaskScheduler(
     for (0..n_tasks) |i| ready_indexes.appendAssumeCapacity(i);
 
     var index: usize = 0;
-    var account_name_buf: [chunk_size][]const u8 = undefined;
     var has_sent_all_accounts = false;
     while (!has_sent_all_accounts) {
         // queue the ready tasks
         var batch = Batch{};
         const n_ready = ready_indexes.items.len;
         for (0..n_ready) |_| {
-            var i: usize = 0;
-            while (i < chunk_size) : (i += 1) {
-                if (index == file_order.len) {
-                    has_sent_all_accounts = true;
-                    break;
-                }
-
-                const file_index = file_order[index];
-                const file_name = file_names[file_index];
-                account_name_buf[i] = file_name;
-
-                index += 1;
+            const size = @min(chunk_size, file_names.len - index);
+            if (size == 0) { 
+                // no more to schedule so break here
+                has_sent_all_accounts = true;
+                break;
             }
-            if (i == 0) break;
 
             // populate the task
             const task_index = ready_indexes.pop();
             const task = &tasks_slice[task_index];
 
             // fill out the filename
-            var task_file_names = allocator.alloc([]const u8, i) catch unreachable;
-            for (0..i) |idx| {
-                var filename: []const u8 = account_name_buf[idx];
-                task_file_names[idx] = filename;
+            var task_file_names = allocator.alloc([]const u8, size) catch unreachable;
+            for (0..size) |idx| {
+                task_file_names[idx] = file_names[index + idx];
             }
             task.file_names = task_file_names;
 
@@ -208,15 +198,13 @@ pub fn runTaskScheduler(
 
             running_indexes.appendAssumeCapacity(task_index);
 
+            index += size;
+            // in this case, we scheduled the last task so break
             if (has_sent_all_accounts) break;
         }
 
         if (batch.len != 0) {
             ThreadPool.schedule(thread_pool, batch);
-        }
-
-        if (has_sent_all_accounts) {
-            std.debug.print("sent all account files!\n", .{});
         }
 
         var current_index: usize = 0;
@@ -281,12 +269,18 @@ pub fn recvAndLoadAccounts(
 
     // var pubkeys = try ArrayList(TmpPubkey).initCapacity(
     //     allocator,
-    //     2_000_000_000,
+    //     361_934_929,
     // );
     // var hashes = try ArrayList(Hash).initCapacity(
     //     allocator,
-    //     2_000_000_000,
+    //     361_934_929,
     // );
+
+    var n_pubkeys: usize = 0;
+    defer { 
+        std.debug.print("found {} pubkeys\n", .{n_pubkeys});
+        std.debug.assert(361_934_929 == n_pubkeys);
+    }
 
     blk: {
         while (true) {
@@ -304,6 +298,8 @@ pub fn recvAndLoadAccounts(
                 //     try hashes.append(pubkey_hash.hash);
                 // }
 
+                n_pubkeys += array_pubkey_hashes.items.len;
+
                 // print progress every so often
                 const n_append_vecs_parsed = n_vecs_array_pubkey_hashes.size;
                 append_vec_count += n_append_vecs_parsed;
@@ -318,10 +314,12 @@ pub fn recvAndLoadAccounts(
                     const min_left = time_left / std.time.ns_per_min;
                     const sec_left = (time_left / std.time.ns_per_s) - (min_left * std.time.s_per_min);
 
-                    std.debug.print("dumped {d}/{d} appendvecs - (vecs left: {d}) (time left: {d}:{d})\r", .{
+                    const p_done = append_vec_count * 100 / total_append_vec_count;
+
+                    std.debug.print("dumped {d}/{d} appendvecs - ({d}%) (time left: {d}:{d})\r", .{
                         append_vec_count,
                         total_append_vec_count,
-                        vecs_left,
+                        p_done,
                         min_left,
                         sec_left,
                     });
@@ -354,85 +352,25 @@ pub fn main() !void {
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
 
-    // track the file names (larger files should be scheduled first)
-    std.debug.print("ordering files...\n", .{});
+    // time it
+    var timer = try std.time.Timer.start();
+
+    // allocate all the filenames
     var file_names = try ArrayList([]const u8).initCapacity(allocator, total_append_vec_count);
     defer {
         for (file_names.items) |file_name| allocator.free(file_name);
         file_names.deinit();
     }
 
-    var large_files = try ArrayList(usize).initCapacity(allocator, 100);
-    defer large_files.deinit();
-    var other_files = try ArrayList(usize).initCapacity(allocator, total_append_vec_count - 100);
-    defer other_files.deinit();
-
-    // this will be the final order
-    var file_order = try allocator.alloc(usize, total_append_vec_count);
-    defer allocator.free(file_order);
-
     // TODO: might need to be longer depending on abs path length
-    var abs_path_buf: [1024]u8 = undefined;
-    var index: usize = 0;
-    const start_time: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
-
+    // var abs_path_buf: [1024]u8 = undefined;
     while (try accounts_dir_iter.next()) |entry| {
         const file_name = entry.name;
         var heap_filename = allocator.alloc(u8, file_name.len) catch unreachable;
         @memcpy(heap_filename, file_name);
-
-        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
-        const file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        defer file.close();
-
-        const file_stat = try file.stat();
-        const file_size: u64 = @intCast(file_stat.size);
-
-        if (file_size > 10_000_000) { // >10MB
-            try large_files.append(index);
-        } else {
-            try other_files.append(index);
-        }
-        index += 1;
-
         file_names.appendAssumeCapacity(heap_filename);
-
-        const append_vec_count = index;
-        const vecs_left = total_append_vec_count - append_vec_count;
-        if (append_vec_count % 10_000 == 0 or vecs_left < 10_000) {
-            // estimate how long left
-            const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
-            const elapsed = now - start_time;
-            const ns_per_vec = elapsed / append_vec_count;
-            const time_left = ns_per_vec * vecs_left;
-
-            const min_left = time_left / std.time.ns_per_min;
-            const sec_left = (time_left / std.time.ns_per_s) - (min_left * std.time.s_per_min);
-
-            if (sec_left < 10) {
-                std.debug.print("time left: {d}:0{d}\r", .{
-                    min_left,
-                    sec_left,
-                });
-            } else {
-                std.debug.print("time left: {d}:{d}\r", .{
-                    min_left,
-                    sec_left,
-                });
-            }
-        }
     }
-    std.debug.print("\n", .{});
-    std.debug.assert(index == total_append_vec_count);
     accounts_dir_iter = accounts_dir.iterate(); // reset
-
-    // transfer to single slice
-    const n_large_files = large_files.items.len;
-    @memcpy(file_order[0..n_large_files], large_files.items[0..n_large_files]);
-    const n_other_files = other_files.items.len;
-    @memcpy(file_order[n_large_files..(n_large_files + n_other_files)], other_files.items[0..n_other_files]);
-
-    std.debug.print("done ordering files...\n", .{});
 
     const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
@@ -443,15 +381,8 @@ pub fn main() !void {
     var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(allocator, accounts_db_fields);
 
-    // time it
-    var timer = try std.time.Timer.start();
-
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
-
-    // channel for thread output
-    var channel = AccountLoadChannel.init(allocator, 1000);
-    defer channel.deinit();
 
     // setup the threadpool
     var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
@@ -460,6 +391,10 @@ pub fn main() !void {
         .stack_size = 2 * 1024 * 1024,
     });
     defer thread_pool.shutdown();
+
+    // channel for thread output
+    var channel = AccountLoadChannel.init(allocator, total_append_vec_count / CHUNK_SIZE);
+    defer channel.deinit();
 
     // pre-allocate the tasks
     const n_tasks = thread_pool.max_threads * 2;
@@ -483,7 +418,6 @@ pub fn main() !void {
         allocator,
         &thread_pool,
         file_names.items,
-        file_order,
         tasks,
         CHUNK_SIZE,
     }) catch unreachable;
@@ -495,10 +429,8 @@ pub fn main() !void {
         &accounts_db,
         total_append_vec_count,
     );
-
     handle.join();
 
-    // 2.08 mintues
     const elapsed = timer.read();
-    std.debug.print("elapsed: {d}seconds\n", .{elapsed / std.time.ns_per_s});
+    std.debug.print("ns elapsed: {d}\n", .{elapsed});
 }
