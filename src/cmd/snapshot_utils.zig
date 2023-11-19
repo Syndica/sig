@@ -209,6 +209,10 @@ pub fn runTaskScheduler(
             ThreadPool.schedule(thread_pool, batch);
         }
 
+        if (has_sent_all_accounts) {
+            std.debug.print("sent all account files!\n", .{});
+        }
+
         var current_index: usize = 0;
         const n_running = running_indexes.items.len;
         for (0..n_running) |_| {
@@ -285,14 +289,6 @@ var snapshot_dir_option = cli.Option{
     .value = .{ .string = null },
 };
 
-var metadata_path_option = cli.Option{
-    .long_name = "metadata-path",
-    .short_alias = 'm',
-    .help = "absolute path to the snapshot metadata file (snapshots/{SLOT}/{SLOT})",
-    .required = true,
-    .value = .{ .string = null },
-};
-
 var app = &cli.App{
     .name = "dump_snapshot",
     .description = "utils for snapshot dumping",
@@ -312,7 +308,6 @@ var app = &cli.App{
             .help = "dumps account db fields for faster loading (should run first)",
             .options = &.{
                 &snapshot_dir_option,
-                &metadata_path_option,
             },
             .action = dumpAccountFields,
         },
@@ -323,7 +318,7 @@ pub fn main() !void {
     // eg,
     // zig build snapshot_utils -Doptimize=ReleaseSafe
     // 1) dump the account fields
-    // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots -m /Users/tmp/snapshots/snapshots/225552163/225552163
+    // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots
     // 2) dump the snapshot info
     // ./zig-out/bin/snapshot_utils dump_snapshot -s /Users/tmp/Documents/zig-solana/snapshots
 
@@ -335,15 +330,39 @@ pub fn main() !void {
 /// we do this bc the bank_fields in the snapshot metadata is very large
 pub fn dumpAccountFields(_: []const []const u8) !void {
     const allocator = std.heap.c_allocator;
-
     const snapshot_dir = snapshot_dir_option.value.string.?;
-    const metadata_path = metadata_path_option.value.string.?;
+
+    // iterate through the snapshot dir 
+    const metadata_sub_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "snapshots" },
+    );
+    var metadata_dir = try std.fs.openIterableDirAbsolute(metadata_sub_path, .{});
+    var metadata_dir_iter = metadata_dir.iterate();
+    var maybe_snapshot_slot: ?usize = null;
+    while (try metadata_dir_iter.next()) |entry| {
+        if (entry.kind == std.fs.File.Kind.directory) { 
+            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10); 
+            break;
+        }
+    }
+    var snapshot_slot = maybe_snapshot_slot orelse unreachable;
+
+    const metadata_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{d}/{d}",
+        .{ metadata_sub_path, snapshot_slot, snapshot_slot },
+    );
 
     const output_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
         .{ snapshot_dir, "accounts_db.bincode" },
     );
+
+    std.debug.print("reading metadata path: {s}\n", .{metadata_path});
+    std.debug.print("saving to output path: {s}\n", .{output_path});
 
     var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, metadata_path);
     const fields = snapshot_fields.getFieldRefs();
