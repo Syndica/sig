@@ -260,21 +260,28 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
 
     // allocate all the filenames
-    var file_names = try ArrayList([]const u8).initCapacity(allocator, total_append_vec_count);
-    defer {
-        for (file_names.items) |file_name| allocator.free(file_name);
-        file_names.deinit();
-    }
-
-    // TODO: might need to be longer depending on abs path length
-    // var abs_path_buf: [1024]u8 = undefined;
+    var total_name_size: usize = 0;
     while (try accounts_dir_iter.next()) |entry| {
-        const file_name = entry.name;
-        var heap_filename = allocator.alloc(u8, file_name.len) catch unreachable;
-        @memcpy(heap_filename, file_name);
-        file_names.appendAssumeCapacity(heap_filename);
+        total_name_size += entry.name.len;
+    }
+    var filename_mem = try allocator.alloc(u8, total_name_size);
+    defer allocator.free(filename_mem);
+    accounts_dir_iter = accounts_dir.iterate(); // reset
+    var index: usize = 0;
+
+    // track the slices
+    var filename_slices = try ArrayList([]u8).initCapacity(allocator, total_append_vec_count);
+    defer filename_slices.deinit();
+
+    while (try accounts_dir_iter.next()) |file_entry| {
+        const file_name_len = file_entry.name.len;
+        @memcpy(filename_mem[index..(index + file_name_len)], file_entry.name);
+        filename_slices.appendAssumeCapacity(filename_mem[index..(index + file_name_len)]);
+        index += file_name_len;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
+    const filename_elapsed = timer.read();
+    std.debug.print("parsed filenames in {d}ms\n", .{filename_elapsed / std.time.ns_per_ms});
 
     const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
@@ -295,13 +302,13 @@ pub fn main() !void {
     var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
     var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
     var chunk_size = total_append_vec_count / n_threads;
-    std.debug.print("chunk size {d} across {d} threads\n", .{chunk_size, n_threads});
 
     var start_index: usize = 0;
     var end_index: usize = chunk_size;
     var rng = std.rand.DefaultPrng.init(19);
     const random = rng.random();
 
+    var actual_thread_count: usize = 0;
     for (0..n_threads) |i| {
         if (end_index == total_append_vec_count) break;
 
@@ -319,11 +326,17 @@ pub fn main() !void {
             channel,
             &accounts_db_fields,
             accounts_dir_path,
-            file_names.items[start_index..end_index],
+            filename_slices.items[start_index..end_index],
         });
         handles.appendAssumeCapacity(handle);
         start_index = end_index;
+
+        actual_thread_count += 1;
+
+        // account for jitter 
+        if (end_index == total_append_vec_count) break;
     }
+    std.debug.print("chunk size {d} across {d} threads\n", .{chunk_size, actual_thread_count});
 
     // recv task output fcn
     try recvAndLoadAccounts(
@@ -337,6 +350,8 @@ pub fn main() !void {
         handle.join();
     }
 
+    // ~138331351292 = 138seconds (likely IO bound watching htop + more threads
+    // than cores = faster)
     const elapsed = timer.read();
     std.debug.print("ns elapsed: {d}\n", .{elapsed});
 }
