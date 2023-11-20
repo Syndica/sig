@@ -332,7 +332,7 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
     const allocator = std.heap.c_allocator;
     const snapshot_dir = snapshot_dir_option.value.string.?;
 
-    // iterate through the snapshot dir 
+    // iterate through the snapshot dir
     const metadata_sub_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
@@ -342,8 +342,8 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
     var metadata_dir_iter = metadata_dir.iterate();
     var maybe_snapshot_slot: ?usize = null;
     while (try metadata_dir_iter.next()) |entry| {
-        if (entry.kind == std.fs.File.Kind.directory) { 
-            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10); 
+        if (entry.kind == std.fs.File.Kind.directory) {
+            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10);
             break;
         }
     }
