@@ -36,41 +36,39 @@ const Release = std.atomic.Ordering.Release;
 const Acquire = std.atomic.Ordering.Acquire;
 
 // const LoadedAccounts = struct { append_vecs: ArrayList(AppendVec), refs: ArrayList(PubkeyAndAccountInAppendVecRef) };
-const PubkeyAndHash = struct { pubkey: TmpPubkey, hash: Hash };
-const TaskOutput = struct { size: usize, items: ArrayList(PubkeyAndHash) };
+const TaskOutput = struct { size: usize, pubkeys: ArrayList(TmpPubkey), hashes: ArrayList(Hash), slots: ArrayList(usize) };
 const AccountLoadChannel = Channel(TaskOutput);
-const CHUNK_SIZE = 20;
 
-pub fn sanitizeWithRefs(append_vec: *AppendVec, refs: *ArrayList(PubkeyAndHash)) !void {
+pub fn sanitizeWithRefs(append_vec: *AppendVec, pubkeys: *ArrayList(TmpPubkey), hashes: *ArrayList(Hash)) !void {
     var offset: usize = 0;
     var n_accounts: usize = 0;
 
     // if sanitization fails revert the refs
-    const init_len = refs.items.len;
-    errdefer refs.shrinkRetainingCapacity(init_len);
+    const init_len = pubkeys.items.len;
+    errdefer {
+        pubkeys.shrinkRetainingCapacity(init_len);
+        hashes.shrinkRetainingCapacity(init_len);
+    }
 
     while (true) {
         const account = append_vec.getAccount(offset) catch break;
         try account.sanitize();
 
-        const pubkey = account.store_info.pubkey;
-        const hash = hashAccount(
-            account.account_info.lamports,
-            account.data,
-            &account.account_info.owner.data,
-            account.account_info.executable,
-            account.account_info.rent_epoch,
-            &pubkey.data,
-        );
+        // only record > 0 lamport accounts
+        if (account.account_info.lamports != 0) {
+            const pubkey = account.store_info.pubkey;
+            const hash = hashAccount(
+                account.account_info.lamports,
+                account.data,
+                &account.account_info.owner.data,
+                account.account_info.executable,
+                account.account_info.rent_epoch,
+                &pubkey.data,
+            );
 
-        const pubkey_account_ref = PubkeyAndHash{
-            .pubkey = pubkey,
-            .hash = hash,
-        };
-
-        // NOTE: the refs array should mostly be pre-allocated
-        // so this shouldnt be expensive
-        try refs.append(pubkey_account_ref);
+            try pubkeys.append(pubkey);
+            try hashes.append(hash);
+        }
 
         offset = offset + account.len;
         n_accounts += 1;
@@ -91,17 +89,31 @@ pub fn parseAccounts(
     // task specific
     file_names: [][]const u8,
 ) !void {
-    const ALLOC_SIZE_MULT = 1_500;
+    const ACCOUNTS_PER_FILE_EST = 500;
+    // const ACCOUNTS_PER_FILE_EST = 10;
     // (32 * 8) * 2 = 512 bytes per pubkey hash
-    var pubkey_hashes = try ArrayList(PubkeyAndHash).initCapacity(
+    var pubkeys = try ArrayList(TmpPubkey).initCapacity(
         allocator,
-        ALLOC_SIZE_MULT * file_names.len,
+        ACCOUNTS_PER_FILE_EST * file_names.len,
     );
-    errdefer pubkey_hashes.deinit();
+    var hashes = try ArrayList(Hash).initCapacity(
+        allocator,
+        ACCOUNTS_PER_FILE_EST * file_names.len,
+    );
+    var slots = try ArrayList(usize).initCapacity(
+        allocator,
+        ACCOUNTS_PER_FILE_EST * file_names.len,
+    );
+
+    errdefer {
+        pubkeys.deinit();
+        hashes.deinit();
+        slots.deinit();
+    }
 
     // TODO: might need to be longer depending on abs path length
     var abs_path_buf: [1024]u8 = undefined;
-    var last_capacity = pubkey_hashes.capacity;
+    var last_capacity = pubkeys.capacity;
     var count: usize = 0;
 
     for (file_names) |file_name| {
@@ -119,17 +131,18 @@ pub fn parseAccounts(
         // read appendVec from file
         const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
         const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch |err| { 
+        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch |err| {
             var buf: [1024]u8 = undefined;
             var stream = std.io.fixedBufferStream(&buf);
             var writer = stream.writer();
-            try std.fmt.format(writer, "failed to open appendVec {s}: {s}", .{file_name, @errorName(err)});
+            try std.fmt.format(writer, "failed to open appendVec {s}: {s}", .{ file_name, @errorName(err) });
             @panic(stream.getWritten());
         };
         defer append_vec.deinit();
 
         // each appendVec will have the n_accounts tracked so we can use just a single refs arraylist
-        sanitizeWithRefs(&append_vec, &pubkey_hashes) catch {
+        const prev_len = pubkeys.items.len;
+        sanitizeWithRefs(&append_vec, &pubkeys, &hashes) catch {
             var buf: [1024]u8 = undefined;
             var stream = std.io.fixedBufferStream(&buf);
             var writer = stream.writer();
@@ -138,16 +151,32 @@ pub fn parseAccounts(
         };
         count += 1;
 
+        const n_items_added = pubkeys.items.len - prev_len;
+        try slots.appendNTimes(slot, n_items_added);
+
+        std.debug.assert(slots.items.len == pubkeys.items.len);
+        std.debug.assert(pubkeys.items.len == hashes.items.len);
+
         // if we ever go over capacity - send em
-        if (last_capacity != pubkey_hashes.capacity) {
+        if (last_capacity != pubkeys.capacity) {
             try channel.send(.{
                 .size = count,
-                .items = pubkey_hashes,
+                .pubkeys = pubkeys,
+                .hashes = hashes,
+                .slots = slots,
             });
 
-            pubkey_hashes = try ArrayList(PubkeyAndHash).initCapacity(
+            pubkeys = try ArrayList(TmpPubkey).initCapacity(
                 allocator,
-                ALLOC_SIZE_MULT * file_names.len,
+                ACCOUNTS_PER_FILE_EST * file_names.len,
+            );
+            hashes = try ArrayList(Hash).initCapacity(
+                allocator,
+                ACCOUNTS_PER_FILE_EST * file_names.len,
+            );
+            slots = try ArrayList(usize).initCapacity(
+                allocator,
+                ACCOUNTS_PER_FILE_EST * file_names.len,
             );
             count = 0;
         }
@@ -156,7 +185,9 @@ pub fn parseAccounts(
     if (count > 0) {
         try channel.send(.{
             .size = count,
-            .items = pubkey_hashes,
+            .pubkeys = pubkeys,
+            .hashes = hashes,
+            .slots = slots,
         });
     }
 }
@@ -184,6 +215,11 @@ pub const AccountsDB = struct {
     }
 };
 
+pub const HashAndSlot = struct {
+    hash: Hash,
+    slot: Slot,
+};
+
 pub fn recvAndLoadAccounts(
     allocator: std.mem.Allocator,
     incoming_channel: *AccountLoadChannel,
@@ -196,85 +232,105 @@ pub fn recvAndLoadAccounts(
     var timer = try std.time.Timer.start();
     const start_time = timer.read();
 
-    var pubkeys = try ArrayList(TmpPubkey).initCapacity(
-        allocator,
-        369_000_000,
-    );
-    var hashes = try ArrayList(Hash).initCapacity(
-        allocator,
-        369_000_000,
-    );
+    var pubkey_hashmap = std.AutoArrayHashMap(TmpPubkey, HashAndSlot).init(allocator);
 
-    var n_pubkeys: usize = 0;
     blk: {
         while (true) {
             const maybe_pubkey_hashes = incoming_channel.drain();
-            var slice_array_pubkey_hashes = maybe_pubkey_hashes orelse continue;
-            defer incoming_channel.allocator.free(slice_array_pubkey_hashes);
-
-            for (slice_array_pubkey_hashes) |n_vecs_array_pubkey_hashes| {
-                const array_pubkey_hashes = n_vecs_array_pubkey_hashes.items;
-                // free the arraylist
-                defer array_pubkey_hashes.deinit();
-
-                for (array_pubkey_hashes.items) |*pubkey_hash| {
-                    try pubkeys.append(pubkey_hash.pubkey);
-                    try hashes.append(pubkey_hash.hash);
+            var slice_task_outputs = maybe_pubkey_hashes orelse continue;
+            defer {
+                for (slice_task_outputs) |task_output| {
+                    task_output.pubkeys.deinit();
+                    task_output.hashes.deinit();
+                    task_output.slots.deinit();
                 }
-                n_pubkeys += array_pubkey_hashes.items.len;
+                incoming_channel.allocator.free(slice_task_outputs);
+            }
 
-                // print progress every so often
-                const n_append_vecs_parsed = n_vecs_array_pubkey_hashes.size;
-                append_vec_count += n_append_vecs_parsed;
-
-                const vecs_left = total_append_vec_count - append_vec_count;
-                if (append_vec_count % 300 == 0 or n_append_vecs_parsed > 300 or vecs_left < 300) {
-                    // estimate how long left
-                    const now: u64 = timer.read();
-                    const elapsed = now - start_time;
-                    const ns_per_vec = elapsed / append_vec_count;
-                    const time_left = ns_per_vec * vecs_left;
-
-                    const min_left = time_left / std.time.ns_per_min;
-                    const sec_left = (time_left / std.time.ns_per_s) - (min_left * std.time.s_per_min);
-
-                    const p_done = append_vec_count * 100 / total_append_vec_count;
-
-                    if (sec_left < 10) {
-                        std.debug.print("dumped {d}/{d} appendvecs - ({d}%) (time left: {d}:0{d})\r", .{
-                            append_vec_count,
-                            total_append_vec_count,
-                            p_done,
-                            min_left,
-                            sec_left,
-                        });
+            var n_append_vecs_parsed: usize = 0;
+            for (slice_task_outputs) |task_output| {
+                for (
+                    task_output.pubkeys.items,
+                    task_output.hashes.items,
+                    task_output.slots.items,
+                ) |pubkey, hash, slot| {
+                    if (pubkey_hashmap.getEntry(pubkey)) |*entry| {
+                        // track the most recent slot
+                        if (entry.value_ptr.slot < slot) {
+                            entry.value_ptr.hash = hash;
+                            entry.value_ptr.slot = slot;
+                        }
                     } else {
-                        std.debug.print("dumped {d}/{d} appendvecs - ({d}%) (time left: {d}:{d})\r", .{
-                            append_vec_count,
-                            total_append_vec_count,
-                            p_done,
-                            min_left,
-                            sec_left,
-                        });
+                        try pubkey_hashmap.put(pubkey, .{ .hash = hash, .slot = slot });
                     }
+                }
+                n_append_vecs_parsed += task_output.size;
+            }
 
-                    if (vecs_left == 0) {
-                        std.debug.print("\n", .{});
-                        break :blk;
-                    }
+            append_vec_count += n_append_vecs_parsed;
+            const vecs_left = total_append_vec_count - append_vec_count;
+            if (append_vec_count % 300 == 0 or n_append_vecs_parsed > 300 or vecs_left < 300) {
+                // estimate how long left
+                const now: u64 = timer.read();
+                const elapsed = now - start_time;
+                const ns_per_vec = elapsed / append_vec_count;
+                const time_left = ns_per_vec * vecs_left;
+
+                const min_left = time_left / std.time.ns_per_min;
+                const sec_left = (time_left / std.time.ns_per_s) - (min_left * std.time.s_per_min);
+
+                const p_done = append_vec_count * 100 / total_append_vec_count;
+
+                if (sec_left < 10) {
+                    std.debug.print("dumped {d}/{d} appendvecs - ({d}%) (time left: {d}:0{d})\r", .{
+                        append_vec_count,
+                        total_append_vec_count,
+                        p_done,
+                        min_left,
+                        sec_left,
+                    });
+                } else {
+                    std.debug.print("dumped {d}/{d} appendvecs - ({d}%) (time left: {d}:{d})\r", .{
+                        append_vec_count,
+                        total_append_vec_count,
+                        p_done,
+                        min_left,
+                        sec_left,
+                    });
+                }
+
+                if (vecs_left == 0) {
+                    std.debug.print("\n", .{});
+                    break :blk;
                 }
             }
         }
     }
+
+    const n_pubkeys = pubkey_hashmap.count();
     std.debug.print("-> parsed all accounts in {}s\n", .{timer.read() / std.time.ns_per_s});
     std.debug.print("found {} pubkeys\n", .{n_pubkeys});
     timer.reset();
 
+    // get the pubkeys and hashes
+    var pubkeys = try ArrayList(*TmpPubkey).initCapacity(allocator, n_pubkeys);
+    var hashes = try ArrayList(*Hash).initCapacity(allocator, n_pubkeys);
+    defer {
+        pubkeys.deinit();
+        hashes.deinit();
+    }
+    
+    var iter = pubkey_hashmap.iterator();
+    while (iter.next()) |*entry| { 
+        pubkeys.appendAssumeCapacity(entry.key_ptr);
+        hashes.appendAssumeCapacity(&entry.value_ptr.hash);
+    }
+
     // sort based on pubkeys
     std.debug.print("sorting pubkeys and hashes\n", .{});
     const SortContext = struct {
-        pubkeys: ArrayList(TmpPubkey),
-        hashes: ArrayList(Hash),
+        pubkeys: ArrayList(*TmpPubkey),
+        hashes: ArrayList(*Hash),
 
         pub fn lessThan(context: @This(), lhs: usize, rhs: usize) bool {
             const lhs_pubkey = context.pubkeys.items[lhs];
@@ -302,7 +358,7 @@ pub fn recvAndLoadAccounts(
 
     var increasing_index: usize = 0;
     for (indexes.items) |sorted_index| {
-        hashes_sorted[increasing_index] = hashes.items[sorted_index];
+        hashes_sorted[increasing_index] = hashes.items[sorted_index].*;
         increasing_index += 1;
     }
     std.debug.print("-> sorting done in {}s\n", .{timer.read() / std.time.ns_per_s});
@@ -444,7 +500,7 @@ pub fn main() !void {
         handle.join();
     }
 
-    // 8min total rn 
+    // 8min total rn
     // ~138331351292 = 138seconds (likely IO bound watching htop + more threads
     // than cores = faster)
     const elapsed = timer.read();
