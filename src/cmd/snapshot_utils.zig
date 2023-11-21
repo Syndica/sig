@@ -329,7 +329,9 @@ pub fn main() !void {
 
 /// we do this bc the bank_fields in the snapshot metadata is very large
 pub fn dumpAccountFields(_: []const []const u8) !void {
-    const allocator = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
+
     const snapshot_dir = snapshot_dir_option.value.string.?;
 
     // iterate through the snapshot dir
@@ -378,7 +380,8 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
 }
 
 pub fn dumpSnapshot(_: []const []const u8) !void {
-    const allocator = std.heap.c_allocator;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
 
     const snapshot_dir = snapshot_dir_option.value.string.?;
     const accounts_db_fields_path = try std.fmt.allocPrint(
