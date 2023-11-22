@@ -35,16 +35,186 @@ pub const MERKLE_FANOUT: usize = 16;
 const Release = std.atomic.Ordering.Release;
 const Acquire = std.atomic.Ordering.Acquire;
 
-pub fn parseAccounts(
+const AccountHashData = struct {
+    pubkey: TmpPubkey,
+    hash: Hash,
+    slot: Slot,
+};
+
+pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
+    var offset: usize = 0;
+    var n_accounts: usize = 0;
+
+    while (true) {
+        const account = append_vec.getAccount(offset) catch break;
+        try account.sanitize();
+
+        // only record > 0 lamport accounts
+        if (account.account_info.lamports != 0) {
+            const pubkey = account.store_info.pubkey;
+            const hash = hashAccount(
+                account.account_info.lamports,
+                account.data,
+                &account.account_info.owner.data,
+                account.account_info.executable,
+                account.account_info.rent_epoch,
+                &pubkey.data,
+            );
+
+            try bins.insert(AccountHashData{
+                .pubkey = pubkey,
+                .hash = hash,
+                .slot = append_vec.slot,
+            });
+        }
+
+        offset = offset + account.len;
+        n_accounts += 1;
+    }
+
+    if (offset != alignToU64(append_vec.length)) {
+        return error.InvalidAppendVecLength;
+    }
+
+    append_vec.n_accounts = n_accounts;
+}
+
+pub fn sortBins(
+    allocator: std.mem.Allocator,
+    thread_bins: []PubkeyBins,
+    bin_start_index: usize,
+    bin_end_index: usize,
+) !void {
+    const HashAndSlot = struct { hash: Hash, slot: Slot, index: usize };
+    var hashmap = HashMap(TmpPubkey, HashAndSlot).init(allocator);
+    defer hashmap.deinit();
+
+    var to_remove_indexes = try ArrayList(usize).initCapacity(allocator, 1_000);
+    defer to_remove_indexes.deinit();
+
+    var timer = try std.time.Timer.start();
+    const n_threads = thread_bins.len;
+    var count: usize = 0;
+
+    for (bin_start_index..bin_end_index) |bin_i| {
+        var main_bin = &thread_bins[0].bins[bin_i];
+
+        // compute total capacity required
+        var total_len_required = main_bin.items.len;
+        for (1..n_threads) |i| {
+            total_len_required += thread_bins[i].bins[bin_i].items.len;
+        }
+        // alloc at once
+        try main_bin.ensureTotalCapacity(total_len_required);
+
+        // fill the main bin
+        for (1..n_threads) |i| {
+            var thread_bin = &thread_bins[i].bins[bin_i];
+            main_bin.appendSliceAssumeCapacity(thread_bin.items);
+            thread_bin.deinit();
+        }
+
+        // remove duplicate pubkeys from main_bin
+        var i: usize = 0;
+        for (0..main_bin.items.len) |_| {
+            const account_hash_data = &main_bin.items[i];
+
+            if (hashmap.getEntry(account_hash_data.pubkey)) |*entry| {
+                // only track the most recent
+                if (entry.value_ptr.slot < account_hash_data.slot) {
+                    const old_index = entry.value_ptr.index;
+                    entry.value_ptr.slot = account_hash_data.slot;
+                    entry.value_ptr.hash = account_hash_data.hash;
+                    entry.value_ptr.index = i;
+
+                    // swap remove the element and dont increment the index
+                    _ = main_bin.swapRemove(old_index);
+                    continue;
+                }
+            } else {
+                try hashmap.putNoClobber(account_hash_data.pubkey, .{
+                    .hash = account_hash_data.hash,
+                    .slot = account_hash_data.slot,
+                    .index = i,
+                });
+            }
+
+            i += 1;
+        }
+
+        // sort main_bin
+        std.mem.sort(AccountHashData, main_bin.items, {}, struct {
+            fn lessThan(_: void, lhs: AccountHashData, rhs: AccountHashData) bool {
+                return std.mem.lessThan(u8, &lhs.pubkey.data, &rhs.pubkey.data);
+            }
+        }.lessThan);
+
+        // clear mem for next iteration
+        to_remove_indexes.clearRetainingCapacity();
+        hashmap.clearRetainingCapacity();
+
+        count += 1;
+        if (count % 1000 == 0) {
+            printTimeEstimate(
+                &timer,
+                bin_end_index - bin_start_index,
+                count,
+                "sorting pubkey bins",
+            );
+        }
+    }
+}
+
+pub fn printTimeEstimate(
+    timer: *std.time.Timer,
+    total: usize,
+    i: usize,
+    comptime name: []const u8,
+) void {
+    if (i == 0 or total == 0) return;
+
+    const p_done = i * 100 / total;
+    const left = total - i;
+
+    const elapsed = timer.read();
+    const ns_per_vec = elapsed / i;
+    const time_left = ns_per_vec * left;
+
+    const min_left = time_left / std.time.ns_per_min;
+    const sec_left = (time_left / std.time.ns_per_s) - (min_left * std.time.s_per_min);
+
+    if (sec_left < 10) {
+        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {d}:0{d})\r", .{
+            name,
+            i,
+            total,
+            p_done,
+            min_left,
+            sec_left,
+        });
+    } else {
+        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {d}:{d})\r", .{
+            name,
+            i,
+            total,
+            p_done,
+            min_left,
+            sec_left,
+        });
+    }
+}
+
+pub fn sortFilesIntoBins(
     accounts_db_fields: *const AccountsDbFields,
     accounts_dir_path: []const u8,
     // task specific
     file_names: [][]const u8,
-    append_vecs: *ArrayList(AppendVec),
+    bins: *PubkeyBins,
 ) !void {
-    std.debug.assert(append_vecs.capacity == file_names.len);
     const total_append_vec_count = file_names.len;
+    var append_vec_count: usize = 0;
 
+    var timer = try std.time.Timer.start();
     // TODO: might need to be longer depending on abs path length
     var abs_path_buf: [1024]u8 = undefined;
     for (file_names) |file_name| {
@@ -69,35 +239,67 @@ pub fn parseAccounts(
             try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
             @panic(stream.getWritten());
         };
+        // close after
+        defer append_vec.deinit();
 
-        // verify its ok 
-        append_vec.sanitize() catch |err| { 
+        sanitizeAndBin(
+            &append_vec,
+            bins,
+        ) catch |err| {
             var buf: [1024]u8 = undefined;
             var stream = std.io.fixedBufferStream(&buf);
             var writer = stream.writer();
             try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
             @panic(stream.getWritten());
         };
+        append_vec_count += 1;
 
-        append_vecs.appendAssumeCapacity(append_vec);
-
-        if (append_vecs.items.len % 1_000 == 0) { 
+        if (append_vec_count % 1_000 == 0) {
             // estimate how long left
-            const append_vec_count = append_vecs.items.len;
-            const p_done = append_vec_count * 100 / total_append_vec_count;
-
-            std.debug.print("parsed {d}/{d} appendvecs ({d}%)\r", .{
-                append_vec_count,
+            printTimeEstimate(
+                &timer,
                 total_append_vec_count,
-                p_done,
-            });
+                append_vec_count,
+                "parsing append vecs",
+            );
         }
     }
-    std.debug.print("\n", .{});
 }
 
-pub const PubkeyBinCalculator = struct { 
-    shift_bits: u32,
+pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
+
+pub const PubkeyBins = struct {
+    bins: []ArrayList(AccountHashData),
+    calculator: PubkeyBinCalculator = PubkeyBinCalculator.init(PUBKEY_BINS_FOR_CALCULATING_HASHES),
+
+    pub fn init(allocator: std.mem.Allocator) !PubkeyBins {
+        const INIT_BUCKET_LENGTH = 1_000;
+        var bins = try allocator.alloc(ArrayList(AccountHashData), PUBKEY_BINS_FOR_CALCULATING_HASHES);
+        for (bins) |*bin| {
+            bin.* = try ArrayList(AccountHashData).initCapacity(allocator, INIT_BUCKET_LENGTH);
+        }
+
+        return PubkeyBins{
+            .bins = bins,
+        };
+    }
+
+    pub fn deinit(self: *PubkeyBins) void {
+        const allocator = self.bins[0].allocator;
+        for (self.bins) |*bin| {
+            bin.deinit();
+        }
+        allocator.free(self.bins);
+    }
+
+    pub fn insert(self: *PubkeyBins, account: AccountHashData) !void {
+        const bin_index = self.calculator.binIndex(&account.pubkey);
+        try self.bins[bin_index].append(account);
+    }
+};
+
+pub const PubkeyBinCalculator = struct {
+    shift_bits: u6,
 
     pub fn init(n_bins: usize) PubkeyBinCalculator {
         // u8 * 3 (ie, we consider on the first 3 bytes of a pubkey)
@@ -105,34 +307,32 @@ pub const PubkeyBinCalculator = struct {
         // within bounds
         std.debug.assert(n_bins > 0);
         std.debug.assert(n_bins <= (1 << MAX_BITS));
-        // power of two 
+        // power of two
         std.debug.assert((n_bins & (n_bins - 1)) == 0);
 
         // eg,
-        // 8 bins 
+        // 8 bins
         // => leading zeros = 28
         // => shift_bits = (24 - (32 - 28 - 1)) = 21
-        // ie, 
+        // ie,
         // if we have the first 24 bits set (u8 << 16)
         // want to consider the first 3 bits of those 24
-            // 0000 ... [100]0 0000 0000 0000 0000 0000
+        // 0000 ... [100]0 0000 0000 0000 0000 0000
         // then we want to shift left by 21
-            // 0000 ... 0000 0000 0000 0000 0000 0[100]
+        // 0000 ... 0000 0000 0000 0000 0000 0[100]
         // those 3 bits can represent 2^3 (= 8) bins
-        const shift_bits = MAX_BITS - (32 - @clz(@as(u32, n_bins)) - 1);
+        const shift_bits = @as(u6, MAX_BITS - (32 - @clz(@as(u32, n_bins)) - 1));
 
-        return PubkeyBinCalculator {
+        return PubkeyBinCalculator{
             .shift_bits = shift_bits,
         };
     }
 
-    pub fn pubkeyToBin(self: *const PubkeyBinCalculator, pubkey: *const TmpPubkey) usize { 
+    pub fn binIndex(self: *const PubkeyBinCalculator, pubkey: *const TmpPubkey) usize {
         const data = &pubkey.data;
-        return (
-            @as(usize, data[0]) << 16 |
+        return (@as(usize, data[0]) << 16 |
             @as(usize, data[1]) << 8 |
-            @as(usize, data[2])
-        ) >> self.shift_bits;
+            @as(usize, data[2])) >> self.shift_bits;
     }
 };
 
@@ -186,7 +386,6 @@ pub fn main() !void {
         index += file_name_len;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    std.debug.print("parsed filenames in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
     std.debug.assert(filename_slices.items.len == total_append_vec_count);
 
     // read accounts_db.bincode
@@ -206,11 +405,17 @@ pub fn main() !void {
     var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
     var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
     var chunk_size = total_append_vec_count / n_threads;
-    std.debug.print("starting {d} threads with {d} accounts per thread\n", .{n_threads, chunk_size});
+    std.debug.print("starting {d} threads with {d} accounts per thread\n", .{ n_threads, chunk_size });
 
     var start_index: usize = 0;
     var end_index: usize = chunk_size;
-    var append_vecs = try allocator.alloc(ArrayList(AppendVec), n_threads);
+
+    // !!
+    var thread_bins = try allocator.alloc(PubkeyBins, n_threads);
+    const total_bin_count = PUBKEY_BINS_FOR_CALCULATING_HASHES;
+    for (0..n_threads) |i| {
+        thread_bins[i] = try PubkeyBins.init(allocator);
+    }
 
     for (0..n_threads) |i| {
         if (i == (n_threads - 1)) {
@@ -220,13 +425,11 @@ pub fn main() !void {
             end_index = @min(end_index, total_append_vec_count);
         }
 
-        append_vecs[i] = try ArrayList(AppendVec).initCapacity(allocator, end_index - start_index);
-
-        const handle = try std.Thread.spawn(.{}, parseAccounts, .{
+        const handle = try std.Thread.spawn(.{}, sortFilesIntoBins, .{
             &accounts_db_fields,
             accounts_dir_path,
             filename_slices.items[start_index..end_index],
-            &append_vecs[i],
+            &thread_bins[i],
         });
         handles.appendAssumeCapacity(handle);
         start_index = end_index;
@@ -236,28 +439,82 @@ pub fn main() !void {
     for (handles.items) |handle| {
         handle.join();
     }
-    std.debug.print("opened append_vecs in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    std.debug.print("\n", .{});
+    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
     timer.reset();
 
-    // open all appendVec files into arraylist 
+    // process per bin
+    // no I/O so we use cpu count exact
+    n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+    chunk_size = total_bin_count / n_threads;
+    std.debug.print("starting {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
+
+    start_index = 0;
+    end_index = chunk_size;
+
+    handles.clearRetainingCapacity();
+    try handles.ensureTotalCapacity(n_threads);
+
+    for (0..n_threads) |i| {
+        if (i == (n_threads - 1)) {
+            end_index = total_bin_count;
+        } else {
+            end_index = start_index + chunk_size;
+            end_index = @min(end_index, total_bin_count);
+        }
+
+        const handle = try std.Thread.spawn(.{}, sortBins, .{
+            allocator,
+            thread_bins,
+            start_index,
+            end_index,
+        });
+        handles.appendAssumeCapacity(handle);
+        start_index = end_index;
+    }
+
+    for (handles.items) |handle| {
+        handle.join();
+    }
+    std.debug.print("\n", .{});
+    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    timer.reset();
+
+    // compute merkle tree over the slices
+    var total_count: usize = 0;
+    for (thread_bins[0].bins) |bin| {
+        total_count += bin.items.len;
+    }
+
+    var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
+    for (thread_bins[0].bins) |bin| {
+        for (bin.items) |account_info| {
+            hashes.appendAssumeCapacity(account_info.hash);
+        }
+    }
+
+    const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
+    std.debug.print("merkle root: {any}\n", .{root_hash.*});
+
+    // open all appendVec files into arraylist
     // spawn threads each with a bucket range of pubkeys
-    // THREAD_LOGIC (append_vecs, bin_range, *output): 
-        // for each appendVec: 
-            // for each pubkey:
-                // calculate the bin
-                // if (bin in bin_range and lamports > 0): 
-                        // if pubkey hasnt been appended yet: 
-                            // output.append .{ pubkey, slot, hash }
-                        // else // there exists a slotA and slotB
-                            // index = @max(slotA, slotB)
-                            // output.append .{ pubkey, slots[index], hashes[index] }
-        // sort(list by pubkey)
-        // return
-    
-    // join all threads 
-        // result = &[&[.{ pubkey, slot, hash}]]
-    
-    // compute merkle tree over the slices 
-    // print the final hash 
+    // THREAD_LOGIC (append_vecs, bin_range, *output):
+    // for each appendVec:
+    // for each pubkey:
+    // calculate the bin
+    // if (bin in bin_range and lamports > 0):
+    // if pubkey hasnt been appended yet:
+    // output.append .{ pubkey, slot, hash }
+    // else // there exists a slotA and slotB
+    // index = @max(slotA, slotB)
+    // output.append .{ pubkey, slots[index], hashes[index] }
+    // sort(list by pubkey)
+    // return
+
+    // join all threads
+    // result = &[&[.{ pubkey, slot, hash}]]
+
+    // compute merkle tree over the slices
+    // print the final hash
 
 }
