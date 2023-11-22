@@ -36,18 +36,17 @@ const Release = std.atomic.Ordering.Release;
 const Acquire = std.atomic.Ordering.Acquire;
 
 pub fn parseAccounts(
-    allocator: std.mem.Allocator,
     accounts_db_fields: *const AccountsDbFields,
     accounts_dir_path: []const u8,
     // task specific
     file_names: [][]const u8,
+    append_vecs: *ArrayList(AppendVec),
 ) !void {
-    _ = allocator; 
+    std.debug.assert(append_vecs.capacity == file_names.len);
+    const total_append_vec_count = file_names.len;
 
     // TODO: might need to be longer depending on abs path length
     var abs_path_buf: [1024]u8 = undefined;
-    var count: usize = 0;
-
     for (file_names) |file_name| {
         // parse "{slot}.{id}" from the file_name
         var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
@@ -67,13 +66,34 @@ pub fn parseAccounts(
             var buf: [1024]u8 = undefined;
             var stream = std.io.fixedBufferStream(&buf);
             var writer = stream.writer();
-            try std.fmt.format(writer, "failed to open appendVec {s}: {s}", .{ file_name, @errorName(err) });
+            try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
             @panic(stream.getWritten());
         };
-        defer append_vec.deinit();
 
-        count += 1;
+        // verify its ok 
+        append_vec.sanitize() catch |err| { 
+            var buf: [1024]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            var writer = stream.writer();
+            try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
+            @panic(stream.getWritten());
+        };
+
+        append_vecs.appendAssumeCapacity(append_vec);
+
+        if (append_vecs.items.len % 1_000 == 0) { 
+            // estimate how long left
+            const append_vec_count = append_vecs.items.len;
+            const p_done = append_vec_count * 100 / total_append_vec_count;
+
+            std.debug.print("parsed {d}/{d} appendvecs ({d}%)\r", .{
+                append_vec_count,
+                total_append_vec_count,
+                p_done,
+            });
+        }
     }
+    std.debug.print("\n", .{});
 }
 
 pub const PubkeyBinCalculator = struct { 
@@ -120,7 +140,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
-    const snapshot_path = "/home/brennan/solana-snapshot-finder";
+    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots";
 
     const accounts_dir_path = try std.fmt.allocPrint(
         allocator,
@@ -139,7 +159,6 @@ pub fn main() !void {
     // compute the total size (to compute time left)
     var total_append_vec_count: usize = 0;
     while (try accounts_dir_iter.next()) |_| {
-        // compute the size
         total_append_vec_count += 1;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
@@ -155,12 +174,11 @@ pub fn main() !void {
     var filename_mem = try allocator.alloc(u8, total_name_size);
     defer allocator.free(filename_mem);
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    var index: usize = 0;
 
-    // track the slices
     var filename_slices = try ArrayList([]u8).initCapacity(allocator, total_append_vec_count);
     defer filename_slices.deinit();
 
+    var index: usize = 0;
     while (try accounts_dir_iter.next()) |file_entry| {
         const file_name_len = file_entry.name.len;
         @memcpy(filename_mem[index..(index + file_name_len)], file_entry.name);
@@ -168,10 +186,10 @@ pub fn main() !void {
         index += file_name_len;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    const filename_elapsed = timer.read();
-    std.debug.print("parsed filenames in {d}ms\n", .{filename_elapsed / std.time.ns_per_ms});
+    std.debug.print("parsed filenames in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
     std.debug.assert(filename_slices.items.len == total_append_vec_count);
 
+    // read accounts_db.bincode
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
         std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
         return;
@@ -181,6 +199,45 @@ pub fn main() !void {
 
     const accounts_hash_exp = accounts_db_fields.bank_hash_info.accounts_hash;
     std.debug.print("expected hash: {s}\n", .{accounts_hash_exp});
+
+    // setup the threads
+    // double the number of CPUs bc of the high I/O from mmap (and cache misses)
+    timer.reset();
+    var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+    var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
+    var chunk_size = total_append_vec_count / n_threads;
+    std.debug.print("starting {d} threads with {d} accounts per thread\n", .{n_threads, chunk_size});
+
+    var start_index: usize = 0;
+    var end_index: usize = chunk_size;
+    var append_vecs = try allocator.alloc(ArrayList(AppendVec), n_threads);
+
+    for (0..n_threads) |i| {
+        if (i == (n_threads - 1)) {
+            end_index = total_append_vec_count;
+        } else {
+            end_index = start_index + chunk_size;
+            end_index = @min(end_index, total_append_vec_count);
+        }
+
+        append_vecs[i] = try ArrayList(AppendVec).initCapacity(allocator, end_index - start_index);
+
+        const handle = try std.Thread.spawn(.{}, parseAccounts, .{
+            &accounts_db_fields,
+            accounts_dir_path,
+            filename_slices.items[start_index..end_index],
+            &append_vecs[i],
+        });
+        handles.appendAssumeCapacity(handle);
+        start_index = end_index;
+    }
+    std.debug.assert(end_index == total_append_vec_count);
+
+    for (handles.items) |handle| {
+        handle.join();
+    }
+    std.debug.print("opened append_vecs in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    timer.reset();
 
     // open all appendVec files into arraylist 
     // spawn threads each with a bucket range of pubkeys
@@ -202,4 +259,5 @@ pub fn main() !void {
     
     // compute merkle tree over the slices 
     // print the final hash 
+
 }

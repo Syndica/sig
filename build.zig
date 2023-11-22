@@ -150,9 +150,9 @@ pub fn build(b: *std.Build) void {
         },
         ExecCommand { 
             .name = "verify", 
-            .path = "src/cmd/verify.zig",
+            .path = "src/cmd/2verify.zig",
             .description = "verify account hashes",
-        }
+        }, 
     };
 
     for (exec_commands) |command_info| { 
