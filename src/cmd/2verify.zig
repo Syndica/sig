@@ -49,7 +49,7 @@ pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
         const account = append_vec.getAccount(offset) catch break;
         try account.sanitize();
 
-        // only record > 0 lamport accounts
+        // only record > 0 lamport accounts (for full snapshots)
         if (account.account_info.lamports != 0) {
             const pubkey = account.store_info.pubkey;
             const hash = hashAccount(
@@ -79,18 +79,15 @@ pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
     append_vec.n_accounts = n_accounts;
 }
 
-pub fn sortBins(
+pub fn sortThreadBins(
     allocator: std.mem.Allocator,
     thread_bins: []PubkeyBins,
     bin_start_index: usize,
     bin_end_index: usize,
 ) !void {
-    const HashAndSlot = struct { hash: Hash, slot: Slot, index: usize };
-    var hashmap = HashMap(TmpPubkey, HashAndSlot).init(allocator);
+    const SlotAndIndex = struct { slot: Slot, index: usize };
+    var hashmap = HashMap(TmpPubkey, SlotAndIndex).init(allocator);
     defer hashmap.deinit();
-
-    var to_remove_indexes = try ArrayList(usize).initCapacity(allocator, 1_000);
-    defer to_remove_indexes.deinit();
 
     var timer = try std.time.Timer.start();
     const n_threads = thread_bins.len;
@@ -108,39 +105,46 @@ pub fn sortBins(
         try main_bin.ensureTotalCapacity(total_len_required);
 
         // fill the main bin
-        for (1..n_threads) |i| {
-            var thread_bin = &thread_bins[i].bins[bin_i];
-            main_bin.appendSliceAssumeCapacity(thread_bin.items);
-            thread_bin.deinit();
-        }
-
-        // remove duplicate pubkeys from main_bin
-        var i: usize = 0;
-        for (0..main_bin.items.len) |_| {
-            const account_hash_data = &main_bin.items[i];
-
+        var main_bin_index: usize = 0;
+        for (main_bin.items) |account_hash_data| {
             if (hashmap.getEntry(account_hash_data.pubkey)) |*entry| {
-                // only track the most recent
-                if (entry.value_ptr.slot < account_hash_data.slot) {
-                    const old_index = entry.value_ptr.index;
+                // only track the most recent slot
+                if (account_hash_data.slot > entry.value_ptr.slot) {
+                    const index = entry.value_ptr.index;
+                    main_bin.items[index] = account_hash_data;
                     entry.value_ptr.slot = account_hash_data.slot;
-                    entry.value_ptr.hash = account_hash_data.hash;
-                    entry.value_ptr.index = i;
-
-                    // swap remove the element and dont increment the index
-                    _ = main_bin.swapRemove(old_index);
-                    continue;
                 }
             } else {
                 try hashmap.putNoClobber(account_hash_data.pubkey, .{
-                    .hash = account_hash_data.hash,
                     .slot = account_hash_data.slot,
-                    .index = i,
+                    .index = main_bin_index,
                 });
+                main_bin_index += 1;
             }
-
-            i += 1;
         }
+
+        for (1..n_threads) |thread_i| {
+            var thread_bin = &thread_bins[thread_i].bins[bin_i];
+
+            for (thread_bin.items) |account_hash_data| {
+                if (hashmap.getEntry(account_hash_data.pubkey)) |*entry| {
+                    // only track the most recent slot
+                    if (account_hash_data.slot > entry.value_ptr.slot) {
+                        const index = entry.value_ptr.index;
+                        main_bin.items[index] = account_hash_data;
+                        entry.value_ptr.slot = account_hash_data.slot;
+                    }
+                } else {
+                    main_bin.appendAssumeCapacity(account_hash_data);
+                    try hashmap.putNoClobber(account_hash_data.pubkey, .{
+                        .slot = account_hash_data.slot,
+                        .index = main_bin_index,
+                    });
+                    main_bin_index += 1;
+                }
+            }
+        }
+        main_bin.items.len = main_bin_index;
 
         // sort main_bin
         std.mem.sort(AccountHashData, main_bin.items, {}, struct {
@@ -150,7 +154,6 @@ pub fn sortBins(
         }.lessThan);
 
         // clear mem for next iteration
-        to_remove_indexes.clearRetainingCapacity();
         hashmap.clearRetainingCapacity();
 
         count += 1;
@@ -266,7 +269,8 @@ pub fn sortFilesIntoBins(
     }
 }
 
-pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
+// pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
+pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 4;
 
 pub const PubkeyBins = struct {
     bins: []ArrayList(AccountHashData),
@@ -315,10 +319,10 @@ pub const PubkeyBinCalculator = struct {
         // => leading zeros = 28
         // => shift_bits = (24 - (32 - 28 - 1)) = 21
         // ie,
-        // if we have the first 24 bits set (u8 << 16)
+        // if we have the first 24 bits set (u8 << 16, 8 + 16 = 24)
         // want to consider the first 3 bits of those 24
         // 0000 ... [100]0 0000 0000 0000 0000 0000
-        // then we want to shift left by 21
+        // then we want to shift right by 21
         // 0000 ... 0000 0000 0000 0000 0000 0[100]
         // those 3 bits can represent 2^3 (= 8) bins
         const shift_bits = @as(u6, MAX_BITS - (32 - @clz(@as(u32, n_bins)) - 1));
@@ -386,7 +390,7 @@ pub fn main() !void {
         index += file_name_len;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    std.debug.assert(filename_slices.items.len == total_append_vec_count);
+    // std.debug.assert(filename_slices.items.len == total_append_vec_count);
 
     // read accounts_db.bincode
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
@@ -402,6 +406,7 @@ pub fn main() !void {
     // setup the threads
     // double the number of CPUs bc of the high I/O from mmap (and cache misses)
     timer.reset();
+
     var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
     var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
     var chunk_size = total_append_vec_count / n_threads;
@@ -413,9 +418,33 @@ pub fn main() !void {
     // !!
     var thread_bins = try allocator.alloc(PubkeyBins, n_threads);
     const total_bin_count = PUBKEY_BINS_FOR_CALCULATING_HASHES;
-    for (0..n_threads) |i| {
-        thread_bins[i] = try PubkeyBins.init(allocator);
-    }
+
+    // // 8j9ARGFv4W2GfML7d3sVJK2MePwrikqYnu6yqer28cCa
+    // try thread_bins[0].insert(AccountHashData{
+    //     .pubkey = TmpPubkey{ .data = .{11} ** 32 },
+    //     .hash = Hash{ .data = .{1} ** 32 },
+    //     .slot = 0,
+    // });
+
+    // // EHv9C5vX7xQjjMpsJMzudnDTzoTSRwYkqLzY8tVMihGj
+    // try thread_bins[1].insert(AccountHashData{
+    //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
+    //     .hash = Hash{ .data = .{2} ** 32 },
+    //     .slot = 0,
+    // });
+    // try thread_bins[1].insert(AccountHashData{
+    //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
+    //     .hash = Hash{ .data = .{4} ** 32 },
+    //     .slot = 1,
+    // });
+
+    // // 7NNPg5A8Xsg1uv4UFm6KZNwsipyyUnmgCrznP6MBWoBZ
+    // // more recent slot
+    // try thread_bins[2].insert(AccountHashData{
+    //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
+    //     .hash = Hash{ .data = .{99} ** 32 },
+    //     .slot = 2,
+    // });
 
     for (0..n_threads) |i| {
         if (i == (n_threads - 1)) {
@@ -463,7 +492,7 @@ pub fn main() !void {
             end_index = @min(end_index, total_bin_count);
         }
 
-        const handle = try std.Thread.spawn(.{}, sortBins, .{
+        const handle = try std.Thread.spawn(.{}, sortThreadBins, .{
             allocator,
             thread_bins,
             start_index,
@@ -481,11 +510,13 @@ pub fn main() !void {
     timer.reset();
 
     // compute merkle tree over the slices
+    std.debug.print("computing merkle tree\n", .{});
     var total_count: usize = 0;
     for (thread_bins[0].bins) |bin| {
         total_count += bin.items.len;
     }
 
+    // write bytes to file
     var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
     for (thread_bins[0].bins) |bin| {
         for (bin.items) |account_info| {
