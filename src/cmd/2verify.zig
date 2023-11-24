@@ -39,7 +39,68 @@ const AccountHashData = struct {
     pubkey: TmpPubkey,
     hash: Hash,
     slot: Slot,
+    lamports: u64,
 };
+
+pub fn sortFilesIntoBins(
+    accounts_db_fields: *const AccountsDbFields,
+    accounts_dir_path: []const u8,
+    // task specific
+    file_names: [][]const u8,
+    bins: *PubkeyBins,
+) !void {
+    const total_append_vec_count = file_names.len;
+
+    var timer = try std.time.Timer.start();
+    // TODO: might need to be longer depending on abs path length
+    var abs_path_buf: [1024]u8 = undefined;
+    for (file_names, 1..) |file_name, append_vec_count| {
+        // parse "{slot}.{id}" from the file_name
+        var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
+        const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
+        const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+
+        // read metadata
+        const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
+        std.debug.assert(slot_metas.items.len == 1);
+        const slot_meta = slot_metas.items[0];
+        std.debug.assert(slot_meta.id == append_vec_id);
+
+        // read appendVec from file
+        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
+        const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
+        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch |err| {
+            var buf: [1024]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            var writer = stream.writer();
+            try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
+            @panic(stream.getWritten());
+        };
+        // close after
+        defer append_vec.deinit();
+
+        sanitizeAndBin(
+            &append_vec,
+            bins,
+        ) catch |err| {
+            var buf: [1024]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            var writer = stream.writer();
+            try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
+            @panic(stream.getWritten());
+        };
+
+        if (append_vec_count % 1_000 == 0) {
+            // estimate how long left
+            printTimeEstimate(
+                &timer,
+                total_append_vec_count,
+                append_vec_count,
+                "parsing append vecs",
+            );
+        }
+    }
+}
 
 pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
     var offset: usize = 0;
@@ -49,24 +110,22 @@ pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
         const account = append_vec.getAccount(offset) catch break;
         try account.sanitize();
 
-        // only record > 0 lamport accounts (for full snapshots)
-        if (account.account_info.lamports != 0) {
-            const pubkey = account.store_info.pubkey;
-            const hash = hashAccount(
-                account.account_info.lamports,
-                account.data,
-                &account.account_info.owner.data,
-                account.account_info.executable,
-                account.account_info.rent_epoch,
-                &pubkey.data,
-            );
+        const pubkey = account.store_info.pubkey;
+        const hash = hashAccount(
+            account.account_info.lamports,
+            account.data,
+            &account.account_info.owner.data,
+            account.account_info.executable,
+            account.account_info.rent_epoch,
+            &pubkey.data,
+        );
 
-            try bins.insert(AccountHashData{
-                .pubkey = pubkey,
-                .hash = hash,
-                .slot = append_vec.slot,
-            });
-        }
+        try bins.insert(AccountHashData{
+            .pubkey = pubkey,
+            .hash = hash,
+            .slot = append_vec.slot,
+            .lamports = account.account_info.lamports,
+        });
 
         offset = offset + account.len;
         n_accounts += 1;
@@ -91,9 +150,8 @@ pub fn sortThreadBins(
 
     var timer = try std.time.Timer.start();
     const n_threads = thread_bins.len;
-    var count: usize = 0;
 
-    for (bin_start_index..bin_end_index) |bin_i| {
+    for (bin_start_index..bin_end_index, 1..) |bin_i, count| {
         var main_bin = &thread_bins[0].bins[bin_i];
 
         // compute total capacity required
@@ -106,24 +164,7 @@ pub fn sortThreadBins(
 
         // fill the main bin
         var main_bin_index: usize = 0;
-        for (main_bin.items) |account_hash_data| {
-            if (hashmap.getEntry(account_hash_data.pubkey)) |*entry| {
-                // only track the most recent slot
-                if (account_hash_data.slot > entry.value_ptr.slot) {
-                    const index = entry.value_ptr.index;
-                    main_bin.items[index] = account_hash_data;
-                    entry.value_ptr.slot = account_hash_data.slot;
-                }
-            } else {
-                try hashmap.putNoClobber(account_hash_data.pubkey, .{
-                    .slot = account_hash_data.slot,
-                    .index = main_bin_index,
-                });
-                main_bin_index += 1;
-            }
-        }
-
-        for (1..n_threads) |thread_i| {
+        for (0..n_threads) |thread_i| {
             var thread_bin = &thread_bins[thread_i].bins[bin_i];
 
             for (thread_bin.items) |account_hash_data| {
@@ -135,7 +176,10 @@ pub fn sortThreadBins(
                         entry.value_ptr.slot = account_hash_data.slot;
                     }
                 } else {
-                    main_bin.appendAssumeCapacity(account_hash_data);
+                    // thread_i == 0 == main_bin so we dont need to append
+                    if (thread_i != 0)
+                        main_bin.appendAssumeCapacity(account_hash_data);
+
                     try hashmap.putNoClobber(account_hash_data.pubkey, .{
                         .slot = account_hash_data.slot,
                         .index = main_bin_index,
@@ -156,7 +200,6 @@ pub fn sortThreadBins(
         // clear mem for next iteration
         hashmap.clearRetainingCapacity();
 
-        count += 1;
         if (count % 1000 == 0) {
             printTimeEstimate(
                 &timer,
@@ -207,70 +250,7 @@ pub fn printTimeEstimate(
     }
 }
 
-pub fn sortFilesIntoBins(
-    accounts_db_fields: *const AccountsDbFields,
-    accounts_dir_path: []const u8,
-    // task specific
-    file_names: [][]const u8,
-    bins: *PubkeyBins,
-) !void {
-    const total_append_vec_count = file_names.len;
-    var append_vec_count: usize = 0;
-
-    var timer = try std.time.Timer.start();
-    // TODO: might need to be longer depending on abs path length
-    var abs_path_buf: [1024]u8 = undefined;
-    for (file_names) |file_name| {
-        // parse "{slot}.{id}" from the file_name
-        var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
-        const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
-        const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
-
-        // read metadata
-        const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
-        std.debug.assert(slot_metas.items.len == 1);
-        const slot_meta = slot_metas.items[0];
-        std.debug.assert(slot_meta.id == append_vec_id);
-
-        // read appendVec from file
-        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
-        const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch |err| {
-            var buf: [1024]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            var writer = stream.writer();
-            try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
-            @panic(stream.getWritten());
-        };
-        // close after
-        defer append_vec.deinit();
-
-        sanitizeAndBin(
-            &append_vec,
-            bins,
-        ) catch |err| {
-            var buf: [1024]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            var writer = stream.writer();
-            try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
-            @panic(stream.getWritten());
-        };
-        append_vec_count += 1;
-
-        if (append_vec_count % 1_000 == 0) {
-            // estimate how long left
-            printTimeEstimate(
-                &timer,
-                total_append_vec_count,
-                append_vec_count,
-                "parsing append vecs",
-            );
-        }
-    }
-}
-
-// pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
-pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 4;
+pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
 
 pub const PubkeyBins = struct {
     bins: []ArrayList(AccountHashData),
@@ -313,7 +293,6 @@ pub const PubkeyBinCalculator = struct {
         std.debug.assert(n_bins <= (1 << MAX_BITS));
         // power of two
         std.debug.assert((n_bins & (n_bins - 1)) == 0);
-
         // eg,
         // 8 bins
         // => leading zeros = 28
@@ -390,7 +369,7 @@ pub fn main() !void {
         index += file_name_len;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    // std.debug.assert(filename_slices.items.len == total_append_vec_count);
+    std.debug.assert(filename_slices.items.len == total_append_vec_count);
 
     // read accounts_db.bincode
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
@@ -401,7 +380,9 @@ pub fn main() !void {
     defer bincode.free(allocator, accounts_db_fields);
 
     const accounts_hash_exp = accounts_db_fields.bank_hash_info.accounts_hash;
+    const total_lamports_exp = accounts_db_fields.bank_hash_info.stats.num_lamports_stored;
     std.debug.print("expected hash: {s}\n", .{accounts_hash_exp});
+    std.debug.print("expected total lamports: {d}\n", .{total_lamports_exp});
 
     // setup the threads
     // double the number of CPUs bc of the high I/O from mmap (and cache misses)
@@ -418,6 +399,9 @@ pub fn main() !void {
     // !!
     var thread_bins = try allocator.alloc(PubkeyBins, n_threads);
     const total_bin_count = PUBKEY_BINS_FOR_CALCULATING_HASHES;
+    for (thread_bins) |*thread_bin| {
+        thread_bin.* = try PubkeyBins.init(allocator);
+    }
 
     // // 8j9ARGFv4W2GfML7d3sVJK2MePwrikqYnu6yqer28cCa
     // try thread_bins[0].insert(AccountHashData{
@@ -425,7 +409,6 @@ pub fn main() !void {
     //     .hash = Hash{ .data = .{1} ** 32 },
     //     .slot = 0,
     // });
-
     // // EHv9C5vX7xQjjMpsJMzudnDTzoTSRwYkqLzY8tVMihGj
     // try thread_bins[1].insert(AccountHashData{
     //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
@@ -451,7 +434,6 @@ pub fn main() !void {
             end_index = total_append_vec_count;
         } else {
             end_index = start_index + chunk_size;
-            end_index = @min(end_index, total_append_vec_count);
         }
 
         const handle = try std.Thread.spawn(.{}, sortFilesIntoBins, .{
@@ -489,7 +471,6 @@ pub fn main() !void {
             end_index = total_bin_count;
         } else {
             end_index = start_index + chunk_size;
-            end_index = @min(end_index, total_bin_count);
         }
 
         const handle = try std.Thread.spawn(.{}, sortThreadBins, .{
@@ -501,6 +482,7 @@ pub fn main() !void {
         handles.appendAssumeCapacity(handle);
         start_index = end_index;
     }
+    std.debug.assert(end_index == total_bin_count);
 
     for (handles.items) |handle| {
         handle.join();
@@ -516,13 +498,15 @@ pub fn main() !void {
         total_count += bin.items.len;
     }
 
-    // write bytes to file
+    var total_lamports: u64 = 0;
     var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
     for (thread_bins[0].bins) |bin| {
         for (bin.items) |account_info| {
             hashes.appendAssumeCapacity(account_info.hash);
+            total_lamports += account_info.lamports;
         }
     }
+    std.debug.print("total lamports: {d}\n", .{total_lamports});
 
     const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
     std.debug.print("merkle root: {any}\n", .{root_hash.*});
