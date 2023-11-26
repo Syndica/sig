@@ -60,6 +60,9 @@ pub fn sortFilesIntoBins(
         const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
         const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
+        // TODO: 
+        // if (slot > 231193525) continue;
+
         // read metadata
         const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
         std.debug.assert(slot_metas.items.len == 1);
@@ -120,6 +123,11 @@ pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
             &pubkey.data,
         );
 
+        // const pk = "RBHdGVfDfMjfU6iUfCb1LczMJcQLx7hGnxbzRsoDNvx";
+        // if (std.mem.eql(u8, try pubkey.toString(), pk)) { 
+        //     std.debug.print("{d}: {any}\n", .{append_vec.slot, account});
+        // }
+
         try bins.insert(AccountHashData{
             .pubkey = pubkey,
             .hash = hash,
@@ -151,34 +159,33 @@ pub fn sortThreadBins(
     var timer = try std.time.Timer.start();
     const n_threads = thread_bins.len;
 
+    // var buf: [44]u8 = undefined;
+
     for (bin_start_index..bin_end_index, 1..) |bin_i, count| {
-        var main_bin = &thread_bins[0].bins[bin_i];
 
         // compute total capacity required
-        var total_len_required = main_bin.items.len;
-        for (1..n_threads) |i| {
+        var total_len_required: usize = 0;
+        for (0..n_threads) |i| {
             total_len_required += thread_bins[i].bins[bin_i].items.len;
         }
-        // alloc at once
-        try main_bin.ensureTotalCapacity(total_len_required);
+        var main_bin = try allocator.alloc(AccountHashData, total_len_required);
 
         // fill the main bin
         var main_bin_index: usize = 0;
         for (0..n_threads) |thread_i| {
             var thread_bin = &thread_bins[thread_i].bins[bin_i];
+            defer thread_bin.deinit();
 
             for (thread_bin.items) |account_hash_data| {
                 if (hashmap.getEntry(account_hash_data.pubkey)) |*entry| {
                     // only track the most recent slot
                     if (account_hash_data.slot > entry.value_ptr.slot) {
                         const index = entry.value_ptr.index;
-                        main_bin.items[index] = account_hash_data;
+                        main_bin[index] = account_hash_data;
                         entry.value_ptr.slot = account_hash_data.slot;
                     }
                 } else {
-                    // thread_i == 0 == main_bin so we dont need to append
-                    if (thread_i != 0)
-                        main_bin.appendAssumeCapacity(account_hash_data);
+                    main_bin[main_bin_index] = account_hash_data;
 
                     try hashmap.putNoClobber(account_hash_data.pubkey, .{
                         .slot = account_hash_data.slot,
@@ -188,14 +195,19 @@ pub fn sortThreadBins(
                 }
             }
         }
-        main_bin.items.len = main_bin_index;
 
         // sort main_bin
-        std.mem.sort(AccountHashData, main_bin.items, {}, struct {
+        std.mem.sort(AccountHashData, main_bin[0..main_bin_index], {}, struct {
             fn lessThan(_: void, lhs: AccountHashData, rhs: AccountHashData) bool {
                 return std.mem.lessThan(u8, &lhs.pubkey.data, &rhs.pubkey.data);
             }
         }.lessThan);
+
+        // update 
+        const main_bin_array = ArrayList(AccountHashData).fromOwnedSlice(allocator, &main_bin);
+        main_bin_array.items.len = main_bin_index;
+
+        thread_bins[0].bins[bin_i] = main_bin_array;
 
         // clear mem for next iteration
         hashmap.clearRetainingCapacity();
@@ -257,10 +269,11 @@ pub const PubkeyBins = struct {
     calculator: PubkeyBinCalculator = PubkeyBinCalculator.init(PUBKEY_BINS_FOR_CALCULATING_HASHES),
 
     pub fn init(allocator: std.mem.Allocator) !PubkeyBins {
-        const INIT_BUCKET_LENGTH = 1_000;
         var bins = try allocator.alloc(ArrayList(AccountHashData), PUBKEY_BINS_FOR_CALCULATING_HASHES);
         for (bins) |*bin| {
+            const INIT_BUCKET_LENGTH = 1_000;
             bin.* = try ArrayList(AccountHashData).initCapacity(allocator, INIT_BUCKET_LENGTH);
+            // bin.* = ArrayList(AccountHashData).init(allocator);
         }
 
         return PubkeyBins{
@@ -345,14 +358,22 @@ pub fn main() !void {
         total_append_vec_count += 1;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
+    std.debug.print("total_append_vec_count: {d}\n", .{total_append_vec_count});
 
     // time it
     var timer = try std.time.Timer.start();
 
     // allocate all the filenames
     var total_name_size: usize = 0;
+    var fcount: usize = 0;
     while (try accounts_dir_iter.next()) |entry| {
         total_name_size += entry.name.len;
+        fcount += 1;
+        // std.debug.print("accounts_v2/{s} ", .{ entry.name });
+        // if (fcount > 500) {
+        //     std.debug.print("\n", .{});
+        //     @panic("ahh");
+        // }
     }
     var filename_mem = try allocator.alloc(u8, total_name_size);
     defer allocator.free(filename_mem);
@@ -363,6 +384,9 @@ pub fn main() !void {
 
     var index: usize = 0;
     while (try accounts_dir_iter.next()) |file_entry| {
+        // if (!std.mem.eql(u8, file_entry.name, "230816002.21801679")) { 
+        //     continue;
+        // }
         const file_name_len = file_entry.name.len;
         @memcpy(filename_mem[index..(index + file_name_len)], file_entry.name);
         filename_slices.appendAssumeCapacity(filename_mem[index..(index + file_name_len)]);
@@ -394,11 +418,10 @@ pub fn main() !void {
     std.debug.print("starting {d} threads with {d} accounts per thread\n", .{ n_threads, chunk_size });
 
     var start_index: usize = 0;
-    var end_index: usize = chunk_size;
+    var end_index: usize = 0;
 
     // !!
     var thread_bins = try allocator.alloc(PubkeyBins, n_threads);
-    const total_bin_count = PUBKEY_BINS_FOR_CALCULATING_HASHES;
     for (thread_bins) |*thread_bin| {
         thread_bin.* = try PubkeyBins.init(allocator);
     }
@@ -435,6 +458,7 @@ pub fn main() !void {
         } else {
             end_index = start_index + chunk_size;
         }
+        if (end_index == start_index) continue;
 
         const handle = try std.Thread.spawn(.{}, sortFilesIntoBins, .{
             &accounts_db_fields,
@@ -456,12 +480,13 @@ pub fn main() !void {
 
     // process per bin
     // no I/O so we use cpu count exact
+    const total_bin_count = PUBKEY_BINS_FOR_CALCULATING_HASHES;
     n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
     chunk_size = total_bin_count / n_threads;
     std.debug.print("starting {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
 
     start_index = 0;
-    end_index = chunk_size;
+    end_index = 0;
 
     handles.clearRetainingCapacity();
     try handles.ensureTotalCapacity(n_threads);
@@ -472,6 +497,7 @@ pub fn main() !void {
         } else {
             end_index = start_index + chunk_size;
         }
+        if (end_index == start_index) continue;
 
         const handle = try std.Thread.spawn(.{}, sortThreadBins, .{
             allocator,
@@ -498,10 +524,16 @@ pub fn main() !void {
         total_count += bin.items.len;
     }
 
+    var dest: [44]u8 = undefined;
     var total_lamports: u64 = 0;
     var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
-    for (thread_bins[0].bins) |bin| {
+    for (thread_bins[0].bins, 0..) |bin, bin_i| {
         for (bin.items) |account_info| {
+            if (account_info.lamports == 0) continue;
+            _ = bin_i;
+            _ = dest;
+
+            // std.debug.print("pubkey: {s} slot: {d} lamports: {d} bin: {d}\n", .{account_info.pubkey.toStringWithBuf(dest[0..44]), account_info.slot, account_info.lamports, bin_i});
             hashes.appendAssumeCapacity(account_info.hash);
             total_lamports += account_info.lamports;
         }
