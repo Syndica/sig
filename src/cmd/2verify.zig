@@ -114,6 +114,7 @@ pub fn sanitizeAndBin(append_vec: *AppendVec, bins: *PubkeyBins) !void {
         try account.sanitize();
 
         const pubkey = account.store_info.pubkey;
+        // TODO: check against the stored hash (if non-default)
         const hash = hashAccount(
             account.account_info.lamports,
             account.data,
@@ -204,7 +205,7 @@ pub fn sortThreadBins(
         }.lessThan);
 
         // update 
-        const main_bin_array = ArrayList(AccountHashData).fromOwnedSlice(allocator, &main_bin);
+        var main_bin_array = ArrayList(AccountHashData).fromOwnedSlice(allocator, main_bin);
         main_bin_array.items.len = main_bin_index;
 
         thread_bins[0].bins[bin_i] = main_bin_array;
@@ -370,8 +371,8 @@ pub fn main() !void {
         total_name_size += entry.name.len;
         fcount += 1;
         // std.debug.print("accounts_v2/{s} ", .{ entry.name });
-        // if (fcount > 500) {
-        //     std.debug.print("\n", .{});
+        // // if (fcount > 1000) {
+        // //     std.debug.print("\n", .{});
         //     @panic("ahh");
         // }
     }
