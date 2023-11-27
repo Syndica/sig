@@ -3,14 +3,12 @@ const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
 
 const Account = @import("./account.zig").Account;
-const hashAccount = @import("./account.zig").hashAccount;
 const Hash = @import("./hash.zig").Hash;
 const Slot = @import("./clock.zig").Slot;
 const Epoch = @import("./clock.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 
-const SnapshotFields = @import("./snapshot_fields.zig").SnapshotFields;
 const AccountsDbFields = @import("./snapshot_fields.zig").AccountsDbFields;
 const AppendVecInfo = @import("./snapshot_fields.zig").AppendVecInfo;
 

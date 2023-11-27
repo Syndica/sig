@@ -5,35 +5,25 @@ const HashMap = std.AutoHashMap;
 const Account = @import("../core/account.zig").Account;
 const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/clock.zig").Slot;
-const Epoch = @import("../core/clock.zig").Epoch;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 
-const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
 const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
 
-const base58 = @import("base58-zig");
 
 const AppendVec = @import("../core/append_vec.zig").AppendVec;
-const AccountsIndex = @import("../core/append_vec.zig").AccountsIndex;
 const TmpPubkey = @import("../core/append_vec.zig").TmpPubkey;
 const alignToU64 = @import("../core/append_vec.zig").alignToU64;
-const PubkeyAndAccountInAppendVecRef = @import("../core/append_vec.zig").PubkeyAndAccountInAppendVecRef;
 
-const Channel = @import("../sync/channel.zig").Channel;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
 const hashAccount = @import("../core/account.zig").hashAccount;
-
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 
 pub const MERKLE_FANOUT: usize = 16;
-
-const Release = std.atomic.Ordering.Release;
-const Acquire = std.atomic.Ordering.Acquire;
 
 const AccountHashData = struct {
     pubkey: TmpPubkey,
@@ -366,15 +356,8 @@ pub fn main() !void {
 
     // allocate all the filenames
     var total_name_size: usize = 0;
-    var fcount: usize = 0;
     while (try accounts_dir_iter.next()) |entry| {
         total_name_size += entry.name.len;
-        fcount += 1;
-        // std.debug.print("accounts_v2/{s} ", .{ entry.name });
-        // // if (fcount > 1000) {
-        // //     std.debug.print("\n", .{});
-        //     @panic("ahh");
-        // }
     }
     var filename_mem = try allocator.alloc(u8, total_name_size);
     defer allocator.free(filename_mem);
@@ -385,9 +368,6 @@ pub fn main() !void {
 
     var index: usize = 0;
     while (try accounts_dir_iter.next()) |file_entry| {
-        // if (!std.mem.eql(u8, file_entry.name, "230816002.21801679")) { 
-        //     continue;
-        // }
         const file_name_len = file_entry.name.len;
         @memcpy(filename_mem[index..(index + file_name_len)], file_entry.name);
         filename_slices.appendAssumeCapacity(filename_mem[index..(index + file_name_len)]);
@@ -426,32 +406,6 @@ pub fn main() !void {
     for (thread_bins) |*thread_bin| {
         thread_bin.* = try PubkeyBins.init(allocator);
     }
-
-    // // 8j9ARGFv4W2GfML7d3sVJK2MePwrikqYnu6yqer28cCa
-    // try thread_bins[0].insert(AccountHashData{
-    //     .pubkey = TmpPubkey{ .data = .{11} ** 32 },
-    //     .hash = Hash{ .data = .{1} ** 32 },
-    //     .slot = 0,
-    // });
-    // // EHv9C5vX7xQjjMpsJMzudnDTzoTSRwYkqLzY8tVMihGj
-    // try thread_bins[1].insert(AccountHashData{
-    //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
-    //     .hash = Hash{ .data = .{2} ** 32 },
-    //     .slot = 0,
-    // });
-    // try thread_bins[1].insert(AccountHashData{
-    //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
-    //     .hash = Hash{ .data = .{4} ** 32 },
-    //     .slot = 1,
-    // });
-
-    // // 7NNPg5A8Xsg1uv4UFm6KZNwsipyyUnmgCrznP6MBWoBZ
-    // // more recent slot
-    // try thread_bins[2].insert(AccountHashData{
-    //     .pubkey = TmpPubkey{ .data = .{10} ** 32 },
-    //     .hash = Hash{ .data = .{99} ** 32 },
-    //     .slot = 2,
-    // });
 
     for (0..n_threads) |i| {
         if (i == (n_threads - 1)) {
@@ -525,15 +479,12 @@ pub fn main() !void {
         total_count += bin.items.len;
     }
 
-    var dest: [44]u8 = undefined;
+    // var dest: [44]u8 = undefined;
     var total_lamports: u64 = 0;
     var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
-    for (thread_bins[0].bins, 0..) |bin, bin_i| {
+    for (thread_bins[0].bins) |bin| {
         for (bin.items) |account_info| {
             if (account_info.lamports == 0) continue;
-            _ = bin_i;
-            _ = dest;
-
             // std.debug.print("pubkey: {s} slot: {d} lamports: {d} bin: {d}\n", .{account_info.pubkey.toStringWithBuf(dest[0..44]), account_info.slot, account_info.lamports, bin_i});
             hashes.appendAssumeCapacity(account_info.hash);
             total_lamports += account_info.lamports;
@@ -543,26 +494,4 @@ pub fn main() !void {
 
     const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
     std.debug.print("merkle root: {any}\n", .{root_hash.*});
-
-    // open all appendVec files into arraylist
-    // spawn threads each with a bucket range of pubkeys
-    // THREAD_LOGIC (append_vecs, bin_range, *output):
-    // for each appendVec:
-    // for each pubkey:
-    // calculate the bin
-    // if (bin in bin_range and lamports > 0):
-    // if pubkey hasnt been appended yet:
-    // output.append .{ pubkey, slot, hash }
-    // else // there exists a slotA and slotB
-    // index = @max(slotA, slotB)
-    // output.append .{ pubkey, slots[index], hashes[index] }
-    // sort(list by pubkey)
-    // return
-
-    // join all threads
-    // result = &[&[.{ pubkey, slot, hash}]]
-
-    // compute merkle tree over the slices
-    // print the final hash
-
 }

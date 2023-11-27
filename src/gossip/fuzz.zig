@@ -3,7 +3,6 @@
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
-const socket_utils = @import("./socket_utils.zig");
 
 const _gossip_service = @import("./gossip_service.zig");
 const GossipService = _gossip_service.GossipService;
