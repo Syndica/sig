@@ -320,7 +320,7 @@ pub fn main() !void {
     // 1) dump the account fields
     // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots
     // 2) dump the snapshot info
-    // ./zig-out/bin/snapshot_utils dump_snapshot -s /Users/tmp/Documents/zig-solana/snapshots
+    // ./zig-out/bin/snapshot_utils dump_snapshot -s /Users/tmp/snapshots
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
