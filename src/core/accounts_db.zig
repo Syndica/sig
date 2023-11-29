@@ -1,6 +1,5 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const HashMap = std.AutoHashMap;
 
 const Account = @import("../core/account.zig").Account;
 const Hash = @import("../core/hash.zig").Hash;
@@ -33,13 +32,13 @@ pub const AccountRef = struct {
 };
 
 pub const AccountsDB = struct {
-    account_files: HashMap(FileId, AppendVec),
-    index: HashMap(TmpPubkey, ArrayList(AccountRef)),
+    account_files: std.AutoArrayHashMap(FileId, AppendVec),
+    index: std.AutoArrayHashMap(TmpPubkey, ArrayList(AccountRef)),
 
     pub fn init(alloc: std.mem.Allocator) AccountsDB {
         return AccountsDB{
-            .account_files = HashMap(FileId, AppendVec).init(alloc),
-            .index = HashMap(TmpPubkey, ArrayList(AccountRef)).init(alloc),
+            .account_files = std.AutoArrayHashMap(FileId, AppendVec).init(alloc),
+            .index = std.AutoArrayHashMap(TmpPubkey, ArrayList(AccountRef)).init(alloc),
         };
     }
 };
@@ -265,6 +264,98 @@ pub fn printTimeEstimate(
     }
 }
 
+pub fn readDirectory(
+    allocator: std.mem.Allocator,
+    directory: std.fs.IterableDir,
+) !struct { filenames: ArrayList([]u8), mem: []u8 } {
+    var dir_iter = directory.iterate();
+    var total_name_size: usize = 0;
+    var total_files: usize = 0;
+    while (try dir_iter.next()) |entry| {
+        total_name_size += entry.name.len;
+        total_files += 1;
+    }
+    var mem = try allocator.alloc(u8, total_name_size);
+    errdefer allocator.free(mem);
+
+    dir_iter = directory.iterate(); // reset
+
+    var filenames = try ArrayList([]u8).initCapacity(allocator, total_files);
+    errdefer filenames.deinit();
+
+    var index: usize = 0;
+    while (try dir_iter.next()) |file_entry| {
+        const file_name_len = file_entry.name.len;
+        @memcpy(mem[index..(index + file_name_len)], file_entry.name);
+        filenames.appendAssumeCapacity(mem[index..(index + file_name_len)]);
+        index += file_name_len;
+    }
+    dir_iter = directory.iterate(); // reset
+
+    return .{ .filenames = filenames, .mem = mem };
+}
+
+const PubkeyBinCalculator = @import("../cmd/snapshot_verify.zig").PubkeyBinCalculator;
+pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
+
+pub const PubkeyBins = struct {
+    bins: []BinType,
+    calculator: PubkeyBinCalculator,
+
+    const BinType = ArrayList(*const TmpPubkey);
+
+    pub fn init(allocator: std.mem.Allocator, n_bins: usize) !PubkeyBins {
+        const calculator = PubkeyBinCalculator.init(n_bins);
+
+        var bins = try allocator.alloc(BinType, n_bins);
+        for (bins) |*bin| {
+            const INIT_BUCKET_LENGTH = 1_000;
+            bin.* = try BinType.initCapacity(allocator, INIT_BUCKET_LENGTH);
+        }
+
+        return PubkeyBins{
+            .bins = bins,
+            .calculator = calculator,
+        };
+    }
+
+    pub fn deinit(self: *PubkeyBins) void {
+        const allocator = self.bins[0].allocator;
+        for (self.bins) |*bin| {
+            bin.deinit();
+        }
+        allocator.free(self.bins);
+    }
+
+    pub fn insert(self: *PubkeyBins, pubkey: *const TmpPubkey) !void {
+        const bin_index = self.calculator.binIndex(pubkey);
+        try self.bins[bin_index].append(pubkey);
+    }
+};
+
+pub fn sortBins(
+    bins: []ArrayList(*const TmpPubkey),
+    bin_start_index: usize,
+    bin_end_index: usize,
+) !void {
+    const total_bins = bin_end_index - bin_start_index;
+    var timer = try std.time.Timer.start();
+
+    for (bin_start_index..bin_end_index, 1..) |bin_i, count| {
+        var bin = bins[bin_i];
+
+        std.mem.sort(*const TmpPubkey, bin.items, {}, struct {
+            fn lessThan(_: void, lhs: *const TmpPubkey, rhs: *const TmpPubkey) bool {
+                return std.mem.lessThan(u8, &lhs.data, &rhs.data);
+            }
+        }.lessThan);
+
+        if (count % 1000 == 0) {
+            printTimeEstimate(&timer, total_bins, count, "sortBins");
+        }
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
@@ -282,41 +373,19 @@ pub fn main() !void {
         .{ snapshot_path, "accounts_db.bincode" },
     );
 
-    var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
-    var accounts_dir_iter = accounts_dir.iterate();
-
-    // compute the total size (to compute time left)
-    var total_append_vec_count: usize = 0;
-    while (try accounts_dir_iter.next()) |_| {
-        total_append_vec_count += 1;
-    }
-    accounts_dir_iter = accounts_dir.iterate(); // reset
-    std.debug.print("total_append_vec_count: {d}\n", .{total_append_vec_count});
-
     // time it
+    var full_timer = try std.time.Timer.start();
     var timer = try std.time.Timer.start();
 
-    // allocate all the filenames
-    var total_name_size: usize = 0;
-    while (try accounts_dir_iter.next()) |entry| {
-        total_name_size += entry.name.len;
+    var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
+    var files = try readDirectory(allocator, accounts_dir);
+    var filenames = files.filenames;
+    defer {
+        filenames.deinit();
+        allocator.free(files.mem);
     }
-    var filename_mem = try allocator.alloc(u8, total_name_size);
-    defer allocator.free(filename_mem);
-    accounts_dir_iter = accounts_dir.iterate(); // reset
-
-    var filename_slices = try ArrayList([]u8).initCapacity(allocator, total_append_vec_count);
-    defer filename_slices.deinit();
-
-    var index: usize = 0;
-    while (try accounts_dir_iter.next()) |file_entry| {
-        const file_name_len = file_entry.name.len;
-        @memcpy(filename_mem[index..(index + file_name_len)], file_entry.name);
-        filename_slices.appendAssumeCapacity(filename_mem[index..(index + file_name_len)]);
-        index += file_name_len;
-    }
-    accounts_dir_iter = accounts_dir.iterate(); // reset
-    std.debug.assert(filename_slices.items.len == total_append_vec_count);
+    var n_account_files: usize = filenames.items.len;
+    std.debug.print("n_account_files: {d}\n", .{n_account_files});
 
     // read accounts_db.bincode
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
@@ -326,15 +395,13 @@ pub fn main() !void {
     var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(allocator, accounts_db_fields);
 
-    const accounts_hash_exp = accounts_db_fields.bank_hash_info.accounts_hash;
-    const total_lamports_exp = accounts_db_fields.bank_hash_info.stats.num_lamports_stored;
-    std.debug.print("expected hash: {s}\n", .{accounts_hash_exp});
-    std.debug.print("expected total lamports: {d}\n", .{total_lamports_exp});
+    // init db
+    var accounts_db = AccountsDB.init(allocator);
 
     // start processing
     var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
     var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
-    var chunk_size = total_append_vec_count / n_threads;
+    var chunk_size = n_account_files / n_threads;
     if (chunk_size == 0) {
         n_threads = 1;
     }
@@ -349,7 +416,7 @@ pub fn main() !void {
     //
     for (0..n_threads) |i| {
         if (i == (n_threads - 1)) {
-            end_index = total_append_vec_count;
+            end_index = n_account_files;
         } else {
             end_index = start_index + chunk_size;
         }
@@ -358,21 +425,103 @@ pub fn main() !void {
             allocator,
             &accounts_db_fields,
             accounts_dir_path,
-            filename_slices.items[start_index..end_index],
+            filenames.items[start_index..end_index],
             channel,
         });
         handles.appendAssumeCapacity(handle);
         start_index = end_index;
     }
-    std.debug.assert(end_index == total_append_vec_count);
+    std.debug.assert(end_index == n_account_files);
 
-    //
-    var accounts_db = AccountsDB.init(allocator);
-    try recvFilesAndIndex(allocator, channel, &accounts_db, total_append_vec_count);
+    try recvFilesAndIndex(allocator, channel, &accounts_db, n_account_files);
 
     for (handles.items) |handle| {
         handle.join();
     }
+    std.debug.print("\n", .{});
+    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    timer.reset();
+
+    // sort the pubkeys
+    std.debug.print("initializing pubkey bins\n", .{});
+    const n_bins = 128;
+    var bins = try PubkeyBins.init(allocator, n_bins);
+    for (accounts_db.index.keys()) |*pubkey| {
+        try bins.insert(pubkey);
+    }
+
+    n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+    chunk_size = n_bins / n_threads;
+    if (chunk_size == 0) {
+        n_threads = 1;
+    }
+    handles.clearRetainingCapacity();
+    std.debug.print("starting {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
+
+    start_index = 0;
+    end_index = 0;
+
+    for (0..n_threads) |i| {
+        if (i == (n_threads - 1)) {
+            end_index = n_bins;
+        } else {
+            end_index = start_index + chunk_size;
+        }
+
+        var handle = try std.Thread.spawn(.{}, sortBins, .{
+            bins.bins,
+            start_index,
+            end_index,
+        });
+
+        handles.appendAssumeCapacity(handle);
+        start_index = end_index;
+    }
+    std.debug.assert(end_index == n_bins);
+
+    for (handles.items) |handle| {
+        handle.join();
+    }
+    std.debug.print("\n", .{});
+    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    timer.reset();
+
+    // compute merkle tree over the slices
+    std.debug.print("computing merkle tree\n", .{});
+    var total_count: usize = 0;
+    for (bins.bins) |*bin| {
+        total_count += bin.items.len;
+    }
+
+    var total_lamports: u64 = 0;
+    var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
+    for (bins.bins) |*bin| {
+        for (bin.items) |pubkey| {
+            const account_states = accounts_db.index.get(pubkey.*).?;
+            var max_slot_index: ?usize = null;
+            var max_slot: usize = 0;
+            for (account_states.items, 0..) |account_info, i| {
+                if (max_slot_index == null or max_slot < account_info.slot) {
+                    max_slot = account_info.slot;
+                    max_slot_index = i;
+                }
+            }
+            const newest_account_loc = account_states.items[max_slot_index.?];
+            const append_vec: AppendVec = accounts_db.account_files.get(newest_account_loc.file_id).?;
+            const account = try append_vec.getAccount(newest_account_loc.offset);
+            const lamports = account.account_info.lamports;
+
+            if (account.account_info.lamports == 0) continue;
+            // std.debug.print("pubkey: {s} slot: {d} lamports: {d} bin: {d}\n", .{account_info.pubkey.toStringWithBuf(dest[0..44]), account_info.slot, account_info.lamports, bin_i});
+            hashes.appendAssumeCapacity(account.hash.*);
+            total_lamports += lamports;
+        }
+    }
+    std.debug.print("total lamports: {d}\n", .{total_lamports});
+
+    const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
+    std.debug.print("merkle root: {any}\n", .{root_hash.*});
+
     std.debug.print("\n", .{});
     std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
     timer.reset();
