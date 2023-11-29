@@ -9,17 +9,26 @@ const Epoch = @import("./clock.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 
-const SnapshotFields = @import("./snapshot_fields.zig").SnapshotFields;
 const AccountsDbFields = @import("./snapshot_fields.zig").AccountsDbFields;
 const AppendVecInfo = @import("./snapshot_fields.zig").AppendVecInfo;
 
 const base58 = @import("base58-zig");
 
-pub const TmpPubkey = struct {
+pub const TmpPubkey = extern struct {
     data: [32]u8,
     // note: need to remove cached string to have correct ptr casting
 
-    pub fn toString(self: *const TmpPubkey) error{EncodingError}![44]u8 {
+    pub fn toStringWithBuf(self: *const TmpPubkey, dest: []u8) []u8 {
+        @memset(dest, 0);
+        const encoder = base58.Encoder.init(.{});
+        var written = encoder.encode(&self.data, dest) catch unreachable;
+        if (written > 44) {
+            std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, self.data });
+        }
+        return dest[0..written];
+    }
+
+    pub fn toString(self: *const TmpPubkey) error{EncodingError}![]u8 {
         var dest: [44]u8 = undefined;
         @memset(&dest, 0);
 
@@ -28,7 +37,7 @@ pub const TmpPubkey = struct {
         if (written > 44) {
             std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, self.data });
         }
-        return dest;
+        return dest[0..written];
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
@@ -38,6 +47,10 @@ pub const TmpPubkey = struct {
 
     pub fn isDefault(self: *const TmpPubkey) bool {
         return std.mem.eql(u8, &self.data, &[_]u8{0} ** 32);
+    }
+
+    pub fn default() TmpPubkey {
+        return TmpPubkey{ .data = [_]u8{0} ** 32 };
     }
 };
 
@@ -85,8 +98,14 @@ pub const AppendVecAccountInfo = struct {
     }
 };
 
+pub const PubkeyAndAccountInAppendVecRef = struct {
+    pubkey: TmpPubkey,
+    account_ref: AccountInAppendVecRef,
+    // hash: Hash,
+};
+
 const u64_size: usize = @sizeOf(u64);
-inline fn alignToU64(addr: usize) usize {
+pub inline fn alignToU64(addr: usize) usize {
     return (addr + (u64_size - 1)) & ~(u64_size - 1);
 }
 
@@ -94,6 +113,7 @@ pub const AppendVec = struct {
     // file contents
     mmap_ptr: []align(std.mem.page_size) u8,
     id: usize,
+    slot: Slot,
     // number of bytes used
     length: usize,
     // total bytes available
@@ -105,7 +125,7 @@ pub const AppendVec = struct {
 
     const Self = @This();
 
-    pub fn init(file: std.fs.File, append_vec_info: AppendVecInfo) !Self {
+    pub fn init(file: std.fs.File, append_vec_info: AppendVecInfo, slot: Slot) !Self {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
 
@@ -126,6 +146,7 @@ pub const AppendVec = struct {
             .id = append_vec_info.id,
             .file_size = file_size,
             .file = file,
+            .slot = slot,
         };
     }
 
@@ -138,7 +159,6 @@ pub const AppendVec = struct {
         var offset: usize = 0;
         var n_accounts: usize = 0;
 
-        // parse all the accounts out of the append vec
         while (true) {
             const account = self.getAccount(offset) catch break;
             try account.sanitize();
@@ -190,6 +210,95 @@ pub const AppendVec = struct {
         const length = @sizeOf(T);
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
+
+    pub fn getAccountsRefs(self: *const Self, allocator: std.mem.Allocator) !ArrayList(PubkeyAndAccountInAppendVecRef) {
+        var accounts = try ArrayList(PubkeyAndAccountInAppendVecRef).initCapacity(allocator, self.n_accounts);
+
+        var offset: usize = 0;
+        while (true) {
+            const account = self.getAccount(offset) catch break;
+            const pubkey = account.store_info.pubkey;
+
+            const pubkey_account_ref = PubkeyAndAccountInAppendVecRef{
+                .pubkey = pubkey,
+                .account_ref = .{
+                    .slot = self.slot,
+                    .offset = offset,
+                    .append_vec_id = self.id,
+                },
+                // .hash = Hash.default(),
+            };
+
+            accounts.appendAssumeCapacity(pubkey_account_ref);
+            offset = offset + account.len;
+        }
+
+        return accounts;
+    }
+};
+
+pub const AccountInAppendVecRef = struct {
+    slot: usize,
+    append_vec_id: usize,
+    offset: usize,
+};
+
+pub const AccountsIndex = struct {
+    // only support RAM for now
+    ram_map: HashMap(TmpPubkey, ArrayList(AccountInAppendVecRef)),
+    // TODO: disk_map
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .ram_map = HashMap(TmpPubkey, ArrayList(AccountInAppendVecRef)).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        var iter = self.ram_map.iterator();
+        while (iter.next()) |*entry| {
+            entry.value_ptr.deinit();
+        }
+        self.ram_map.deinit();
+    }
+
+    pub fn insertNewAccountRef(
+        self: *Self,
+        pubkey: TmpPubkey,
+        account_ref: AccountInAppendVecRef,
+    ) !void {
+        var maybe_entry = self.ram_map.getEntry(pubkey);
+
+        // if the pubkey already exists
+        if (maybe_entry) |*entry| {
+            var existing_refs: *ArrayList(AccountInAppendVecRef) = entry.value_ptr;
+
+            // search: if slot already exists, replace the value
+            var found_matching_slot = false;
+            for (existing_refs.items) |*existing_ref| {
+                if (existing_ref.slot == account_ref.slot) {
+                    if (!found_matching_slot) {
+                        existing_ref.* = account_ref;
+                        found_matching_slot = true;
+                        break;
+                    }
+                    // TODO: rust impl continues to scan and removes other slot duplicates
+                    // do we need to do this?
+                }
+            }
+
+            // otherwise we append the new slot
+            if (!found_matching_slot) {
+                try existing_refs.append(account_ref);
+            }
+        } else {
+            var account_refs = try ArrayList(AccountInAppendVecRef).initCapacity(self.ram_map.allocator, 1);
+            account_refs.appendAssumeCapacity(account_ref);
+            try self.ram_map.putNoClobber(pubkey, account_refs);
+        }
+    }
 };
 
 test "core.append_vec: parse accounts out of append vec" {
@@ -200,7 +309,7 @@ test "core.append_vec: parse accounts out of append vec" {
     // 3) run the test
     const alloc = std.testing.allocator;
 
-    const accounts_db_fields_path = "/Users/tmp2/Documents/zig-solana/snapshots/accounts_db.bincode";
+    const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
         std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
         return;
@@ -209,64 +318,20 @@ test "core.append_vec: parse accounts out of append vec" {
     var accounts_db_fields = try bincode.read(alloc, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(alloc, accounts_db_fields);
 
-    //
-    var storage = HashMap(Slot, AppendVec).init(alloc);
-    defer {
-        var iter = storage.iterator();
-        while (iter.next()) |*entry| {
-            entry.value_ptr.deinit();
-        }
-        storage.deinit();
-    }
-
-    var n_appendvec: usize = 0;
-    var n_valid_appendvec: usize = 0;
-
-    //
     const accounts_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
-    var accounts_dir = std.fs.openIterableDirAbsolute(accounts_dir_path, .{}) catch |err| {
-        std.debug.print("failed to open accounts dir: {s} ... skipping test\n", .{@errorName(err)});
-        return;
-    };
-    var accounts_dir_iter = accounts_dir.iterate();
+    _ = accounts_dir_path;
 
-    while (try accounts_dir_iter.next()) |entry| {
-        var filename: []const u8 = entry.name;
+    // // time it
+    // var timer = try std.time.Timer.start();
 
-        // parse "{slot}.{id}" from the filename
-        var fiter = std.mem.tokenizeSequence(u8, filename, ".");
-        const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
-        const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+    // var accounts_db = AccountsDB.init(alloc);
+    // defer accounts_db.deinit();
+    // try accounts_db.load(alloc, accounts_db_fields, accounts_dir_path, null);
 
-        // read metadata
-        const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
-        std.debug.assert(slot_metas.items.len == 1);
-        const slot_meta = slot_metas.items[0];
-        std.debug.assert(slot_meta.id == append_vec_id);
-
-        // read appendVec from file
-        var abs_path_buf: [1024]u8 = undefined;
-        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, filename });
-        const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        n_appendvec += 1;
-
-        var append_vec = AppendVec.init(append_vec_file, slot_meta) catch continue;
-
-        // verify its valid
-        append_vec.sanitize() catch {
-            append_vec.deinit();
-            continue;
-        };
-        n_valid_appendvec += 1;
-
-        // note: newer snapshots shouldnt clobber
-        try storage.putNoClobber(slot, append_vec);
-
-        // dont open too many files (just testing)
-        if (n_appendvec == 10) break;
-    }
+    // const elapsed = timer.read();
+    // std.debug.print("elapsed: {d}\n", .{elapsed / std.time.ns_per_s});
 
     // note: didnt untar the full snapshot (bc time)
     // n_valid_appendvec: 328_811, total_append_vec: 328_812
-    std.debug.print("n_valid_appendvec: {d}, total_append_vec: {d}\n", .{ n_valid_appendvec, n_appendvec });
+    // std.debug.print("n_valid_appendvec: {d}, total_append_vec: {d}\n", .{ n_valid_appendvec, n_appendvec });
 }
