@@ -15,43 +15,17 @@ const AppendVecInfo = @import("./snapshot_fields.zig").AppendVecInfo;
 
 const base58 = @import("base58-zig");
 
-pub const TmpPubkey = struct {
-    data: [32]u8,
-    // note: need to remove cached string to have correct ptr casting
-
-    pub fn toString(self: *const TmpPubkey) error{EncodingError}![44]u8 {
-        var dest: [44]u8 = undefined;
-        @memset(&dest, 0);
-
-        const encoder = base58.Encoder.init(.{});
-        var written = encoder.encode(&self.data, &dest) catch return error.EncodingError;
-        if (written > 44) {
-            std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, self.data });
-        }
-        return dest;
-    }
-
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
-        const str = self.toString() catch unreachable;
-        return writer.print("{s}", .{str});
-    }
-
-    pub fn isDefault(self: *const TmpPubkey) bool {
-        return std.mem.eql(u8, &self.data, &[_]u8{0} ** 32);
-    }
-};
-
 // metadata which is stored inside an AppendVec
 pub const AppendVecStoreInfo = struct {
     write_version_obsolete: u64,
     data_len: u64,
-    pubkey: TmpPubkey,
+    pubkey: Pubkey,
 };
 
 pub const AppendVecInnerAccountInfo = struct {
     lamports: u64,
     rent_epoch: Epoch,
-    owner: TmpPubkey,
+    owner: Pubkey,
     executable: bool,
 };
 

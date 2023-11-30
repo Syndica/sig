@@ -81,7 +81,7 @@ fn gossip(_: []const []const u8) !void {
     std.debug.print("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = LegacyContactInfo.default(my_pubkey);
     contact_info.shred_version = 0; // TODO: double check
     contact_info.gossip = gossip_address;
