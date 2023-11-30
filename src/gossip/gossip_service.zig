@@ -337,6 +337,14 @@ pub const GossipService = struct {
             };
             self.verified_incoming_channel.send(msg) catch unreachable;
         }
+
+        /// waits for the task to be done, then resets the done state to false
+        fn awaitAndReset(self: *VerifyMessageTask) void {
+            while (!self.done.load(std.atomic.Ordering.Acquire)) {
+                // wait
+            }
+            self.done.store(false, std.atomic.Ordering.Release);
+        }
     };
 
     /// main logic for deserializing Packets into Protocol messages
@@ -380,7 +388,10 @@ pub const GossipService = struct {
             var count: usize = 0;
             for (packet_batches) |*packet_batch| {
                 for (packet_batch.items) |*packet| {
-                    var task = tasks[count];
+                    var task = tasks[count % socket_utils.PACKETS_PER_BATCH];
+                    if (count > socket_utils.PACKETS_PER_BATCH) {
+                        task.awaitAndReset();
+                    }
                     task.packet = packet;
 
                     const batch = Batch.from(&task.task);
@@ -390,11 +401,8 @@ pub const GossipService = struct {
                 }
             }
 
-            for (tasks[0..count]) |task| {
-                while (!task.done.load(std.atomic.Ordering.Acquire)) {
-                    // wait
-                }
-                task.done.store(false, std.atomic.Ordering.Release);
+            for (tasks[0..@min(count, socket_utils.PACKETS_PER_BATCH)]) |task| {
+                task.awaitAndReset();
             }
         }
 
