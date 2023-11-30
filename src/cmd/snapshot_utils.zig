@@ -29,6 +29,7 @@ pub fn accountsToCsvRowAndSend(
     accounts_db_fields: *AccountsDbFields,
     accounts_dir_path: []const u8,
     channel: *CsvChannel,
+    owner_filter: ?TmpPubkey,
     // !
     filename: []const u8,
 ) !void {
@@ -65,6 +66,10 @@ pub fn accountsToCsvRowAndSend(
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
 
+        if (owner_filter) |owner| {
+            if (!account.account_info.owner.equals(&owner)) continue;
+        }
+
         // 5 seperators = 5 bytes
         // new line = 1 byte
         // pubkey string = 44 bytes
@@ -88,7 +93,12 @@ pub fn accountsToCsvRowAndSend(
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const pubkey = pubkey_and_ref.pubkey;
         const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
+        if (owner_filter) |owner| {
+            if (!account.account_info.owner.equals(&owner)) continue;
+        }
+
         const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
+
 
         const fmt_slice_len = (std.fmt.bufPrint(
             csv_string[csv_string_offset..],
@@ -115,6 +125,7 @@ const CsvTask = struct {
     accounts_db_fields: *AccountsDbFields,
     accounts_dir_path: []const u8,
     channel: *CsvChannel,
+    owner_filter: ?TmpPubkey,
 
     file_names: [][]const u8,
 
@@ -131,6 +142,7 @@ const CsvTask = struct {
                 self.accounts_db_fields,
                 self.accounts_dir_path,
                 self.channel,
+                self.owner_filter,
                 file_name,
             ) catch {};
         }
@@ -281,6 +293,14 @@ pub fn recvAndWriteCsv(
     }
 }
 
+var owner_filter_option = cli.Option{
+    .long_name = "owner-filter",
+    .short_alias = 's',
+    .help = "owner pubkey to filter what accounts to dump",
+    .required = false,
+    .value = .{ .string = null },
+};
+
 var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
     .short_alias = 's',
@@ -301,6 +321,7 @@ var app = &cli.App{
             .action = dumpSnapshot,
             .options = &.{
                 &snapshot_dir_option,
+                &owner_filter_option,
             },
         },
         &cli.Command{
@@ -383,6 +404,12 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
+    const owner_filter_str = owner_filter_option.value.string;
+    var owner_filter: ?TmpPubkey = null;
+    if (owner_filter_str) |str| { 
+        owner_filter = try TmpPubkey.fromString(str);
+    }
+
     const snapshot_dir = snapshot_dir_option.value.string.?;
     const accounts_db_fields_path = try std.fmt.allocPrint(
         allocator,
@@ -451,6 +478,7 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
             .accounts_dir_path = accounts_dir_path,
             .allocator = allocator,
             .channel = channel,
+            .owner_filter = owner_filter,
             // to be filled
             .file_names = undefined,
         };

@@ -40,6 +40,16 @@ pub const TmpPubkey = extern struct {
         return dest[0..written];
     }
 
+    pub fn fromString(str: []const u8) !TmpPubkey {
+        var pubkey = TmpPubkey{ .data = [_]u8{0} ** 32 };
+        const decoder = base58.Decoder.init(.{});
+        const size = try decoder.decode(str, &pubkey.data);
+        if (size != 32) {
+            return error.EncodingError;
+        } 
+        return pubkey;
+    }
+
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
         const str = self.toString() catch unreachable;
         return writer.print("{s}", .{str});
@@ -51,6 +61,10 @@ pub const TmpPubkey = extern struct {
 
     pub fn default() TmpPubkey {
         return TmpPubkey{ .data = [_]u8{0} ** 32 };
+    }
+
+    pub fn equals(self: *const TmpPubkey, other: *const TmpPubkey) bool {
+        return std.mem.eql(u8, &self.data, &other.data);
     }
 };
 

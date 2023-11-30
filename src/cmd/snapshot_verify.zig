@@ -67,8 +67,8 @@ pub fn indexAndBinFiles(
             try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
             @panic(stream.getWritten());
         };
-        // // close after
-        // defer append_vec.deinit();
+        // close after
+        defer append_vec.deinit();
 
         sanitizeAndBin(
             &append_vec,
