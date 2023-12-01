@@ -8,10 +8,10 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
-const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
+const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 
-const AppendVec = @import("../core/append_vec.zig").AppendVec;
-const alignToU64 = @import("../core/append_vec.zig").alignToU64;
+const AccountFile = @import("../core/accounts_file.zig").AccountFile;
+const alignToU64 = @import("../core/accounts_file.zig").alignToU64;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
@@ -31,12 +31,12 @@ pub const AccountRef = struct {
 };
 
 pub const AccountsDB = struct {
-    account_files: std.AutoArrayHashMap(FileId, AppendVec),
+    account_files: std.AutoArrayHashMap(FileId, AccountFile),
     index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
 
     pub fn init(alloc: std.mem.Allocator) AccountsDB {
         return AccountsDB{
-            .account_files = std.AutoArrayHashMap(FileId, AppendVec).init(alloc),
+            .account_files = std.AutoArrayHashMap(FileId, AccountFile).init(alloc),
             .index = std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)).init(alloc),
         };
     }
@@ -84,7 +84,7 @@ const PubkeyAccountRef = struct {
     slot: Slot,
 };
 
-const AccountFileChannel = Channel(struct { AppendVec, ArrayList(PubkeyAccountRef) });
+const AccountFileChannel = Channel(struct { AccountFile, ArrayList(PubkeyAccountRef) });
 
 pub fn openFiles(
     allocator: std.mem.Allocator,
@@ -107,7 +107,7 @@ pub fn openFiles(
         const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
         // read metadata
-        const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
+        const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
         std.debug.assert(slot_metas.items.len == 1);
         const slot_meta = slot_metas.items[0];
         std.debug.assert(slot_meta.id == append_vec_id);
@@ -115,7 +115,7 @@ pub fn openFiles(
         // read appendVec from file
         const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
         const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch |err| {
+        var append_vec = AccountFile.init(append_vec_file, slot_meta, slot) catch |err| {
             var buf: [1024]u8 = undefined;
             var stream = std.io.fixedBufferStream(&buf);
             var writer = stream.writer();
@@ -138,7 +138,7 @@ pub fn openFiles(
     }
 }
 
-pub fn sanitizeAndParseAccounts(append_vec: *AppendVec, refs: *ArrayList(PubkeyAccountRef)) !void {
+pub fn sanitizeAndParseAccounts(append_vec: *AccountFile, refs: *ArrayList(PubkeyAccountRef)) !void {
     var offset: usize = 0;
     var n_accounts: usize = 0;
 
@@ -172,7 +172,7 @@ pub fn sanitizeAndParseAccounts(append_vec: *AppendVec, refs: *ArrayList(PubkeyA
     }
 
     if (offset != alignToU64(append_vec.length)) {
-        return error.InvalidAppendVecLength;
+        return error.InvalidAccountFileLength;
     }
 
     append_vec.n_accounts = n_accounts;
@@ -193,7 +193,7 @@ pub fn recvFilesAndIndex(
         defer channel.allocator.free(task_outputs);
 
         for (task_outputs) |task_output| {
-            const account_file: AppendVec = task_output[0];
+            const account_file: AccountFile = task_output[0];
             const refs: ArrayList(PubkeyAccountRef) = task_output[1];
             defer refs.deinit();
 
@@ -506,7 +506,7 @@ pub fn main() !void {
                 }
             }
             const newest_account_loc = account_states.items[max_slot_index.?];
-            const append_vec: AppendVec = accounts_db.account_files.get(newest_account_loc.file_id).?;
+            const append_vec: AccountFile = accounts_db.account_files.get(newest_account_loc.file_id).?;
             const account = try append_vec.getAccount(newest_account_loc.offset);
             const lamports = account.account_info.lamports;
 

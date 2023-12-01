@@ -233,11 +233,11 @@ pub const BankFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .skip = true };
 };
 
-pub const AppendVecInfo = struct {
+pub const AccountFileInfo = struct {
     id: usize,
     length: usize, // amount of bytes used
 
-    pub fn sanitize(self: *const AppendVecInfo, file_size: usize) !void {
+    pub fn sanitize(self: *const AccountFileInfo, file_size: usize) !void {
         if (file_size == 0) {
             return error.FileSizeTooSmall;
         } else if (file_size > @as(usize, MAXIMUM_APPEND_VEC_FILE_SIZE)) {
@@ -263,7 +263,7 @@ pub const BankHashStats = struct {
 };
 
 pub const AccountsDbFields = struct {
-    map: HashMap(Slot, ArrayList(AppendVecInfo)),
+    map: HashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,

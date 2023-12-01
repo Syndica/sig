@@ -10,28 +10,28 @@ const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 
 const AccountsDbFields = @import("./snapshot_fields.zig").AccountsDbFields;
-const AppendVecInfo = @import("./snapshot_fields.zig").AppendVecInfo;
+const AccountFileInfo = @import("./snapshot_fields.zig").AccountFileInfo;
 
 const base58 = @import("base58-zig");
 
-// metadata which is stored inside an AppendVec
-pub const AppendVecStoreInfo = struct {
+// metadata which is stored inside an AccountFile
+pub const AccountFileStoreInfo = struct {
     write_version_obsolete: u64,
     data_len: u64,
     pubkey: Pubkey,
 };
 
-pub const AppendVecInnerAccountInfo = struct {
+pub const AccountFileInnerAccountInfo = struct {
     lamports: u64,
     rent_epoch: Epoch,
     owner: Pubkey,
     executable: bool,
 };
 
-// account meta data which is stored inside an AppendVec
-pub const AppendVecAccountInfo = struct {
-    store_info: *AppendVecStoreInfo,
-    account_info: *AppendVecInnerAccountInfo,
+// account meta data which is stored inside an AccountFile
+pub const AccountFileAccountInfo = struct {
+    store_info: *AccountFileStoreInfo,
+    account_info: *AccountFileInnerAccountInfo,
 
     data: []u8,
     offset: usize,
@@ -58,9 +58,9 @@ pub const AppendVecAccountInfo = struct {
     }
 };
 
-pub const PubkeyAndAccountInAppendVecRef = struct {
+pub const PubkeyAndAccountInAccountFileRef = struct {
     pubkey: Pubkey,
-    account_ref: AccountInAppendVecRef,
+    account_ref: AccountInAccountFileRef,
     // hash: Hash,
 };
 
@@ -69,7 +69,7 @@ pub inline fn alignToU64(addr: usize) usize {
     return (addr + (u64_size - 1)) & ~(u64_size - 1);
 }
 
-pub const AppendVec = struct {
+pub const AccountFile = struct {
     // file contents
     mmap_ptr: []align(std.mem.page_size) u8,
     id: usize,
@@ -85,7 +85,7 @@ pub const AppendVec = struct {
 
     const Self = @This();
 
-    pub fn init(file: std.fs.File, append_vec_info: AppendVecInfo, slot: Slot) !Self {
+    pub fn init(file: std.fs.File, append_vec_info: AccountFileInfo, slot: Slot) !Self {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
 
@@ -127,23 +127,23 @@ pub const AppendVec = struct {
         }
 
         if (offset != alignToU64(self.length)) {
-            return error.InvalidAppendVecLength;
+            return error.InvalidAccountFileLength;
         }
 
         self.n_accounts = n_accounts;
     }
 
-    pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AppendVecAccountInfo {
+    pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AccountFileAccountInfo {
         var offset = start_offset;
 
-        var store_info = try self.getType(&offset, AppendVecStoreInfo);
-        var account_info = try self.getType(&offset, AppendVecInnerAccountInfo);
+        var store_info = try self.getType(&offset, AccountFileStoreInfo);
+        var account_info = try self.getType(&offset, AccountFileInnerAccountInfo);
         var hash = try self.getType(&offset, Hash);
         var data = try self.getSlice(&offset, store_info.data_len);
 
         var len = offset - start_offset;
 
-        return AppendVecAccountInfo{
+        return AccountFileAccountInfo{
             .store_info = store_info,
             .account_info = account_info,
             .hash = hash,
@@ -171,15 +171,15 @@ pub const AppendVec = struct {
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
 
-    pub fn getAccountsRefs(self: *const Self, allocator: std.mem.Allocator) !ArrayList(PubkeyAndAccountInAppendVecRef) {
-        var accounts = try ArrayList(PubkeyAndAccountInAppendVecRef).initCapacity(allocator, self.n_accounts);
+    pub fn getAccountsRefs(self: *const Self, allocator: std.mem.Allocator) !ArrayList(PubkeyAndAccountInAccountFileRef) {
+        var accounts = try ArrayList(PubkeyAndAccountInAccountFileRef).initCapacity(allocator, self.n_accounts);
 
         var offset: usize = 0;
         while (true) {
             const account = self.getAccount(offset) catch break;
             const pubkey = account.store_info.pubkey;
 
-            const pubkey_account_ref = PubkeyAndAccountInAppendVecRef{
+            const pubkey_account_ref = PubkeyAndAccountInAccountFileRef{
                 .pubkey = pubkey,
                 .account_ref = .{
                     .slot = self.slot,
@@ -197,7 +197,7 @@ pub const AppendVec = struct {
     }
 };
 
-pub const AccountInAppendVecRef = struct {
+pub const AccountInAccountFileRef = struct {
     slot: usize,
     append_vec_id: usize,
     offset: usize,
@@ -205,14 +205,14 @@ pub const AccountInAppendVecRef = struct {
 
 pub const AccountsIndex = struct {
     // only support RAM for now
-    ram_map: HashMap(Pubkey, ArrayList(AccountInAppendVecRef)),
+    ram_map: HashMap(Pubkey, ArrayList(AccountInAccountFileRef)),
     // TODO: disk_map
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .ram_map = HashMap(Pubkey, ArrayList(AccountInAppendVecRef)).init(allocator),
+            .ram_map = HashMap(Pubkey, ArrayList(AccountInAccountFileRef)).init(allocator),
         };
     }
 
@@ -227,13 +227,13 @@ pub const AccountsIndex = struct {
     pub fn insertNewAccountRef(
         self: *Self,
         pubkey: Pubkey,
-        account_ref: AccountInAppendVecRef,
+        account_ref: AccountInAccountFileRef,
     ) !void {
         var maybe_entry = self.ram_map.getEntry(pubkey);
 
         // if the pubkey already exists
         if (maybe_entry) |*entry| {
-            var existing_refs: *ArrayList(AccountInAppendVecRef) = entry.value_ptr;
+            var existing_refs: *ArrayList(AccountInAccountFileRef) = entry.value_ptr;
 
             // search: if slot already exists, replace the value
             var found_matching_slot = false;
@@ -254,7 +254,7 @@ pub const AccountsIndex = struct {
                 try existing_refs.append(account_ref);
             }
         } else {
-            var account_refs = try ArrayList(AccountInAppendVecRef).initCapacity(self.ram_map.allocator, 1);
+            var account_refs = try ArrayList(AccountInAccountFileRef).initCapacity(self.ram_map.allocator, 1);
             account_refs.appendAssumeCapacity(account_ref);
             try self.ram_map.putNoClobber(pubkey, account_refs);
         }

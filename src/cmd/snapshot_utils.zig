@@ -2,8 +2,8 @@ const std = @import("std");
 const cli = @import("zig-cli");
 const bincode = @import("../bincode/bincode.zig");
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
-const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
-const AppendVec = @import("../core/append_vec.zig").AppendVec;
+const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
+const AccountFile = @import("../core/accounts_file.zig").AccountFile;
 const Account = @import("../core/account.zig").Account;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Slot = @import("../core/clock.zig").Slot;
@@ -38,7 +38,7 @@ pub fn accountsToCsvRowAndSend(
     const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
     // read metadata
-    const slot_metas: ArrayList(AppendVecInfo) = accounts_db_fields.map.get(slot).?;
+    const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
     std.debug.assert(slot_metas.items.len == 1);
     const slot_meta = slot_metas.items[0];
     std.debug.assert(slot_meta.id == append_vec_id);
@@ -48,7 +48,7 @@ pub fn accountsToCsvRowAndSend(
     const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, filename });
     const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
 
-    var append_vec = AppendVec.init(append_vec_file, slot_meta, slot) catch return;
+    var append_vec = AccountFile.init(append_vec_file, slot_meta, slot) catch return;
     defer append_vec.deinit();
 
     // verify its valid
