@@ -12,7 +12,6 @@ const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields
 const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
 
 const AppendVec = @import("../core/append_vec.zig").AppendVec;
-const TmpPubkey = @import("../core/append_vec.zig").TmpPubkey;
 const alignToU64 = @import("../core/append_vec.zig").alignToU64;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
@@ -25,7 +24,7 @@ const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 pub const MERKLE_FANOUT: usize = 16;
 
 const AccountHashData = struct {
-    pubkey: TmpPubkey,
+    pubkey: Pubkey,
     hash: Hash,
     slot: Slot,
     lamports: u64,
@@ -150,7 +149,7 @@ pub fn sortThreadBins(
     bin_end_index: usize,
 ) !void {
     const SlotAndIndex = struct { slot: Slot, index: usize };
-    var hashmap = HashMap(TmpPubkey, SlotAndIndex).init(allocator);
+    var hashmap = HashMap(Pubkey, SlotAndIndex).init(allocator);
     defer hashmap.deinit();
 
     var timer = try std.time.Timer.start();
@@ -322,7 +321,7 @@ pub const PubkeyBinCalculator = struct {
         };
     }
 
-    pub fn binIndex(self: *const PubkeyBinCalculator, pubkey: *const TmpPubkey) usize {
+    pub fn binIndex(self: *const PubkeyBinCalculator, pubkey: *const Pubkey) usize {
         const data = &pubkey.data;
         return (@as(usize, data[0]) << 16 |
             @as(usize, data[1]) << 8 |

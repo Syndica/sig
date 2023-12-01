@@ -4,7 +4,6 @@ const bincode = @import("../bincode/bincode.zig");
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
 const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
 const AppendVec = @import("../core/append_vec.zig").AppendVec;
-const TmpPubkey = @import("../core/append_vec.zig").TmpPubkey;
 const Account = @import("../core/account.zig").Account;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Slot = @import("../core/clock.zig").Slot;
@@ -17,7 +16,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
 pub const AccountAndPubkey = struct {
-    pubkey: TmpPubkey,
+    pubkey: Pubkey,
     account: Account,
 };
 
@@ -29,7 +28,7 @@ pub fn accountsToCsvRowAndSend(
     accounts_db_fields: *AccountsDbFields,
     accounts_dir_path: []const u8,
     channel: *CsvChannel,
-    owner_filter: ?TmpPubkey,
+    owner_filter: ?Pubkey,
     // !
     filename: []const u8,
 ) !void {
@@ -97,14 +96,13 @@ pub fn accountsToCsvRowAndSend(
             if (!account.account_info.owner.equals(&owner)) continue;
         }
 
-        const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data, .{});
-
+        const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data);
 
         const fmt_slice_len = (std.fmt.bufPrint(
             csv_string[csv_string_offset..],
             "{s};{s};{any};{d};{any};{d}\n",
             .{
-                try pubkey.toString(),
+                pubkey.string(),
                 owner_pk.string(),
                 account.data,
                 account.account_info.lamports,
@@ -125,7 +123,7 @@ const CsvTask = struct {
     accounts_db_fields: *AccountsDbFields,
     accounts_dir_path: []const u8,
     channel: *CsvChannel,
-    owner_filter: ?TmpPubkey,
+    owner_filter: ?Pubkey,
 
     file_names: [][]const u8,
 
@@ -405,9 +403,9 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     var allocator = gpa.allocator();
 
     const owner_filter_str = owner_filter_option.value.string;
-    var owner_filter: ?TmpPubkey = null;
-    if (owner_filter_str) |str| { 
-        owner_filter = try TmpPubkey.fromString(str);
+    var owner_filter: ?Pubkey = null;
+    if (owner_filter_str) |str| {
+        owner_filter = try Pubkey.fromString(str);
     }
 
     const snapshot_dir = snapshot_dir_option.value.string.?;

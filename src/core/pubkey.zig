@@ -18,15 +18,11 @@ pub const Pubkey = struct {
         if (str.len != 44) {
             return Error.InvalidEncodedLength;
         }
-        var out: [32]u8 = .{
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        };
+        var out: [32]u8 = undefined;
         var written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
-        if (written != 32) {
-            @panic("written is not 32");
-        }
-        return Self{ .data = out, .cached_str = str[0..44].* };
+        if (written != 32) @panic("written is not 32");
+
+        return Self{ .data = out };
     }
 
     /// ***fromBytes*** will automatically base58 decode the value. It will also cache the decoded string

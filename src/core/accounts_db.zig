@@ -11,7 +11,6 @@ const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields
 const AppendVecInfo = @import("../core/snapshot_fields.zig").AppendVecInfo;
 
 const AppendVec = @import("../core/append_vec.zig").AppendVec;
-const TmpPubkey = @import("../core/append_vec.zig").TmpPubkey;
 const alignToU64 = @import("../core/append_vec.zig").alignToU64;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
@@ -33,12 +32,12 @@ pub const AccountRef = struct {
 
 pub const AccountsDB = struct {
     account_files: std.AutoArrayHashMap(FileId, AppendVec),
-    index: std.AutoArrayHashMap(TmpPubkey, ArrayList(AccountRef)),
+    index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
 
     pub fn init(alloc: std.mem.Allocator) AccountsDB {
         return AccountsDB{
             .account_files = std.AutoArrayHashMap(FileId, AppendVec).init(alloc),
-            .index = std.AutoArrayHashMap(TmpPubkey, ArrayList(AccountRef)).init(alloc),
+            .index = std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)).init(alloc),
         };
     }
 };
@@ -80,7 +79,7 @@ pub const AccountsDB = struct {
 // dump to csv
 
 const PubkeyAccountRef = struct {
-    pubkey: TmpPubkey,
+    pubkey: Pubkey,
     offset: usize,
     slot: Slot,
 };
@@ -302,7 +301,7 @@ pub const PubkeyBins = struct {
     bins: []BinType,
     calculator: PubkeyBinCalculator,
 
-    const BinType = ArrayList(*const TmpPubkey);
+    const BinType = ArrayList(*const Pubkey);
 
     pub fn init(allocator: std.mem.Allocator, n_bins: usize) !PubkeyBins {
         const calculator = PubkeyBinCalculator.init(n_bins);
@@ -327,14 +326,14 @@ pub const PubkeyBins = struct {
         allocator.free(self.bins);
     }
 
-    pub fn insert(self: *PubkeyBins, pubkey: *const TmpPubkey) !void {
+    pub fn insert(self: *PubkeyBins, pubkey: *const Pubkey) !void {
         const bin_index = self.calculator.binIndex(pubkey);
         try self.bins[bin_index].append(pubkey);
     }
 };
 
 pub fn sortBins(
-    bins: []ArrayList(*const TmpPubkey),
+    bins: []ArrayList(*const Pubkey),
     bin_start_index: usize,
     bin_end_index: usize,
 ) !void {
@@ -344,8 +343,8 @@ pub fn sortBins(
     for (bin_start_index..bin_end_index, 1..) |bin_i, count| {
         var bin = bins[bin_i];
 
-        std.mem.sort(*const TmpPubkey, bin.items, {}, struct {
-            fn lessThan(_: void, lhs: *const TmpPubkey, rhs: *const TmpPubkey) bool {
+        std.mem.sort(*const Pubkey, bin.items, {}, struct {
+            fn lessThan(_: void, lhs: *const Pubkey, rhs: *const Pubkey) bool {
                 return std.mem.lessThan(u8, &lhs.data, &rhs.data);
             }
         }.lessThan);
@@ -523,6 +522,6 @@ pub fn main() !void {
     std.debug.print("merkle root: {any}\n", .{root_hash.*});
 
     std.debug.print("\n", .{});
-    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    std.debug.print("done in {d}ms\n", .{full_timer.read() / std.time.ns_per_ms});
     timer.reset();
 }

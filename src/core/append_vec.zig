@@ -59,7 +59,7 @@ pub const AppendVecAccountInfo = struct {
 };
 
 pub const PubkeyAndAccountInAppendVecRef = struct {
-    pubkey: TmpPubkey,
+    pubkey: Pubkey,
     account_ref: AccountInAppendVecRef,
     // hash: Hash,
 };
@@ -205,14 +205,14 @@ pub const AccountInAppendVecRef = struct {
 
 pub const AccountsIndex = struct {
     // only support RAM for now
-    ram_map: HashMap(TmpPubkey, ArrayList(AccountInAppendVecRef)),
+    ram_map: HashMap(Pubkey, ArrayList(AccountInAppendVecRef)),
     // TODO: disk_map
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .ram_map = HashMap(TmpPubkey, ArrayList(AccountInAppendVecRef)).init(allocator),
+            .ram_map = HashMap(Pubkey, ArrayList(AccountInAppendVecRef)).init(allocator),
         };
     }
 
@@ -226,7 +226,7 @@ pub const AccountsIndex = struct {
 
     pub fn insertNewAccountRef(
         self: *Self,
-        pubkey: TmpPubkey,
+        pubkey: Pubkey,
         account_ref: AccountInAppendVecRef,
     ) !void {
         var maybe_entry = self.ram_map.getEntry(pubkey);
