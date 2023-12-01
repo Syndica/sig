@@ -85,11 +85,11 @@ pub const AccountFile = struct {
 
     const Self = @This();
 
-    pub fn init(file: std.fs.File, append_vec_info: AccountFileInfo, slot: Slot) !Self {
+    pub fn init(file: std.fs.File, accounts_file_info: AccountFileInfo, slot: Slot) !Self {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
 
-        try append_vec_info.sanitize(file_size);
+        try accounts_file_info.sanitize(file_size);
 
         var mmap_ptr = try std.os.mmap(
             null,
@@ -102,8 +102,8 @@ pub const AccountFile = struct {
 
         return Self{
             .mmap_ptr = mmap_ptr,
-            .length = append_vec_info.length,
-            .id = append_vec_info.id,
+            .length = accounts_file_info.length,
+            .id = accounts_file_info.id,
             .file_size = file_size,
             .file = file,
             .slot = slot,
@@ -184,7 +184,7 @@ pub const AccountFile = struct {
                 .account_ref = .{
                     .slot = self.slot,
                     .offset = offset,
-                    .append_vec_id = self.id,
+                    .accounts_file_id = self.id,
                 },
                 // .hash = Hash.default(),
             };
@@ -199,7 +199,7 @@ pub const AccountFile = struct {
 
 pub const AccountInAccountFileRef = struct {
     slot: usize,
-    append_vec_id: usize,
+    accounts_file_id: usize,
     offset: usize,
 };
 
@@ -261,7 +261,7 @@ pub const AccountsIndex = struct {
     }
 };
 
-test "core.append_vec: parse accounts out of append vec" {
+test "core.accounts_file: parse accounts out of accounts file" {
     // to run this test
     // 1) run the test `core.snapshot_fields: parse snapshot fields`
     //     - to build accounts_db.bincode file
@@ -292,6 +292,6 @@ test "core.append_vec: parse accounts out of append vec" {
     // std.debug.print("elapsed: {d}\n", .{elapsed / std.time.ns_per_s});
 
     // note: didnt untar the full snapshot (bc time)
-    // n_valid_appendvec: 328_811, total_append_vec: 328_812
-    // std.debug.print("n_valid_appendvec: {d}, total_append_vec: {d}\n", .{ n_valid_appendvec, n_appendvec });
+    // n_valid_accountsfile: 328_811, total_accounts_file: 328_812
+    // std.debug.print("n_valid_accountsfile: {d}, total_accounts_file: {d}\n", .{ n_valid_accountsfile, n_accountsfile });
 }

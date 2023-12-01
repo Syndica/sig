@@ -39,27 +39,27 @@ pub fn indexAndBinFiles(
     file_names: [][]const u8,
     bins: *PubkeyBins,
 ) !void {
-    const total_append_vec_count = file_names.len;
+    const total_accounts_file_count = file_names.len;
 
     var timer = try std.time.Timer.start();
     // TODO: might need to be longer depending on abs path length
     var abs_path_buf: [1024]u8 = undefined;
-    for (file_names, 1..) |file_name, append_vec_count| {
+    for (file_names, 1..) |file_name, accounts_file_count| {
         // parse "{slot}.{id}" from the file_name
         var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
         const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
-        const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+        const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
         // read metadata
         const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
         std.debug.assert(slot_metas.items.len == 1);
         const slot_meta = slot_metas.items[0];
-        std.debug.assert(slot_meta.id == append_vec_id);
+        std.debug.assert(slot_meta.id == accounts_file_id);
 
         // read appendVec from file
         const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
-        const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        var append_vec = AccountFile.init(append_vec_file, slot_meta, slot) catch |err| {
+        const accounts_file_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
+        var accounts_file = AccountFile.init(accounts_file_file, slot_meta, slot) catch |err| {
             var buf: [1024]u8 = undefined;
             var stream = std.io.fixedBufferStream(&buf);
             var writer = stream.writer();
@@ -67,10 +67,10 @@ pub fn indexAndBinFiles(
             @panic(stream.getWritten());
         };
         // close after
-        defer append_vec.deinit();
+        defer accounts_file.deinit();
 
         sanitizeAndBin(
-            &append_vec,
+            &accounts_file,
             bins,
         ) catch |err| {
             var buf: [1024]u8 = undefined;
@@ -80,13 +80,13 @@ pub fn indexAndBinFiles(
             @panic(stream.getWritten());
         };
 
-        if (append_vec_count % 1_000 == 0) {
+        if (accounts_file_count % 1_000 == 0) {
             // estimate how long left
             printTimeEstimate(
                 &timer,
-                total_append_vec_count,
-                append_vec_count,
-                "parsing append vecs",
+                total_accounts_file_count,
+                accounts_file_count,
+                "parsing accounts files",
             );
         }
     }
@@ -94,12 +94,12 @@ pub fn indexAndBinFiles(
 
 /// used for initial loading
 /// we want to sanitize and index and bin (for hash verification) in one go
-pub fn sanitizeAndBin(append_vec: *AccountFile, bins: *PubkeyBins) !void {
+pub fn sanitizeAndBin(accounts_file: *AccountFile, bins: *PubkeyBins) !void {
     var offset: usize = 0;
     var n_accounts: usize = 0;
 
     while (true) {
-        var account = append_vec.getAccount(offset) catch break;
+        var account = accounts_file.getAccount(offset) catch break;
         try account.sanitize();
 
         const pubkey = account.store_info.pubkey;
@@ -123,11 +123,11 @@ pub fn sanitizeAndBin(append_vec: *AccountFile, bins: *PubkeyBins) !void {
         }
 
         try bins.insert(AccountHashData{
-            .id = append_vec.id,
+            .id = accounts_file.id,
             .pubkey = pubkey,
             .hash = hash,
             .lamports = account.account_info.lamports,
-            .slot = append_vec.slot,
+            .slot = accounts_file.slot,
             .offset = offset,
         });
 
@@ -135,11 +135,11 @@ pub fn sanitizeAndBin(append_vec: *AccountFile, bins: *PubkeyBins) !void {
         n_accounts += 1;
     }
 
-    if (offset != alignToU64(append_vec.length)) {
+    if (offset != alignToU64(accounts_file.length)) {
         return error.InvalidAccountFileLength;
     }
 
-    append_vec.n_accounts = n_accounts;
+    accounts_file.n_accounts = n_accounts;
 }
 
 pub fn sortThreadBins(
@@ -350,12 +350,12 @@ pub fn main() !void {
     var accounts_dir_iter = accounts_dir.iterate();
 
     // compute the total size (to compute time left)
-    var total_append_vec_count: usize = 0;
+    var total_accounts_file_count: usize = 0;
     while (try accounts_dir_iter.next()) |_| {
-        total_append_vec_count += 1;
+        total_accounts_file_count += 1;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    std.debug.print("total_append_vec_count: {d}\n", .{total_append_vec_count});
+    std.debug.print("total_accounts_file_count: {d}\n", .{total_accounts_file_count});
 
     // time it
     var full_timer = try std.time.Timer.start();
@@ -370,7 +370,7 @@ pub fn main() !void {
     defer allocator.free(filename_mem);
     accounts_dir_iter = accounts_dir.iterate(); // reset
 
-    var filename_slices = try ArrayList([]u8).initCapacity(allocator, total_append_vec_count);
+    var filename_slices = try ArrayList([]u8).initCapacity(allocator, total_accounts_file_count);
     defer filename_slices.deinit();
 
     var index: usize = 0;
@@ -381,7 +381,7 @@ pub fn main() !void {
         index += file_name_len;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
-    std.debug.assert(filename_slices.items.len == total_append_vec_count);
+    std.debug.assert(filename_slices.items.len == total_accounts_file_count);
 
     // read accounts_db.bincode
     const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
@@ -402,7 +402,7 @@ pub fn main() !void {
 
     var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
     var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
-    var chunk_size = total_append_vec_count / n_threads;
+    var chunk_size = total_accounts_file_count / n_threads;
     if (chunk_size == 0) {
         n_threads = 1;
     }
@@ -421,7 +421,7 @@ pub fn main() !void {
 
     for (0..n_threads) |i| {
         if (i == (n_threads - 1)) {
-            end_index = total_append_vec_count;
+            end_index = total_accounts_file_count;
         } else {
             end_index = start_index + chunk_size;
         }
@@ -435,7 +435,7 @@ pub fn main() !void {
         handles.appendAssumeCapacity(handle);
         start_index = end_index;
     }
-    std.debug.assert(end_index == total_append_vec_count);
+    std.debug.assert(end_index == total_accounts_file_count);
 
     for (handles.items) |handle| {
         handle.join();

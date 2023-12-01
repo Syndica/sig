@@ -35,35 +35,35 @@ pub fn accountsToCsvRowAndSend(
     // parse "{slot}.{id}" from the filename
     var fiter = std.mem.tokenizeSequence(u8, filename, ".");
     const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
-    const append_vec_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+    const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
     // read metadata
     const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
     std.debug.assert(slot_metas.items.len == 1);
     const slot_meta = slot_metas.items[0];
-    std.debug.assert(slot_meta.id == append_vec_id);
+    std.debug.assert(slot_meta.id == accounts_file_id);
 
     // read appendVec from file
     var abs_path_buf: [1024]u8 = undefined;
     const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, filename });
-    const append_vec_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
+    const accounts_file_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
 
-    var append_vec = AccountFile.init(append_vec_file, slot_meta, slot) catch return;
-    defer append_vec.deinit();
+    var accounts_file = AccountFile.init(accounts_file_file, slot_meta, slot) catch return;
+    defer accounts_file.deinit();
 
     // verify its valid
-    append_vec.sanitize() catch {
-        append_vec.deinit();
+    accounts_file.sanitize() catch {
+        accounts_file.deinit();
         return;
     };
 
-    const pubkey_and_refs = try append_vec.getAccountsRefs(alloc);
+    const pubkey_and_refs = try accounts_file.getAccountsRefs(alloc);
     defer pubkey_and_refs.deinit();
 
     // compute the full size to allocate at once
     var total_fmt_size: u64 = 0;
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
-        const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
+        const account = try accounts_file.getAccount(pubkey_and_ref.account_ref.offset);
 
         if (owner_filter) |owner| {
             if (!account.account_info.owner.equals(&owner)) continue;
@@ -91,7 +91,7 @@ pub fn accountsToCsvRowAndSend(
 
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const pubkey = pubkey_and_ref.pubkey;
-        const account = try append_vec.getAccount(pubkey_and_ref.account_ref.offset);
+        const account = try accounts_file.getAccount(pubkey_and_ref.account_ref.offset);
         if (owner_filter) |owner| {
             if (!account.account_info.owner.equals(&owner)) continue;
         }
@@ -249,12 +249,12 @@ pub fn runTaskScheduler(
 }
 
 pub fn recvAndWriteCsv(
-    total_append_vec_count: usize,
+    total_accounts_file_count: usize,
     csv_file: std.fs.File,
     channel: *CsvChannel,
     is_done: *std.atomic.Atomic(bool),
 ) void {
-    var append_vec_count: usize = 0;
+    var accounts_file_count: usize = 0;
     var writer = csv_file.writer();
     const start_time: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
 
@@ -271,19 +271,19 @@ pub fn recvAndWriteCsv(
         for (csv_rows) |csv_row| {
             writer.writeAll(csv_row) catch unreachable;
             channel.allocator.free(csv_row);
-            append_vec_count += 1;
+            accounts_file_count += 1;
 
-            const vecs_left = total_append_vec_count - append_vec_count;
-            if (append_vec_count % 100 == 0 or vecs_left < 100) {
+            const vecs_left = total_accounts_file_count - accounts_file_count;
+            if (accounts_file_count % 100 == 0 or vecs_left < 100) {
                 // estimate how long left
                 const now: u64 = @intCast(std.time.milliTimestamp() * std.time.ns_per_ms);
                 const elapsed = now - start_time;
-                const ns_per_vec = elapsed / append_vec_count;
+                const ns_per_vec = elapsed / accounts_file_count;
                 const time_left = ns_per_vec * vecs_left / std.time.ns_per_min;
 
-                std.debug.print("dumped {d}/{d} appendvecs - (mins left: {d})\r", .{
-                    append_vec_count,
-                    total_append_vec_count,
+                std.debug.print("dumped {d}/{d} accountsfiles - (mins left: {d})\r", .{
+                    accounts_file_count,
+                    total_accounts_file_count,
                     time_left,
                 });
             }
@@ -454,9 +454,9 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     std.debug.print("starting with {d} threads\n", .{n_threads});
 
     // compute the total size (to compute time left)
-    var total_append_vec_count: usize = 0;
+    var total_accounts_file_count: usize = 0;
     while (try accounts_dir_iter.next()) |_| {
-        total_append_vec_count += 1;
+        total_accounts_file_count += 1;
     }
     accounts_dir_iter = accounts_dir.iterate(); // reset
 
@@ -494,7 +494,7 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     }) catch unreachable;
 
     recvAndWriteCsv(
-        total_append_vec_count,
+        total_accounts_file_count,
         csv_file,
         channel,
         &is_done,
