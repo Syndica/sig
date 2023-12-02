@@ -406,6 +406,7 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     var owner_filter: ?Pubkey = null;
     if (owner_filter_str) |str| {
         owner_filter = try Pubkey.fromString(str);
+        std.debug.print("using owner filter: {s}\n", .{owner_filter.?.string});
     }
 
     const snapshot_dir = snapshot_dir_option.value.string.?;
