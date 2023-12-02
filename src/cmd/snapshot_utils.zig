@@ -293,7 +293,7 @@ pub fn recvAndWriteCsv(
 
 var owner_filter_option = cli.Option{
     .long_name = "owner-filter",
-    .short_alias = 's',
+    .short_alias = 'o',
     .help = "owner pubkey to filter what accounts to dump",
     .required = false,
     .value = .{ .string = null },
