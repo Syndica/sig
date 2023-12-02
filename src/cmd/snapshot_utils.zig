@@ -107,7 +107,7 @@ pub fn accountsToCsvRowAndSend(
                 account.data,
                 account.account_info.lamports,
                 account.account_info.executable,
-                account.account_info.rent_epoch,
+                slot,
             },
         ) catch unreachable).len;
 
