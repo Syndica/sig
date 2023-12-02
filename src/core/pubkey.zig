@@ -15,9 +15,6 @@ pub const Pubkey = struct {
     /// If `bytes`, it wil automatically encode so that it's able to call string() method.
     ///
     pub fn fromString(str: []const u8) !Self {
-        if (str.len != 44) {
-            return Error.InvalidEncodedLength;
-        }
         var out: [32]u8 = undefined;
         var written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
         if (written != 32) @panic("written is not 32");
@@ -52,6 +49,14 @@ pub const Pubkey = struct {
 
     pub fn string(self: *const Self) [44]u8 {
         return Self.base58_encode(&self.data) catch @panic("could not encode pubkey");
+    }
+
+    pub fn stringWithBuf(self: *const Self, dest: []u8) []u8 {
+        var written = encoder.encode(&self.data, dest) catch @panic("could not encode pubkey");
+        if (written > 44) {
+            std.debug.panic("written > 44\n", .{});
+        }
+        return dest[0..written];
     }
 
     /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.

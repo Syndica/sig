@@ -150,12 +150,6 @@ pub fn build(b: *std.Build) void {
             .path = "src/cmd/snapshot_verify.zig",
             .description = "verify snapshot account hashes",
         }, 
-        // tmp :: remove when done with 
-        ExecCommand { 
-            .name = "accounts", 
-            .path = "src/core/accounts_db.zig",
-            .description = "tmp file",
-        }, 
     };
 
     for (exec_commands) |command_info| { 

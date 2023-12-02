@@ -89,6 +89,9 @@ pub fn accountsToCsvRowAndSend(
     const csv_string = alloc.alloc(u8, total_fmt_size) catch unreachable;
     var csv_string_offset: usize = 0;
 
+    var buf1: [44]u8 = undefined;
+    var buf2: [44]u8 = undefined;
+
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
         const pubkey = pubkey_and_ref.pubkey;
         const account = try accounts_file.getAccount(pubkey_and_ref.account_ref.offset);
@@ -96,14 +99,12 @@ pub fn accountsToCsvRowAndSend(
             if (!account.account_info.owner.equals(&owner)) continue;
         }
 
-        const owner_pk = try Pubkey.fromBytes(&account.account_info.owner.data);
-
         const fmt_slice_len = (std.fmt.bufPrint(
             csv_string[csv_string_offset..],
             "{s};{s};{any};{d};{any};{d}\n",
             .{
-                pubkey.string(),
-                owner_pk.string(),
+                pubkey.stringWithBuf(&buf1),
+                account.account_info.owner.stringWithBuf(&buf2),
                 account.data,
                 account.account_info.lamports,
                 account.account_info.executable,
@@ -406,7 +407,7 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     var owner_filter: ?Pubkey = null;
     if (owner_filter_str) |str| {
         owner_filter = try Pubkey.fromString(str);
-        std.debug.print("using owner filter: {s}\n", .{owner_filter.?.string});
+        std.debug.print("using owner filter: {s}\n", .{owner_filter.?.string()});
     }
 
     const snapshot_dir = snapshot_dir_option.value.string.?;

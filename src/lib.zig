@@ -17,7 +17,6 @@ pub const core = struct {
     pub usingnamespace @import("core/genesis_config.zig");
     pub usingnamespace @import("core/snapshot_fields.zig");
     pub usingnamespace @import("core/accounts_file.zig");
-    pub usingnamespace @import("core/accounts_db.zig");
 };
 
 pub const gossip = struct {
