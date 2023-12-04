@@ -4,6 +4,10 @@ Thank you for considering contributing to Syndica's Sig project! We appreciate y
 
 Before you start contributing, please take a moment to read and understand this Contributing Guidelines document. It will help you get started and ensure a smooth collaboration process.
 
+## Dev Environment Setup
+
+See the [readme](../readme.md#-setup).
+
 ## Style Guide
 
 ### Optional Values
