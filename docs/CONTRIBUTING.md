@@ -12,8 +12,8 @@ Before you start contributing, please take a moment to read and understand this 
 
 ```zig
 fn do_something(maybe_foo: ?Foo) void { 
-  if (maybe_foo) |foo| {
-    // do something with foo here 
+    if (maybe_foo) |foo| {
+        // do something with foo here 
   }
 }
 ```

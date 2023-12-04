@@ -1,23 +1,201 @@
 <br/>
 
 <p align="center">
-  <h1>&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana Zig validator client</h1>
+  <h1 align="center">&nbsp;🤖⚡ &nbsp;<code>Sig</code> - a Solana Zig validator client</h1>
     <br/>
-    <br/>
+<div align="center">
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
   <a href="https://github.com/syndica/sig/actions/workflows/test.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/syndica/sig/test.yml?branch=main" /></a>
-  <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-master-green.svg"></a>
-  <a href="https://github.com/syndica/sig/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.11.0-green.svg"></a>
+  <a href="https://github.com/syndica/sig/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPLv3-blue"></a>
+  </div>
 </p>
 <br/>
-
-## Overview
 
 _Sig_ is a Solana validator client implementation written in Zig.
 <br/>
 <br/>
 
 ⚠️ NOTE: This is a WIP, please open any issues for any bugs/improvements.
+
+## 📦 Setup
+
+Zig 0.11.0 is required to build Sig.
+
+<details><summary>Details</summary>
+
+### Build Dependencies
+- Zig 0.11.0 - Choose one:
+  - [Binary Releases](https://ziglang.org/download/) (extract and add to PATH)
+  - [Install with a package manager](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
+  - Manage multiple versions with [zigup](https://github.com/marler8997/zigup) or [zvm](https://www.zvm.app/)
+
+### Developer Tools
+These tools are optional but recommended for a smooth development process.
+
+- [Zig Language Server (ZLS) 0.11.0](https://github.com/zigtools/zls/wiki/Installation)
+- [lldb](https://lldb.llvm.org/): [Zig CLI Debugging](https://devlog.hexops.com/2022/debugging-undefined-behavior/)
+- [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) VS Code extension
+- [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) VS Code extension
+
+#### Visual Studio Code
+
+If you use VS Code, you should install the [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) extension. It can use your installed versions of Zig and ZLS, or it can download and manage its own internal versions.
+
+You can use [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) to debug Zig code with lldb in VS Code's debugging GUI. If you'd like to automatically build the project before running the debugger, you'll need a `zig build` task.
+
+<details><summary>tasks.json</summary>
+
+```json
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "zig build",
+            "type": "shell",
+            "command": "zig",
+            "args": [
+                "build",
+                "--summary",
+                "all"
+            ],
+            "options": {
+                "cwd": "${workspaceRoot}"
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
+```
+</details><br>
+
+To run the debugger, you need a run configuration. This launch.json includes an example for debugging gossip. Customize the args as desired.
+
+<details><summary>launch.json</summary>
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Gossip Mainnet",
+            "program": "${workspaceFolder}/zig-out/bin/sig",
+            "args": ["gossip", "--entrypoint", "34.83.231.102:8001", "--entrypoint", "145.40.67.83:8001", "--entrypoint", "147.75.38.117:8001", "--entrypoint", "145.40.93.177:8001", "--entrypoint", "86.109.15.59:8001"],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "zig build"
+        },
+    ]
+}
+```
+</details><br>
+
+</details>
+
+## 🔧 Build
+
+```bash
+zig build
+```
+
+## ▶️ Usage
+
+### 🚀 Run Sig
+
+Run Sig with `zig` or execute the binary you already built:
+```bash
+zig build run -- --help
+```
+```bash
+./zig-out/bin/sig --help
+```
+
+For simplicity, the above commands will be abbreviated as `sig` in the rest of this document. An alias can be used to realize this abbreviation in your shell.
+```bash
+alias sig="$(pwd)/zig-out/bin/sig"
+```
+
+### 👤 Identity
+
+Sig stores its private key in `~/.sig/identity.key`. On its first run, Sig will automatically generate a key if no key exists.
+
+To see the public key, use the `identity` subcommand:
+```bash
+sig identity
+```
+
+### 📞 Gossip
+
+To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entrypoints to connect to a cluster. Optionally use `-p` to specify a custom listening port (default is 8001).
+```bash
+sig gossip -p <PORT> --entrypoint <IP>:<PORT>
+```
+
+<details><summary>mainnet</summary>
+
+```bash
+sig gossip --entrypoint 34.83.231.102:8001 \
+    --entrypoint 145.40.67.83:8001 \
+    --entrypoint 147.75.38.117:8001 \
+    --entrypoint 145.40.93.177:8001 \
+    --entrypoint 86.109.15.59:8001
+```
+</details>
+
+<details><summary>devnet</summary>
+
+```bash
+sig gossip --entrypoint 35.197.53.105:8001 \
+    --entrypoint 147.75.55.147:8001 \
+    --entrypoint 136.144.49.15:8001 \
+    --entrypoint 145.40.71.85:8001 \
+    --entrypoint 147.75.105.51:8001
+```
+</details>
+
+<details><summary>testnet</summary>
+
+```bash
+sig gossip --entrypoint 35.203.170.30:8001 \
+    --entrypoint 139.178.68.207:8001 \
+    --entrypoint 139.178.68.207:8001
+```
+</details>
+
+
+### 🧪 Testing
+```bash
+zig build test --summary all
+```
+
+## Learn More
+[Zig](https://ziglang.org/)
+- [Documentation](https://ziglang.org/documentation/0.11.0/)
+- [Ziglearn Book](https://ziglearn.org/)
+- [Ziglings Exercises](https://github.com/ratfactor/ziglings)
+
+[Solana](https://solana.com/)
+- [Documentation](https://docs.solana.com/validator/anatomy)
+- [Code](https://github.com/solana-labs/solana)
+
+Sig
+- [Introduction](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/)
+- [Gossip Deep Dive](https://blog.syndica.io/sig-engineering-1-gossip-protocol/)
 
 ## Why Zig?
 
