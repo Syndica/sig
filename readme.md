@@ -12,17 +12,17 @@
 </p>
 <br/>
 
-_Sig_ is a Solana validator client implementation written in Zig. Read the [introductory blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/) for more about the goals of this project.
+_Sig_ is a Solana validator client implemented in Zig. Read the [introductory blog post](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/) for more about the goals of this project.
 <br/>
 <br/>
 
 ⚠️ NOTE: This is a WIP, please open any issues for any bugs/improvements.
 
-## 📦 Setup
+## 📋 Setup
 
 Zig 0.11.0 is required to build Sig.
 
-<details><summary>Dev Environment Recommendations</summary>
+<details><summary>Dev Environment Details</summary>
 
 ### Build Dependencies
 - Zig 0.11.0 - Choose one:
@@ -46,7 +46,7 @@ You can use [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadim
 
 <details><summary>tasks.json</summary>
 
-```json
+```yaml
 {
     // See https://go.microsoft.com/fwlink/?LinkId=733558
     // for the documentation about the tasks.json format
@@ -168,11 +168,11 @@ sig gossip --entrypoint 35.197.53.105:8001 \
 sig gossip --entrypoint 35.203.170.30:8001 \
     --entrypoint 139.178.68.207:8001
 ```
-</details>
+</details><br>
 
 ## Develop
 
-See [Setup](#-setup) for information about setting up your development environment. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
+See [Setup](#-setup) to get your environment set up. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
 
 ### 🧪 Test
 Run all tests.
@@ -197,7 +197,7 @@ Run a benchmark group: socket_utils, gossip, or sync.
 ```bash
 zig build benchmark -- gossip
 ```
-<br><br>
+<br>
 
 
 ## 📦 Import Sig 
@@ -292,19 +292,18 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 ### Note
 
-- Zig is still a evolving language.
+- Zig is still an evolving language.
 - Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.11`.
-- This library was compiled and tested using `0.11.0-dev.3997+546212ff7` (master).
 - Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests, fix is in works.
 <br><br>
 
 ## 🧩 Modules
 
-- **[Gossip](src/gossip/readme.md)** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
+- **[Gossip](src/gossip)** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
 
-- **Core** - Core data structures shared across modules
+- **[Core](src/core)** - Core data structures shared across modules
 
-- **RPC Client** - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions
+- **[RPC Client](src/rpc)** - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions
 <br><br>
 
 ## 📚 Learn More
