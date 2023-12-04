@@ -124,24 +124,18 @@ zig build run -- --help
 ./zig-out/bin/sig --help
 ```
 
-These commands are abbreviated as `sig` in this document. An alias can be used to implement this abbreviation in your shell.
-```bash
-# run in repository root
-alias sig="$(pwd)/zig-out/bin/sig"
-```
+These commands will be abbreviated as `sig` in the rest of this document.
 
 ### 👤 Identity
 
-Sig stores its private key in `~/.sig/identity.key`. On its first run, Sig will automatically generate a key if no key exists.
-
-To see the public key, use the `identity` subcommand:
+Sig stores its private key in `~/.sig/identity.key`. On its first run, Sig will automatically generate a key if no key exists. To see the public key, use the `identity` subcommand.
 ```bash
 sig identity
 ```
 
 ### 📞 Gossip
 
-To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entrypoints to connect to a cluster. Optionally use `-p` to specify a custom listening port (default is 8001).
+To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entrypoints to connect to a cluster. Optionally use `-p` to specify a custom listening port (default is 8001). For more info about gossip, see the [readme](src/gossip/readme.md).
 ```bash
 sig gossip -p <PORT> --entrypoint <IP>:<PORT>
 ```
@@ -175,7 +169,6 @@ sig gossip --entrypoint 35.203.170.30:8001 \
     --entrypoint 139.178.68.207:8001
 ```
 </details>
-<br>
 
 ## Develop
 
@@ -307,7 +300,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 ## 🧩 Modules
 
-- **Gossip** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
+- **[Gossip](src/gossip/readme.md)** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
 
 - **Core** - Core data structures shared across modules
 
