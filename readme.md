@@ -18,21 +18,19 @@ _Sig_ is a Solana validator client implementation written in Zig. Read the [intr
 
 ⚠️ NOTE: This is a WIP, please open any issues for any bugs/improvements.
 
-## Development
-
-### 📦 Setup
+## 📦 Setup
 
 Zig 0.11.0 is required to build Sig.
 
 <details><summary>Dev Environment Recommendations</summary>
 
-#### Build Dependencies
+### Build Dependencies
 - Zig 0.11.0 - Choose one:
   - [Binary Releases](https://ziglang.org/download/) (extract and add to PATH)
   - [Install with a package manager](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
   - Manage multiple versions with [zigup](https://github.com/marler8997/zigup) or [zvm](https://www.zvm.app/)
 
-#### Developer Tools
+### Developer Tools
 These tools are optional but recommended for a smooth development process.
 
 - [Zig Language Server (ZLS) 0.11.0](https://github.com/zigtools/zls/wiki/Installation)
@@ -40,7 +38,7 @@ These tools are optional but recommended for a smooth development process.
 - [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) VS Code extension
 - [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) VS Code extension
 
-##### Visual Studio Code
+#### Visual Studio Code
 
 If you use VS Code, you should install the [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) extension. It can use your installed versions of Zig and ZLS, or it can download and manage its own internal versions.
 
@@ -109,39 +107,12 @@ To run the debugger, you need a run configuration. This launch.json includes an 
 
 </details>
 
-### 🔧 Build
+
+## 🔧 Build
 
 ```bash
 zig build
 ```
-
-### 🧪 Test
-Run all tests.
-```bash
-zig build test
-```
-
-Include `--summary all` with any test command to see a summary of the test results.
-
-Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.crds_table` like this:
-```bash
-zig build test --summary all -- gossip.crds_table
-```
-
-### 📊 Benchmark
-Run all benchmarks.
-```bash
-zig build benchmark
-```
-
-Run a benchmark group: socket_utils, gossip, or sync.
-```bash
-zig build benchmark -- gossip
-```
-
-### Code
-See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
-<br><br>
 
 ## 🚀 Run
 
@@ -205,6 +176,36 @@ sig gossip --entrypoint 35.203.170.30:8001 \
 ```
 </details>
 <br>
+
+## Develop
+
+See [Setup](#-setup) for information about setting up your development environment. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
+
+### 🧪 Test
+Run all tests.
+```bash
+zig build test
+```
+
+Include `--summary all` with any test command to see a summary of the test results.
+
+Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.crds_table` like this:
+```bash
+zig build test --summary all -- gossip.crds_table
+```
+
+### 📊 Benchmark
+Run all benchmarks.
+```bash
+zig build benchmark
+```
+
+Run a benchmark group: socket_utils, gossip, or sync.
+```bash
+zig build benchmark -- gossip
+```
+<br><br>
+
 
 ## 📦 Import Sig 
 
