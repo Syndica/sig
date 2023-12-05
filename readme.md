@@ -20,17 +20,16 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 
 ## 📋 Setup
 
-Zig 0.11.0 is required to build Sig.
-
-<details><summary>Dev Environment Details</summary>
-
 ### Build Dependencies
 - Zig 0.11.0 - Choose one:
   - [Binary Releases](https://ziglang.org/download/) (extract and add to PATH)
   - [Install with a package manager](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
   - Manage multiple versions with [zigup](https://github.com/marler8997/zigup) or [zvm](https://www.zvm.app/)
 
-### Developer Tools
+<details><summary>
+
+### Developer Tools</summary>
+
 These tools are optional but recommended for a smooth development process.
 
 - [Zig Language Server (ZLS) 0.11.0](https://github.com/zigtools/zls/wiki/Installation)
