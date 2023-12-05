@@ -307,6 +307,7 @@ pub const GossipService = struct {
 
         pub fn callback(task: *Task) void {
             var self = @fieldParentPtr(@This(), "task", task);
+            std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
             defer self.done.store(true, std.atomic.Ordering.Release);
 
             var protocol_message = bincode.readFromSlice(
@@ -389,7 +390,7 @@ pub const GossipService = struct {
             for (packet_batches) |*packet_batch| {
                 for (packet_batch.items) |*packet| {
                     var task = tasks[count % socket_utils.PACKETS_PER_BATCH];
-                    if (count > socket_utils.PACKETS_PER_BATCH) {
+                    if (count >= socket_utils.PACKETS_PER_BATCH) {
                         task.awaitAndReset();
                     }
                     task.packet = packet;
