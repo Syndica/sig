@@ -157,7 +157,7 @@ pub fn LruCache(comptime K: type, comptime V: type) type {
             if (self.hashmap.fetchSwapRemove(k)) |kv| {
                 var node = kv.value;
                 self.dbl_link_list.remove(node);
-                self.deinitNode(node);
+                defer self.deinitNode(node);
                 return node.data.value;
             }
             return null;
