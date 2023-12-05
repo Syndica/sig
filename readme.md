@@ -302,9 +302,9 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 - **[Gossip](src/gossip)** - A gossip spy node, run by: `sig gossip` or `zig build run -- gossip`
 
-- **[Core](src/core)** - Core data structures shared across modules
+- **[Core](src/core)** - Core data structures shared across modules.
 
-- **[RPC Client](src/rpc)** - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions
+- **[RPC Client](src/rpc)** ([docs](docs/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
 <br><br>
 
 ## 📚 Learn More
