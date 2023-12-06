@@ -306,8 +306,8 @@ pub const SnapshotFields = struct {
         return .{ .bank_fields = bank_fields, .accounts_db_fields = &self.accounts_db_fields };
     }
 
-    pub fn readFromFilePath(allocator: std.mem.Allocator, abs_path: []const u8) !SnapshotFields {
-        var file = try std.fs.openFileAbsolute(abs_path, .{});
+    pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
+        var file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
         var file_reader = std.io.bufferedReader(file.reader());

@@ -44,9 +44,9 @@ pub fn accountsToCsvRowAndSend(
     std.debug.assert(slot_meta.id == accounts_file_id);
 
     // read appendVec from file
-    var abs_path_buf: [1024]u8 = undefined;
-    const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, filename });
-    const accounts_file_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
+    var file_buf: [1024]u8 = undefined;
+    const file_path = try std.fmt.bufPrint(&file_buf, "{s}/{s}", .{ accounts_dir_path, filename });
+    const accounts_file_file = try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
 
     var accounts_file = AccountFile.init(accounts_file_file, slot_meta, slot) catch return;
     defer accounts_file.deinit();
@@ -69,31 +69,25 @@ pub fn accountsToCsvRowAndSend(
             if (!account.account_info.owner.equals(&owner)) continue;
         }
 
-        // 5 seperators = 5 bytes
-        // new line = 1 byte
-        // pubkey string = 44 bytes
-        // owner string = 44 bytes
-        // data = { 1, 2, 3, 4 }
-        // ?? the number themeselves (1*data.len bytes)
-        // + comma per datapoint ( 1*data.len)
-        // + whitespace ( ~2*data.len ) + '{' '}' = ~4 * data.len + 2
-        // lamports = 8 bytes
-        // executable = "true" or "false" = 5 bytes
-        // rent_epoch = 8 bytes
-
-        // estimate?
-        const fmt_count = 120 + 5 * account.data.len;
+        // TODO: can probs compute it with a (N + data.len * M)
+        const fmt_count = std.fmt.count(
+            "{s};{s};{any};{d};{any};{d}\n",
+            .{
+                account.store_info.pubkey.string(),
+                account.account_info.owner.string(),
+                account.data,
+                account.account_info.lamports,
+                account.account_info.executable,
+                account.account_info.rent_epoch,
+            },
+        );
         total_fmt_size += fmt_count;
     }
 
     const csv_string = alloc.alloc(u8, total_fmt_size) catch unreachable;
     var csv_string_offset: usize = 0;
 
-    var buf1: [44]u8 = undefined;
-    var buf2: [44]u8 = undefined;
-
     for (pubkey_and_refs.items) |*pubkey_and_ref| {
-        const pubkey = pubkey_and_ref.pubkey;
         const account = try accounts_file.getAccount(pubkey_and_ref.account_ref.offset);
         if (owner_filter) |owner| {
             if (!account.account_info.owner.equals(&owner)) continue;
@@ -103,12 +97,12 @@ pub fn accountsToCsvRowAndSend(
             csv_string[csv_string_offset..],
             "{s};{s};{any};{d};{any};{d}\n",
             .{
-                pubkey.stringWithBuf(&buf1),
-                account.account_info.owner.stringWithBuf(&buf2),
+                account.store_info.pubkey.string(),
+                account.account_info.owner.string(),
                 account.data,
                 account.account_info.lamports,
                 account.account_info.executable,
-                slot,
+                account.account_info.rent_epoch,
             },
         ) catch unreachable).len;
 
@@ -294,7 +288,7 @@ pub fn recvAndWriteCsv(
 
 var owner_filter_option = cli.Option{
     .long_name = "owner-filter",
-    .short_alias = 'o',
+    .short_alias = 's',
     .help = "owner pubkey to filter what accounts to dump",
     .required = false,
     .value = .{ .string = null },
@@ -336,7 +330,7 @@ var app = &cli.App{
 
 pub fn main() !void {
     // eg,
-    // zig build snapshot_utils -Doptimize=ReleaseSafe
+    // zig build -Doptimize=ReleaseSafe
     // 1) dump the account fields
     // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots
     // 2) dump the snapshot info
@@ -353,6 +347,7 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
     var allocator = gpa.allocator();
 
     const snapshot_dir = snapshot_dir_option.value.string.?;
+    const cwd = std.fs.cwd();
 
     // iterate through the snapshot dir
     const metadata_sub_path = try std.fmt.allocPrint(
@@ -360,7 +355,7 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
         "{s}/{s}",
         .{ snapshot_dir, "snapshots" },
     );
-    var metadata_dir = try std.fs.openIterableDirAbsolute(metadata_sub_path, .{});
+    var metadata_dir = try cwd.openIterableDir(metadata_sub_path, .{});
     var metadata_dir_iter = metadata_dir.iterate();
     var maybe_snapshot_slot: ?usize = null;
     while (try metadata_dir_iter.next()) |entry| {
@@ -390,7 +385,7 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
     const fields = snapshot_fields.getFieldRefs();
 
     // rewrite the accounts_db_fields seperate
-    const db_file = try std.fs.createFileAbsolute(output_path, .{});
+    const db_file = try cwd.createFile(output_path, .{});
     defer db_file.close();
 
     var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields.*, .{});
@@ -407,9 +402,9 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     var owner_filter: ?Pubkey = null;
     if (owner_filter_str) |str| {
         owner_filter = try Pubkey.fromString(str);
-        std.debug.print("using owner filter: {s}\n", .{owner_filter.?.string()});
     }
 
+    const cwd = std.fs.cwd();
     const snapshot_dir = snapshot_dir_option.value.string.?;
     const accounts_db_fields_path = try std.fmt.allocPrint(
         allocator,
@@ -432,17 +427,17 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
         allocator.free(dump_csv_path);
     }
 
-    const csv_file = try std.fs.createFileAbsolute(dump_csv_path, .{});
+    const csv_file = try cwd.createFile(dump_csv_path, .{});
     defer csv_file.close();
 
-    const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch {
+    const accounts_db_fields_file = cwd.openFile(accounts_db_fields_path, .{}) catch {
         std.debug.print("could not open accounts_db.bincode - run `prepare` first\n", .{});
         return;
     };
     var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
     defer bincode.free(allocator, accounts_db_fields);
 
-    var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
+    var accounts_dir = try cwd.openIterableDir(accounts_dir_path, .{});
     var accounts_dir_iter = accounts_dir.iterate();
 
     var n_threads = @as(u32, @truncate(std.Thread.getCpuCount() catch unreachable));
