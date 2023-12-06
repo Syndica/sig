@@ -148,7 +148,7 @@ pub fn build(b: *std.Build) void {
         ExecCommand { 
             .name = "snapshot_verify", 
             .path = "src/cmd/snapshot_verify.zig",
-            .description = "verify snapshot account hashes",
+            .description = "verify snapshot account hashes ",
         }, 
     };
 
