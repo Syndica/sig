@@ -34,10 +34,13 @@ pub fn findSnapshotMetadataPath(
         "{s}/{s}",
         .{ snapshot_dir, "snapshots" },
     );
+    defer allocator.free(metadata_sub_path);
+
     var metadata_dir = try std.fs.cwd().openIterableDir(metadata_sub_path, .{});
-    var metadata_dir_iter = metadata_dir.iterate();
+    defer metadata_dir.close();
 
     var maybe_snapshot_slot: ?usize = null;
+    var metadata_dir_iter = metadata_dir.iterate();
     while (try metadata_dir_iter.next()) |entry| {
         if (entry.kind == std.fs.File.Kind.directory) {
             maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10);

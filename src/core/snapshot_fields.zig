@@ -313,6 +313,10 @@ pub const SnapshotFields = struct {
         var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
         return snapshot_fields;
     }
+
+    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, self);
+    }
 };
 
 test "core.snapshot_fields: parse snapshot fields" {
@@ -334,7 +338,7 @@ test "core.snapshot_fields: parse snapshot fields" {
         }
         return err;
     };
-    defer bincode.free(alloc, snapshot_fields);
+    defer snapshot_fields.deinit(alloc);
 
     const fields = snapshot_fields.getFieldRefs();
     _ = fields;

@@ -51,7 +51,14 @@ pub const AccountsDB = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        for (self.account_files.values()) |*af| {
+            af.deinit();
+        }
         self.account_files.deinit();
+
+        for (self.index.values()) |*refs| {
+            refs.deinit();
+        }
         self.index.deinit();
     }
 
@@ -67,6 +74,7 @@ pub const AccountsDB = struct {
             "{s}/{s}",
             .{ snapshot_path, "accounts" },
         );
+        defer self.allocator.free(accounts_path);
 
         // no accounts/ directory OR no snapshots/{slot}/{slot} file
         // => search for .zst tarball
@@ -76,14 +84,18 @@ pub const AccountsDB = struct {
                     break :blk true;
                 }
             };
-            _ = findSnapshotMetadataPath(self.allocator, snapshot_path) catch {
+
+            var path = findSnapshotMetadataPath(self.allocator, snapshot_path) catch {
                 break :blk true;
             };
+            self.allocator.free(path);
 
             break :blk false;
         };
 
         var snapshot_dir = try std.fs.cwd().openIterableDir(snapshot_path, .{});
+        defer snapshot_dir.close();
+
         if (search_for_zstd) {
             var snapshot_iter = snapshot_dir.iterate();
             while (try snapshot_iter.next()) |entry| {
@@ -113,11 +125,18 @@ pub const AccountsDB = struct {
         // load the snapshot metadata
         std.debug.print("reading snapshot metadata...", .{});
         var timer = try std.time.Timer.start();
-        const snapshot_metadata_path = try findSnapshotMetadataPath(self.allocator, snapshot_path);
+        const snapshot_metadata_path = try findSnapshotMetadataPath(
+            self.allocator,
+            snapshot_path,
+        );
+        defer self.allocator.free(snapshot_metadata_path);
+
         var snapshot_fields = try SnapshotFields.readFromFilePath(
             self.allocator,
             snapshot_metadata_path,
         );
+        defer snapshot_fields.deinit(self.allocator);
+
         var snapshot_metadata = snapshot_fields.getFieldRefs();
         std.debug.print(" took {s}\n", .{std.fmt.fmtDuration(timer.read())});
 
@@ -125,6 +144,8 @@ pub const AccountsDB = struct {
         std.debug.print("starting indexing...\n", .{});
         timer.reset();
         var accounts_dir = try std.fs.cwd().openIterableDir(accounts_path, .{});
+        defer accounts_dir.close();
+
         var files = try readDirectory(self.allocator, accounts_dir);
         var filenames = files.filenames;
         defer {
@@ -144,6 +165,7 @@ pub const AccountsDB = struct {
 
         var channel = AccountFileChannel.init(self.allocator, 10_000);
         defer channel.deinit();
+
         var handles = try ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
         defer handles.deinit();
 
@@ -233,6 +255,7 @@ pub const AccountsDB = struct {
             // re-allocate
             refs = try ArrayList(PubkeyAccountRef).initCapacity(allocator, ACCOUNTS_PER_FILE_EST);
         }
+        refs.deinit();
     }
 
     pub fn recvAndIndexAccounts(
@@ -410,6 +433,17 @@ pub fn sortBins(
             printTimeEstimate(&timer, total_bins, count, "sortBins");
         }
     }
+}
+
+test "core.accounts_db: load from test snapshot" {
+    var allocator = std.testing.allocator;
+    const snapshot_path = "test_data/";
+
+    // init db -- will first load from the .zstd file
+    var accounts_db = AccountsDB.init(allocator);
+    defer accounts_db.deinit();
+
+    try accounts_db.loadFromSnapshot(snapshot_path);
 }
 
 pub fn main() !void {
