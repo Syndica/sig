@@ -3,6 +3,7 @@ const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
 
 const Account = @import("./account.zig").Account;
+const hashAccount = @import("./account.zig").hashAccount;
 const Hash = @import("./hash.zig").Hash;
 const Slot = @import("./clock.zig").Slot;
 const Epoch = @import("./clock.zig").Epoch;
@@ -58,10 +59,10 @@ pub const AccountFileAccountInfo = struct {
     }
 };
 
-pub const PubkeyAndAccountInAccountFileRef = struct {
+pub const PubkeyAccountRef = struct {
     pubkey: Pubkey,
-    account_ref: AccountInAccountFileRef,
-    // hash: Hash,
+    offset: usize,
+    slot: Slot,
 };
 
 const u64_size: usize = @sizeOf(u64);
@@ -133,6 +134,46 @@ pub const AccountFile = struct {
         self.n_accounts = n_accounts;
     }
 
+    pub fn sanitizeAndGetAccountsRefs(self: *Self, refs: *ArrayList(PubkeyAccountRef)) !void {
+        var offset: usize = 0;
+        var n_accounts: usize = 0;
+
+        while (true) {
+            var account = self.getAccount(offset) catch break;
+            try account.sanitize();
+
+            const pubkey = account.store_info.pubkey;
+
+            const hash_is_missing = std.mem.eql(u8, &account.hash.data, &Hash.default().data);
+            if (hash_is_missing) {
+                const hash = hashAccount(
+                    account.account_info.lamports,
+                    account.data,
+                    &account.account_info.owner.data,
+                    account.account_info.executable,
+                    account.account_info.rent_epoch,
+                    &pubkey.data,
+                );
+                account.hash.* = hash;
+            }
+
+            try refs.append(PubkeyAccountRef{
+                .pubkey = pubkey,
+                .offset = offset,
+                .slot = self.slot,
+            });
+
+            offset = offset + account.len;
+            n_accounts += 1;
+        }
+
+        if (offset != alignToU64(self.length)) {
+            return error.InvalidAccountFileLength;
+        }
+
+        self.n_accounts = n_accounts;
+    }
+
     pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AccountFileAccountInfo {
         var offset = start_offset;
 
@@ -169,31 +210,6 @@ pub const AccountFile = struct {
     pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
         const length = @sizeOf(T);
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
-    }
-
-    pub fn getAccountsRefs(self: *const Self, allocator: std.mem.Allocator) !ArrayList(PubkeyAndAccountInAccountFileRef) {
-        var accounts = try ArrayList(PubkeyAndAccountInAccountFileRef).initCapacity(allocator, self.n_accounts);
-
-        var offset: usize = 0;
-        while (true) {
-            const account = self.getAccount(offset) catch break;
-            const pubkey = account.store_info.pubkey;
-
-            const pubkey_account_ref = PubkeyAndAccountInAccountFileRef{
-                .pubkey = pubkey,
-                .account_ref = .{
-                    .slot = self.slot,
-                    .offset = offset,
-                    .accounts_file_id = self.id,
-                },
-                // .hash = Hash.default(),
-            };
-
-            accounts.appendAssumeCapacity(pubkey_account_ref);
-            offset = offset + account.len;
-        }
-
-        return accounts;
     }
 };
 

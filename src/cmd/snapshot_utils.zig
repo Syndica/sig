@@ -4,6 +4,8 @@ const bincode = @import("../bincode/bincode.zig");
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
 const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
+const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
+
 const Account = @import("../core/account.zig").Account;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Slot = @import("../core/clock.zig").Slot;
@@ -22,6 +24,36 @@ pub const AccountAndPubkey = struct {
 
 pub const CsvRows = []u8;
 pub const CsvChannel = Channel(CsvRows);
+
+pub fn findSnapshotMetadataPath(
+    allocator: std.mem.Allocator,
+    snapshot_dir: []const u8,
+) ![]const u8 {
+    const metadata_sub_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "snapshots" },
+    );
+    var metadata_dir = try std.fs.cwd().openIterableDir(metadata_sub_path, .{});
+    var metadata_dir_iter = metadata_dir.iterate();
+
+    var maybe_snapshot_slot: ?usize = null;
+    while (try metadata_dir_iter.next()) |entry| {
+        if (entry.kind == std.fs.File.Kind.directory) {
+            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10);
+            break;
+        }
+    }
+    var snapshot_slot = maybe_snapshot_slot orelse return error.MetadataNotFound;
+
+    const metadata_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{d}/{d}",
+        .{ metadata_sub_path, snapshot_slot, snapshot_slot },
+    );
+
+    return metadata_path;
+}
 
 pub fn accountsToCsvRowAndSend(
     alloc: std.mem.Allocator,
@@ -52,19 +84,17 @@ pub fn accountsToCsvRowAndSend(
     defer accounts_file.deinit();
 
     // verify its valid
-    accounts_file.sanitize() catch {
-        accounts_file.deinit();
-        return;
-    };
+    var refs = try ArrayList(PubkeyAccountRef).initCapacity(alloc, 20_000);
+    defer refs.deinit();
 
-    const pubkey_and_refs = try accounts_file.getAccountsRefs(alloc);
-    defer pubkey_and_refs.deinit();
+    accounts_file.sanitizeAndGetAccountsRefs(&refs) catch {
+        std.debug.panic("failed to *sanitize* appendVec {s} ... snapshot likely faulty ... aborting\n", .{filename});
+    };
 
     // compute the full size to allocate at once
     var total_fmt_size: u64 = 0;
-    for (pubkey_and_refs.items) |*pubkey_and_ref| {
-        const account = try accounts_file.getAccount(pubkey_and_ref.account_ref.offset);
-
+    for (refs.items) |*ref| {
+        const account = try accounts_file.getAccount(ref.offset);
         if (owner_filter) |owner| {
             if (!account.account_info.owner.equals(&owner)) continue;
         }
@@ -87,8 +117,8 @@ pub fn accountsToCsvRowAndSend(
     const csv_string = alloc.alloc(u8, total_fmt_size) catch unreachable;
     var csv_string_offset: usize = 0;
 
-    for (pubkey_and_refs.items) |*pubkey_and_ref| {
-        const account = try accounts_file.getAccount(pubkey_and_ref.account_ref.offset);
+    for (refs.items) |*ref| {
+        const account = try accounts_file.getAccount(ref.offset);
         if (owner_filter) |owner| {
             if (!account.account_info.owner.equals(&owner)) continue;
         }
@@ -350,28 +380,7 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
     const cwd = std.fs.cwd();
 
     // iterate through the snapshot dir
-    const metadata_sub_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "snapshots" },
-    );
-    var metadata_dir = try cwd.openIterableDir(metadata_sub_path, .{});
-    var metadata_dir_iter = metadata_dir.iterate();
-    var maybe_snapshot_slot: ?usize = null;
-    while (try metadata_dir_iter.next()) |entry| {
-        if (entry.kind == std.fs.File.Kind.directory) {
-            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10);
-            break;
-        }
-    }
-    var snapshot_slot = maybe_snapshot_slot orelse unreachable;
-
-    const metadata_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{d}/{d}",
-        .{ metadata_sub_path, snapshot_slot, snapshot_slot },
-    );
-
+    const metadata_path = try findSnapshotMetadataPath(allocator, snapshot_dir);
     const output_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",

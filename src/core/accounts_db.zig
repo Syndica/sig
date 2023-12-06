@@ -12,6 +12,7 @@ const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
 const alignToU64 = @import("../core/accounts_file.zig").alignToU64;
+const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
@@ -20,6 +21,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 
 const hashAccount = @import("../core/account.zig").hashAccount;
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
+const findSnapshotMetadataPath = @import("../cmd/snapshot_utils.zig").findSnapshotMetadataPath;
 
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
@@ -31,36 +33,7 @@ pub const AccountRef = struct {
     file_id: FileId,
     offset: usize,
 };
-
-pub fn findSnapshotMetadataPath(
-    allocator: std.mem.Allocator,
-    snapshot_dir: []const u8,
-) ![]const u8 {
-    const metadata_sub_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "snapshots" },
-    );
-    var metadata_dir = try std.fs.cwd().openIterableDir(metadata_sub_path, .{});
-    var metadata_dir_iter = metadata_dir.iterate();
-
-    var maybe_snapshot_slot: ?usize = null;
-    while (try metadata_dir_iter.next()) |entry| {
-        if (entry.kind == std.fs.File.Kind.directory) {
-            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10);
-            break;
-        }
-    }
-    var snapshot_slot = maybe_snapshot_slot orelse return error.MetadataNotFound;
-
-    const metadata_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{d}/{d}",
-        .{ metadata_sub_path, snapshot_slot, snapshot_slot },
-    );
-
-    return metadata_path;
-}
+const AccountFileChannel = Channel(struct { AccountFile, ArrayList(PubkeyAccountRef) });
 
 pub const AccountsDB = struct {
     account_files: std.AutoArrayHashMap(FileId, AccountFile),
@@ -247,7 +220,7 @@ pub const AccountsDB = struct {
                 @panic(stream.getWritten());
             };
 
-            sanitizeAndParseAccounts(&accounts_file, &refs) catch |err| {
+            accounts_file.sanitizeAndGetAccountsRefs(&refs) catch |err| {
                 var buf: [1024]u8 = undefined;
                 var stream = std.io.fixedBufferStream(&buf);
                 var writer = stream.writer();
@@ -306,90 +279,6 @@ pub const AccountsDB = struct {
         }
     }
 };
-
-// accounts-db {
-// 	accounts-files: hashmap<file_id, account_file>
-// 	index: hashmap<pubkey, (slot, file_id, offset)>
-// }
-
-// read account files
-// thread1:
-// open accounts_file
-// generate vec<account_hash_data>
-// send vec<account_hash_data> to channel
-
-// thread2:
-// index vec<account_hash_data>
-
-// once all index
-// compute_accounts_hash(max_slot)
-// iterate over the index and get accounts
-// bin the pubkeys
-// run sorting algo across bins
-// get the full hash across bins
-// compute the merkle tree
-
-// dump_to_csv(max_slot)
-// iterate over the index and get accounts
-// look up the full accounts in the accounts-db
-// dump to csv
-
-// iterate over the index and get accounts
-// get their hash
-// compute the merkle tree
-
-// dump_to_csv(max_slot)
-// iterate over the index and get accounts
-// look up the full accounts in the accounts-db
-// dump to csv
-
-const PubkeyAccountRef = struct {
-    pubkey: Pubkey,
-    offset: usize,
-    slot: Slot,
-};
-
-const AccountFileChannel = Channel(struct { AccountFile, ArrayList(PubkeyAccountRef) });
-
-pub fn sanitizeAndParseAccounts(accounts_file: *AccountFile, refs: *ArrayList(PubkeyAccountRef)) !void {
-    var offset: usize = 0;
-    var n_accounts: usize = 0;
-
-    while (true) {
-        var account = accounts_file.getAccount(offset) catch break;
-        try account.sanitize();
-
-        const pubkey = account.store_info.pubkey;
-
-        const hash_is_missing = std.mem.eql(u8, &account.hash.data, &Hash.default().data);
-        if (hash_is_missing) {
-            const hash = hashAccount(
-                account.account_info.lamports,
-                account.data,
-                &account.account_info.owner.data,
-                account.account_info.executable,
-                account.account_info.rent_epoch,
-                &pubkey.data,
-            );
-            account.hash.* = hash;
-        }
-
-        try refs.append(PubkeyAccountRef{
-            .pubkey = pubkey,
-            .offset = offset,
-            .slot = accounts_file.slot,
-        });
-
-        offset = offset + account.len;
-        n_accounts += 1;
-    }
-
-    if (offset != alignToU64(accounts_file.length)) {
-        return error.InvalidAccountFileLength;
-    }
-
-    accounts_file.n_accounts = n_accounts;
-}
 
 pub fn printTimeEstimate(
     // timer should be started at the beginning
