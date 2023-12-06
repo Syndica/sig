@@ -766,6 +766,8 @@ pub const NodeInstance = struct {
 pub const ShredType = enum(u32) {
     Data = 0b1010_0101,
     Code = 0b0101_1010,
+
+    pub const BincodeSize = u8;
 };
 
 pub const DuplicateShred = struct {

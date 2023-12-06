@@ -118,10 +118,14 @@ pub fn Deserializer(comptime Reader: type) type {
         }
 
         pub fn deserializeEnum(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const T = u32; // enum size
+            const T = @TypeOf(visitor).Value;
+            comptime var SerializedSize = u32;
+            comptime if (@hasDecl(T, "BincodeSize")) {
+                SerializedSize = T.BincodeSize;
+            };
             const tag = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(T),
-                .Big => self.reader.readIntBig(T),
+                .Little => self.reader.readIntLittle(SerializedSize),
+                .Big => self.reader.readIntBig(SerializedSize),
             } catch {
                 return Error.IO;
             };
