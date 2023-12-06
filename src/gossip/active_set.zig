@@ -70,8 +70,12 @@ pub const ActiveSet = struct {
         pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
-        for (0..size) |i| {
-            self.peers[i] = crds_peers[i].id;
+        var tgt: u8 = 0;
+        for (0..size) |src| {
+            if (self.pruned_peers.contains(crds_peers[src].id)) {
+                continue;
+            }
+            self.peers[tgt] = crds_peers[src].id;
 
             // *full* hard restart on blooms -- labs doesnt do this - bug?
             var bloom = try Bloom.random(
@@ -80,9 +84,10 @@ pub const ActiveSet = struct {
                 BLOOM_FALSE_RATE,
                 BLOOM_MAX_BITS,
             );
-            try self.pruned_peers.put(self.peers[i], bloom);
+            try self.pruned_peers.put(self.peers[tgt], bloom);
+            tgt += 1;
         }
-        self.len = size;
+        self.len = tgt;
     }
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
@@ -176,4 +181,25 @@ test "gossip.active_set: init/deinit" {
     var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &crds_table);
     defer fanout_with_prune.deinit();
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
+}
+
+// This used to cause a double free when rotating after duplicate ids were inserted
+// because there were two entries in the array but only one entry in the hashmap.
+// Now the logic prevents duplicates, and this test prevents regressions.
+test "gossip.active_set: gracefully rotates with duplicate contact ids" {
+    var alloc = std.testing.allocator;
+
+    var rng = std.rand.DefaultPrng.init(100);
+    var gossip_peers = try std.ArrayList(crds.LegacyContactInfo).initCapacity(alloc, 10);
+    defer gossip_peers.deinit();
+
+    var data = crds.LegacyContactInfo.random(rng.random());
+    var dupe = crds.LegacyContactInfo.random(rng.random());
+    dupe.id = data.id;
+    try gossip_peers.append(data);
+    try gossip_peers.append(dupe);
+
+    var active_set = ActiveSet.init(alloc);
+    defer active_set.deinit();
+    try active_set.rotate(gossip_peers.items);
 }
