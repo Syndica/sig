@@ -21,6 +21,8 @@ const Channel = @import("../sync/channel.zig").Channel;
 const hashAccount = @import("../core/account.zig").hashAccount;
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 
+const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
+
 pub const MERKLE_FANOUT: usize = 16;
 
 pub const FileId = usize;
@@ -30,15 +32,278 @@ pub const AccountRef = struct {
     offset: usize,
 };
 
+pub fn findSnapshotMetadataPath(
+    allocator: std.mem.Allocator,
+    snapshot_dir: []const u8,
+) ![]const u8 {
+    const metadata_sub_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "snapshots" },
+    );
+    var metadata_dir = try std.fs.cwd().openIterableDir(metadata_sub_path, .{});
+    var metadata_dir_iter = metadata_dir.iterate();
+
+    var maybe_snapshot_slot: ?usize = null;
+    while (try metadata_dir_iter.next()) |entry| {
+        if (entry.kind == std.fs.File.Kind.directory) {
+            maybe_snapshot_slot = try std.fmt.parseInt(usize, entry.name, 10);
+            break;
+        }
+    }
+    var snapshot_slot = maybe_snapshot_slot orelse return error.MetadataNotFound;
+
+    const metadata_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{d}/{d}",
+        .{ metadata_sub_path, snapshot_slot, snapshot_slot },
+    );
+
+    return metadata_path;
+}
+
 pub const AccountsDB = struct {
     account_files: std.AutoArrayHashMap(FileId, AccountFile),
     index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
+    allocator: std.mem.Allocator,
 
-    pub fn init(alloc: std.mem.Allocator) AccountsDB {
-        return AccountsDB{
-            .account_files = std.AutoArrayHashMap(FileId, AccountFile).init(alloc),
-            .index = std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)).init(alloc),
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .account_files = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
+            .index = std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)).init(allocator),
+            .allocator = allocator,
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.account_files.deinit();
+        self.index.deinit();
+    }
+
+    pub fn loadFromSnapshot(
+        self: *Self,
+        snapshot_path: []const u8,
+    ) !void {
+        std.debug.print("loading from snapshot: {s}\n", .{snapshot_path});
+
+        // check if accounts dir path exists
+        const accounts_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/{s}",
+            .{ snapshot_path, "accounts" },
+        );
+
+        // no accounts/ directory OR no snapshots/{slot}/{slot} file
+        // => search for .zst tarball
+        const search_for_zstd = blk: {
+            std.fs.cwd().access(accounts_path, .{}) catch |e| {
+                if (e == error.FileNotFound) {
+                    break :blk true;
+                }
+            };
+            _ = findSnapshotMetadataPath(self.allocator, snapshot_path) catch {
+                break :blk true;
+            };
+
+            break :blk false;
+        };
+
+        var snapshot_dir = try std.fs.cwd().openIterableDir(snapshot_path, .{});
+        if (search_for_zstd) {
+            var snapshot_iter = snapshot_dir.iterate();
+            while (try snapshot_iter.next()) |entry| {
+                if (std.mem.containsAtLeast(u8, entry.name, 1, ".tar.zst")) {
+                    std.debug.print("loading from zstd tarball: {s} ...", .{entry.name});
+
+                    // unpack
+                    var timer = try std.time.Timer.start();
+                    const zstd_tarball_path = try std.fmt.allocPrint(
+                        self.allocator,
+                        "{s}/{s}",
+                        .{ snapshot_path, entry.name },
+                    );
+                    const file = try std.fs.cwd().openFile(zstd_tarball_path, .{});
+                    defer file.close();
+
+                    var stream = std.compress.zstd.decompressStream(self.allocator, file.reader());
+                    try std.tar.pipeToFileSystem(snapshot_dir.dir, stream.reader(), .{ .mode_mode = .ignore });
+                    std.debug.print(" took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+                    break;
+                }
+            }
+        } else {
+            std.debug.print("loading from directory...\n", .{});
+        }
+
+        // load the snapshot metadata
+        std.debug.print("reading snapshot metadata...", .{});
+        var timer = try std.time.Timer.start();
+        const snapshot_metadata_path = try findSnapshotMetadataPath(self.allocator, snapshot_path);
+        var snapshot_fields = try SnapshotFields.readFromFilePath(
+            self.allocator,
+            snapshot_metadata_path,
+        );
+        var snapshot_metadata = snapshot_fields.getFieldRefs();
+        std.debug.print(" took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+
+        // start the indexing
+        std.debug.print("starting indexing...\n", .{});
+        timer.reset();
+        var accounts_dir = try std.fs.cwd().openIterableDir(accounts_path, .{});
+        var files = try readDirectory(self.allocator, accounts_dir);
+        var filenames = files.filenames;
+        defer {
+            filenames.deinit();
+            self.allocator.free(files.mem);
+        }
+        var n_account_files: usize = filenames.items.len;
+        std.debug.print("found {d} account files\n", .{n_account_files});
+
+        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+        var chunk_size = n_account_files / n_threads;
+        if (chunk_size == 0) {
+            n_threads = 1;
+            chunk_size = n_account_files;
+        }
+        std.debug.print("using {d} threads with {d} account_files per thread\n", .{ n_threads, chunk_size });
+
+        var channel = AccountFileChannel.init(self.allocator, 10_000);
+        defer channel.deinit();
+        var handles = try ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
+        defer handles.deinit();
+
+        //
+        var start_index: usize = 0;
+        var end_index: usize = 0;
+        for (0..n_threads) |i| {
+            if (i == (n_threads - 1)) {
+                end_index = n_account_files;
+            } else {
+                end_index = start_index + chunk_size;
+            }
+            const handle = try std.Thread.spawn(.{}, openAndParseAccountFiles, .{
+                self.allocator,
+                accounts_path,
+                snapshot_metadata.accounts_db_fields,
+                channel,
+                // per task files
+                filenames.items[start_index..end_index],
+            });
+
+            handles.appendAssumeCapacity(handle);
+            start_index = end_index;
+        }
+        std.debug.assert(end_index == n_account_files);
+
+        try self.recvAndIndexAccounts(channel, n_account_files);
+
+        for (handles.items) |handle| {
+            handle.join();
+        }
+        std.debug.print("\n", .{});
+        std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+    }
+
+    pub fn openAndParseAccountFiles(
+        allocator: std.mem.Allocator,
+        accounts_dir_path: []const u8,
+        accounts_db_fields: *const AccountsDbFields,
+        channel: *AccountFileChannel,
+        // task specific
+        file_names: [][]const u8,
+    ) !void {
+        // estimate of how many accounts per accounts file
+        const ACCOUNTS_PER_FILE_EST = 20_000; // TODO: tune?
+        var refs = try ArrayList(PubkeyAccountRef).initCapacity(allocator, ACCOUNTS_PER_FILE_EST);
+
+        // NOTE: might need to be longer depending on abs path length
+        var abs_path_buf: [1024]u8 = undefined;
+        for (file_names) |file_name| {
+            // parse "{slot}.{id}" from the file_name
+            var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
+            const slot = std.fmt.parseInt(Slot, fiter.next().?, 10) catch |err| {
+                std.debug.print("failed to parse slot from {s}\n", .{file_name});
+                return err;
+            };
+            const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+
+            // read metadata
+            const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
+            std.debug.assert(slot_metas.items.len == 1);
+            const slot_meta = slot_metas.items[0];
+            std.debug.assert(slot_meta.id == accounts_file_id);
+
+            // read appendVec from file
+            const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
+            const accounts_file_file = try std.fs.cwd().openFile(abs_path, .{ .mode = .read_write });
+            var accounts_file = AccountFile.init(accounts_file_file, slot_meta, slot) catch |err| {
+                var buf: [1024]u8 = undefined;
+                var stream = std.io.fixedBufferStream(&buf);
+                var writer = stream.writer();
+                try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
+                @panic(stream.getWritten());
+            };
+
+            sanitizeAndParseAccounts(&accounts_file, &refs) catch |err| {
+                var buf: [1024]u8 = undefined;
+                var stream = std.io.fixedBufferStream(&buf);
+                var writer = stream.writer();
+                try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
+                @panic(stream.getWritten());
+            };
+
+            try channel.send(.{ accounts_file, refs });
+
+            // re-allocate
+            refs = try ArrayList(PubkeyAccountRef).initCapacity(allocator, ACCOUNTS_PER_FILE_EST);
+        }
+    }
+
+    pub fn recvAndIndexAccounts(
+        self: *Self,
+        channel: *AccountFileChannel,
+        total_files: usize,
+    ) !void {
+        var timer = try std.time.Timer.start();
+        var file_count: usize = 0;
+
+        while (true) {
+            const maybe_task_outputs = channel.try_drain() catch unreachable;
+            var task_outputs = maybe_task_outputs orelse continue;
+            defer channel.allocator.free(task_outputs);
+
+            for (task_outputs) |task_output| {
+                const account_file: AccountFile = task_output[0];
+                const refs: ArrayList(PubkeyAccountRef) = task_output[1];
+                defer refs.deinit();
+
+                // track the file
+                try self.account_files.putNoClobber(account_file.id, account_file);
+
+                // populate index
+                for (refs.items) |account_ref| {
+                    var entry = try self.index.getOrPut(account_ref.pubkey);
+                    if (!entry.found_existing) {
+                        entry.value_ptr.* = ArrayList(AccountRef).init(self.allocator);
+                    }
+
+                    try entry.value_ptr.append(AccountRef{
+                        .file_id = account_file.id,
+                        .offset = account_ref.offset,
+                        .slot = account_ref.slot,
+                    });
+                }
+
+                file_count += 1;
+                if (file_count % 1000 == 0 or file_count < 1000) {
+                    printTimeEstimate(&timer, total_files, file_count, "recvAndIndexAccounts");
+                    if (file_count == total_files) return;
+                }
+            }
+        }
     }
 };
 
@@ -86,58 +351,6 @@ const PubkeyAccountRef = struct {
 
 const AccountFileChannel = Channel(struct { AccountFile, ArrayList(PubkeyAccountRef) });
 
-pub fn openFiles(
-    allocator: std.mem.Allocator,
-    accounts_db_fields: *const AccountsDbFields,
-    accounts_dir_path: []const u8,
-    // task specific
-    file_names: [][]const u8,
-    channel: *AccountFileChannel,
-) !void {
-    // estimate of how many accounts per accounts file
-    const ACCOUNTS_PER_FILE_EST = 20_000;
-    var refs = try ArrayList(PubkeyAccountRef).initCapacity(allocator, ACCOUNTS_PER_FILE_EST);
-
-    // NOTE: might need to be longer depending on abs path length
-    var abs_path_buf: [1024]u8 = undefined;
-    for (file_names) |file_name| {
-        // parse "{slot}.{id}" from the file_name
-        var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
-        const slot = try std.fmt.parseInt(Slot, fiter.next().?, 10);
-        const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
-
-        // read metadata
-        const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
-        std.debug.assert(slot_metas.items.len == 1);
-        const slot_meta = slot_metas.items[0];
-        std.debug.assert(slot_meta.id == accounts_file_id);
-
-        // read appendVec from file
-        const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
-        const accounts_file_file = try std.fs.openFileAbsolute(abs_path, .{ .mode = .read_write });
-        var accounts_file = AccountFile.init(accounts_file_file, slot_meta, slot) catch |err| {
-            var buf: [1024]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            var writer = stream.writer();
-            try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
-            @panic(stream.getWritten());
-        };
-
-        sanitizeAndParseAccounts(&accounts_file, &refs) catch |err| {
-            var buf: [1024]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            var writer = stream.writer();
-            try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
-            @panic(stream.getWritten());
-        };
-
-        try channel.send(.{ accounts_file, refs });
-
-        // re-allocate
-        refs = try ArrayList(PubkeyAccountRef).initCapacity(allocator, ACCOUNTS_PER_FILE_EST);
-    }
-}
-
 pub fn sanitizeAndParseAccounts(accounts_file: *AccountFile, refs: *ArrayList(PubkeyAccountRef)) !void {
     var offset: usize = 0;
     var n_accounts: usize = 0;
@@ -176,51 +389,6 @@ pub fn sanitizeAndParseAccounts(accounts_file: *AccountFile, refs: *ArrayList(Pu
     }
 
     accounts_file.n_accounts = n_accounts;
-}
-
-pub fn recvFilesAndIndex(
-    allocator: std.mem.Allocator,
-    channel: *AccountFileChannel,
-    accounts_db: *AccountsDB,
-    total_files: usize,
-) !void {
-    var timer = try std.time.Timer.start();
-    var file_count: usize = 0;
-
-    while (true) {
-        const maybe_task_outputs = channel.try_drain() catch unreachable;
-        var task_outputs = maybe_task_outputs orelse continue;
-        defer channel.allocator.free(task_outputs);
-
-        for (task_outputs) |task_output| {
-            const account_file: AccountFile = task_output[0];
-            const refs: ArrayList(PubkeyAccountRef) = task_output[1];
-            defer refs.deinit();
-
-            // track the file
-            try accounts_db.account_files.putNoClobber(account_file.id, account_file);
-
-            // populate index
-            for (refs.items) |account_ref| {
-                var entry = try accounts_db.index.getOrPut(account_ref.pubkey);
-                if (!entry.found_existing) {
-                    entry.value_ptr.* = ArrayList(AccountRef).init(allocator);
-                }
-
-                try entry.value_ptr.append(AccountRef{
-                    .file_id = account_file.id,
-                    .offset = account_ref.offset,
-                    .slot = account_ref.slot,
-                });
-            }
-
-            file_count += 1;
-            if (file_count % 1000 == 0 or file_count < 1000) {
-                printTimeEstimate(&timer, total_files, file_count, "recvFilesAndIndex");
-                if (file_count == total_files) return;
-            }
-        }
-    }
 }
 
 pub fn printTimeEstimate(
@@ -359,169 +527,94 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
-    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots";
-
-    const accounts_dir_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_path, "accounts" },
-    );
-    const accounts_db_fields_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_path, "accounts_db.bincode" },
-    );
-
-    // time it
-    var full_timer = try std.time.Timer.start();
-    var timer = try std.time.Timer.start();
-
-    var accounts_dir = try std.fs.openIterableDirAbsolute(accounts_dir_path, .{});
-    var files = try readDirectory(allocator, accounts_dir);
-    var filenames = files.filenames;
-    defer {
-        filenames.deinit();
-        allocator.free(files.mem);
-    }
-    var n_account_files: usize = filenames.items.len;
-    std.debug.print("n_account_files: {d}\n", .{n_account_files});
-
-    // read accounts_db.bincode
-    const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
-        std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
-        return;
-    };
-    var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
-    defer bincode.free(allocator, accounts_db_fields);
+    const snapshot_path = "../local-net";
 
     // init db
     var accounts_db = AccountsDB.init(allocator);
+    try accounts_db.loadFromSnapshot(snapshot_path);
 
-    // start processing
-    var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
-    var handles = try ArrayList(std.Thread).initCapacity(allocator, n_threads);
-    var chunk_size = n_account_files / n_threads;
-    if (chunk_size == 0) {
-        n_threads = 1;
-    }
-    std.debug.print("starting {d} threads with {d} files per thread\n", .{ n_threads, chunk_size });
+    // // // verification logic
+    // // sort the pubkeys
+    // std.debug.print("initializing pubkey bins\n", .{});
+    // const n_bins = 128;
+    // var bins = try PubkeyBins.init(allocator, n_bins);
+    // for (accounts_db.index.keys()) |*pubkey| {
+    //     try bins.insert(pubkey);
+    // }
 
-    var channel = AccountFileChannel.init(allocator, 10_000);
-    defer channel.deinit();
+    // n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+    // chunk_size = n_bins / n_threads;
+    // if (chunk_size == 0) {
+    //     n_threads = 1;
+    // }
+    // handles.clearRetainingCapacity();
+    // std.debug.print("starting {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
 
-    var start_index: usize = 0;
-    var end_index: usize = 0;
+    // start_index = 0;
+    // end_index = 0;
 
-    //
-    for (0..n_threads) |i| {
-        if (i == (n_threads - 1)) {
-            end_index = n_account_files;
-        } else {
-            end_index = start_index + chunk_size;
-        }
+    // for (0..n_threads) |i| {
+    //     if (i == (n_threads - 1)) {
+    //         end_index = n_bins;
+    //     } else {
+    //         end_index = start_index + chunk_size;
+    //     }
 
-        const handle = try std.Thread.spawn(.{}, openFiles, .{
-            allocator,
-            &accounts_db_fields,
-            accounts_dir_path,
-            filenames.items[start_index..end_index],
-            channel,
-        });
-        handles.appendAssumeCapacity(handle);
-        start_index = end_index;
-    }
-    std.debug.assert(end_index == n_account_files);
+    //     var handle = try std.Thread.spawn(.{}, sortBins, .{
+    //         bins.bins,
+    //         start_index,
+    //         end_index,
+    //     });
 
-    try recvFilesAndIndex(allocator, channel, &accounts_db, n_account_files);
+    //     handles.appendAssumeCapacity(handle);
+    //     start_index = end_index;
+    // }
+    // std.debug.assert(end_index == n_bins);
 
-    for (handles.items) |handle| {
-        handle.join();
-    }
-    std.debug.print("\n", .{});
-    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
-    timer.reset();
+    // for (handles.items) |handle| {
+    //     handle.join();
+    // }
+    // std.debug.print("\n", .{});
+    // std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
+    // timer.reset();
 
-    // sort the pubkeys
-    std.debug.print("initializing pubkey bins\n", .{});
-    const n_bins = 128;
-    var bins = try PubkeyBins.init(allocator, n_bins);
-    for (accounts_db.index.keys()) |*pubkey| {
-        try bins.insert(pubkey);
-    }
+    // // compute merkle tree over the slices
+    // std.debug.print("computing merkle tree\n", .{});
+    // var total_count: usize = 0;
+    // for (bins.bins) |*bin| {
+    //     total_count += bin.items.len;
+    // }
 
-    n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    chunk_size = n_bins / n_threads;
-    if (chunk_size == 0) {
-        n_threads = 1;
-    }
-    handles.clearRetainingCapacity();
-    std.debug.print("starting {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
+    // var total_lamports: u64 = 0;
+    // var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
+    // for (bins.bins) |*bin| {
+    //     for (bin.items) |pubkey| {
+    //         const account_states = accounts_db.index.get(pubkey.*).?;
+    //         var max_slot_index: ?usize = null;
+    //         var max_slot: usize = 0;
+    //         for (account_states.items, 0..) |account_info, i| {
+    //             if (max_slot_index == null or max_slot < account_info.slot) {
+    //                 max_slot = account_info.slot;
+    //                 max_slot_index = i;
+    //             }
+    //         }
+    //         const newest_account_loc = account_states.items[max_slot_index.?];
+    //         const accounts_file: AccountFile = accounts_db.account_files.get(newest_account_loc.file_id).?;
+    //         const account = try accounts_file.getAccount(newest_account_loc.offset);
+    //         const lamports = account.account_info.lamports;
 
-    start_index = 0;
-    end_index = 0;
+    //         if (account.account_info.lamports == 0) continue;
+    //         // std.debug.print("pubkey: {s} slot: {d} lamports: {d} bin: {d}\n", .{account_info.pubkey.toStringWithBuf(dest[0..44]), account_info.slot, account_info.lamports, bin_i});
+    //         hashes.appendAssumeCapacity(account.hash.*);
+    //         total_lamports += lamports;
+    //     }
+    // }
+    // std.debug.print("total lamports: {d}\n", .{total_lamports});
 
-    for (0..n_threads) |i| {
-        if (i == (n_threads - 1)) {
-            end_index = n_bins;
-        } else {
-            end_index = start_index + chunk_size;
-        }
+    // const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
+    // std.debug.print("merkle root: {any}\n", .{root_hash.*});
 
-        var handle = try std.Thread.spawn(.{}, sortBins, .{
-            bins.bins,
-            start_index,
-            end_index,
-        });
-
-        handles.appendAssumeCapacity(handle);
-        start_index = end_index;
-    }
-    std.debug.assert(end_index == n_bins);
-
-    for (handles.items) |handle| {
-        handle.join();
-    }
-    std.debug.print("\n", .{});
-    std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
-    timer.reset();
-
-    // compute merkle tree over the slices
-    std.debug.print("computing merkle tree\n", .{});
-    var total_count: usize = 0;
-    for (bins.bins) |*bin| {
-        total_count += bin.items.len;
-    }
-
-    var total_lamports: u64 = 0;
-    var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
-    for (bins.bins) |*bin| {
-        for (bin.items) |pubkey| {
-            const account_states = accounts_db.index.get(pubkey.*).?;
-            var max_slot_index: ?usize = null;
-            var max_slot: usize = 0;
-            for (account_states.items, 0..) |account_info, i| {
-                if (max_slot_index == null or max_slot < account_info.slot) {
-                    max_slot = account_info.slot;
-                    max_slot_index = i;
-                }
-            }
-            const newest_account_loc = account_states.items[max_slot_index.?];
-            const accounts_file: AccountFile = accounts_db.account_files.get(newest_account_loc.file_id).?;
-            const account = try accounts_file.getAccount(newest_account_loc.offset);
-            const lamports = account.account_info.lamports;
-
-            if (account.account_info.lamports == 0) continue;
-            // std.debug.print("pubkey: {s} slot: {d} lamports: {d} bin: {d}\n", .{account_info.pubkey.toStringWithBuf(dest[0..44]), account_info.slot, account_info.lamports, bin_i});
-            hashes.appendAssumeCapacity(account.hash.*);
-            total_lamports += lamports;
-        }
-    }
-    std.debug.print("total lamports: {d}\n", .{total_lamports});
-
-    const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
-    std.debug.print("merkle root: {any}\n", .{root_hash.*});
-
-    std.debug.print("\n", .{});
-    std.debug.print("done in {d}ms\n", .{full_timer.read() / std.time.ns_per_ms});
-    timer.reset();
+    // std.debug.print("\n", .{});
+    // std.debug.print("done in {d}ms\n", .{full_timer.read() / std.time.ns_per_ms});
+    // timer.reset();
 }
