@@ -57,6 +57,27 @@ pub const AccountFileAccountInfo = struct {
             return error.InvalidLamports;
         }
     }
+
+    // pubkey
+    pub inline fn pubkey(self: *const @This()) Pubkey {
+        return self.store_info.pubkey;
+    }
+
+    pub inline fn lamports(self: *const @This()) u64 {
+        return self.account_info.lamports;
+    }
+
+    pub inline fn owner(self: *const @This()) Pubkey {
+        return self.account_info.owner;
+    }
+
+    pub inline fn executable(self: *const @This()) bool {
+        return self.account_info.executable;
+    }
+
+    pub inline fn rent_epoch(self: *const @This()) Epoch {
+        return self.account_info.rent_epoch;
+    }
 };
 
 pub const PubkeyAccountRef = struct {

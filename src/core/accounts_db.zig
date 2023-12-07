@@ -12,6 +12,7 @@ const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields
 const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
+const AccountFileAccountInfo = @import("../core/accounts_file.zig").AccountFileAccountInfo;
 const alignToU64 = @import("../core/accounts_file.zig").alignToU64;
 const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
 
@@ -368,8 +369,14 @@ pub const AccountsDB = struct {
             total_accounts += bin.items.len;
         }
 
+        // used for account-delta-hash
+        const snapshot_slot = self.snapshot_metadata.bank_fields.slot;
+        var slot_hashes = try ArrayList(Hash).initCapacity(self.allocator, 1000);
+        defer slot_hashes.deinit();
+
         var hashes = try ArrayList(Hash).initCapacity(self.allocator, total_accounts);
         defer hashes.deinit();
+
         var total_lamports: u64 = 0;
         for (bins.bins) |*bin| {
             for (bin.items) |pubkey| {
@@ -386,12 +393,15 @@ pub const AccountsDB = struct {
                 }
                 const newest_account_loc = account_slot_list.items[max_slot_index.?];
 
-                const accounts_file: AccountFile = self.account_files.get(newest_account_loc.file_id).?;
-                const account = try accounts_file.getAccount(newest_account_loc.offset);
-                const lamports = account.account_info.lamports;
+                const account = try self.getAccount(newest_account_loc.file_id, newest_account_loc.offset);
+                const lamports = account.lamports();
+
+                if (max_slot == snapshot_slot) {
+                    try slot_hashes.append(account.hash.*);
+                }
 
                 // only include non-zero lamport accounts (for full snapshots)
-                if (account.account_info.lamports == 0) continue;
+                if (lamports == 0) continue;
 
                 // std.debug.print("pubkey: {s} lamports: {d}\n", .{
                 //     account.store_info.pubkey.string(),
@@ -407,6 +417,7 @@ pub const AccountsDB = struct {
 
         const expected_total_lamports = self.snapshot_metadata.bank_fields.capitalization;
         if (expected_total_lamports != total_lamports) {
+            std.debug.print("incorrect total lamports\n", .{});
             std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_total_lamports, total_lamports });
             return error.IncorrectTotalLamports;
         }
@@ -419,9 +430,26 @@ pub const AccountsDB = struct {
         const bank_hash_info = self.snapshot_metadata.accounts_db_fields.bank_hash_info;
         const expected_accounts_hash = bank_hash_info.accounts_hash;
         if (expected_accounts_hash.cmp(accounts_hash) != .eq) {
+            std.debug.print("incorrect accounts hash\n", .{});
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_hash, accounts_hash });
             return error.IncorrectAccountsHash;
         }
+
+        const expected_accounts_delta_hash = bank_hash_info.accounts_delta_hash;
+        const accounts_delta_hash = try merkleTreeHash(slot_hashes.items, MERKLE_FANOUT);
+        if (expected_accounts_delta_hash.cmp(accounts_delta_hash) != .eq) {
+            std.debug.print("incorrect accounts delta hash\n", .{});
+            std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
+            return error.IncorrectAccountsDeltaHash;
+        }
+    }
+
+    pub fn getAccount(self: *const Self, file_id: FileId, offset: usize) !AccountFileAccountInfo {
+        const accounts_file = self.account_files.get(file_id) orelse {
+            return error.InvalidFileId;
+        };
+        const account = try accounts_file.getAccount(offset);
+        return account;
     }
 };
 
