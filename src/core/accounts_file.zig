@@ -96,7 +96,7 @@ pub inline fn alignToU64(addr: usize) usize {
 pub const AccountFile = struct {
     // file contents
     mmap_ptr: []align(std.mem.page_size) u8,
-    id: FileId,
+    id: usize,
     slot: Slot,
     // number of bytes used
     length: usize,

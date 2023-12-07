@@ -25,6 +25,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 const hashAccount = @import("../core/account.zig").hashAccount;
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 const findSnapshotMetadataPath = @import("../cmd/snapshot_utils.zig").findSnapshotMetadataPath;
+const GenesisConfig = @import("../core/genesis_config.zig").GenesisConfig;
 
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
@@ -69,6 +70,7 @@ pub const AccountsDB = struct {
         bincode.free(self.allocator, self.snapshot_metadata);
     }
 
+    /// loads the account files and create the pubkey indexes
     pub fn loadFromSnapshot(
         self: *Self,
         snapshot_path: []const u8,
@@ -269,9 +271,9 @@ pub const AccountsDB = struct {
     ) !void {
         var timer = try std.time.Timer.start();
         var file_count: usize = 0;
-        var max_file_id: FileId = 0;
+        var max_file_id: usize = 0;
 
-        while (true) blk: {
+        while (file_count != total_files) {
             const maybe_task_outputs = channel.try_drain() catch unreachable;
             var task_outputs = maybe_task_outputs orelse continue;
             defer channel.allocator.free(task_outputs);
@@ -282,8 +284,9 @@ pub const AccountsDB = struct {
                 defer refs.deinit();
 
                 // track the file
-                try self.account_files.putNoClobber(account_file.id, account_file);
                 max_file_id = @max(account_file.id, max_file_id);
+                const u32_id: u32 = @intCast(account_file.id);
+                try self.account_files.putNoClobber(u32_id, account_file);
 
                 // populate index
                 for (refs.items) |account_ref| {
@@ -293,7 +296,7 @@ pub const AccountsDB = struct {
                     }
 
                     try entry.value_ptr.append(AccountRef{
-                        .file_id = account_file.id,
+                        .file_id = u32_id,
                         .offset = account_ref.offset,
                         .slot = account_ref.slot,
                     });
@@ -302,8 +305,6 @@ pub const AccountsDB = struct {
                 file_count += 1;
                 if (file_count % 1000 == 0 or file_count < 1000) {
                     printTimeEstimate(&timer, total_files, file_count, "recvAndIndexAccounts");
-                    if (file_count == total_files)
-                        break :blk;
                 }
             }
         }
@@ -311,9 +312,46 @@ pub const AccountsDB = struct {
         std.debug.assert(max_file_id <= std.math.maxInt(u32) / 2);
     }
 
-    pub fn validate(
+    /// validates the loaded accounts_db which is loaded from a snapshot
+    /// this verifies:
+    /// - the full account hash is correct
+    /// - the total number of lamports is correct
+    /// - the delta account hash is correct
+    /// - the bankfields metadata matches the genesis config metadata
+    /// - the bankfields are correct
+    pub fn validateLoadFromSnapshot(
         self: *Self,
+        genesis_config: *const GenesisConfig,
     ) !void {
+        const bank_fields = self.snapshot_metadata.bank_fields;
+        if (bank_fields.max_tick_height != (bank_fields.slot + 1) * bank_fields.ticks_per_slot) {
+            return error.InvalidBankFields;
+        }
+        if (bank_fields.epoch_schedule.getEpoch(bank_fields.slot) != bank_fields.epoch) {
+            return error.InvalidBankFields;
+        }
+
+        // the bankfields metadata matches the genesis config metadata
+        if (genesis_config.creation_time != bank_fields.genesis_creation_time) {
+            return error.BankAndGenesisMismatch;
+        }
+        if (genesis_config.ticks_per_slot != bank_fields.ticks_per_slot) {
+            return error.BankAndGenesisMismatch;
+        }
+        const genesis_ns_per_slot = genesis_config.poh_config.target_tick_duration.nanos * @as(u128, genesis_config.ticks_per_slot);
+        if (bank_fields.ns_per_slot != genesis_ns_per_slot) {
+            return error.BankAndGenesisMismatch;
+        }
+
+        const genesis_slots_per_year = yearsAsSlots(1, genesis_config.poh_config.target_tick_duration.nanos, bank_fields.ticks_per_slot);
+        if (genesis_slots_per_year != bank_fields.slots_per_year) {
+            return error.BankAndGenesisMismatch;
+        }
+        if (!std.meta.eql(bank_fields.epoch_schedule, genesis_config.epoch_schedule)) {
+            return error.BankAndGenesisMismatch;
+        }
+
+        // logic for computing the hashes
         const n_bins = blk: {
             if (builtin.is_test) {
                 break :blk 256;
@@ -458,6 +496,12 @@ pub const AccountsDB = struct {
     }
 };
 
+pub const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
+
+pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 {
+    return years * SECONDS_PER_YEAR * (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration_ns))) / @as(f64, @floatFromInt(ticks_per_slot));
+}
+
 pub fn printTimeEstimate(
     // timer should be started at the beginning
     timer: *std.time.Timer,
@@ -592,14 +636,19 @@ pub fn sortBins(
 
 test "core.accounts_db: load from test snapshot" {
     var allocator = std.testing.allocator;
-    const snapshot_path = "test_data/";
 
     // init db -- will first load from the .zstd file
+    const snapshot_path = "test_data/";
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
-
     try accounts_db.loadFromSnapshot(snapshot_path);
-    try accounts_db.validate();
+
+    // use the genesis to verify loading
+    const genesis_path = "test_data/genesis.bin";
+    const gen_config = try GenesisConfig.init(allocator, genesis_path);
+    defer gen_config.deinit(allocator);
+
+    try accounts_db.validateLoadFromSnapshot(&gen_config);
 }
 
 pub fn main() !void {

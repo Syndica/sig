@@ -234,6 +234,7 @@ pub const BankFields = struct {
 };
 
 pub const AccountFileInfo = struct {
+    // note: serialized id is a usize but in code its FileId (u32)
     id: usize,
     length: usize, // amount of bytes used
 
