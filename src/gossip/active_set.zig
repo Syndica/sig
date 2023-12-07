@@ -47,8 +47,8 @@ pub const ActiveSet = struct {
         self.pruned_peers.deinit();
     }
 
-    pub inline fn len(self: *const Self) u32 {
-        return self.pruned_peers.unmanaged.size;
+    pub fn len(self: *const Self) u32 {
+        return self.pruned_peers.count();
     }
 
     pub fn rotate(
@@ -70,19 +70,18 @@ pub const ActiveSet = struct {
         pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
-        for (0..size) |src| {
-            if (self.pruned_peers.contains(crds_peers[src].id)) {
-                continue;
+        for (0..size) |i| {
+            var entry = try self.pruned_peers.getOrPut(crds_peers[i].id);
+            if (entry.found_existing == false) {
+                // *full* hard restart on blooms -- labs doesnt do this - bug?
+                var bloom = try Bloom.random(
+                    self.allocator,
+                    bloom_num_items,
+                    BLOOM_FALSE_RATE,
+                    BLOOM_MAX_BITS,
+                );
+                entry.value_ptr.* = bloom;
             }
-
-            // *full* hard restart on blooms -- labs doesnt do this - bug?
-            var bloom = try Bloom.random(
-                self.allocator,
-                bloom_num_items,
-                BLOOM_FALSE_RATE,
-                BLOOM_MAX_BITS,
-            );
-            try self.pruned_peers.put(crds_peers[src].id, bloom);
         }
     }
 
@@ -180,9 +179,6 @@ test "gossip.active_set: init/deinit" {
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
 }
 
-// This used to cause a double free when rotating after duplicate ids were inserted
-// because there were two entries in the array but only one entry in the hashmap.
-// Now the logic prevents duplicates, and this test prevents regressions.
 test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     var alloc = std.testing.allocator;
 
