@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ArrayList = std.ArrayList;
 
 const Account = @import("../core/account.zig").Account;
@@ -36,9 +37,12 @@ pub const AccountRef = struct {
 const AccountFileChannel = Channel(struct { AccountFile, ArrayList(PubkeyAccountRef) });
 
 pub const AccountsDB = struct {
+    allocator: std.mem.Allocator,
     account_files: std.AutoArrayHashMap(FileId, AccountFile),
     index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
-    allocator: std.mem.Allocator,
+
+    // TODO: remove later (only need accounts-db fields)
+    snapshot_metadata: SnapshotFields = undefined,
 
     const Self = @This();
 
@@ -60,6 +64,8 @@ pub const AccountsDB = struct {
             refs.deinit();
         }
         self.index.deinit();
+
+        bincode.free(self.allocator, self.snapshot_metadata);
     }
 
     pub fn loadFromSnapshot(
@@ -135,9 +141,7 @@ pub const AccountsDB = struct {
             self.allocator,
             snapshot_metadata_path,
         );
-        defer snapshot_fields.deinit(self.allocator);
-
-        var snapshot_metadata = snapshot_fields.getFieldRefs();
+        self.snapshot_metadata = snapshot_fields;
         std.debug.print(" took {s}\n", .{std.fmt.fmtDuration(timer.read())});
 
         // start the indexing
@@ -169,7 +173,6 @@ pub const AccountsDB = struct {
         var handles = try ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
         defer handles.deinit();
 
-        //
         var start_index: usize = 0;
         var end_index: usize = 0;
         for (0..n_threads) |i| {
@@ -181,7 +184,7 @@ pub const AccountsDB = struct {
             const handle = try std.Thread.spawn(.{}, openAndParseAccountFiles, .{
                 self.allocator,
                 accounts_path,
-                snapshot_metadata.accounts_db_fields,
+                &self.snapshot_metadata.accounts_db_fields,
                 channel,
                 // per task files
                 filenames.items[start_index..end_index],
@@ -299,6 +302,125 @@ pub const AccountsDB = struct {
                     if (file_count == total_files) return;
                 }
             }
+        }
+    }
+
+    pub fn validate(
+        self: *Self,
+    ) !void {
+        const n_bins = blk: {
+            if (builtin.is_test) {
+                break :blk 256;
+            } else {
+                break :blk PUBKEY_BINS_FOR_CALCULATING_HASHES;
+            }
+        };
+
+        var bins = try PubkeyBins.init(self.allocator, n_bins);
+        defer bins.deinit();
+
+        // populate the bins
+        for (self.index.keys()) |*pubkey| {
+            try bins.insert(pubkey);
+        }
+
+        std.debug.print("sorting bins\n", .{});
+        var timer = try std.time.Timer.start();
+        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+        var chunk_size = n_bins / n_threads;
+        if (chunk_size == 0) {
+            n_threads = 1;
+            chunk_size = n_bins;
+        }
+
+        var handles = try std.ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
+        defer handles.deinit();
+
+        var start_index: usize = 0;
+        var end_index: usize = 0;
+        for (0..n_threads) |i| {
+            if (i == (n_threads - 1)) {
+                end_index = n_bins;
+            } else {
+                end_index = start_index + chunk_size;
+            }
+            var handle = try std.Thread.spawn(.{}, sortBins, .{
+                bins.bins,
+                start_index,
+                end_index,
+            });
+            handles.appendAssumeCapacity(handle);
+            start_index = end_index;
+        }
+        std.debug.assert(end_index == n_bins);
+
+        for (handles.items) |handle| {
+            handle.join();
+        }
+        std.debug.print("\n", .{});
+        std.debug.print("sorting took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+
+        // compute merkle tree over the slices
+        std.debug.print("gathering account hashes\n", .{});
+        var total_accounts: usize = 0;
+        for (bins.bins) |*bin| {
+            total_accounts += bin.items.len;
+        }
+
+        var hashes = try ArrayList(Hash).initCapacity(self.allocator, total_accounts);
+        defer hashes.deinit();
+        var total_lamports: u64 = 0;
+        for (bins.bins) |*bin| {
+            for (bin.items) |pubkey| {
+                const account_slot_list = self.index.get(pubkey.*).?;
+
+                // get the most recent state of the account
+                var max_slot_index: ?usize = null;
+                var max_slot: usize = 0;
+                for (account_slot_list.items, 0..) |account_info, i| {
+                    if (max_slot_index == null or max_slot < account_info.slot) {
+                        max_slot = account_info.slot;
+                        max_slot_index = i;
+                    }
+                }
+                const newest_account_loc = account_slot_list.items[max_slot_index.?];
+
+                const accounts_file: AccountFile = self.account_files.get(newest_account_loc.file_id).?;
+                const account = try accounts_file.getAccount(newest_account_loc.offset);
+                const lamports = account.account_info.lamports;
+
+                // only include non-zero lamport accounts (for full snapshots)
+                if (account.account_info.lamports == 0) continue;
+
+                // std.debug.print("pubkey: {s} lamports: {d}\n", .{
+                //     account.store_info.pubkey.string(),
+                //     account.account_info.lamports,
+                // });
+
+                hashes.appendAssumeCapacity(account.hash.*);
+                total_lamports += lamports;
+            }
+        }
+        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+
+        const expected_total_lamports = self.snapshot_metadata.bank_fields.capitalization;
+        if (expected_total_lamports != total_lamports) {
+            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_total_lamports, total_lamports });
+            return error.IncorrectTotalLamports;
+        }
+
+        std.debug.print("computing the merkle root\n", .{});
+        const accounts_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
+        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+
+        const bank_hash_info = self.snapshot_metadata.accounts_db_fields.bank_hash_info;
+        const expected_accounts_hash = bank_hash_info.accounts_hash;
+        if (expected_accounts_hash.cmp(accounts_hash) != .eq) {
+            std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_hash, accounts_hash });
+            return error.IncorrectAccountsHash;
         }
     }
 };
@@ -444,6 +566,7 @@ test "core.accounts_db: load from test snapshot" {
     defer accounts_db.deinit();
 
     try accounts_db.loadFromSnapshot(snapshot_path);
+    try accounts_db.validate();
 }
 
 pub fn main() !void {
@@ -456,88 +579,5 @@ pub fn main() !void {
     var accounts_db = AccountsDB.init(allocator);
     try accounts_db.loadFromSnapshot(snapshot_path);
 
-    // // // verification logic
-    // // sort the pubkeys
-    // std.debug.print("initializing pubkey bins\n", .{});
-    // const n_bins = 128;
-    // var bins = try PubkeyBins.init(allocator, n_bins);
-    // for (accounts_db.index.keys()) |*pubkey| {
-    //     try bins.insert(pubkey);
-    // }
-
-    // n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    // chunk_size = n_bins / n_threads;
-    // if (chunk_size == 0) {
-    //     n_threads = 1;
-    // }
-    // handles.clearRetainingCapacity();
-    // std.debug.print("starting {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
-
-    // start_index = 0;
-    // end_index = 0;
-
-    // for (0..n_threads) |i| {
-    //     if (i == (n_threads - 1)) {
-    //         end_index = n_bins;
-    //     } else {
-    //         end_index = start_index + chunk_size;
-    //     }
-
-    //     var handle = try std.Thread.spawn(.{}, sortBins, .{
-    //         bins.bins,
-    //         start_index,
-    //         end_index,
-    //     });
-
-    //     handles.appendAssumeCapacity(handle);
-    //     start_index = end_index;
-    // }
-    // std.debug.assert(end_index == n_bins);
-
-    // for (handles.items) |handle| {
-    //     handle.join();
-    // }
-    // std.debug.print("\n", .{});
-    // std.debug.print("done in {d}ms\n", .{timer.read() / std.time.ns_per_ms});
-    // timer.reset();
-
-    // // compute merkle tree over the slices
-    // std.debug.print("computing merkle tree\n", .{});
-    // var total_count: usize = 0;
-    // for (bins.bins) |*bin| {
-    //     total_count += bin.items.len;
-    // }
-
-    // var total_lamports: u64 = 0;
-    // var hashes = try ArrayList(Hash).initCapacity(allocator, total_count);
-    // for (bins.bins) |*bin| {
-    //     for (bin.items) |pubkey| {
-    //         const account_states = accounts_db.index.get(pubkey.*).?;
-    //         var max_slot_index: ?usize = null;
-    //         var max_slot: usize = 0;
-    //         for (account_states.items, 0..) |account_info, i| {
-    //             if (max_slot_index == null or max_slot < account_info.slot) {
-    //                 max_slot = account_info.slot;
-    //                 max_slot_index = i;
-    //             }
-    //         }
-    //         const newest_account_loc = account_states.items[max_slot_index.?];
-    //         const accounts_file: AccountFile = accounts_db.account_files.get(newest_account_loc.file_id).?;
-    //         const account = try accounts_file.getAccount(newest_account_loc.offset);
-    //         const lamports = account.account_info.lamports;
-
-    //         if (account.account_info.lamports == 0) continue;
-    //         // std.debug.print("pubkey: {s} slot: {d} lamports: {d} bin: {d}\n", .{account_info.pubkey.toStringWithBuf(dest[0..44]), account_info.slot, account_info.lamports, bin_i});
-    //         hashes.appendAssumeCapacity(account.hash.*);
-    //         total_lamports += lamports;
-    //     }
-    // }
-    // std.debug.print("total lamports: {d}\n", .{total_lamports});
-
-    // const root_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
-    // std.debug.print("merkle root: {any}\n", .{root_hash.*});
-
-    // std.debug.print("\n", .{});
-    // std.debug.print("done in {d}ms\n", .{full_timer.read() / std.time.ns_per_ms});
-    // timer.reset();
+    // try accounts_db.validate();
 }
