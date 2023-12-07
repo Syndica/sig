@@ -650,16 +650,3 @@ test "core.accounts_db: load from test snapshot" {
 
     try accounts_db.validateLoadFromSnapshot(&gen_config);
 }
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
-
-    const snapshot_path = "../local-net";
-
-    // init db
-    var accounts_db = AccountsDB.init(allocator);
-    try accounts_db.loadFromSnapshot(snapshot_path);
-
-    // try accounts_db.validate();
-}
