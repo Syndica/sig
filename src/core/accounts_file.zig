@@ -15,6 +15,8 @@ const AccountFileInfo = @import("./snapshot_fields.zig").AccountFileInfo;
 
 const base58 = @import("base58-zig");
 
+pub const FileId = u32;
+
 // metadata which is stored inside an AccountFile
 pub const AccountFileStoreInfo = struct {
     write_version_obsolete: u64,
@@ -94,7 +96,7 @@ pub inline fn alignToU64(addr: usize) usize {
 pub const AccountFile = struct {
     // file contents
     mmap_ptr: []align(std.mem.page_size) u8,
-    id: usize,
+    id: FileId,
     slot: Slot,
     // number of bytes used
     length: usize,

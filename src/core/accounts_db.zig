@@ -12,6 +12,7 @@ const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields
 const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
+const FileId = @import("../core/accounts_file.zig").FileId;
 const AccountFileAccountInfo = @import("../core/accounts_file.zig").AccountFileAccountInfo;
 const alignToU64 = @import("../core/accounts_file.zig").alignToU64;
 const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
@@ -29,7 +30,6 @@ const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
 pub const MERKLE_FANOUT: usize = 16;
 
-pub const FileId = usize;
 pub const AccountRef = struct {
     slot: Slot,
     file_id: FileId,
@@ -269,8 +269,9 @@ pub const AccountsDB = struct {
     ) !void {
         var timer = try std.time.Timer.start();
         var file_count: usize = 0;
+        var max_file_id: FileId = 0;
 
-        while (true) {
+        while (true) blk: {
             const maybe_task_outputs = channel.try_drain() catch unreachable;
             var task_outputs = maybe_task_outputs orelse continue;
             defer channel.allocator.free(task_outputs);
@@ -282,6 +283,7 @@ pub const AccountsDB = struct {
 
                 // track the file
                 try self.account_files.putNoClobber(account_file.id, account_file);
+                max_file_id = @max(account_file.id, max_file_id);
 
                 // populate index
                 for (refs.items) |account_ref| {
@@ -300,10 +302,13 @@ pub const AccountsDB = struct {
                 file_count += 1;
                 if (file_count % 1000 == 0 or file_count < 1000) {
                     printTimeEstimate(&timer, total_files, file_count, "recvAndIndexAccounts");
-                    if (file_count == total_files) return;
+                    if (file_count == total_files)
+                        break :blk;
                 }
             }
         }
+
+        std.debug.assert(max_file_id <= std.math.maxInt(u32) / 2);
     }
 
     pub fn validate(
