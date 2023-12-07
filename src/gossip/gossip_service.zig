@@ -796,7 +796,7 @@ pub const GossipService = struct {
             var active_set: *const ActiveSet = active_set_lock.get();
             defer active_set_lock.unlock();
 
-            if (active_set.len == 0) return null;
+            if (active_set.len() == 0) return null;
 
             for (crds_entries) |entry| {
                 const value = entry.value;
@@ -1861,8 +1861,9 @@ test "gossip.gossip_service: tests handle_prune_messages" {
 
     var as_lock = gossip_service.active_set_rw.read();
     var as: *const ActiveSet = as_lock.get();
-    try std.testing.expect(as.len > 0); // FIX
-    var peer0 = as.peers[0];
+    try std.testing.expect(as.len() > 0); // FIX
+    var iter = as.pruned_peers.keyIterator();
+    const peer0 = iter.next().?.*;
     as_lock.unlock();
 
     var prunes = [_]Pubkey{Pubkey.random(rng.random(), .{})};
@@ -2221,7 +2222,7 @@ test "gossip.gossip_service: test build_push_messages" {
         var as: *ActiveSet = as_lock.mut();
         try as.rotate(peers.items);
         as_lock.unlock();
-        try std.testing.expect(as.len > 0);
+        try std.testing.expect(as.len() > 0);
     }
 
     {

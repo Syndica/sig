@@ -28,9 +28,7 @@ const BLOOM_MAX_BITS: usize = 1024 * 8 * 4;
 
 pub const ActiveSet = struct {
     // store pubkeys as keys in crds table bc the data can change
-    peers: [NUM_ACTIVE_SET_ENTRIES]Pubkey,
     pruned_peers: std.AutoHashMap(Pubkey, Bloom),
-    len: u8 = 0,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -38,16 +36,19 @@ pub const ActiveSet = struct {
     pub fn init(
         allocator: std.mem.Allocator,
     ) Self {
-        return Self{ .peers = undefined, .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator), .len = 0, .allocator = allocator };
+        return Self{ .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator), .allocator = allocator };
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.peers[0..self.len]) |peer| {
-            var entry = self.pruned_peers.getEntry(peer).?;
+        var iter = self.pruned_peers.iterator();
+        while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
         self.pruned_peers.deinit();
-        self.len = 0;
+    }
+
+    pub inline fn len(self: *const Self) u32 {
+        return self.pruned_peers.unmanaged.size;
     }
 
     pub fn rotate(
@@ -55,11 +56,10 @@ pub const ActiveSet = struct {
         crds_peers: []crds.LegacyContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
-        for (self.peers[0..self.len]) |peer| {
-            var entry = self.pruned_peers.getEntry(peer).?;
+        var iter = self.pruned_peers.iterator();
+        while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
-        self.len = 0;
         self.pruned_peers.clearRetainingCapacity();
 
         if (crds_peers.len == 0) {
@@ -70,12 +70,10 @@ pub const ActiveSet = struct {
         pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
-        var tgt: u8 = 0;
         for (0..size) |src| {
             if (self.pruned_peers.contains(crds_peers[src].id)) {
                 continue;
             }
-            self.peers[tgt] = crds_peers[src].id;
 
             // *full* hard restart on blooms -- labs doesnt do this - bug?
             var bloom = try Bloom.random(
@@ -84,10 +82,8 @@ pub const ActiveSet = struct {
                 BLOOM_FALSE_RATE,
                 BLOOM_MAX_BITS,
             );
-            try self.pruned_peers.put(self.peers[tgt], bloom);
-            tgt += 1;
+            try self.pruned_peers.put(crds_peers[src].id, bloom);
         }
-        self.len = tgt;
     }
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
@@ -111,17 +107,17 @@ pub const ActiveSet = struct {
         errdefer active_set_endpoints.deinit();
 
         // change to while loop
-        for (self.peers[0..self.len]) |peer_pubkey| {
+        var iter = self.pruned_peers.iterator();
+        while (iter.next()) |entry| {
             // lookup peer contact info
             const peer_info = crds_table.get(crds.CrdsValueLabel{
-                .LegacyContactInfo = peer_pubkey,
+                .LegacyContactInfo = entry.key_ptr.*,
             }) orelse continue; // peer pubkey could have been removed from the crds table
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
             crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
             // check if peer has been pruned
-            const entry = self.pruned_peers.getEntry(peer_pubkey) orelse unreachable;
             const origin_bytes = origin.data;
             if (entry.value_ptr.contains(&origin_bytes)) {
                 continue;
@@ -166,7 +162,7 @@ test "gossip.active_set: init/deinit" {
     defer active_set.deinit();
     try active_set.rotate(gossip_peers.items);
 
-    try std.testing.expect(active_set.len == CRDS_GOSSIP_PUSH_FANOUT);
+    try std.testing.expect(active_set.len() == CRDS_GOSSIP_PUSH_FANOUT);
 
     const origin = Pubkey.random(rng.random(), .{});
 
@@ -175,7 +171,8 @@ test "gossip.active_set: init/deinit" {
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
 
-    const peer_pubkey = active_set.peers[0];
+    var iter = active_set.pruned_peers.keyIterator();
+    const peer_pubkey = iter.next().?.*;
     active_set.prune(peer_pubkey, origin);
 
     var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &crds_table);
