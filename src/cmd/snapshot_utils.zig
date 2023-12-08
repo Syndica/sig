@@ -8,7 +8,7 @@ const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
 
 const Account = @import("../core/account.zig").Account;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Slot = @import("../core/clock.zig").Slot;
+const Slot = @import("../core/time.zig").Slot;
 const ArrayList = std.ArrayList;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;

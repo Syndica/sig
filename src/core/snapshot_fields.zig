@@ -11,8 +11,8 @@ const Inflation = _genesis_config.Inflation;
 
 const Account = @import("./account.zig").Account;
 const Hash = @import("./hash.zig").Hash;
-const Slot = @import("./clock.zig").Slot;
-const Epoch = @import("./clock.zig").Epoch;
+const Slot = @import("./time.zig").Slot;
+const Epoch = @import("./time.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;

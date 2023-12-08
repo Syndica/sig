@@ -5,8 +5,8 @@ const AutoHashMap = std.AutoHashMap;
 const Account = @import("account.zig").Account;
 const Pubkey = @import("pubkey.zig").Pubkey;
 
-const Slot = @import("clock.zig").Slot;
-const Epoch = @import("clock.zig").Epoch;
+const Slot = @import("time.zig").Slot;
+const Epoch = @import("time.zig").Epoch;
 const bincode = @import("../bincode/bincode.zig");
 
 pub const UnixTimestamp = i64;
