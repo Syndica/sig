@@ -635,38 +635,30 @@ pub const CrdsTable = struct {
         const cutoff_timestamp = now -| timeout;
         const n_pubkeys = self.pubkey_to_values.count();
 
-        var tasks = try std.ArrayList(*GetOldLabelsTask).initCapacity(self.allocator, n_pubkeys);
+        var tasks = try self.allocator.alloc(GetOldLabelsTask, n_pubkeys);
         defer {
-            for (tasks.items) |task| {
-                task.deinit();
-                self.allocator.destroy(task);
-            }
-            tasks.deinit();
+            for (tasks) |*task| task.deinit();
+            self.allocator.free(tasks);
         }
 
         // run this loop in parallel
-        for (self.pubkey_to_values.keys()[0..n_pubkeys]) |key| {
+        for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..n_pubkeys) |key, i| {
             var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
-            var task = GetOldLabelsTask{
+            tasks[i] = GetOldLabelsTask{
                 .key = key,
                 .crds_table = self,
                 .cutoff_timestamp = cutoff_timestamp,
                 .old_labels = old_labels,
             };
 
-            // alloc on heap
-            var task_heap = try self.allocator.create(GetOldLabelsTask);
-            task_heap.* = task;
-            tasks.appendAssumeCapacity(task_heap);
-
             // run it
-            const batch = Batch.from(&task_heap.task);
+            const batch = Batch.from(&tasks[i].task);
             ThreadPool.schedule(self.thread_pool, batch);
         }
 
         // wait for them to be done to release the lock
         var output_length: u64 = 0;
-        for (tasks.items) |task| {
+        for (tasks) |*task| {
             while (!task.done.load(std.atomic.Ordering.Acquire)) {
                 // wait
             }
@@ -675,7 +667,7 @@ pub const CrdsTable = struct {
 
         // move labels to one big array
         var output = try std.ArrayList(CrdsValueLabel).initCapacity(self.allocator, output_length);
-        for (tasks.items) |task| {
+        for (tasks) |*task| {
             output.appendSliceAssumeCapacity(task.old_labels.items);
         }
 
