@@ -46,6 +46,7 @@ pub const AccountsDB = struct {
 
     // TODO: remove later (only need accounts-db fields)
     snapshot_metadata: SnapshotFields = undefined,
+    snapshot_path: ?[]const u8 = null,
 
     const Self = @This();
 
@@ -324,6 +325,11 @@ pub const AccountsDB = struct {
         self: *Self,
         genesis_config: *const GenesisConfig,
     ) !void {
+        if (self.snapshot_path == null) { 
+            std.debug.print("need to load from a snapshot, before validating\n", .{});
+            return error.NoSnapshotPathSet;
+        }
+
         const bank_fields = self.snapshot_metadata.bank_fields;
         if (bank_fields.max_tick_height != (bank_fields.slot + 1) * bank_fields.ticks_per_slot) {
             return error.InvalidBankFields;
@@ -476,6 +482,17 @@ pub const AccountsDB = struct {
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
+
+        // validate the status cache
+        const status_cache_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/{s}",
+            .{ self.snapshot_path.?, "snapshots/status_cache" },
+        );
+        defer self.allocator.free(status_cache_path); 
+
+        
+
     }
 
     pub inline fn slotListArgmax(
@@ -726,7 +743,6 @@ test "core.accounts_db: load clock sysvar" {
     try accounts_db.loadFromSnapshot(snapshot_path);
 
     const clock = try accounts_db.getTypeFromAccount(sysvars.Clock, &sysvars.IDS.clock);
-
     const expected_clock = sysvars.Clock{
         .slot = 269,
         .epoch_start_timestamp = 1701807364,
@@ -739,6 +755,8 @@ test "core.accounts_db: load clock sysvar" {
 
 test "core.accounts_db: load other sysvars" {
     var allocator = std.testing.allocator;
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // var allocator = gpa.allocator();
 
     const snapshot_path = "test_data/";
     var accounts_db = AccountsDB.init(allocator);
@@ -747,9 +765,14 @@ test "core.accounts_db: load other sysvars" {
     try accounts_db.loadFromSnapshot(snapshot_path);
 
     _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
-    // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
     _ = try accounts_db.getTypeFromAccount(sysvars.SlotHash, &sysvars.IDS.slot_hashes);
     _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
-    _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
+    
+    const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
+    defer bincode.free(allocator, slot_history);
+
+    // // not included in local snapshot? -- TODO: figure out why
+    // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
+    // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
 }

@@ -21,6 +21,7 @@ pub const IDS = struct {
     pub const epoch_rewards = Pubkey.fromString("SysvarEpochRewards1111111111111111111111111") catch unreachable;
     pub const rent = Pubkey.fromString("SysvarRent111111111111111111111111111111111") catch unreachable;
     pub const slot_hashes = Pubkey.fromString("SysvarS1otHashes111111111111111111111111111") catch unreachable;
+    pub const slot_history = Pubkey.fromString("SysvarS1otHistory11111111111111111111111111") catch unreachable;
     pub const stake_history = Pubkey.fromString("SysvarStakeHistory1111111111111111111111111") catch unreachable;
     pub const last_restart_slot = Pubkey.fromString("SysvarLastRestartS1ot1111111111111111111111") catch unreachable;
 };
@@ -106,4 +107,11 @@ pub const StakeHistory = ArrayList(struct {
 
 pub const LastRestartSlot = struct {
     last_restart_slot: Slot,
+};
+
+const BitVec = @import("../bloom/bitvec.zig").BitVec;
+
+pub const SlotHistory = struct {
+    bits: BitVec,
+    next_slot: Slot,
 };
