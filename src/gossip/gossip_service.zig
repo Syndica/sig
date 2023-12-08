@@ -352,23 +352,18 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified Protocol messages are then sent to the verified_channel.
     fn verifyPackets(self: *Self) !void {
-        var tasks: [socket_utils.PACKETS_PER_BATCH]*VerifyMessageTask = undefined;
+        var tasks = try self.allocator.alloc(VerifyMessageTask, socket_utils.PACKETS_PER_BATCH);
+        defer self.allocator.free(tasks);
+
         // pre-allocate all the tasks
-        for (0..tasks.len) |i| {
-            var verify_task_heap = try self.allocator.create(VerifyMessageTask);
-            verify_task_heap.* = VerifyMessageTask{
+        for (tasks) |*task| {
+            task.* = VerifyMessageTask{
                 .task = .{ .callback = VerifyMessageTask.callback },
                 .allocator = self.allocator,
                 .verified_incoming_channel = self.verified_incoming_channel,
                 .packet = &Packet.default(),
                 .logger = self.logger,
             };
-            tasks[i] = verify_task_heap;
-        }
-        defer {
-            for (tasks) |task| {
-                self.allocator.destroy(task);
-            }
         }
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
@@ -389,7 +384,7 @@ pub const GossipService = struct {
             var count: usize = 0;
             for (packet_batches) |*packet_batch| {
                 for (packet_batch.items) |*packet| {
-                    var task = tasks[count % socket_utils.PACKETS_PER_BATCH];
+                    var task = &tasks[count % socket_utils.PACKETS_PER_BATCH];
                     if (count >= socket_utils.PACKETS_PER_BATCH) {
                         task.awaitAndReset();
                     }
@@ -402,7 +397,7 @@ pub const GossipService = struct {
                 }
             }
 
-            for (tasks[0..@min(count, socket_utils.PACKETS_PER_BATCH)]) |task| {
+            for (tasks[0..@min(count, socket_utils.PACKETS_PER_BATCH)]) |*task| {
                 task.awaitAndReset();
             }
         }
@@ -1107,12 +1102,11 @@ pub const GossipService = struct {
 
         // create the pull requests
         const n_valid_requests = valid_indexs.items.len;
-        var tasks = try ArrayList(*PullRequestTask).initCapacity(self.allocator, n_valid_requests);
+
+        var tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
         defer {
-            for (tasks.items) |task| {
-                self.allocator.destroy(task);
-            }
-            tasks.deinit();
+            for (tasks) |*task| task.deinit();
+            self.allocator.free(tasks);
         }
 
         {
@@ -1122,10 +1116,10 @@ pub const GossipService = struct {
 
             var output_limit = std.atomic.Atomic(i64).init(MAX_NUM_CRDS_VALUES_PULL_RESPONSE);
 
+            var task_index: usize = 0;
             for (valid_indexs.items) |i| {
                 // create the thread task
-                var task_heap = try self.allocator.create(PullRequestTask);
-                task_heap.* = PullRequestTask{
+                tasks[task_index] = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
                     .my_pubkey = &self.my_pubkey,
                     .from_endpoint = &pull_requests.items[i].from_endpoint,
@@ -1136,22 +1130,22 @@ pub const GossipService = struct {
                     .allocator = self.allocator,
                     .output_limit = &output_limit,
                 };
-                tasks.appendAssumeCapacity(task_heap);
+                task_index += 1;
 
                 // run it
-                const batch = Batch.from(&task_heap.task);
+                const batch = Batch.from(&tasks[task_index].task);
                 ThreadPool.schedule(self.thread_pool, batch);
             }
 
             // wait for them to be done to release the lock
-            for (tasks.items) |task| {
+            for (tasks) |*task| {
                 while (!task.done.load(std.atomic.Ordering.Acquire)) {
                     // wait
                 }
             }
         }
 
-        for (tasks.items) |task| {
+        for (tasks) |*task| {
             if (task.output.items.len > 0) {
                 // TODO: should only need one mux lock in this loop
                 try self.packet_outgoing_channel.send(task.output);
