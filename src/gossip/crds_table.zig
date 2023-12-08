@@ -642,7 +642,7 @@ pub const CrdsTable = struct {
         }
 
         // run this loop in parallel
-        for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..n_pubkeys) |key, i| {
+        for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..) |key, i| {
             var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
             tasks[i] = GetOldLabelsTask{
                 .key = key,

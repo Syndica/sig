@@ -1116,8 +1116,7 @@ pub const GossipService = struct {
 
             var output_limit = std.atomic.Atomic(i64).init(MAX_NUM_CRDS_VALUES_PULL_RESPONSE);
 
-            var task_index: usize = 0;
-            for (valid_indexs.items) |i| {
+            for (valid_indexs.items, 0..) |i, task_index| {
                 // create the thread task
                 tasks[task_index] = PullRequestTask{
                     .task = .{ .callback = PullRequestTask.callback },
@@ -1130,7 +1129,6 @@ pub const GossipService = struct {
                     .allocator = self.allocator,
                     .output_limit = &output_limit,
                 };
-                task_index += 1;
 
                 // run it
                 const batch = Batch.from(&tasks[task_index].task);
