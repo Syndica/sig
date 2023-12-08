@@ -573,7 +573,43 @@ pub fn readDirectory(
     return .{ .filenames = filenames, .mem = mem };
 }
 
-const PubkeyBinCalculator = @import("../cmd/snapshot_verify.zig").PubkeyBinCalculator;
+pub const PubkeyBinCalculator = struct {
+    shift_bits: u6,
+
+    pub fn init(n_bins: usize) PubkeyBinCalculator {
+        // u8 * 3 (ie, we consider on the first 3 bytes of a pubkey)
+        const MAX_BITS: u32 = 24;
+        // within bounds
+        std.debug.assert(n_bins > 0);
+        std.debug.assert(n_bins <= (1 << MAX_BITS));
+        // power of two
+        std.debug.assert((n_bins & (n_bins - 1)) == 0);
+        // eg,
+        // 8 bins
+        // => leading zeros = 28
+        // => shift_bits = (24 - (32 - 28 - 1)) = 21
+        // ie,
+        // if we have the first 24 bits set (u8 << 16, 8 + 16 = 24)
+        // want to consider the first 3 bits of those 24
+        // 0000 ... [100]0 0000 0000 0000 0000 0000
+        // then we want to shift right by 21
+        // 0000 ... 0000 0000 0000 0000 0000 0[100]
+        // those 3 bits can represent 2^3 (= 8) bins
+        const shift_bits = @as(u6, @intCast(MAX_BITS - (32 - @clz(@as(u32, @intCast(n_bins))) - 1)));
+
+        return PubkeyBinCalculator{
+            .shift_bits = shift_bits,
+        };
+    }
+
+    pub fn binIndex(self: *const PubkeyBinCalculator, pubkey: *const Pubkey) usize {
+        const data = &pubkey.data;
+        return (@as(usize, data[0]) << 16 |
+            @as(usize, data[1]) << 8 |
+            @as(usize, data[2])) >> self.shift_bits;
+    }
+};
+
 pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
 
 pub const PubkeyBins = struct {
