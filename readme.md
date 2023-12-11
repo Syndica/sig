@@ -139,7 +139,7 @@ To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entry
 sig gossip -p <PORT> --entrypoint <IP>:<PORT>
 ```
 
-The following IP addresses were resolved from domains found at https://docs.solana.com/clusters. Sig currently only works with IP addresses, not domain names.
+The following IP addresses were resolved from domains found at https://docs.solana.com/clusters.
 
 <details><summary>mainnet</summary>
 
