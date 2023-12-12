@@ -790,6 +790,89 @@ pub fn sortBins(
     }
 }
 
+pub const FullSnapshotPath = struct {
+    path: []const u8,
+    slot: Slot,
+    hash: []const u8,
+};
+
+pub const IncrementalSnapshotPath = struct {
+    path: []const u8,
+    base_slot: Slot,
+    slot: Slot,
+    hash: []const u8,
+};
+
+pub fn parseFullSnapshotPath(path: []const u8) !FullSnapshotPath {
+    var ext_parts = std.mem.splitSequence(u8, path, ".");
+    const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
+
+    var extn = ext_parts.rest();
+    // only support tar.zst
+    if (!std.mem.eql(u8, extn, "tar.zst"))
+        return error.InvalidSnapshotPath;
+
+    var parts = std.mem.splitSequence(u8, stem, "-");
+    const header = parts.next() orelse return error.InvalidSnapshotPath;
+    if (!std.mem.eql(u8, header, "snapshot"))
+        return error.InvalidSnapshotPath;
+
+    const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
+    const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
+
+    var hash = parts.next() orelse return error.InvalidSnapshotPath;
+
+    return FullSnapshotPath{ .path = path, .slot = slot, .hash = hash };
+}
+
+pub fn parseIncrementalSnapshotPath(path: []const u8) !IncrementalSnapshotPath {
+    var ext_parts = std.mem.splitSequence(u8, path, ".");
+    const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
+
+    var extn = ext_parts.rest();
+    // only support tar.zst
+    if (!std.mem.eql(u8, extn, "tar.zst"))
+        return error.InvalidSnapshotPath;
+
+    var parts = std.mem.splitSequence(u8, stem, "-");
+    var header = parts.next() orelse return error.InvalidSnapshotPath;
+    if (!std.mem.eql(u8, header, "incremental"))
+        return error.InvalidSnapshotPath;
+
+    header = parts.next() orelse return error.InvalidSnapshotPath;
+    if (!std.mem.eql(u8, header, "snapshot"))
+        return error.InvalidSnapshotPath;
+
+    const base_slot_str = parts.next() orelse return error.InvalidSnapshotPath;
+    const base_slot = std.fmt.parseInt(Slot, base_slot_str, 10) catch return error.InvalidSnapshotPath;
+
+    const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
+    const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
+
+    var hash = parts.next() orelse return error.InvalidSnapshotPath;
+
+    return IncrementalSnapshotPath{ .path = path, .slot = slot, .base_slot = base_slot, .hash = hash };
+}
+
+test "core.accounts_db: test full snapshot path parsing" {
+    const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
+    const snapshot_info = try parseFullSnapshotPath(full_snapshot_path);
+
+    try std.testing.expect(snapshot_info.slot == 269);
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.hash, "EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn"));
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.path, full_snapshot_path));
+}
+
+test "core.accounts_db: test incremental snapshot path parsing" {
+    const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
+    const snapshot_info = try parseIncrementalSnapshotPath(path);
+
+    try std.testing.expect(snapshot_info.base_slot == 269);
+    try std.testing.expect(snapshot_info.slot == 307);
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.hash, "4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB"));
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.path, path));
+}
+
 test "core.accounts_db: load and validate from test snapshot" {
     var allocator = std.testing.allocator;
 
