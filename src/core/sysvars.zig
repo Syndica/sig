@@ -111,7 +111,36 @@ pub const LastRestartSlot = struct {
 
 const BitVec = @import("../bloom/bitvec.zig").BitVec;
 
+pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+
+pub const SlotCheckResult = enum { Future, TooOld, Found, NotFound };
+
+const DynamicBitSet = std.bit_set.DynamicBitSet;
+const BitVecConfig = @import("../bloom/bitvec.zig").BitVecConfig;
+
 pub const SlotHistory = struct {
-    bits: BitVec,
+    bits: DynamicBitSet,
     next_slot: Slot,
+
+    pub const @"!bincode-config:bits" = BitVecConfig();
+
+    pub fn check(self: *const SlotHistory, slot: Slot) SlotCheckResult {
+        if (slot > self.newest()) {
+            return SlotCheckResult.Future;
+        } else if (slot < self.oldest()) {
+            return SlotCheckResult.TooOld;
+        } else if (self.bits.isSet(slot % MAX_ENTRIES)) {
+            return SlotCheckResult.Found;
+        } else {
+            return SlotCheckResult.NotFound;
+        }
+    }
+
+    pub fn newest(self: *const SlotHistory) Slot {
+        return self.next_slot - 1;
+    }
+
+    pub fn oldest(self: *const SlotHistory) Slot {
+        return self.next_slot -| MAX_ENTRIES;
+    }
 };

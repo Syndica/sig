@@ -27,6 +27,9 @@ const Channel = @import("../sync/channel.zig").Channel;
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 const findSnapshotMetadataPath = @import("../cmd/snapshot_utils.zig").findSnapshotMetadataPath;
 const GenesisConfig = @import("../core/genesis_config.zig").GenesisConfig;
+const StatusCache = @import("../core/snapshot_fields.zig").StatusCache;
+const MAX_CACHE_ENTRIES = @import("../core/snapshot_fields.zig").MAX_CACHE_ENTRIES;
+const HashSet = @import("../core/snapshot_fields.zig").HashSet;
 
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
@@ -78,6 +81,7 @@ pub const AccountsDB = struct {
         snapshot_path: []const u8,
     ) !void {
         std.debug.print("loading from snapshot: {s}\n", .{snapshot_path});
+        self.snapshot_path = snapshot_path;
 
         // check if accounts dir path exists
         const accounts_path = try std.fmt.allocPrint(
@@ -325,7 +329,7 @@ pub const AccountsDB = struct {
         self: *Self,
         genesis_config: *const GenesisConfig,
     ) !void {
-        if (self.snapshot_path == null) { 
+        if (self.snapshot_path == null) {
             std.debug.print("need to load from a snapshot, before validating\n", .{});
             return error.NoSnapshotPathSet;
         }
@@ -419,7 +423,7 @@ pub const AccountsDB = struct {
         }
 
         // used for account-delta-hash
-        const snapshot_slot = self.snapshot_metadata.bank_fields.slot;
+        const bank_slot = self.snapshot_metadata.bank_fields.slot;
         var slot_hashes = try ArrayList(Hash).initCapacity(self.allocator, 1000);
         defer slot_hashes.deinit();
 
@@ -440,7 +444,7 @@ pub const AccountsDB = struct {
                     max_account_loc.offset,
                 );
 
-                if (max_account_loc.slot == snapshot_slot) {
+                if (max_account_loc.slot == bank_slot) {
                     try slot_hashes.append(account.hash.*);
                 }
 
@@ -489,10 +493,32 @@ pub const AccountsDB = struct {
             "{s}/{s}",
             .{ self.snapshot_path.?, "snapshots/status_cache" },
         );
-        defer self.allocator.free(status_cache_path); 
+        defer self.allocator.free(status_cache_path);
 
-        
+        var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
+        defer status_cache_file.close();
 
+        var status_cache = try bincode.read(
+            self.allocator,
+            StatusCache,
+            status_cache_file.reader(),
+            .{},
+        );
+        defer bincode.free(self.allocator, status_cache);
+
+        // TODO: probs wana store this on the bank?
+        const slot_history = try self.getTypeFromAccount(
+            sysvars.SlotHistory,
+            &sysvars.IDS.slot_history,
+        );
+        defer bincode.free(self.allocator, slot_history);
+
+        try AccountsDB.validateStatusCache(
+            self.allocator,
+            bank_slot,
+            &status_cache,
+            &slot_history,
+        );
     }
 
     pub inline fn slotListArgmax(
@@ -541,6 +567,51 @@ pub const AccountsDB = struct {
             return error.DeserializationError;
         };
         return t;
+    }
+
+    pub fn validateStatusCache(
+        allocator: std.mem.Allocator,
+        bank_slot: Slot,
+        status_cache: *const StatusCache,
+        slot_history: *const sysvars.SlotHistory,
+    ) !void {
+        // status cache validation
+        const len = status_cache.items.len;
+        if (len > MAX_CACHE_ENTRIES) {
+            return error.TooManyCacheEntries;
+        }
+        var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
+        defer slots_seen.deinit();
+
+        for (status_cache.items) |slot_delta| {
+            if (!slot_delta.is_root) {
+                return error.NonRootSlot;
+            }
+            const slot = slot_delta.slot;
+            if (slot > bank_slot) {
+                return error.SlotTooHigh;
+            }
+            const entry = try slots_seen.getOrPut(slot);
+            if (entry.found_existing) {
+                return error.MultipleSlotEntries;
+            }
+        }
+
+        // validate bank matches the status cache
+        if (slot_history.newest() != bank_slot) {
+            return error.SlotHistoryMismatch;
+        }
+        for (slots_seen.keys()) |slot| {
+            if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
+                return error.SlotNotFoundInHistory;
+            }
+        }
+
+        for (slot_history.oldest()..slot_history.newest()) |slot| {
+            if (!slots_seen.contains(slot)) {
+                return error.SlotNotFoundInStatusCache;
+            }
+        }
     }
 };
 
@@ -718,7 +789,7 @@ pub fn sortBins(
     }
 }
 
-test "core.accounts_db: load from test snapshot" {
+test "core.accounts_db: load and validate from test snapshot" {
     var allocator = std.testing.allocator;
 
     const snapshot_path = "test_data/";
@@ -768,7 +839,7 @@ test "core.accounts_db: load other sysvars" {
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
     _ = try accounts_db.getTypeFromAccount(sysvars.SlotHash, &sysvars.IDS.slot_hashes);
     _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
-    
+
     const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
     defer bincode.free(allocator, slot_history);
 

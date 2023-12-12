@@ -526,7 +526,7 @@ pub const InstructionError = union(enum) {
     // conversions must also be added
 };
 
-const TransactionError = union(enum) { 
+const TransactionError = union(enum) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
     AccountInUse,
@@ -558,7 +558,7 @@ const TransactionError = union(enum) {
 
     /// An error occurred while processing an instruction. The first element of the tuple
     /// indicates the instruction index in which the error occurred.
-    InstructionError: struct { instruction_index: u8, err: InstructionError},
+    InstructionError: struct { instruction_index: u8, err: InstructionError },
 
     /// Loader call chain is too deep
     CallChainTooDeep,
@@ -643,67 +643,54 @@ const TransactionError = union(enum) {
     ProgramExecutionTemporarilyRestricted: struct { account_index: u8 },
 };
 
-const Result = union(enum) { 
-    Ok, 
+const Result = union(enum) {
+    Ok,
     Error: TransactionError,
 };
 
 const CACHED_KEY_SIZE: usize = 20;
-const Status = HashMap(Hash, struct { 
-    i: usize, 
-    j: ArrayList(struct { 
-        key_slice: [CACHED_KEY_SIZE]u8, 
-        r: Result,
-    })
-});
-const BankSlotDelta = struct { 
-    slot: Slot, 
-    is_root: bool, 
-    status: Status
-};
-const StatusCache = ArrayList(BankSlotDelta);
+const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
+    key_slice: [CACHED_KEY_SIZE]u8,
+    r: Result,
+}) });
+const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
+pub const StatusCache = ArrayList(BankSlotDelta);
 
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 
-test "core.snapshot_fields: parse status cache" { 
+test "core.snapshot_fields: parse status cache" {
+    const alloc = std.testing.allocator;
+
     const status_cache_path = "./test_data/status_cache";
-
-    // open file 
-    // const alloc = std.testing.allocator;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var alloc = gpa.allocator();
-
     var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
     defer status_cache_file.close();
 
     var status_cache = try bincode.read(alloc, StatusCache, status_cache_file.reader(), .{});
-    // std.debug.print("len: {d}\n", .{status_cache.items.len});
-    // std.debug.print("0: {any}\n", .{status_cache.items[0]});
-
+    defer bincode.free(alloc, status_cache);
     const bank_slot = 269;
 
     // structural validation
     const len = status_cache.items.len;
-    if (len > MAX_CACHE_ENTRIES) { 
+    if (len > MAX_CACHE_ENTRIES) {
         return error.TooManyCacheEntries;
     }
     var slots_seen = HashSet(Slot).init(alloc);
-    for (status_cache.items) |slot_delta| { 
-        if (!slot_delta.is_root) { 
+    defer slots_seen.deinit();
+
+    for (status_cache.items) |slot_delta| {
+        if (!slot_delta.is_root) {
             return error.NonRootSlot;
         }
         const slot = slot_delta.slot;
-        if (slot > bank_slot) { 
+        if (slot > bank_slot) {
             return error.SlotTooHigh;
         }
         const entry = try slots_seen.getOrPut(slot);
-        if (entry.found_existing) { 
+        if (entry.found_existing) {
             return error.MultipleSlotEntries;
         }
     }
-    
-
 
     // std.debug.print("status_cache: {any}\n", .{status_cache});
 }
