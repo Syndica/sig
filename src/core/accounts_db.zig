@@ -325,6 +325,7 @@ pub const AccountsDB = struct {
     /// - the delta account hash is correct
     /// - the bankfields metadata matches the genesis config metadata
     /// - the bankfields are correct
+    /// - the status cache is correct
     pub fn validateLoadFromSnapshot(
         self: *Self,
         genesis_config: *const GenesisConfig,
@@ -826,8 +827,6 @@ test "core.accounts_db: load clock sysvar" {
 
 test "core.accounts_db: load other sysvars" {
     var allocator = std.testing.allocator;
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // var allocator = gpa.allocator();
 
     const snapshot_path = "test_data/";
     var accounts_db = AccountsDB.init(allocator);
@@ -843,7 +842,7 @@ test "core.accounts_db: load other sysvars" {
     const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
     defer bincode.free(allocator, slot_history);
 
-    // // not included in local snapshot? -- TODO: figure out why
+    // // not always included in local snapshot
     // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
     // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
 }

@@ -691,6 +691,4 @@ test "core.snapshot_fields: parse status cache" {
             return error.MultipleSlotEntries;
         }
     }
-
-    // std.debug.print("status_cache: {any}\n", .{status_cache});
 }
