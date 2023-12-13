@@ -273,7 +273,7 @@ pub const AccountsDbFields = struct {
     rooted_slots: ArrayList(Slot),
     rooted_slot_hashes: ArrayList(SlotHash),
 
-    pub const SlotHash = struct { Slot, Hash };
+    pub const SlotHash = struct { slot: Slot, hash: Hash };
     pub const @"!bincode-config:rooted_slots" = defaultArrayListOnEOFConfig(Slot);
     pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotHash);
 };
@@ -293,25 +293,20 @@ pub const SnapshotFields = struct {
     pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(Hash){ .default_on_eof = true };
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .default_on_eof = true };
 
-    /// NOTE: should call this to get the correct bank_fields instead of accessing it directly
-    /// due to the way snapshot deserialization works
-    pub fn getFieldRefs(self: *@This()) struct { bank_fields: *const BankFields, accounts_db_fields: *const AccountsDbFields } {
-        var bank_fields = &self.bank_fields;
-        // if these are availabel they will be parsed (and likely not the default values)
-        // so, we push them on the bank fields here
-        bank_fields.fee_rate_governor.lamports_per_signature = self.lamports_per_signature;
-        bank_fields.incremental_snapshot_persistence = self.incremental_snapshot_persistence;
-        bank_fields.epoch_accounts_hash = self.epoch_accounts_hash;
-        bank_fields.epoch_reward_status = self.epoch_reward_status;
-
-        return .{ .bank_fields = bank_fields, .accounts_db_fields = &self.accounts_db_fields };
-    }
-
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
         var file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
         var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
+
+        var bank_fields = &snapshot_fields.bank_fields;
+        // if these are available they will be parsed (and likely not the default values)
+        // so, we push them on the bank fields here
+        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
+        bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence;
+        bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash;
+        bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status;
+
         return snapshot_fields;
     }
 
@@ -340,9 +335,6 @@ test "core.snapshot_fields: parse snapshot fields" {
         return err;
     };
     defer snapshot_fields.deinit(alloc);
-
-    const fields = snapshot_fields.getFieldRefs();
-    _ = fields;
 }
 
 pub const InstructionError = union(enum) {

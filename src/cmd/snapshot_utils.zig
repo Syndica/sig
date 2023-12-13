@@ -393,14 +393,13 @@ pub fn dumpAccountFields(_: []const []const u8) !void {
     std.debug.print("reading metadata path: {s}\n", .{metadata_path});
     std.debug.print("saving to output path: {s}\n", .{output_path});
 
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, metadata_path);
-    const fields = snapshot_fields.getFieldRefs();
+    var fields = try SnapshotFields.readFromFilePath(allocator, metadata_path);
 
     // rewrite the accounts_db_fields seperate
     const db_file = try cwd.createFile(output_path, .{});
     defer db_file.close();
 
-    var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields.*, .{});
+    var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields, .{});
     defer db_buf.deinit();
 
     _ = try db_file.write(db_buf.items);

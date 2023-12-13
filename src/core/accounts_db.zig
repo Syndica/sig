@@ -862,6 +862,132 @@ pub fn parseIncrementalSnapshotPath(path: []const u8) !IncrementalSnapshotPath {
     };
 }
 
+pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_dir: std.fs.Dir) !void {
+    const file = try output_dir.openFile(path, .{});
+    defer file.close();
+
+    var stream = std.compress.zstd.decompressStream(allocator, file.reader());
+    try std.tar.pipeToFileSystem(output_dir, stream.reader(), .{ .mode_mode = .ignore });
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = gpa.allocator();
+
+    const snapshot_dir = "./test_data/";
+    var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
+    defer snapshot_dir_iter.close();
+
+    var files = try readDirectory(allocator, snapshot_dir_iter);
+    var filenames = files.filenames;
+    defer {
+        filenames.deinit();
+        allocator.free(files.mem);
+    }
+
+    // find the snapshots
+    var maybe_largest_full_snapshot: ?FullSnapshotPath = null;
+    var count: usize = 0;
+    for (filenames.items) |filename| {
+        const snap_path = parseFullSnapshotPath(filename) catch continue;
+        if (count == 0 or snap_path.slot > maybe_largest_full_snapshot.?.slot) {
+            maybe_largest_full_snapshot = snap_path;
+        }
+        count += 1;
+    }
+    var largest_full_snapshot = maybe_largest_full_snapshot.?;
+    std.debug.print("full snapshot: {s}\n", .{largest_full_snapshot.path});
+
+    count = 0;
+    var maybe_largest_incremental_snapshot: ?IncrementalSnapshotPath = null;
+    for (filenames.items) |filename| {
+        const snap_path = parseIncrementalSnapshotPath(filename) catch continue;
+        // need to match the base slot
+        if (snap_path.base_slot == largest_full_snapshot.slot and (count == 0 or
+            // this unwrap is safe because count > 0
+            snap_path.slot > maybe_largest_incremental_snapshot.?.slot))
+        {
+            maybe_largest_incremental_snapshot = snap_path;
+        }
+        count += 1;
+    }
+
+    // unpack
+    try unpackZstdTarBall(allocator, largest_full_snapshot.path, snapshot_dir_iter.dir);
+    const full_metadata_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}/{d}/{d}",
+        .{ snapshot_dir, "snapshots", largest_full_snapshot.slot, largest_full_snapshot.slot },
+    );
+    defer allocator.free(full_metadata_path);
+    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
+        allocator,
+        full_metadata_path,
+    );
+
+    if (maybe_largest_incremental_snapshot) |largest_incremental_snapshot| {
+        std.debug.print("incremental snapshot: {s}\n", .{largest_incremental_snapshot.path});
+        try unpackZstdTarBall(allocator, largest_incremental_snapshot.path, snapshot_dir_iter.dir);
+
+        const incremental_metadata_path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/{s}/{d}/{d}",
+            .{ snapshot_dir, "snapshots", largest_incremental_snapshot.slot, largest_incremental_snapshot.slot },
+        );
+        defer allocator.free(incremental_metadata_path);
+
+        var incremental_snapshot_fields = try SnapshotFields.readFromFilePath(
+            allocator,
+            incremental_metadata_path,
+        );
+        defer incremental_snapshot_fields.deinit(allocator);
+
+        // validation
+        const full_snapshot_slot = full_snapshot_fields.accounts_db_fields.slot;
+        const incremental_snapshot_persistence = incremental_snapshot_fields.incremental_snapshot_persistence;
+        if (incremental_snapshot_persistence.full_slot != full_snapshot_slot) {
+            std.debug.panic("invalid incremental snapshot: slot {d} is the same as the full snapshot slot {d}\n", .{ largest_incremental_snapshot.slot, largest_full_snapshot.slot });
+        }
+
+        const full_snapshot_accounts_hash = full_snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash;
+        if (incremental_snapshot_persistence.full_hash.cmp(&full_snapshot_accounts_hash) != .eq) {
+            std.debug.panic("invalid incremental snapshot: accounts hash does not match full snapshot\n", .{});
+        }
+
+        const full_snapshot_capitialization = full_snapshot_fields.bank_fields.capitalization;
+        if (incremental_snapshot_persistence.full_capitalization != full_snapshot_capitialization) {
+            std.debug.panic("invalid incremental snapshot: capitalization does not match full snapshot\n", .{});
+        }
+
+        // collapse fields
+        // - bank fields
+        full_snapshot_fields.bank_fields = incremental_snapshot_fields.bank_fields;
+
+        // - accounts-db fields
+        var storages_map = &incremental_snapshot_fields.accounts_db_fields.map;
+        // make sure theres no overlap in slots between full and incremental and combine
+        var storages_entry_iter = storages_map.iterator();
+        while (storages_entry_iter.next()) |*incremental_entry| {
+            const slot = incremental_entry.key_ptr.*;
+
+            // filter out slots < full snapshot slot
+            if (slot < full_snapshot_slot) {
+                _ = storages_map.remove(slot);
+                continue;
+            }
+
+            var full_snapshot_entry = try full_snapshot_fields.accounts_db_fields.map.getOrPut(slot);
+            if (full_snapshot_entry.found_existing) {
+                std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
+            } else {
+                full_snapshot_entry.value_ptr.* = incremental_entry.value_ptr.*;
+            }
+        }
+    } else {
+        std.debug.print("no incremental snapshot found\n", .{});
+    }
+}
+
 test "core.accounts_db: test full snapshot path parsing" {
     const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try parseFullSnapshotPath(full_snapshot_path);
