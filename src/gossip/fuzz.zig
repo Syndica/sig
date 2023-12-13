@@ -8,7 +8,7 @@ const socket_utils = @import("./socket_utils.zig");
 const _gossip_service = @import("./gossip_service.zig");
 const GossipService = _gossip_service.GossipService;
 const ChunkType = _gossip_service.ChunkType;
-const crds_values_to_packets = _gossip_service.crdsValuesToPackets;
+const crdsValuesToPackets = _gossip_service.crdsValuesToPackets;
 const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
 
 const Logger = @import("../trace/log.zig").Logger;
@@ -119,14 +119,14 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try crds_values_to_packets(
+    const packets = try crdsValuesToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
         &crds_values,
         &to_addr,
         ChunkType.PushMessage,
     );
-    return packets.?;
+    return packets;
 }
 
 pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
@@ -139,14 +139,14 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try crds_values_to_packets(
+    const packets = try crdsValuesToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
         &crds_values,
         &to_addr,
         ChunkType.PullResponse,
     );
-    return packets.?;
+    return packets;
 }
 
 pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
