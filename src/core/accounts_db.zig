@@ -798,11 +798,13 @@ pub const FullSnapshotPath = struct {
 
 pub const IncrementalSnapshotPath = struct {
     path: []const u8,
+    // this references the full snapshot slot
     base_slot: Slot,
     slot: Slot,
     hash: []const u8,
 };
 
+/// matches with the regex: r"^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
 pub fn parseFullSnapshotPath(path: []const u8) !FullSnapshotPath {
     var ext_parts = std.mem.splitSequence(u8, path, ".");
     const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
@@ -825,6 +827,7 @@ pub fn parseFullSnapshotPath(path: []const u8) !FullSnapshotPath {
     return FullSnapshotPath{ .path = path, .slot = slot, .hash = hash };
 }
 
+/// matches against regex: r"^incremental-snapshot-(?P<base>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
 pub fn parseIncrementalSnapshotPath(path: []const u8) !IncrementalSnapshotPath {
     var ext_parts = std.mem.splitSequence(u8, path, ".");
     const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
@@ -851,7 +854,12 @@ pub fn parseIncrementalSnapshotPath(path: []const u8) !IncrementalSnapshotPath {
 
     var hash = parts.next() orelse return error.InvalidSnapshotPath;
 
-    return IncrementalSnapshotPath{ .path = path, .slot = slot, .base_slot = base_slot, .hash = hash };
+    return IncrementalSnapshotPath{
+        .path = path,
+        .slot = slot,
+        .base_slot = base_slot,
+        .hash = hash,
+    };
 }
 
 test "core.accounts_db: test full snapshot path parsing" {
