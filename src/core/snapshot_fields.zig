@@ -283,15 +283,15 @@ pub const SnapshotFields = struct {
     accounts_db_fields: AccountsDbFields,
 
     // incremental snapshot fields (to be added to bank_fields)
-    lamports_per_signature: u64 = 0,
-    incremental_snapshot_persistence: BankIncrementalSnapshotPersistence = BankIncrementalSnapshotPersistence.default(),
-    epoch_accounts_hash: Hash = Hash.default(),
-    epoch_reward_status: EpochRewardStatus = EpochRewardStatus.default(),
+    lamports_per_signature: ?u64 = null,
+    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+    epoch_accounts_hash: ?Hash = null,
+    epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(BankIncrementalSnapshotPersistence){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(Hash){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .default_on_eof = true };
+    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(?u64){ .default_on_eof = true };
+    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
+    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
+    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
         var file = try std.fs.cwd().openFile(path, .{});
@@ -299,13 +299,13 @@ pub const SnapshotFields = struct {
 
         var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
 
-        var bank_fields = &snapshot_fields.bank_fields;
-        // if these are available they will be parsed (and likely not the default values)
-        // so, we push them on the bank fields here
-        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
-        bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence;
-        bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash;
-        bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status;
+        // var bank_fields = &snapshot_fields.bank_fields;
+        // // if these are available they will be parsed (and likely not the default values)
+        // // so, we push them on the bank fields here
+        // bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
+        // bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence;
+        // bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash;
+        // bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status;
 
         return snapshot_fields;
     }
@@ -316,25 +316,21 @@ pub const SnapshotFields = struct {
 };
 
 test "core.snapshot_fields: parse snapshot fields" {
-    // steps:
-    // 1) download a snapshot
-    // 2) decompress snapshot
-    // 3) untar snapshot to get accounts/ dir + other metdata files
-    // 4) set the `snapshot_path` to point to the file with metadata
-    // 4) run this
-    // const snapshot_path = "/test_data/slot/slot";
+    const allocator = std.testing.allocator;
+    const snapshot_path = "./test_data/269";
 
-    const snapshot_path = "../local-net/snapshots/269/269";
-    const alloc = std.testing.allocator;
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
+    defer snapshot_fields.deinit(allocator);
+}
 
-    var snapshot_fields = SnapshotFields.readFromFilePath(alloc, snapshot_path) catch |err| {
-        if (err == std.fs.File.OpenError.FileNotFound) {
-            std.debug.print("failed to open snapshot fields file: {s} ... skipping test\n", .{@errorName(err)});
-            return;
-        }
-        return err;
-    };
-    defer snapshot_fields.deinit(alloc);
+test "core.snapshot_fields: parse incremental snapshot fields" {
+    const allocator = std.testing.allocator;
+    const snapshot_path = "./test_data/307";
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
+    defer snapshot_fields.deinit(allocator);
+
+    std.debug.print("{}\n", .{snapshot_fields.bank_fields.incremental_snapshot_persistence});
 }
 
 pub const InstructionError = union(enum) {

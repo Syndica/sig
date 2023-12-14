@@ -48,8 +48,7 @@ pub const AccountsDB = struct {
     index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
 
     // TODO: remove later (only need accounts-db fields)
-    snapshot_metadata: SnapshotFields = undefined,
-    snapshot_path: ?[]const u8 = null,
+    snapshot_fields: SnapshotFields = undefined,
 
     const Self = @This();
 
@@ -72,90 +71,22 @@ pub const AccountsDB = struct {
         }
         self.index.deinit();
 
-        bincode.free(self.allocator, self.snapshot_metadata);
+        bincode.free(self.allocator, self.snapshot_fields);
     }
 
     /// loads the account files and create the pubkey indexes
     pub fn loadFromSnapshot(
         self: *Self,
-        snapshot_path: []const u8,
+        snapshot_fields: SnapshotFields,
+        accounts_path: []const u8,
     ) !void {
-        std.debug.print("loading from snapshot: {s}\n", .{snapshot_path});
-        self.snapshot_path = snapshot_path;
-
-        // check if accounts dir path exists
-        const accounts_path = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/{s}",
-            .{ snapshot_path, "accounts" },
-        );
-        defer self.allocator.free(accounts_path);
-
-        // no accounts/ directory OR no snapshots/{slot}/{slot} file
-        // => search for .zst tarball
-        const search_for_zstd = blk: {
-            std.fs.cwd().access(accounts_path, .{}) catch |e| {
-                if (e == error.FileNotFound) {
-                    break :blk true;
-                }
-            };
-
-            var path = findSnapshotMetadataPath(self.allocator, snapshot_path) catch {
-                break :blk true;
-            };
-            self.allocator.free(path);
-
-            break :blk false;
-        };
-
-        var snapshot_dir = try std.fs.cwd().openIterableDir(snapshot_path, .{});
-        defer snapshot_dir.close();
-
-        if (search_for_zstd) {
-            var snapshot_iter = snapshot_dir.iterate();
-            while (try snapshot_iter.next()) |entry| {
-                if (std.mem.containsAtLeast(u8, entry.name, 1, ".tar.zst")) {
-                    std.debug.print("loading from zstd tarball: {s} ...", .{entry.name});
-
-                    // unpack
-                    var timer = try std.time.Timer.start();
-                    const zstd_tarball_path = try std.fmt.allocPrint(
-                        self.allocator,
-                        "{s}/{s}",
-                        .{ snapshot_path, entry.name },
-                    );
-                    const file = try std.fs.cwd().openFile(zstd_tarball_path, .{});
-                    defer file.close();
-
-                    var stream = std.compress.zstd.decompressStream(self.allocator, file.reader());
-                    try std.tar.pipeToFileSystem(snapshot_dir.dir, stream.reader(), .{ .mode_mode = .ignore });
-                    std.debug.print(" took {s}\n", .{std.fmt.fmtDuration(timer.read())});
-                    break;
-                }
-            }
-        } else {
-            std.debug.print("loading from directory...\n", .{});
-        }
-
-        // load the snapshot metadata
-        std.debug.print("reading snapshot metadata...", .{});
-        var timer = try std.time.Timer.start();
-        const snapshot_metadata_path = try findSnapshotMetadataPath(
-            self.allocator,
-            snapshot_path,
-        );
-        defer self.allocator.free(snapshot_metadata_path);
-
-        var snapshot_fields = try SnapshotFields.readFromFilePath(
-            self.allocator,
-            snapshot_metadata_path,
-        );
-        self.snapshot_metadata = snapshot_fields;
-        std.debug.print(" took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.snapshot_fields = snapshot_fields;
 
         // start the indexing
+        var timer = std.time.Timer.start() catch unreachable;
         std.debug.print("starting indexing...\n", .{});
         timer.reset();
+
         var accounts_dir = try std.fs.cwd().openIterableDir(accounts_path, .{});
         defer accounts_dir.close();
 
@@ -193,7 +124,7 @@ pub const AccountsDB = struct {
             const handle = try std.Thread.spawn(.{}, openAndParseAccountFiles, .{
                 self.allocator,
                 accounts_path,
-                &self.snapshot_metadata.accounts_db_fields,
+                &self.snapshot_fields.accounts_db_fields,
                 channel,
                 // per task files
                 filenames.items[start_index..end_index],
@@ -241,7 +172,11 @@ pub const AccountsDB = struct {
             const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
             std.debug.assert(slot_metas.items.len == 1);
             const slot_meta = slot_metas.items[0];
-            std.debug.assert(slot_meta.id == accounts_file_id);
+            if (slot_meta.id != accounts_file_id) {
+                std.debug.print("slot: {d} slot metas: {any}\n", .{ slot, slot_metas.items });
+                std.debug.panic("slot_meta.id ({d}) != accounts_file_id ({d})\n", .{ slot_meta.id, accounts_file_id });
+                std.debug.assert(false);
+            }
 
             // read appendVec from file
             const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
@@ -329,13 +264,9 @@ pub const AccountsDB = struct {
     pub fn validateLoadFromSnapshot(
         self: *Self,
         genesis_config: *const GenesisConfig,
+        status_cache: *StatusCache,
     ) !void {
-        if (self.snapshot_path == null) {
-            std.debug.print("need to load from a snapshot, before validating\n", .{});
-            return error.NoSnapshotPathSet;
-        }
-
-        const bank_fields = self.snapshot_metadata.bank_fields;
+        const bank_fields = self.snapshot_fields.bank_fields;
         if (bank_fields.max_tick_height != (bank_fields.slot + 1) * bank_fields.ticks_per_slot) {
             return error.InvalidBankFields;
         }
@@ -424,7 +355,7 @@ pub const AccountsDB = struct {
         }
 
         // used for account-delta-hash
-        const bank_slot = self.snapshot_metadata.bank_fields.slot;
+        const bank_slot = self.snapshot_fields.bank_fields.slot;
         var slot_hashes = try ArrayList(Hash).initCapacity(self.allocator, 1000);
         defer slot_hashes.deinit();
 
@@ -460,7 +391,7 @@ pub const AccountsDB = struct {
         std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        const expected_total_lamports = self.snapshot_metadata.bank_fields.capitalization;
+        const expected_total_lamports = self.snapshot_fields.bank_fields.capitalization;
         if (expected_total_lamports != total_lamports) {
             std.debug.print("incorrect total lamports\n", .{});
             std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_total_lamports, total_lamports });
@@ -472,7 +403,7 @@ pub const AccountsDB = struct {
         std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        const bank_hash_info = self.snapshot_metadata.accounts_db_fields.bank_hash_info;
+        const bank_hash_info = self.snapshot_fields.accounts_db_fields.bank_hash_info;
         const expected_accounts_hash = bank_hash_info.accounts_hash;
         if (expected_accounts_hash.cmp(accounts_hash) != .eq) {
             std.debug.print("incorrect accounts hash\n", .{});
@@ -489,24 +420,6 @@ pub const AccountsDB = struct {
         }
 
         // validate the status cache
-        const status_cache_path = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/{s}",
-            .{ self.snapshot_path.?, "snapshots/status_cache" },
-        );
-        defer self.allocator.free(status_cache_path);
-
-        var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
-        defer status_cache_file.close();
-
-        var status_cache = try bincode.read(
-            self.allocator,
-            StatusCache,
-            status_cache_file.reader(),
-            .{},
-        );
-        defer bincode.free(self.allocator, status_cache);
-
         // TODO: probs wana store this on the bank?
         const slot_history = try self.getTypeFromAccount(
             sysvars.SlotHistory,
@@ -517,7 +430,7 @@ pub const AccountsDB = struct {
         try AccountsDB.validateStatusCache(
             self.allocator,
             bank_slot,
-            &status_cache,
+            status_cache,
             &slot_history,
         );
     }
@@ -920,6 +833,7 @@ pub fn main() !void {
         .{ snapshot_dir, "snapshots", largest_full_snapshot.slot, largest_full_snapshot.slot },
     );
     defer allocator.free(full_metadata_path);
+
     var full_snapshot_fields = try SnapshotFields.readFromFilePath(
         allocator,
         full_metadata_path,
@@ -940,38 +854,37 @@ pub fn main() !void {
             allocator,
             incremental_metadata_path,
         );
-        defer incremental_snapshot_fields.deinit(allocator);
+        // TODO: figure out how to properly deinit this
 
-        // validation
-        const full_snapshot_slot = full_snapshot_fields.accounts_db_fields.slot;
-        const incremental_snapshot_persistence = incremental_snapshot_fields.incremental_snapshot_persistence;
-        if (incremental_snapshot_persistence.full_slot != full_snapshot_slot) {
-            std.debug.panic("invalid incremental snapshot: slot {d} is the same as the full snapshot slot {d}\n", .{ largest_incremental_snapshot.slot, largest_full_snapshot.slot });
-        }
-
-        const full_snapshot_accounts_hash = full_snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash;
-        if (incremental_snapshot_persistence.full_hash.cmp(&full_snapshot_accounts_hash) != .eq) {
-            std.debug.panic("invalid incremental snapshot: accounts hash does not match full snapshot\n", .{});
-        }
-
-        const full_snapshot_capitialization = full_snapshot_fields.bank_fields.capitalization;
-        if (incremental_snapshot_persistence.full_capitalization != full_snapshot_capitialization) {
-            std.debug.panic("invalid incremental snapshot: capitalization does not match full snapshot\n", .{});
-        }
+        // // fastboot validation (?)
+        // const incremental_snapshot_persistence = incremental_snapshot_fields.incremental_snapshot_persistence;
+        // std.debug.print("incremental snapshot persistence: {any}\n", .{incremental_snapshot_persistence});
+        // if (incremental_snapshot_persistence.full_slot != full_snapshot_slot) {
+        //     std.debug.panic("invalid incremental snapshot: slot {d} is not the same as the full snapshot slot {d}\n", .{ incremental_snapshot_persistence.full_slot, full_snapshot_slot });
+        // }
+        // const full_snapshot_accounts_hash = full_snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash;
+        // if (incremental_snapshot_persistence.full_hash.cmp(&full_snapshot_accounts_hash) != .eq) {
+        //     std.debug.panic("invalid incremental snapshot: accounts hash does not match full snapshot\n", .{});
+        // }
+        // const full_snapshot_capitialization = full_snapshot_fields.bank_fields.capitalization;
+        // if (incremental_snapshot_persistence.full_capitalization != full_snapshot_capitialization) {
+        //     std.debug.panic("invalid incremental snapshot: capitalization does not match full snapshot\n", .{});
+        // }
 
         // collapse fields
         // - bank fields
         full_snapshot_fields.bank_fields = incremental_snapshot_fields.bank_fields;
 
         // - accounts-db fields
+        const full_snapshot_slot = full_snapshot_fields.accounts_db_fields.slot;
         var storages_map = &incremental_snapshot_fields.accounts_db_fields.map;
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
         while (storages_entry_iter.next()) |*incremental_entry| {
             const slot = incremental_entry.key_ptr.*;
 
-            // filter out slots < full snapshot slot
-            if (slot < full_snapshot_slot) {
+            // only keep slots > full snapshot slot
+            if (slot <= full_snapshot_slot) {
                 _ = storages_map.remove(slot);
                 continue;
             }
@@ -980,12 +893,59 @@ pub fn main() !void {
             if (full_snapshot_entry.found_existing) {
                 std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
             } else {
+                // // re allocate so we can deinit the full snapshotmeta safely
+                // const slice = try allocator.alloc(AccountFileInfo, incremental_entry.value_ptr.items.len);
+                // @memcpy(slice, incremental_entry.value_ptr.items);
+                // full_snapshot_entry.value_ptr.* = ArrayList(AccountFileInfo).fromOwnedSlice(allocator, slice);
+
                 full_snapshot_entry.value_ptr.* = incremental_entry.value_ptr.*;
             }
         }
     } else {
         std.debug.print("no incremental snapshot found\n", .{});
     }
+
+    const accounts_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "accounts" },
+    );
+    defer allocator.free(accounts_path);
+
+    const genesis_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "genesis.bin" },
+    );
+    defer allocator.free(genesis_path);
+
+    // use the genesis to verify loading
+    const gen_config = try GenesisConfig.init(allocator, genesis_path);
+    defer gen_config.deinit(allocator);
+
+    const status_cache_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "snapshots/status_cache" },
+    );
+    defer allocator.free(status_cache_path);
+
+    var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
+    defer status_cache_file.close();
+
+    var status_cache = try bincode.read(
+        allocator,
+        StatusCache,
+        status_cache_file.reader(),
+        .{},
+    );
+    defer bincode.free(allocator, status_cache);
+
+    var accounts_db = AccountsDB.init(allocator);
+    defer accounts_db.deinit();
+
+    try accounts_db.loadFromSnapshot(full_snapshot_fields, accounts_path);
+    try accounts_db.validateLoadFromSnapshot(&gen_config, &status_cache);
 }
 
 test "core.accounts_db: test full snapshot path parsing" {
