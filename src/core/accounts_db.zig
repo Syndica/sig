@@ -173,28 +173,18 @@ pub const AccountsDB = struct {
             std.debug.assert(slot_metas.items.len == 1);
             const slot_meta = slot_metas.items[0];
             if (slot_meta.id != accounts_file_id) {
-                std.debug.print("slot: {d} slot metas: {any}\n", .{ slot, slot_metas.items });
                 std.debug.panic("slot_meta.id ({d}) != accounts_file_id ({d})\n", .{ slot_meta.id, accounts_file_id });
-                std.debug.assert(false);
             }
 
             // read appendVec from file
             const abs_path = try std.fmt.bufPrint(&abs_path_buf, "{s}/{s}", .{ accounts_dir_path, file_name });
             const accounts_file_file = try std.fs.cwd().openFile(abs_path, .{ .mode = .read_write });
             var accounts_file = AccountFile.init(accounts_file_file, slot_meta, slot) catch |err| {
-                var buf: [1024]u8 = undefined;
-                var stream = std.io.fixedBufferStream(&buf);
-                var writer = stream.writer();
-                try std.fmt.format(writer, "failed to *open* appendVec {s}: {s}", .{ file_name, @errorName(err) });
-                @panic(stream.getWritten());
+                std.debug.panic("failed to *open* appendVec {s}: {s}\n", .{ file_name, @errorName(err) });
             };
 
             accounts_file.sanitizeAndGetAccountsRefs(&refs) catch |err| {
-                var buf: [1024]u8 = undefined;
-                var stream = std.io.fixedBufferStream(&buf);
-                var writer = stream.writer();
-                try std.fmt.format(writer, "failed to *sanitize* appendVec {s}: {s}", .{ file_name, @errorName(err) });
-                @panic(stream.getWritten());
+                std.debug.panic("failed to *sanitize* appendVec {s}: {s}\n", .{ file_name, @errorName(err) });
             };
 
             try channel.send(.{ accounts_file, refs });
