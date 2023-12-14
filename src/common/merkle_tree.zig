@@ -4,6 +4,8 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 
 pub fn merkleTreeHash(hashes: []Hash, fanout: usize) !*Hash {
     var length = hashes.len;
+    if (length == 0) return error.EmptyHashList;
+
     while (true) {
         const chunks = try std.math.divCeil(usize, length, fanout);
         var index: usize = 0;

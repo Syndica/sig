@@ -264,7 +264,7 @@ pub const BankHashStats = struct {
 };
 
 pub const AccountsDbFields = struct {
-    map: HashMap(Slot, ArrayList(AccountFileInfo)),
+    file_map: HashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,

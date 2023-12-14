@@ -73,7 +73,7 @@ pub fn accountsToCsvRowAndSend(
     const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
     // read metadata
-    const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.map.get(slot).?;
+    const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.file_map.get(slot).?;
     std.debug.assert(slot_metas.items.len == 1);
     const slot_meta = slot_metas.items[0];
     std.debug.assert(slot_meta.id == accounts_file_id);
