@@ -391,7 +391,7 @@ pub const GossipService = struct {
                     task.packet = packet;
 
                     const batch = Batch.from(&task.task);
-                    ThreadPool.schedule(self.thread_pool, batch);
+                    self.thread_pool.schedule(batch);
 
                     count += 1;
                 }
@@ -1132,7 +1132,7 @@ pub const GossipService = struct {
 
                 // run it
                 const batch = Batch.from(&tasks[task_index].task);
-                ThreadPool.schedule(self.thread_pool, batch);
+                self.thread_pool.schedule(batch);
             }
 
             // wait for them to be done to release the lock

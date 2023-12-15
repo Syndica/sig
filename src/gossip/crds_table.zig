@@ -653,7 +653,7 @@ pub const CrdsTable = struct {
 
             // run it
             const batch = Batch.from(&tasks[i].task);
-            ThreadPool.schedule(self.thread_pool, batch);
+            self.thread_pool.schedule(batch);
         }
 
         // wait for them to be done to release the lock
