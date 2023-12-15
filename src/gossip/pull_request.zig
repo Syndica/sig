@@ -249,7 +249,9 @@ pub fn hashToU64(hash: *const Hash) u64 {
 }
 
 test "gossip.pull: test build_crds_filters" {
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // insert a some value

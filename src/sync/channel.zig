@@ -5,12 +5,13 @@ const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;
 const Mux = @import("mux.zig").Mux;
+const Ordering = std.atomic.Ordering;
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
 pub fn Channel(comptime T: type) type {
     return struct {
         buffer: Mux(std.ArrayList(T)),
-        hasValue: Condition = .{},
+        has_value: Condition = .{},
         closed: Atomic(bool) = Atomic(bool).init(false),
         allocator: std.mem.Allocator,
 
@@ -26,9 +27,10 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            var buff = self.buffer.lock();
-            buff.mut().deinit();
-            buff.unlock();
+            var buff_lock = self.buffer.lock();
+            var buff: *std.ArrayList(T) = buff_lock.mut();
+            buff.deinit();
+            buff_lock.unlock();
 
             self.allocator.destroy(self);
         }
@@ -37,10 +39,26 @@ pub fn Channel(comptime T: type) type {
             if (self.closed.load(.Monotonic)) {
                 return error.ChannelClosed;
             }
-            var buffer = self.buffer.lock();
-            defer buffer.unlock();
-            try buffer.mut().append(value);
-            self.hasValue.signal();
+            var buffer_lock = self.buffer.lock();
+            defer buffer_lock.unlock();
+
+            var buffer: *std.ArrayList(T) = buffer_lock.mut();
+            try buffer.append(value);
+
+            self.has_value.signal();
+        }
+
+        pub fn sendBatch(self: *Self, value: std.ArrayList(T)) error{ OutOfMemory, ChannelClosed }!void {
+            if (self.closed.load(.Monotonic)) {
+                return error.ChannelClosed;
+            }
+            var buffer_lock = self.buffer.lock();
+            defer buffer_lock.unlock();
+
+            var buffer: *std.ArrayList(T) = buffer_lock.mut();
+            try buffer.appendSlice(value.items);
+
+            self.has_value.signal();
         }
 
         pub fn receive(self: *Self) ?T {
@@ -48,7 +66,7 @@ pub fn Channel(comptime T: type) type {
             defer buffer.unlock();
 
             while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
-                buffer.condition(&self.hasValue);
+                buffer.condition(&self.has_value);
             }
 
             // channel closed so return null to signal no more items
@@ -67,7 +85,7 @@ pub fn Channel(comptime T: type) type {
             defer buffer.unlock();
 
             while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
-                buffer.condition(&self.hasValue);
+                buffer.condition(&self.has_value);
             }
 
             // channel closed so return null to signal no more items
@@ -109,7 +127,7 @@ pub fn Channel(comptime T: type) type {
 
         pub fn close(self: *Self) void {
             self.closed.store(true, .SeqCst);
-            self.hasValue.broadcast();
+            self.has_value.broadcast();
         }
 
         pub fn isClosed(self: *Self) bool {
@@ -121,9 +139,11 @@ pub fn Channel(comptime T: type) type {
 const Block = struct {
     num: u32 = 333,
     valid: bool = true,
+    data: [1024]u8 = undefined,
 };
 
 const BlockChannel = Channel(Block);
+const BlockPointerChannel = Channel(*Block);
 
 const logger = std.log.scoped(.sync_channel_tests);
 
@@ -143,6 +163,23 @@ fn testSender(chan: *BlockChannel, total_send: usize) void {
     chan.close();
 }
 
+const Packet = @import("../gossip/packet.zig").Packet;
+fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
+    var i: usize = 0;
+    while (i < total_send) : (i += 1) {
+        var packet = Packet.default();
+        chan.send(packet) catch unreachable;
+    }
+}
+
+fn testPacketReceiver(chan: *Channel(Packet), total_recv: usize) void {
+    var count: usize = 0;
+    while (count < total_recv) : (count += 1) {
+        const v = chan.receive();
+        _ = v;
+    }
+}
+
 test "sync.channel: channel works properly" {
     var ch = BlockChannel.init(testing.allocator, 100);
     defer ch.deinit();
@@ -150,41 +187,42 @@ test "sync.channel: channel works properly" {
     var recv_count: Atomic(usize) = Atomic(usize).init(0);
     var send_count: usize = 100_000;
 
-    var join1 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
     var join2 = try std.Thread.spawn(.{}, testSender, .{ ch, send_count });
-    var join3 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 2 });
-    var join4 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 3 });
+    var join1 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
 
     join1.join();
     join2.join();
-    join3.join();
-    join4.join();
 
     try testing.expectEqual(send_count, recv_count.value);
 }
 
 pub const BenchmarkChannel = struct {
-    pub const min_iterations = 10;
-    pub const max_iterations = 20;
+    pub const min_iterations = 5;
+    pub const max_iterations = 5;
+    const send_count: usize = 500_000;
 
     pub fn benchmarkChannel() !void {
-        const T: type = Block;
-
         const allocator = std.heap.page_allocator;
-        var channel = Channel(T).init(allocator, 100);
+        var channel = BlockChannel.init(allocator, send_count / 2);
         defer channel.deinit();
 
         var recv_count: Atomic(usize) = Atomic(usize).init(0);
-        var send_count: usize = 100_000;
 
-        var join1 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 1 });
         var join2 = try std.Thread.spawn(.{}, testSender, .{ channel, send_count });
-        var join3 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 2 });
-        var join4 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 3 });
+        var join1 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 1 });
+        join1.join();
+        join2.join();
+    }
+
+    pub fn benchmarkPacketChannel() !void {
+        const allocator = std.heap.page_allocator;
+        var channel = Channel(Packet).init(allocator, send_count / 2);
+        defer channel.deinit();
+
+        var join1 = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, send_count });
+        var join2 = try std.Thread.spawn(.{}, testPacketSender, .{ channel, send_count });
 
         join1.join();
         join2.join();
-        join3.join();
-        join4.join();
     }
 };

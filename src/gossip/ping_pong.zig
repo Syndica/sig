@@ -112,12 +112,12 @@ pub const PingCache = struct {
     rate_limit_delay_ns: u64,
     // Timestamp of last ping message sent to a remote node.
     // Used to rate limit pings to remote nodes.
-    pings: LruCache(PubkeyAndSocketAddr, Instant),
+    pings: LruCache(.non_locking, PubkeyAndSocketAddr, Instant),
     // Verified pong responses from remote nodes.
-    pongs: LruCache(PubkeyAndSocketAddr, Instant),
+    pongs: LruCache(.non_locking, PubkeyAndSocketAddr, Instant),
     // Hash of ping tokens sent out to remote nodes,
     // pending a pong response back.
-    pending_cache: LruCache(Hash, PubkeyAndSocketAddr),
+    pending_cache: LruCache(.non_locking, Hash, PubkeyAndSocketAddr),
     // allocator
     allocator: std.mem.Allocator,
 
@@ -133,9 +133,9 @@ pub const PingCache = struct {
         return Self{
             .ttl_ns = ttl_ns,
             .rate_limit_delay_ns = rate_limit_delay_ns,
-            .pings = try LruCache(PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
-            .pongs = try LruCache(PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
-            .pending_cache = try LruCache(Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
+            .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
+            .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
+            .pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
             .allocator = allocator,
         };
     }
@@ -149,7 +149,7 @@ pub const PingCache = struct {
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
         var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
-        if (self.pending_cache.peek(pong.hash)) |pubkey_and_addr| {
+        if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
             const pubkey: Pubkey = pubkey_and_addr[0];
             const addr: SocketAddr = pubkey_and_addr[1];
             if (pubkey.equals(&pong.from) and addr.eql(&socket)) {
@@ -217,16 +217,16 @@ pub const PingCache = struct {
         allocator: std.mem.Allocator,
         our_keypair: KeyPair,
         peers: []LegacyContactInfo,
-    ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(LegacyContactInfo), pings: std.ArrayList(PingAndSocketAddr) } {
+    ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
         var now = std.time.Instant.now() catch @panic("time not supported by OS!");
-        var valid_peers = std.ArrayList(LegacyContactInfo).init(allocator);
+        var valid_peers = std.ArrayList(usize).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
-        for (peers) |peer| {
+        for (peers, 0..) |*peer, i| {
             if (!peer.gossip.isUnspecified()) {
                 var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, &our_keypair);
                 if (result.passes_ping_check) {
-                    try valid_peers.append(peer);
+                    try valid_peers.append(i);
                 }
                 if (result.maybe_ping) |ping| {
                     try pings.append(.{ .ping = ping, .socket = peer.gossip });

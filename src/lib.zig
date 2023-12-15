@@ -46,6 +46,7 @@ pub const sync = struct {
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
     pub usingnamespace @import("sync/mux.zig");
+    pub usingnamespace @import("sync/thread_pool.zig");
 };
 
 pub const utils = struct {

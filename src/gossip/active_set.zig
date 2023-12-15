@@ -10,7 +10,7 @@ const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("../gossip/crds.zig").getWallclockMs;
+const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
 
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
@@ -28,9 +28,7 @@ const BLOOM_MAX_BITS: usize = 1024 * 8 * 4;
 
 pub const ActiveSet = struct {
     // store pubkeys as keys in crds table bc the data can change
-    peers: [NUM_ACTIVE_SET_ENTRIES]Pubkey,
     pruned_peers: std.AutoHashMap(Pubkey, Bloom),
-    len: u8 = 0,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -38,16 +36,19 @@ pub const ActiveSet = struct {
     pub fn init(
         allocator: std.mem.Allocator,
     ) Self {
-        return Self{ .peers = undefined, .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator), .len = 0, .allocator = allocator };
+        return Self{ .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator), .allocator = allocator };
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.peers[0..self.len]) |peer| {
-            var entry = self.pruned_peers.getEntry(peer).?;
+        var iter = self.pruned_peers.iterator();
+        while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
         self.pruned_peers.deinit();
-        self.len = 0;
+    }
+
+    pub fn len(self: *const Self) u32 {
+        return self.pruned_peers.count();
     }
 
     pub fn rotate(
@@ -55,34 +56,33 @@ pub const ActiveSet = struct {
         crds_peers: []crds.LegacyContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
-        for (self.peers[0..self.len]) |peer| {
-            var entry = self.pruned_peers.getEntry(peer).?;
+        var iter = self.pruned_peers.iterator();
+        while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
-        self.len = 0;
         self.pruned_peers.clearRetainingCapacity();
 
         if (crds_peers.len == 0) {
             return;
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(get_wallclock_ms());
+        var rng = std.rand.DefaultPrng.init(getWallclockMs());
         pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            self.peers[i] = crds_peers[i].id;
-
-            // *full* hard restart on blooms -- labs doesnt do this - bug?
-            var bloom = try Bloom.random(
-                self.allocator,
-                bloom_num_items,
-                BLOOM_FALSE_RATE,
-                BLOOM_MAX_BITS,
-            );
-            try self.pruned_peers.put(self.peers[i], bloom);
+            var entry = try self.pruned_peers.getOrPut(crds_peers[i].id);
+            if (entry.found_existing == false) {
+                // *full* hard restart on blooms -- labs doesnt do this - bug?
+                var bloom = try Bloom.random(
+                    self.allocator,
+                    bloom_num_items,
+                    BLOOM_FALSE_RATE,
+                    BLOOM_MAX_BITS,
+                );
+                entry.value_ptr.* = bloom;
+            }
         }
-        self.len = size;
     }
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
@@ -106,17 +106,17 @@ pub const ActiveSet = struct {
         errdefer active_set_endpoints.deinit();
 
         // change to while loop
-        for (self.peers[0..self.len]) |peer_pubkey| {
+        var iter = self.pruned_peers.iterator();
+        while (iter.next()) |entry| {
             // lookup peer contact info
             const peer_info = crds_table.get(crds.CrdsValueLabel{
-                .LegacyContactInfo = peer_pubkey,
+                .LegacyContactInfo = entry.key_ptr.*,
             }) orelse continue; // peer pubkey could have been removed from the crds table
             const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
 
             crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
             // check if peer has been pruned
-            const entry = self.pruned_peers.getEntry(peer_pubkey) orelse unreachable;
             const origin_bytes = origin.data;
             if (entry.value_ptr.contains(&origin_bytes)) {
                 continue;
@@ -132,10 +132,13 @@ pub const ActiveSet = struct {
     }
 };
 
+const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+
 test "gossip.active_set: init/deinit" {
     var alloc = std.testing.allocator;
 
-    var crds_table = try CrdsTable.init(alloc);
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(alloc, &tp);
     defer crds_table.deinit();
 
     // insert some contacts
@@ -151,14 +154,14 @@ test "gossip.active_set: init/deinit" {
         var value = try CrdsValue.initSigned(crds.CrdsData{
             .LegacyContactInfo = data,
         }, &keypair);
-        try crds_table.insert(value, get_wallclock_ms());
+        try crds_table.insert(value, getWallclockMs());
     }
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
     try active_set.rotate(gossip_peers.items);
 
-    try std.testing.expect(active_set.len == CRDS_GOSSIP_PUSH_FANOUT);
+    try std.testing.expect(active_set.len() == CRDS_GOSSIP_PUSH_FANOUT);
 
     const origin = Pubkey.random(rng.random(), .{});
 
@@ -167,10 +170,29 @@ test "gossip.active_set: init/deinit" {
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
 
-    const peer_pubkey = active_set.peers[0];
+    var iter = active_set.pruned_peers.keyIterator();
+    const peer_pubkey = iter.next().?.*;
     active_set.prune(peer_pubkey, origin);
 
     var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &crds_table);
     defer fanout_with_prune.deinit();
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
+}
+
+test "gossip.active_set: gracefully rotates with duplicate contact ids" {
+    var alloc = std.testing.allocator;
+
+    var rng = std.rand.DefaultPrng.init(100);
+    var gossip_peers = try std.ArrayList(crds.LegacyContactInfo).initCapacity(alloc, 10);
+    defer gossip_peers.deinit();
+
+    var data = crds.LegacyContactInfo.random(rng.random());
+    var dupe = crds.LegacyContactInfo.random(rng.random());
+    dupe.id = data.id;
+    try gossip_peers.append(data);
+    try gossip_peers.append(dupe);
+
+    var active_set = ActiveSet.init(alloc);
+    defer active_set.deinit();
+    try active_set.rotate(gossip_peers.items);
 }
