@@ -244,6 +244,107 @@ pub const AccountsDB = struct {
     }
 
     /// computes the full accounts hash, accounts-delta-hash, and total lamports
+    pub fn computeAccountDeltaHashAndLamports(self: *Self, min_slot: Slot) !struct { accounts_hash: Hash, total_lamports: u64 } {
+        std.debug.print("computing account hashes\n", .{});
+
+        // logic for computing the hashes
+        var n_bins: usize = undefined;
+        if (builtin.is_test or self.index.count() < 100_000) {
+            n_bins = 256;
+        } else {
+            n_bins = PUBKEY_BINS_FOR_CALCULATING_HASHES;
+        }
+
+        var bins = try PubkeyBins.init(self.allocator, n_bins);
+        defer bins.deinit();
+
+        // populate the bins
+        for (self.index.keys()) |*pubkey| {
+            try bins.insert(pubkey);
+        }
+
+        std.debug.print("sorting {d} bins\n", .{n_bins});
+        var timer = try std.time.Timer.start();
+        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
+        var chunk_size = n_bins / n_threads;
+        if (chunk_size == 0) {
+            n_threads = 1;
+            chunk_size = n_bins;
+        }
+
+        var handles = try std.ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
+        defer handles.deinit();
+
+        var start_index: usize = 0;
+        var end_index: usize = 0;
+        for (0..n_threads) |i| {
+            if (i == (n_threads - 1)) {
+                end_index = n_bins;
+            } else {
+                end_index = start_index + chunk_size;
+            }
+            var handle = try std.Thread.spawn(.{}, sortBins, .{
+                bins.bins,
+                start_index,
+                end_index,
+            });
+            handles.appendAssumeCapacity(handle);
+            start_index = end_index;
+        }
+        std.debug.assert(end_index == n_bins);
+
+        for (handles.items) |handle| {
+            handle.join();
+        }
+        std.debug.print("\n", .{});
+        std.debug.print("sorting took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+
+        // compute merkle tree over the slices
+        std.debug.print("gathering account hashes\n", .{});
+        var total_accounts: usize = 0;
+        for (bins.bins) |*bin| {
+            total_accounts += bin.items.len;
+        }
+
+        // used for full hashes
+        var hashes = try ArrayList(Hash).initCapacity(self.allocator, total_accounts);
+        defer hashes.deinit();
+
+        var total_lamports: u64 = 0;
+        for (bins.bins) |*bin| {
+            for (bin.items) |pubkey| {
+                const slot_list: ArrayList(AccountRef) = self.index.get(pubkey.*).?;
+                std.debug.assert(slot_list.items.len > 0);
+
+                // get the most recent state of the account
+                const max_slot_index = slotListArgmaxWithMin(slot_list, min_slot) orelse continue;
+                const max_account_loc = slot_list.items[max_slot_index];
+                const account = try self.getAccountInner(
+                    max_account_loc.file_id,
+                    max_account_loc.offset,
+                );
+
+                const lamports = account.lamports();
+                hashes.appendAssumeCapacity(account.hash.*);
+                total_lamports += lamports;
+            }
+        }
+        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+
+        std.debug.print("computing the full account merkle root over {d} accounts\n", .{hashes.items.len});
+        const accounts_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
+        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
+
+        return .{
+            .accounts_hash = accounts_hash.*,
+            .total_lamports = total_lamports,
+        };
+    }
+
+    /// computes the full accounts hash, accounts-delta-hash, and total lamports
     pub fn computeAccountHashesAndLamports(self: *Self, max_slot: Slot) !struct { accounts_hash: Hash, total_lamports: u64 } {
         std.debug.print("computing account hashes\n", .{});
 
@@ -399,8 +500,6 @@ pub const AccountsDB = struct {
             return error.BankAndGenesisMismatch;
         }
 
-        // const bank_slot = self.snapshot_fields.bank_fields.slot;
-
         const result = try self.computeAccountHashesAndLamports(full_snapshot_slot);
         const total_lamports = result.total_lamports;
         const accounts_hash = result.accounts_hash;
@@ -420,29 +519,51 @@ pub const AccountsDB = struct {
             return error.IncorrectAccountsHash;
         }
 
-        // const expected_accounts_delta_hash = bank_hash_info.accounts_delta_hash;
-        // if (expected_accounts_delta_hash.cmp(&accounts_delta_hash) != .eq) {
-        //     std.debug.print("incorrect accounts delta hash\n", .{});
-        //     std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
-        //     return error.IncorrectAccountsDeltaHash;
-        // }
+        const result2 = try self.computeAccountDeltaHashAndLamports(full_snapshot_slot);
+        const accounts_delta_hash = result2.accounts_hash;
 
-        _ = status_cache;
-        // // validate the status cache
-        // std.debug.print("validating status cache\n", .{});
-        // // TODO: probs wana store this on the bank?
-        // const slot_history = try self.getTypeFromAccount(
-        //     sysvars.SlotHistory,
-        //     &sysvars.IDS.slot_history,
-        // );
-        // defer bincode.free(self.allocator, slot_history);
+        const expected_accounts_delta_hash = self.snapshot_fields.bank_fields.incremental_snapshot_persistence.incremental_hash;
+        if (expected_accounts_delta_hash.cmp(&accounts_delta_hash) != .eq) {
+            std.debug.print("incorrect accounts delta hash\n", .{});
+            std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
+            return error.IncorrectAccountsDeltaHash;
+        }
 
-        // try AccountsDB.validateStatusCache(
-        //     self.allocator,
-        //     bank_slot,
-        //     status_cache,
-        //     &slot_history,
-        // );
+        // validate the status cache
+        std.debug.print("validating status cache\n", .{});
+        // TODO: probs wana store this on the bank?
+        const slot_history = try self.getTypeFromAccount(
+            sysvars.SlotHistory,
+            &sysvars.IDS.slot_history,
+        );
+        defer bincode.free(self.allocator, slot_history);
+
+        try AccountsDB.validateStatusCache(
+            self.allocator,
+            bank_fields.slot,
+            status_cache,
+            &slot_history,
+        );
+    }
+
+    pub inline fn slotListArgmaxWithMin(
+        slot_list: ArrayList(AccountRef),
+        min_slot: Slot,
+    ) ?usize {
+        if (slot_list.items.len == 0) {
+            return null;
+        }
+
+        var biggest: *AccountRef = undefined;
+        var biggest_index: ?usize = null;
+        for (slot_list.items, 0..) |*item, i| {
+            if (item.slot > min_slot and (biggest_index == null or item.slot > biggest.slot)) {
+                biggest = item;
+                biggest_index = i;
+            }
+        }
+
+        return biggest_index;
     }
 
     pub inline fn slotListArgmaxWithMax(

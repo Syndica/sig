@@ -283,12 +283,12 @@ pub const SnapshotFields = struct {
     accounts_db_fields: AccountsDbFields,
 
     // incremental snapshot fields (to be added to bank_fields)
-    lamports_per_signature: ?u64 = null,
+    lamports_per_signature: u64 = 0,
     incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
     epoch_accounts_hash: ?Hash = null,
     epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(?u64){ .default_on_eof = true };
+    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
     pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
     pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
@@ -299,13 +299,18 @@ pub const SnapshotFields = struct {
 
         var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
 
-        // var bank_fields = &snapshot_fields.bank_fields;
-        // // if these are available they will be parsed (and likely not the default values)
-        // // so, we push them on the bank fields here
-        // bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
-        // bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence;
-        // bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash;
-        // bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status;
+        // if these are available, we push them onto the banks
+        var bank_fields = &snapshot_fields.bank_fields;
+        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
+        if (snapshot_fields.incremental_snapshot_persistence != null) {
+            bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence.?;
+        }
+        if (snapshot_fields.epoch_accounts_hash != null) {
+            bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash.?;
+        }
+        if (snapshot_fields.epoch_reward_status != null) {
+            bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status.?;
+        }
 
         return snapshot_fields;
     }
@@ -314,24 +319,6 @@ pub const SnapshotFields = struct {
         bincode.free(allocator, self);
     }
 };
-
-test "core.snapshot_fields: parse snapshot fields" {
-    const allocator = std.testing.allocator;
-    const snapshot_path = "./test_data/269";
-
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
-    defer snapshot_fields.deinit(allocator);
-}
-
-test "core.snapshot_fields: parse incremental snapshot fields" {
-    const allocator = std.testing.allocator;
-    const snapshot_path = "./test_data/307";
-
-    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
-    defer snapshot_fields.deinit(allocator);
-
-    std.debug.print("{}\n", .{snapshot_fields.bank_fields.incremental_snapshot_persistence});
-}
 
 pub const InstructionError = union(enum) {
     /// Deprecated! Use CustomError instead!
@@ -679,4 +666,23 @@ test "core.snapshot_fields: parse status cache" {
             return error.MultipleSlotEntries;
         }
     }
+}
+
+test "core.snapshot_fields: parse snapshot fields" {
+    const allocator = std.testing.allocator;
+    const snapshot_path = "./test_data/10";
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
+    defer snapshot_fields.deinit(allocator);
+}
+
+test "core.snapshot_fields: parse incremental snapshot fields" {
+    const allocator = std.testing.allocator;
+    const snapshot_path = "test_data/25";
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
+    defer snapshot_fields.deinit(allocator);
+
+    try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
+    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.full_slot, 10);
 }
