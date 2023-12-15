@@ -237,7 +237,7 @@ pub const CrdsTable = struct {
         } else {
             const old_entry = result.value_ptr.*;
 
-            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != CompareResult.Equal) {
+            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
                 return CrdsError.OldValue;
@@ -677,7 +677,7 @@ pub fn crdsOverwrites(new_value: *const CrdsVersionedValue, old_value: *const Cr
     } else if (new_ts < old_ts) {
         return false;
     } else {
-        return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
+        return old_value.value_hash.cmp(&new_value.value_hash) == .lt;
     }
 }
 

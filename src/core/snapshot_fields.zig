@@ -234,6 +234,7 @@ pub const BankFields = struct {
 };
 
 pub const AccountFileInfo = struct {
+    // note: serialized id is a usize but in code its FileId (u32)
     id: usize,
     length: usize, // amount of bytes used
 
@@ -310,14 +311,12 @@ pub const SnapshotFields = struct {
         var file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
-        var file_reader = std.io.bufferedReader(file.reader());
-        const file_size = (try file.stat()).size;
-
-        var buf = try std.ArrayList(u8).initCapacity(allocator, file_size);
-        defer buf.deinit();
-
-        var snapshot_fields = try bincode.read(allocator, SnapshotFields, file_reader.reader(), .{});
+        var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
         return snapshot_fields;
+    }
+
+    pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, self);
     }
 };
 
@@ -330,7 +329,7 @@ test "core.snapshot_fields: parse snapshot fields" {
     // 4) run this
     // const snapshot_path = "/test_data/slot/slot";
 
-    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
+    const snapshot_path = "../local-net/snapshots/269/269";
     const alloc = std.testing.allocator;
 
     var snapshot_fields = SnapshotFields.readFromFilePath(alloc, snapshot_path) catch |err| {
@@ -340,7 +339,7 @@ test "core.snapshot_fields: parse snapshot fields" {
         }
         return err;
     };
-    defer bincode.free(alloc, snapshot_fields);
+    defer snapshot_fields.deinit(alloc);
 
     const fields = snapshot_fields.getFieldRefs();
     _ = fields;

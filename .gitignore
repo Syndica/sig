@@ -1,3 +1,8 @@
 zig-cache/
 zig-out/
 data/
+
+# unpacking test snapshots
+test_data/version
+test_data/accounts/
+test_data/snapshots/

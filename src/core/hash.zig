@@ -42,15 +42,15 @@ pub const Hash = struct {
         return hash;
     }
 
-    pub fn cmp(a: *const Self, b: *const Self) CompareResult {
+    pub fn cmp(a: *const Self, b: *const Self) std.math.Order {
         for (0..HASH_SIZE) |i| {
             if (a.data[i] > b.data[i]) {
-                return CompareResult.Greater;
+                return .gt;
             } else if (a.data[i] < b.data[i]) {
-                return CompareResult.Less;
+                return .lt;
             }
         }
-        return CompareResult.Equal;
+        return .eq;
     }
 
     pub fn extendAndHash(

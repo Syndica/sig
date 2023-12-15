@@ -87,6 +87,8 @@ pub const Inflation = struct {
     __unused: f64,
 };
 
+pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
+
 pub const EpochSchedule = extern struct {
     /// The maximum number of slots in each epoch.
     slots_per_epoch: u64,
@@ -107,6 +109,40 @@ pub const EpochSchedule = extern struct {
     ///
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
     first_normal_slot: Slot,
+
+    pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
+        return self.getEpochAndSlotIndex(slot).epoch;
+    }
+
+    pub fn getEpochAndSlotIndex(self: *const EpochSchedule, slot: Slot) struct { epoch: Epoch, slot_index: Slot } {
+        if (slot < self.first_normal_slot) {
+            var epoch = slot +| MINIMUM_SLOTS_PER_EPOCH +| 1;
+            epoch = @ctz(std.math.ceilPowerOfTwo(u64, epoch) catch {
+                std.debug.panic("failed to ceil power of two: {d}", .{epoch});
+            }) -| @ctz(MINIMUM_SLOTS_PER_EPOCH) -| 1;
+
+            const exponent = epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH);
+            const epoch_len = std.math.powi(u64, 2, exponent) catch std.math.maxInt(u64);
+
+            const slot_index = slot -| (epoch_len -| MINIMUM_SLOTS_PER_EPOCH);
+
+            return .{
+                .epoch = epoch,
+                .slot_index = slot_index,
+            };
+        } else {
+            const normal_slot_index = slot -| self.first_normal_slot;
+            const normal_epoch_index = std.math.divTrunc(u64, normal_slot_index, self.slots_per_epoch) catch 0;
+
+            const epoch = self.first_normal_epoch +| normal_epoch_index;
+            const slot_index = std.math.rem(u64, normal_slot_index, self.slots_per_epoch) catch 0;
+
+            return .{
+                .epoch = epoch,
+                .slot_index = slot_index,
+            };
+        }
+    }
 };
 
 pub const ClusterType = enum(u8) {
@@ -142,39 +178,29 @@ pub const GenesisConfig = struct {
     epoch_schedule: EpochSchedule,
     /// network runlevel
     cluster_type: ClusterType,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        genesis_path: []const u8,
+    ) !GenesisConfig {
+        var file = try std.fs.cwd().openFile(genesis_path, .{});
+        defer file.close();
+        const config = try bincode.read(allocator, GenesisConfig, file.reader(), .{});
+
+        return config;
+    }
+
+    pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, self);
+    }
 };
 
-test "core.genesis_config: test" {
-    const alloc = std.testing.allocator;
+test "core.genesis_config: deserialize config" {
+    const allocator = std.testing.allocator;
+
     const genesis_path = "./test_data/genesis.bin";
-    const abs_genesis_path = try std.fs.cwd().realpathAlloc(alloc, genesis_path);
-    defer alloc.free(abs_genesis_path);
+    const config = try GenesisConfig.init(allocator, genesis_path);
+    defer config.deinit(allocator);
 
-    // open file
-    var file = try std.fs.openFileAbsolute(abs_genesis_path, .{});
-    defer file.close();
-
-    try file.seekFromEnd(0);
-    const file_size = try file.getPos();
-    try file.seekTo(0);
-    std.debug.print("length: {d}\n", .{file_size});
-
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
-
-    var buf = try std.ArrayList(u8).initCapacity(std.testing.allocator, file_size);
-    defer buf.deinit();
-
-    // read all to buf
-    try in_stream.readAllArrayList(&buf, file_size);
-
-    const config = try bincode.readFromSlice(
-        std.testing.allocator,
-        GenesisConfig,
-        buf.items[0..buf.items.len],
-        .{},
-    );
-    defer bincode.free(std.testing.allocator, config);
-
-    try std.testing.expect(config.cluster_type == ClusterType.MainnetBeta);
+    try std.testing.expect(config.cluster_type == ClusterType.Development);
 }
