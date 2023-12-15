@@ -112,12 +112,12 @@ pub const PingCache = struct {
     rate_limit_delay_ns: u64,
     // Timestamp of last ping message sent to a remote node.
     // Used to rate limit pings to remote nodes.
-    pings: LruCache(PubkeyAndSocketAddr, Instant),
+    pings: LruCache(.non_locking, PubkeyAndSocketAddr, Instant),
     // Verified pong responses from remote nodes.
-    pongs: LruCache(PubkeyAndSocketAddr, Instant),
+    pongs: LruCache(.non_locking, PubkeyAndSocketAddr, Instant),
     // Hash of ping tokens sent out to remote nodes,
     // pending a pong response back.
-    pending_cache: LruCache(Hash, PubkeyAndSocketAddr),
+    pending_cache: LruCache(.non_locking, Hash, PubkeyAndSocketAddr),
     // allocator
     allocator: std.mem.Allocator,
 
@@ -133,9 +133,9 @@ pub const PingCache = struct {
         return Self{
             .ttl_ns = ttl_ns,
             .rate_limit_delay_ns = rate_limit_delay_ns,
-            .pings = try LruCache(PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
-            .pongs = try LruCache(PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
-            .pending_cache = try LruCache(Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
+            .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
+            .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
+            .pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
             .allocator = allocator,
         };
     }
