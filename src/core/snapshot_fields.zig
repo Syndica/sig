@@ -682,7 +682,7 @@ pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 test "core.snapshot_fields: parse status cache" {
     const alloc = std.testing.allocator;
 
-    const status_cache_path = "./test_data/status_cache";
+    const status_cache_path = "test_data/status_cache";
     var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
     defer status_cache_file.close();
 
@@ -715,7 +715,7 @@ test "core.snapshot_fields: parse status cache" {
 
 test "core.snapshot_fields: parse snapshot fields" {
     const allocator = std.testing.allocator;
-    const snapshot_path = "./test_data/10";
+    const snapshot_path = "test_data/10";
 
     var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
     defer snapshot_fields.deinit(allocator);

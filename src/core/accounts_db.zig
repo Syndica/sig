@@ -505,7 +505,7 @@ pub const AccountsDB = struct {
         };
         std.debug.assert(refs.items.len > 0);
 
-        // this is a safe unwrap because we know refs.len > 0 
+        // this is a safe unwrap because we know refs.len > 0
         const max_account_index = slotListArgmax(refs).?;
         const max_account_loc = refs.items[max_account_index];
         const account = try self.getAccountInner(
