@@ -1,6 +1,5 @@
 const std = @import("std");
 const base58 = @import("base58-zig");
-const bincode = @import("../bincode/bincode.zig");
 const Ed25519 = std.crypto.sign.Ed25519;
 const encoder = base58.Encoder.init(.{});
 const decoder = base58.Decoder.init(.{});

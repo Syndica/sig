@@ -1,5 +1,5 @@
 const Pubkey = @import("pubkey.zig").Pubkey;
-const Epoch = @import("./clock.zig").Epoch;
+const Epoch = @import("./time.zig").Epoch;
 
 pub const Account = struct {
     lamports: u64,

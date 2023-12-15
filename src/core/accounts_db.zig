@@ -4,9 +4,12 @@ const ArrayList = std.ArrayList;
 
 const Account = @import("../core/account.zig").Account;
 const Hash = @import("../core/hash.zig").Hash;
-const Slot = @import("../core/clock.zig").Slot;
+const Slot = @import("../core/time.zig").Slot;
+const Epoch = @import("../core/time.zig").Epoch;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
+
+const sysvars = @import("../core/sysvars.zig");
 
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
 const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
@@ -14,7 +17,6 @@ const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
 const FileId = @import("../core/accounts_file.zig").FileId;
 const AccountFileAccountInfo = @import("../core/accounts_file.zig").AccountFileAccountInfo;
-const alignToU64 = @import("../core/accounts_file.zig").alignToU64;
 const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
@@ -22,10 +24,12 @@ const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 const Channel = @import("../sync/channel.zig").Channel;
 
-const hashAccount = @import("../core/account.zig").hashAccount;
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 const findSnapshotMetadataPath = @import("../cmd/snapshot_utils.zig").findSnapshotMetadataPath;
 const GenesisConfig = @import("../core/genesis_config.zig").GenesisConfig;
+const StatusCache = @import("../core/snapshot_fields.zig").StatusCache;
+const MAX_CACHE_ENTRIES = @import("../core/snapshot_fields.zig").MAX_CACHE_ENTRIES;
+const HashSet = @import("../core/snapshot_fields.zig").HashSet;
 
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 
@@ -45,6 +49,7 @@ pub const AccountsDB = struct {
 
     // TODO: remove later (only need accounts-db fields)
     snapshot_metadata: SnapshotFields = undefined,
+    snapshot_path: ?[]const u8 = null,
 
     const Self = @This();
 
@@ -76,6 +81,7 @@ pub const AccountsDB = struct {
         snapshot_path: []const u8,
     ) !void {
         std.debug.print("loading from snapshot: {s}\n", .{snapshot_path});
+        self.snapshot_path = snapshot_path;
 
         // check if accounts dir path exists
         const accounts_path = try std.fmt.allocPrint(
@@ -319,10 +325,16 @@ pub const AccountsDB = struct {
     /// - the delta account hash is correct
     /// - the bankfields metadata matches the genesis config metadata
     /// - the bankfields are correct
+    /// - the status cache is correct
     pub fn validateLoadFromSnapshot(
         self: *Self,
         genesis_config: *const GenesisConfig,
     ) !void {
+        if (self.snapshot_path == null) {
+            std.debug.print("need to load from a snapshot, before validating\n", .{});
+            return error.NoSnapshotPathSet;
+        }
+
         const bank_fields = self.snapshot_metadata.bank_fields;
         if (bank_fields.max_tick_height != (bank_fields.slot + 1) * bank_fields.ticks_per_slot) {
             return error.InvalidBankFields;
@@ -352,13 +364,12 @@ pub const AccountsDB = struct {
         }
 
         // logic for computing the hashes
-        const n_bins = blk: {
-            if (builtin.is_test) {
-                break :blk 256;
-            } else {
-                break :blk PUBKEY_BINS_FOR_CALCULATING_HASHES;
-            }
-        };
+        var n_bins: usize = undefined;
+        if (builtin.is_test) {
+            n_bins = 256;
+        } else {
+            n_bins = PUBKEY_BINS_FOR_CALCULATING_HASHES;
+        }
 
         var bins = try PubkeyBins.init(self.allocator, n_bins);
         defer bins.deinit();
@@ -413,7 +424,7 @@ pub const AccountsDB = struct {
         }
 
         // used for account-delta-hash
-        const snapshot_slot = self.snapshot_metadata.bank_fields.slot;
+        const bank_slot = self.snapshot_metadata.bank_fields.slot;
         var slot_hashes = try ArrayList(Hash).initCapacity(self.allocator, 1000);
         defer slot_hashes.deinit();
 
@@ -423,33 +434,24 @@ pub const AccountsDB = struct {
         var total_lamports: u64 = 0;
         for (bins.bins) |*bin| {
             for (bin.items) |pubkey| {
-                const account_slot_list = self.index.get(pubkey.*).?;
+                const slot_list = self.index.get(pubkey.*).?;
+                std.debug.assert(slot_list.items.len > 0);
 
                 // get the most recent state of the account
-                var max_slot_index: ?usize = null;
-                var max_slot: usize = 0;
-                for (account_slot_list.items, 0..) |account_info, i| {
-                    if (max_slot_index == null or max_slot < account_info.slot) {
-                        max_slot = account_info.slot;
-                        max_slot_index = i;
-                    }
-                }
-                const newest_account_loc = account_slot_list.items[max_slot_index.?];
+                const max_slot_index = slotListArgmax(slot_list).?;
+                const max_account_loc = slot_list.items[max_slot_index];
+                const account = try self.getAccountInner(
+                    max_account_loc.file_id,
+                    max_account_loc.offset,
+                );
 
-                const account = try self.getAccount(newest_account_loc.file_id, newest_account_loc.offset);
-                const lamports = account.lamports();
-
-                if (max_slot == snapshot_slot) {
+                if (max_account_loc.slot == bank_slot) {
                     try slot_hashes.append(account.hash.*);
                 }
 
                 // only include non-zero lamport accounts (for full snapshots)
+                const lamports = account.lamports();
                 if (lamports == 0) continue;
-
-                // std.debug.print("pubkey: {s} lamports: {d}\n", .{
-                //     account.store_info.pubkey.string(),
-                //     account.account_info.lamports,
-                // });
 
                 hashes.appendAssumeCapacity(account.hash.*);
                 total_lamports += lamports;
@@ -485,14 +487,132 @@ pub const AccountsDB = struct {
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
+
+        // validate the status cache
+        const status_cache_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/{s}",
+            .{ self.snapshot_path.?, "snapshots/status_cache" },
+        );
+        defer self.allocator.free(status_cache_path);
+
+        var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
+        defer status_cache_file.close();
+
+        var status_cache = try bincode.read(
+            self.allocator,
+            StatusCache,
+            status_cache_file.reader(),
+            .{},
+        );
+        defer bincode.free(self.allocator, status_cache);
+
+        // TODO: probs wana store this on the bank?
+        const slot_history = try self.getTypeFromAccount(
+            sysvars.SlotHistory,
+            &sysvars.IDS.slot_history,
+        );
+        defer bincode.free(self.allocator, slot_history);
+
+        try AccountsDB.validateStatusCache(
+            self.allocator,
+            bank_slot,
+            &status_cache,
+            &slot_history,
+        );
     }
 
-    pub fn getAccount(self: *const Self, file_id: FileId, offset: usize) !AccountFileAccountInfo {
-        const accounts_file = self.account_files.get(file_id) orelse {
-            return error.InvalidFileId;
+    pub inline fn slotListArgmax(
+        slot_list: ArrayList(AccountRef),
+    ) ?usize {
+        return std.sort.argMax(
+            AccountRef,
+            slot_list.items,
+            {},
+            struct {
+                fn lessThan(_: void, a: AccountRef, b: AccountRef) bool {
+                    return a.slot < b.slot;
+                }
+            }.lessThan,
+        );
+    }
+
+    /// gets an account given an associated pubkey
+    pub fn getAccount(self: *const Self, pubkey: *const Pubkey) !AccountFileAccountInfo {
+        const refs = self.index.get(pubkey.*) orelse {
+            return error.PubkeyNotInIndex;
         };
-        const account = try accounts_file.getAccount(offset);
+        std.debug.assert(refs.items.len > 0);
+
+        const max_account_index = slotListArgmax(refs) orelse return error.EmptySlotList;
+        const max_account_loc = refs.items[max_account_index];
+        const account = try self.getAccountInner(
+            max_account_loc.file_id,
+            max_account_loc.offset,
+        );
         return account;
+    }
+
+    /// gets an account given an file_id and offset value
+    pub fn getAccountInner(self: *const Self, file_id: FileId, offset: usize) !AccountFileAccountInfo {
+        const accounts_file: AccountFile = self.account_files.get(file_id) orelse return error.FileIdNotFound;
+        const account = accounts_file.getAccount(offset) catch {
+            return error.InvalidOffset;
+        };
+        return account;
+    }
+
+    pub fn getTypeFromAccount(self: *const Self, comptime T: type, pubkey: *const Pubkey) !T {
+        const account = try self.getAccount(pubkey);
+        const t = bincode.readFromSlice(self.allocator, T, account.data, .{}) catch {
+            return error.DeserializationError;
+        };
+        return t;
+    }
+
+    pub fn validateStatusCache(
+        allocator: std.mem.Allocator,
+        bank_slot: Slot,
+        status_cache: *const StatusCache,
+        slot_history: *const sysvars.SlotHistory,
+    ) !void {
+        // status cache validation
+        const len = status_cache.items.len;
+        if (len > MAX_CACHE_ENTRIES) {
+            return error.TooManyCacheEntries;
+        }
+        var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
+        defer slots_seen.deinit();
+
+        for (status_cache.items) |slot_delta| {
+            if (!slot_delta.is_root) {
+                return error.NonRootSlot;
+            }
+            const slot = slot_delta.slot;
+            if (slot > bank_slot) {
+                return error.SlotTooHigh;
+            }
+            const entry = try slots_seen.getOrPut(slot);
+            if (entry.found_existing) {
+                return error.MultipleSlotEntries;
+            }
+        }
+
+        // validate bank matches the status cache
+        if (slot_history.newest() != bank_slot) {
+            return error.SlotHistoryMismatch;
+        }
+        for (slots_seen.keys()) |slot| {
+            if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
+                return error.SlotNotFoundInHistory;
+            }
+        }
+
+        for (slot_history.oldest()..slot_history.newest()) |slot| {
+            if (!slots_seen.contains(slot)) {
+                return error.SlotNotFoundInStatusCache;
+            }
+        }
     }
 };
 
@@ -670,10 +790,9 @@ pub fn sortBins(
     }
 }
 
-test "core.accounts_db: load from test snapshot" {
+test "core.accounts_db: load and validate from test snapshot" {
     var allocator = std.testing.allocator;
 
-    // init db -- will first load from the .zstd file
     const snapshot_path = "test_data/";
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
@@ -685,4 +804,45 @@ test "core.accounts_db: load from test snapshot" {
     defer gen_config.deinit(allocator);
 
     try accounts_db.validateLoadFromSnapshot(&gen_config);
+}
+
+test "core.accounts_db: load clock sysvar" {
+    var allocator = std.testing.allocator;
+
+    const snapshot_path = "test_data/";
+    var accounts_db = AccountsDB.init(allocator);
+    defer accounts_db.deinit();
+    try accounts_db.loadFromSnapshot(snapshot_path);
+
+    const clock = try accounts_db.getTypeFromAccount(sysvars.Clock, &sysvars.IDS.clock);
+    const expected_clock = sysvars.Clock{
+        .slot = 269,
+        .epoch_start_timestamp = 1701807364,
+        .epoch = 0,
+        .leader_schedule_epoch = 1,
+        .unix_timestamp = 1701807490,
+    };
+    try std.testing.expect(std.meta.eql(clock, expected_clock));
+}
+
+test "core.accounts_db: load other sysvars" {
+    var allocator = std.testing.allocator;
+
+    const snapshot_path = "test_data/";
+    var accounts_db = AccountsDB.init(allocator);
+    defer accounts_db.deinit();
+
+    try accounts_db.loadFromSnapshot(snapshot_path);
+
+    _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
+    _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
+    _ = try accounts_db.getTypeFromAccount(sysvars.SlotHash, &sysvars.IDS.slot_hashes);
+    _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
+
+    const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
+    defer bincode.free(allocator, slot_history);
+
+    // // not always included in local snapshot
+    // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
+    // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
 }

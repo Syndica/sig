@@ -33,7 +33,6 @@ const HashTimeQueue = _crds_table.HashTimeQueue;
 const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
 
 const Logger = @import("../trace/log.zig").Logger;
-const DoNothingSink = @import("../trace/log.zig").DoNothingSink;
 const Entry = @import("../trace/entry.zig").Entry;
 
 const pull_request = @import("../gossip/pull_request.zig");

@@ -5,6 +5,7 @@ const BitVec = @import("bitvec.zig").BitVec;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 
 const bincode = @import("../bincode/bincode.zig");
+const BitVecConfig = @import("bitvec.zig").BitVecConfig;
 
 const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
@@ -126,36 +127,6 @@ pub const Bloom = struct {
         }
     }
 };
-
-pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
-    const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            var bitset: DynamicBitSet = data;
-            var bitvec = BitVec.initFromBitSet(bitset);
-            try bincode.write(null, writer, bitvec, params);
-        }
-
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !DynamicBitSet {
-            var ally = allocator.?;
-            var bitvec = try bincode.read(ally, BitVec, reader, params);
-            defer bincode.free(ally, bitvec);
-
-            var dynamic_bitset = try bitvec.toBitSet(ally);
-            return dynamic_bitset;
-        }
-
-        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
-            _ = allocator;
-            data.deinit();
-        }
-    };
-
-    return bincode.FieldConfig(DynamicBitSet){
-        .serializer = S.serialize,
-        .deserializer = S.deserialize,
-        .free = S.free,
-    };
-}
 
 test "bloom.bloom: helper fcns match rust" {
     const n_bits = Bloom.numBits(100.2, 1e-5);
