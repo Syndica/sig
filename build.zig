@@ -123,36 +123,36 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const ExecCommand = struct { 
-        name: []const u8, 
+    const ExecCommand = struct {
+        name: []const u8,
         path: []const u8,
         description: []const u8 = "",
     };
 
-    const exec_commands = [_]ExecCommand{ 
-        ExecCommand { 
-            .name = "fuzz", 
+    const exec_commands = [_]ExecCommand{
+        ExecCommand{
+            .name = "fuzz",
             .path = "src/gossip/fuzz.zig",
             .description = "gossip fuzz testing",
         },
-        ExecCommand { 
-            .name = "benchmark", 
+        ExecCommand{
+            .name = "benchmark",
             .path = "src/benchmarks.zig",
             .description = "benchmark client",
         },
-        ExecCommand { 
-            .name = "snapshot_utils", 
+        ExecCommand{
+            .name = "snapshot_utils",
             .path = "src/cmd/snapshot_utils.zig",
             .description = "snapshot utils",
         },
-        ExecCommand { 
-            .name = "db", 
+        ExecCommand{
+            .name = "db",
             .path = "src/core/accounts_db.zig",
             .description = "run accounts-db code",
         },
     };
 
-    for (exec_commands) |command_info| { 
+    for (exec_commands) |command_info| {
         const exec = b.addExecutable(.{
             .name = command_info.name,
             .root_source_file = .{ .path = command_info.path },
