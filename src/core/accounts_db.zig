@@ -98,8 +98,17 @@ pub const AccountsDB = struct {
             filenames.deinit();
             self.allocator.free(files.mem);
         }
-        var n_account_files: usize = filenames.items.len;
+
+        var n_account_files: usize = 0;
+        for (filenames.items) |filename| {
+            var fiter = std.mem.tokenizeSequence(u8, filename, ".");
+            const slot = std.fmt.parseInt(Slot, fiter.next().?, 10) catch continue;
+            if (accounts_db_fields.file_map.contains(slot)) {
+                n_account_files += 1;
+            }
+        }
         std.debug.print("found {d} account files\n", .{n_account_files});
+        std.debug.assert(n_account_files > 0);
 
         var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
         var chunk_size = n_account_files / n_threads;
@@ -119,7 +128,7 @@ pub const AccountsDB = struct {
         var end_index: usize = 0;
         for (0..n_threads) |i| {
             if (i == (n_threads - 1)) {
-                end_index = n_account_files;
+                end_index = filenames.items.len;
             } else {
                 end_index = start_index + chunk_size;
             }
@@ -135,7 +144,7 @@ pub const AccountsDB = struct {
             handles.appendAssumeCapacity(handle);
             start_index = end_index;
         }
-        std.debug.assert(end_index == n_account_files);
+        std.debug.assert(end_index == filenames.items.len);
 
         try self.recvAndIndexAccounts(channel, n_account_files);
 
@@ -171,7 +180,11 @@ pub const AccountsDB = struct {
             const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
-            const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.file_map.get(slot).?;
+            const slot_metas: ArrayList(AccountFileInfo) = accounts_db_fields.file_map.get(slot) orelse {
+                // dont read account files which are not in the file_map
+                std.debug.print("failed to read metadata for slot {d}\n", .{slot});
+                continue;
+            };
             std.debug.assert(slot_metas.items.len == 1);
             const slot_meta = slot_metas.items[0];
             if (slot_meta.id != accounts_file_id) {
@@ -245,11 +258,16 @@ pub const AccountsDB = struct {
         std.debug.assert(max_file_id <= std.math.maxInt(u32) / 2);
     }
 
-    pub const AccountHashesConfig = union(enum) { FullAccountHash: struct {
-        max_slot: Slot,
-    }, IncrementalAccountHash: struct {
-        min_slot: Slot,
-    } };
+    pub const AccountHashesConfig = union(enum) {
+        // compute hash from (..., max_slot]
+        FullAccountHash: struct {
+            max_slot: Slot,
+        },
+        // compute hash from (min_slot, ...)
+        IncrementalAccountHash: struct {
+            min_slot: Slot,
+        },
+    };
 
     /// computes the full accounts hash, accounts-delta-hash, and total lamports
     /// using index data (not account file data)
@@ -264,6 +282,8 @@ pub const AccountsDB = struct {
             n_bins = PUBKEY_BINS_FOR_CALCULATING_HASHES;
         }
 
+        // NOTE: because we preallocate sizes per bin, this can be expensive
+        // for a large number of bins
         var bins = try PubkeyBins.init(self.allocator, n_bins);
         defer bins.deinit();
 
@@ -315,10 +335,6 @@ pub const AccountsDB = struct {
         for (bins.bins) |*bin| {
             total_accounts += bin.items.len;
         }
-
-        // used for account-delta-hash
-        var slot_hashes = try ArrayList(Hash).initCapacity(self.allocator, 1000);
-        defer slot_hashes.deinit();
 
         // used for full hashes
         var hashes = try ArrayList(Hash).initCapacity(self.allocator, total_accounts);
@@ -374,9 +390,11 @@ pub const AccountsDB = struct {
         const expected_accounts_hash = self.accounts_db_fields.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
-        const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{ .FullAccountHash = .{
-            .max_slot = full_snapshot_slot,
-        } });
+        const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
+            .FullAccountHash = .{
+                .max_slot = full_snapshot_slot,
+            },
+        });
         const total_lamports = full_result.total_lamports;
         const accounts_hash = full_result.accounts_hash;
 
@@ -397,9 +415,11 @@ pub const AccountsDB = struct {
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
 
-        const incremental_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{ .IncrementalAccountHash = .{
-            .min_slot = full_snapshot_slot,
-        } });
+        const incremental_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
+            .IncrementalAccountHash = .{
+                .min_slot = full_snapshot_slot,
+            },
+        });
         const incremental_lamports = incremental_result.total_lamports;
         const accounts_delta_hash = incremental_result.accounts_hash;
 
@@ -414,15 +434,6 @@ pub const AccountsDB = struct {
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
-
-        // defer bincode.free(self.allocator, slot_history);
-
-        // try AccountsDB.validateStatusCache(
-        //     self.allocator,
-        //     bank_fields.slot,
-        //     status_cache,
-        //     &slot_history,
-        // );
     }
 
     pub fn getSlotHistory(self: *const Self) !sysvars.SlotHistory {
@@ -925,7 +936,9 @@ pub fn main() !void {
     try bank.validateLoadFromSnapshot(&genesis_config);
 
     std.debug.print("validating status cache...\n", .{});
-    const slot_history = try accounts_db.getSlotHistory();
+    var slot_history = try accounts_db.getSlotHistory();
+    defer slot_history.deinit(accounts_db.allocator);
+
     try validateStatusCache(
         &status_cache,
         allocator,
@@ -958,46 +971,66 @@ test "core.accounts_db: test incremental snapshot path parsing" {
 test "core.accounts_db: load and validate from test snapshot" {
     var allocator = std.testing.allocator;
 
-    const snapshot_path = "test_data/";
+    const full_metadata_path = "test_data/snapshots/10/10";
+    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
+        allocator,
+        full_metadata_path,
+    );
+    defer full_snapshot_fields.deinit(allocator);
+
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
-    try accounts_db.loadFromSnapshot(snapshot_path);
 
-    // use the genesis to verify loading
-    const genesis_path = "test_data/genesis.bin";
-    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
-    defer genesis_config.deinit(allocator);
+    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, "test_data/accounts");
 
-    try accounts_db.validateLoadFromSnapshot(&genesis_config);
+    try accounts_db.validateLoadFromSnapshot(
+        null,
+        full_snapshot_fields.bank_fields.slot,
+        full_snapshot_fields.bank_fields.capitalization,
+    );
 }
 
 test "core.accounts_db: load clock sysvar" {
     var allocator = std.testing.allocator;
 
-    const snapshot_path = "test_data/";
+    const full_metadata_path = "test_data/snapshots/10/10";
+    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
+        allocator,
+        full_metadata_path,
+    );
+    defer full_snapshot_fields.deinit(allocator);
+
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
-    try accounts_db.loadFromSnapshot(snapshot_path);
+
+    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, "test_data/accounts");
 
     const clock = try accounts_db.getTypeFromAccount(sysvars.Clock, &sysvars.IDS.clock);
     const expected_clock = sysvars.Clock{
-        .slot = 269,
-        .epoch_start_timestamp = 1701807364,
+        .slot = 10,
+        .epoch_start_timestamp = 1702587901,
         .epoch = 0,
         .leader_schedule_epoch = 1,
-        .unix_timestamp = 1701807490,
+        .unix_timestamp = 1702587908,
     };
-    try std.testing.expect(std.meta.eql(clock, expected_clock));
+    std.debug.print("clock: {}\n", .{clock});
+    try std.testing.expectEqual(clock, expected_clock);
 }
 
 test "core.accounts_db: load other sysvars" {
     var allocator = std.testing.allocator;
 
-    const snapshot_path = "test_data/";
+    const full_metadata_path = "test_data/snapshots/10/10";
+    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
+        allocator,
+        full_metadata_path,
+    );
+    defer full_snapshot_fields.deinit(allocator);
+
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
 
-    try accounts_db.loadFromSnapshot(snapshot_path);
+    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, "test_data/accounts");
 
     _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);

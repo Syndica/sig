@@ -729,5 +729,5 @@ test "core.snapshot_fields: parse incremental snapshot fields" {
     defer snapshot_fields.deinit(allocator);
 
     try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.full_slot, 10);
+    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.?.full_slot, 10);
 }
