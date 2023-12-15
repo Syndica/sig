@@ -1,7 +1,7 @@
-pub const rpc = struct {
-    pub usingnamespace @import("rpc/client.zig");
+pub const rpc_client = struct {
+    pub usingnamespace @import("rpc-client/client.zig");
     pub const types = struct {
-        pub usingnamespace @import("rpc/types.zig");
+        pub usingnamespace @import("rpc-client/types.zig");
     };
 };
 
@@ -73,4 +73,8 @@ pub const cmd = struct {
 pub const net = struct {
     pub usingnamespace @import("net/net.zig");
     pub usingnamespace @import("net/echo.zig");
+};
+
+pub const rpc = struct {
+    pub usingnamespace @import("rpc/server.zig");
 };

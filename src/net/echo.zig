@@ -176,7 +176,7 @@ pub const Server = struct {
         self: *Self,
     ) !void {
         try self.server.listen(std.net.Address.initIp4(.{ 0, 0, 0, 0 }, self.port));
-        self.logger.debugf("started server listener on 0.0.0.0:{d}", .{self.port});
+        self.logger.debugf("started ip echo server listener on 0.0.0.0:{d}", .{self.port});
 
         // launch acceptor thread
         var acceptor_thread_handle = try std.Thread.spawn(.{}, Self.acceptorThread, .{self});
