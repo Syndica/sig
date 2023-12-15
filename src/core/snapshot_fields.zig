@@ -16,6 +16,7 @@ const Epoch = @import("./time.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
+pub const sysvars = @import("./sysvars.zig");
 
 pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
@@ -224,13 +225,13 @@ pub const BankFields = struct {
 
     // we skip these values now because they may be at
     // the end of the snapshot (after account_db_fields)
-    incremental_snapshot_persistence: BankIncrementalSnapshotPersistence = BankIncrementalSnapshotPersistence.default(),
-    epoch_accounts_hash: Hash = Hash.default(),
-    epoch_reward_status: EpochRewardStatus = EpochRewardStatus.default(),
+    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+    epoch_accounts_hash: ?Hash = null,
+    epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(BankIncrementalSnapshotPersistence){ .skip = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(Hash){ .skip = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .skip = true };
+    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .skip = true };
+    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .skip = true };
+    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
 };
 
 pub const AccountFileInfo = struct {
@@ -264,7 +265,7 @@ pub const BankHashStats = struct {
 };
 
 pub const AccountsDbFields = struct {
-    map: HashMap(Slot, ArrayList(AccountFileInfo)),
+    file_map: HashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,
@@ -273,7 +274,7 @@ pub const AccountsDbFields = struct {
     rooted_slots: ArrayList(Slot),
     rooted_slot_hashes: ArrayList(SlotHash),
 
-    pub const SlotHash = struct { Slot, Hash };
+    pub const SlotHash = struct { slot: Slot, hash: Hash };
     pub const @"!bincode-config:rooted_slots" = defaultArrayListOnEOFConfig(Slot);
     pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotHash);
 };
@@ -284,34 +285,34 @@ pub const SnapshotFields = struct {
 
     // incremental snapshot fields (to be added to bank_fields)
     lamports_per_signature: u64 = 0,
-    incremental_snapshot_persistence: BankIncrementalSnapshotPersistence = BankIncrementalSnapshotPersistence.default(),
-    epoch_accounts_hash: Hash = Hash.default(),
-    epoch_reward_status: EpochRewardStatus = EpochRewardStatus.default(),
+    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+    epoch_accounts_hash: ?Hash = null,
+    epoch_reward_status: ?EpochRewardStatus = null,
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(BankIncrementalSnapshotPersistence){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(Hash){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .default_on_eof = true };
-
-    /// NOTE: should call this to get the correct bank_fields instead of accessing it directly
-    /// due to the way snapshot deserialization works
-    pub fn getFieldRefs(self: *@This()) struct { bank_fields: *const BankFields, accounts_db_fields: *const AccountsDbFields } {
-        var bank_fields = &self.bank_fields;
-        // if these are availabel they will be parsed (and likely not the default values)
-        // so, we push them on the bank fields here
-        bank_fields.fee_rate_governor.lamports_per_signature = self.lamports_per_signature;
-        bank_fields.incremental_snapshot_persistence = self.incremental_snapshot_persistence;
-        bank_fields.epoch_accounts_hash = self.epoch_accounts_hash;
-        bank_fields.epoch_reward_status = self.epoch_reward_status;
-
-        return .{ .bank_fields = bank_fields, .accounts_db_fields = &self.accounts_db_fields };
-    }
+    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
+    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
+    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
         var file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
         var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
+
+        // if these are available, we push them onto the banks
+        var bank_fields = &snapshot_fields.bank_fields;
+        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
+        if (snapshot_fields.incremental_snapshot_persistence != null) {
+            bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence.?;
+        }
+        if (snapshot_fields.epoch_accounts_hash != null) {
+            bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash.?;
+        }
+        if (snapshot_fields.epoch_reward_status != null) {
+            bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status.?;
+        }
+
         return snapshot_fields;
     }
 
@@ -319,31 +320,6 @@ pub const SnapshotFields = struct {
         bincode.free(allocator, self);
     }
 };
-
-test "core.snapshot_fields: parse snapshot fields" {
-    // steps:
-    // 1) download a snapshot
-    // 2) decompress snapshot
-    // 3) untar snapshot to get accounts/ dir + other metdata files
-    // 4) set the `snapshot_path` to point to the file with metadata
-    // 4) run this
-    // const snapshot_path = "/test_data/slot/slot";
-
-    const snapshot_path = "../local-net/snapshots/269/269";
-    const alloc = std.testing.allocator;
-
-    var snapshot_fields = SnapshotFields.readFromFilePath(alloc, snapshot_path) catch |err| {
-        if (err == std.fs.File.OpenError.FileNotFound) {
-            std.debug.print("failed to open snapshot fields file: {s} ... skipping test\n", .{@errorName(err)});
-            return;
-        }
-        return err;
-    };
-    defer snapshot_fields.deinit(alloc);
-
-    const fields = snapshot_fields.getFieldRefs();
-    _ = fields;
-}
 
 pub const InstructionError = union(enum) {
     /// Deprecated! Use CustomError instead!
@@ -651,10 +627,54 @@ const Result = union(enum) {
 const CACHED_KEY_SIZE: usize = 20;
 const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     key_slice: [CACHED_KEY_SIZE]u8,
-    r: Result,
+    result: Result,
 }) });
 const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
 pub const StatusCache = ArrayList(BankSlotDelta);
+
+pub fn validateStatusCache(
+    status_cache: *const StatusCache,
+    allocator: std.mem.Allocator,
+    bank_slot: Slot,
+    slot_history: *const sysvars.SlotHistory,
+) !void {
+    // status cache validation
+    const len = status_cache.items.len;
+    if (len > MAX_CACHE_ENTRIES) {
+        return error.TooManyCacheEntries;
+    }
+    var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
+    defer slots_seen.deinit();
+
+    for (status_cache.items) |slot_delta| {
+        if (!slot_delta.is_root) {
+            return error.NonRootSlot;
+        }
+        const slot = slot_delta.slot;
+        if (slot > bank_slot) {
+            return error.SlotTooHigh;
+        }
+        const entry = try slots_seen.getOrPut(slot);
+        if (entry.found_existing) {
+            return error.MultipleSlotEntries;
+        }
+    }
+
+    // validate bank's slot_history matches the status cache
+    if (slot_history.newest() != bank_slot) {
+        return error.SlotHistoryMismatch;
+    }
+    for (slots_seen.keys()) |slot| {
+        if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
+            return error.SlotNotFoundInHistory;
+        }
+    }
+    for (slot_history.oldest()..slot_history.newest()) |slot| {
+        if (!slots_seen.contains(slot)) {
+            return error.SlotNotFoundInStatusCache;
+        }
+    }
+}
 
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
@@ -691,4 +711,23 @@ test "core.snapshot_fields: parse status cache" {
             return error.MultipleSlotEntries;
         }
     }
+}
+
+test "core.snapshot_fields: parse snapshot fields" {
+    const allocator = std.testing.allocator;
+    const snapshot_path = "./test_data/10";
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
+    defer snapshot_fields.deinit(allocator);
+}
+
+test "core.snapshot_fields: parse incremental snapshot fields" {
+    const allocator = std.testing.allocator;
+    const snapshot_path = "test_data/25";
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
+    defer snapshot_fields.deinit(allocator);
+
+    try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
+    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.?.full_slot, 10);
 }

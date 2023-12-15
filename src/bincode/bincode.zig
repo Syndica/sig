@@ -286,14 +286,7 @@ pub fn Deserializer(comptime Reader: type) type {
                                     }
 
                                     if (config.default_on_eof) {
-                                        const field_type = comptime blk: {
-                                            // if optional then get the inner type
-                                            if (@typeInfo(field.type) == .Optional) {
-                                                break :blk @typeInfo(field.type).Optional.child;
-                                            } else {
-                                                break :blk field.type;
-                                            }
-                                        };
+                                        const field_type = field.type;
 
                                         @field(data, field.name) = getty.deserialize(alloc, field_type, dd) catch |err| blk: {
                                             if (err == Error.EOF) {

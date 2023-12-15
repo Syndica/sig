@@ -117,12 +117,17 @@ pub const SlotCheckResult = enum { Future, TooOld, Found, NotFound };
 
 const DynamicBitSet = std.bit_set.DynamicBitSet;
 const BitVecConfig = @import("../bloom/bitvec.zig").BitVecConfig;
+const bincode = @import("../bincode/bincode.zig");
 
 pub const SlotHistory = struct {
     bits: DynamicBitSet,
     next_slot: Slot,
 
     pub const @"!bincode-config:bits" = BitVecConfig();
+
+    pub fn deinit(self: SlotHistory, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, self);
+    }
 
     pub fn check(self: *const SlotHistory, slot: Slot) SlotCheckResult {
         if (slot > self.newest()) {

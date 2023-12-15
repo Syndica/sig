@@ -145,6 +145,11 @@ pub fn build(b: *std.Build) void {
             .path = "src/cmd/snapshot_utils.zig",
             .description = "snapshot utils",
         },
+        ExecCommand { 
+            .name = "db", 
+            .path = "src/core/accounts_db.zig",
+            .description = "run accounts-db code",
+        },
     };
 
     for (exec_commands) |command_info| { 
