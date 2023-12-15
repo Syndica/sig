@@ -785,7 +785,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
-    const snapshot_dir = "./test_data/";
+    const snapshot_dir = "test_data/";
     var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
     defer snapshot_dir_iter.close();
 
@@ -969,20 +969,44 @@ test "core.accounts_db: test incremental snapshot path parsing" {
     try std.testing.expect(std.mem.eql(u8, snapshot_info.path, path));
 }
 
-test "core.accounts_db: load and validate from test snapshot" {
+fn loadTestAccountsDB() !struct { AccountsDB, SnapshotFields } {
+    std.debug.assert(builtin.is_test); // should only be used in tests
+
     var allocator = std.testing.allocator;
 
-    const full_metadata_path = "test_data/snapshots/10/10";
+    const full_metadata_path = "test_data/10";
     var full_snapshot_fields = try SnapshotFields.readFromFilePath(
         allocator,
         full_metadata_path,
     );
-    defer full_snapshot_fields.deinit(allocator);
 
     var accounts_db = AccountsDB.init(allocator);
-    defer accounts_db.deinit();
 
-    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, "test_data/accounts");
+    const accounts_path = "test_data/accounts";
+    const dir = try std.fs.cwd().openDir("test_data", .{});
+
+    dir.access("accounts", .{}) catch {
+        // unpack both snapshots to get the acccount files
+        try unpackZstdTarBall(allocator, "snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst", dir);
+        try unpackZstdTarBall(allocator, "incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst", dir);
+    };
+
+    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, accounts_path);
+
+    return .{
+        accounts_db,
+        full_snapshot_fields,
+    };
+}
+
+test "core.accounts_db: load and validate from test snapshot" {
+    var allocator = std.testing.allocator;
+
+    var result = try loadTestAccountsDB();
+    var accounts_db = result[0];
+    defer accounts_db.deinit();
+    var full_snapshot_fields = result[1];
+    defer full_snapshot_fields.deinit(allocator);
 
     try accounts_db.validateLoadFromSnapshot(
         null,
@@ -994,17 +1018,11 @@ test "core.accounts_db: load and validate from test snapshot" {
 test "core.accounts_db: load clock sysvar" {
     var allocator = std.testing.allocator;
 
-    const full_metadata_path = "test_data/snapshots/10/10";
-    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
-        allocator,
-        full_metadata_path,
-    );
-    defer full_snapshot_fields.deinit(allocator);
-
-    var accounts_db = AccountsDB.init(allocator);
+    var result = try loadTestAccountsDB();
+    var accounts_db = result[0];
     defer accounts_db.deinit();
-
-    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, "test_data/accounts");
+    var full_snapshot_fields = result[1];
+    defer full_snapshot_fields.deinit(allocator);
 
     const clock = try accounts_db.getTypeFromAccount(sysvars.Clock, &sysvars.IDS.clock);
     const expected_clock = sysvars.Clock{
@@ -1021,17 +1039,11 @@ test "core.accounts_db: load clock sysvar" {
 test "core.accounts_db: load other sysvars" {
     var allocator = std.testing.allocator;
 
-    const full_metadata_path = "test_data/snapshots/10/10";
-    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
-        allocator,
-        full_metadata_path,
-    );
-    defer full_snapshot_fields.deinit(allocator);
-
-    var accounts_db = AccountsDB.init(allocator);
+    var result = try loadTestAccountsDB();
+    var accounts_db = result[0];
     defer accounts_db.deinit();
-
-    try accounts_db.loadFromSnapshot(full_snapshot_fields.accounts_db_fields, "test_data/accounts");
+    var full_snapshot_fields = result[1];
+    defer full_snapshot_fields.deinit(allocator);
 
     _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
