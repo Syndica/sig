@@ -7,7 +7,6 @@ const decoder = base58.Decoder.init(.{});
 
 pub const Pubkey = struct {
     data: [32]u8,
-    cached_str: ?[44]u8 = null,
 
     const Self = @This();
 
@@ -16,18 +15,11 @@ pub const Pubkey = struct {
     /// If `bytes`, it wil automatically encode so that it's able to call string() method.
     ///
     pub fn fromString(str: []const u8) !Self {
-        if (str.len != 44) {
-            return Error.InvalidEncodedLength;
-        }
-        var out: [32]u8 = .{
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        };
+        var out: [32]u8 = undefined;
         var written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
-        if (written != 32) {
-            @panic("written is not 32");
-        }
-        return Self{ .data = out, .cached_str = str[0..44].* };
+        if (written != 32) @panic("written is not 32");
+
+        return Self{ .data = out };
     }
 
     /// ***fromBytes*** will automatically base58 decode the value. It will also cache the decoded string
@@ -38,16 +30,11 @@ pub const Pubkey = struct {
     /// set this option to true and it will not decode & cache the encoded value. This can be helpful in
     /// scenarios where you plan to only use the bytes and want to save on expensive base58 encoding.
     ///
-    pub fn fromBytes(bytes: []const u8, opts: struct { skip_encoding: bool = false }) !Self {
+    pub fn fromBytes(bytes: []const u8) !Self {
         if (bytes.len != 32) {
             return Error.InvalidBytesLength;
         }
-        if (opts.skip_encoding) {
-            return Self{ .data = bytes[0..32].*, .cached_str = null };
-        } else {
-            var dest = base58_encode(bytes) catch @panic("could not encode pubkey");
-            return Self{ .data = bytes[0..32].*, .cached_str = dest };
-        }
+        return Self{ .data = bytes[0..32].* };
     }
 
     pub fn base58_encode(bytes: []const u8) error{EncodingError}![44]u8 {
@@ -61,11 +48,15 @@ pub const Pubkey = struct {
     }
 
     pub fn string(self: *const Self) [44]u8 {
-        if (self.cached_str) |str| {
-            return str;
-        } else {
-            return base58_encode(&self.data) catch @panic("could not encode pubkey");
+        return Self.base58_encode(&self.data) catch @panic("could not encode pubkey");
+    }
+
+    pub fn stringWithBuf(self: *const Self, dest: []u8) []u8 {
+        var written = encoder.encode(&self.data, dest) catch @panic("could not encode pubkey");
+        if (written > 44) {
+            std.debug.panic("written > 44\n", .{});
         }
+        return dest[0..written];
     }
 
     /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
@@ -79,13 +70,13 @@ pub const Pubkey = struct {
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         };
         if (options.skip_encoding) {
-            return Self{ .data = bytes[0..32].*, .cached_str = null };
+            return Self{ .data = bytes[0..32].* };
         }
         var written = encoder.encode(&bytes, &dest) catch @panic("could not encode pubkey");
         if (written > 44) {
             std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
         }
-        return Self{ .data = bytes[0..32].*, .cached_str = dest[0..44].* };
+        return Self{ .data = bytes[0..32].* };
     }
 
     pub fn default() Self {
@@ -96,15 +87,17 @@ pub const Pubkey = struct {
         return std.mem.eql(u8, &self.data, &other.data);
     }
 
-    pub fn fromPublicKey(public_key: *const Ed25519.PublicKey, skip_bs58_encoding: bool) Self {
-        return Self.fromBytes(public_key.bytes[0..], .{ .skip_encoding = skip_bs58_encoding }) catch unreachable;
+    pub fn fromPublicKey(public_key: *const Ed25519.PublicKey) Self {
+        return Self.fromBytes(&public_key.bytes) catch unreachable;
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
         return writer.print("{s}", .{self.string()});
     }
 
-    pub const @"!bincode-config:cached_str" = bincode.FieldConfig(?[44]u8){ .skip = true };
+    pub fn isDefault(self: *const Self) bool {
+        return std.mem.eql(u8, &self.data, &[_]u8{0} ** 32);
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

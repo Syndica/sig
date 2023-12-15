@@ -17,6 +17,8 @@ const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
 
+pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
+
 pub const StakeHistoryEntry = struct {
     effective: u64, // effective stake at this epoch
     activating: u64, // sum of portion of stakes not fully warmed up
@@ -231,9 +233,19 @@ pub const BankFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .skip = true };
 };
 
-pub const SerializableAccountStorageEntry = struct {
+pub const AccountFileInfo = struct {
     id: usize,
-    accounts_current_len: usize,
+    length: usize, // amount of bytes used
+
+    pub fn sanitize(self: *const AccountFileInfo, file_size: usize) !void {
+        if (file_size == 0) {
+            return error.FileSizeTooSmall;
+        } else if (file_size > @as(usize, MAXIMUM_APPEND_VEC_FILE_SIZE)) {
+            return error.FileSizeTooLarge;
+        } else if (self.length > file_size) {
+            return error.OffsetOutOfBounds;
+        }
+    }
 };
 
 pub const BankHashInfo = struct {
@@ -251,7 +263,7 @@ pub const BankHashStats = struct {
 };
 
 pub const AccountsDbFields = struct {
-    map: HashMap(Slot, ArrayList(SerializableAccountStorageEntry)),
+    map: HashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,
@@ -282,7 +294,7 @@ pub const SnapshotFields = struct {
 
     /// NOTE: should call this to get the correct bank_fields instead of accessing it directly
     /// due to the way snapshot deserialization works
-    pub fn getFields(self: *@This()) struct { bank_fields: BankFields, accounts_db_fields: AccountsDbFields } {
+    pub fn getFieldRefs(self: *@This()) struct { bank_fields: *const BankFields, accounts_db_fields: *const AccountsDbFields } {
         var bank_fields = &self.bank_fields;
         // if these are availabel they will be parsed (and likely not the default values)
         // so, we push them on the bank fields here
@@ -291,40 +303,45 @@ pub const SnapshotFields = struct {
         bank_fields.epoch_accounts_hash = self.epoch_accounts_hash;
         bank_fields.epoch_reward_status = self.epoch_reward_status;
 
-        return .{ .bank_fields = self.bank_fields, .accounts_db_fields = self.accounts_db_fields };
+        return .{ .bank_fields = bank_fields, .accounts_db_fields = &self.accounts_db_fields };
+    }
+
+    pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
+        var file = try std.fs.cwd().openFile(path, .{});
+        defer file.close();
+
+        var file_reader = std.io.bufferedReader(file.reader());
+        const file_size = (try file.stat()).size;
+
+        var buf = try std.ArrayList(u8).initCapacity(allocator, file_size);
+        defer buf.deinit();
+
+        var snapshot_fields = try bincode.read(allocator, SnapshotFields, file_reader.reader(), .{});
+        return snapshot_fields;
     }
 };
 
-test "core.bank_fields: tmp" {
+test "core.snapshot_fields: parse snapshot fields" {
     // steps:
     // 1) download a snapshot
     // 2) decompress snapshot
     // 3) untar snapshot to get accounts/ dir + other metdata files
-    // 4) set the `root_snapshot_path` to point to the file with metadata
+    // 4) set the `snapshot_path` to point to the file with metadata
     // 4) run this
-    const root_snapshot_path = "/test_data/slot/slot";
+    // const snapshot_path = "/test_data/slot/slot";
+
+    const snapshot_path = "/Users/tmp/Documents/zig-solana/snapshots/snapshots/225552163/225552163";
     const alloc = std.testing.allocator;
 
-    // open file
-    var file = std.fs.openFileAbsolute(root_snapshot_path, .{}) catch |err| {
-        std.debug.print("failed to open bank/accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
-        return;
+    var snapshot_fields = SnapshotFields.readFromFilePath(alloc, snapshot_path) catch |err| {
+        if (err == std.fs.File.OpenError.FileNotFound) {
+            std.debug.print("failed to open snapshot fields file: {s} ... skipping test\n", .{@errorName(err)});
+            return;
+        }
+        return err;
     };
-    defer file.close();
-
-    try file.seekFromEnd(0);
-    const file_size = try file.getPos();
-    try file.seekTo(0);
-
-    var buf_reader = std.io.bufferedReader(file.reader());
-    var in_stream = buf_reader.reader();
-
-    var buf = try std.ArrayList(u8).initCapacity(alloc, file_size);
-    defer buf.deinit();
-
-    var snapshot_fields = try bincode.read(alloc, SnapshotFields, in_stream, .{});
     defer bincode.free(alloc, snapshot_fields);
 
-    const fields = snapshot_fields.getFields();
+    const fields = snapshot_fields.getFieldRefs();
     _ = fields;
 }

@@ -91,7 +91,7 @@ pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
 
 pub fn randomCrdsValue(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !CrdsValue {
     var keypair = try KeyPair.create(null);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     // will have random id
     var value = try CrdsValue.random(rng, &keypair);
@@ -117,7 +117,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     const allocator = std.heap.page_allocator;
     const packets = try crds_values_to_packets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &Pubkey.fromPublicKey(&keypair.public_key),
         &crds_values,
         &to_addr,
         ChunkType.PushMessage,
@@ -137,7 +137,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     const allocator = std.heap.page_allocator;
     const packets = try crds_values_to_packets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &Pubkey.fromPublicKey(&keypair.public_key),
         &crds_values,
         &to_addr,
         ChunkType.PullResponse,
@@ -226,7 +226,7 @@ pub fn main() !void {
     var exit = AtomicBool.init(false);
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = LegacyContactInfo.default(my_pubkey);
     contact_info.shred_version = 0;
     contact_info.gossip = gossip_address;
@@ -253,7 +253,7 @@ pub fn main() !void {
     var fuzz_keypair = try KeyPair.create(null);
     var fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
 
-    var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
+    var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = LegacyContactInfo.default(fuzz_pubkey);
     fuzz_contact_info.shred_version = 19;
     fuzz_contact_info.gossip = fuzz_address;
