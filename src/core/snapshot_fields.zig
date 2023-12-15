@@ -16,6 +16,7 @@ const Epoch = @import("./time.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
+pub const sysvars = @import("./sysvars.zig");
 
 pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
@@ -626,10 +627,54 @@ const Result = union(enum) {
 const CACHED_KEY_SIZE: usize = 20;
 const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     key_slice: [CACHED_KEY_SIZE]u8,
-    r: Result,
+    result: Result,
 }) });
 const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
 pub const StatusCache = ArrayList(BankSlotDelta);
+
+pub fn validateStatusCache(
+    status_cache: *const StatusCache,
+    allocator: std.mem.Allocator,
+    bank_slot: Slot,
+    slot_history: *const sysvars.SlotHistory,
+) !void {
+    // status cache validation
+    const len = status_cache.items.len;
+    if (len > MAX_CACHE_ENTRIES) {
+        return error.TooManyCacheEntries;
+    }
+    var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
+    defer slots_seen.deinit();
+
+    for (status_cache.items) |slot_delta| {
+        if (!slot_delta.is_root) {
+            return error.NonRootSlot;
+        }
+        const slot = slot_delta.slot;
+        if (slot > bank_slot) {
+            return error.SlotTooHigh;
+        }
+        const entry = try slots_seen.getOrPut(slot);
+        if (entry.found_existing) {
+            return error.MultipleSlotEntries;
+        }
+    }
+
+    // validate bank's slot_history matches the status cache
+    if (slot_history.newest() != bank_slot) {
+        return error.SlotHistoryMismatch;
+    }
+    for (slots_seen.keys()) |slot| {
+        if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
+            return error.SlotNotFoundInHistory;
+        }
+    }
+    for (slot_history.oldest()..slot_history.newest()) |slot| {
+        if (!slots_seen.contains(slot)) {
+            return error.SlotNotFoundInStatusCache;
+        }
+    }
+}
 
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;

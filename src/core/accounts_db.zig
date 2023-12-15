@@ -28,10 +28,15 @@ const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
 const findSnapshotMetadataPath = @import("../cmd/snapshot_utils.zig").findSnapshotMetadataPath;
 const GenesisConfig = @import("../core/genesis_config.zig").GenesisConfig;
 const StatusCache = @import("../core/snapshot_fields.zig").StatusCache;
+const validateStatusCache = @import("../core/snapshot_fields.zig").validateStatusCache;
+
 const MAX_CACHE_ENTRIES = @import("../core/snapshot_fields.zig").MAX_CACHE_ENTRIES;
 const HashSet = @import("../core/snapshot_fields.zig").HashSet;
 
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
+const BankIncrementalSnapshotPersistence = @import("../core/snapshot_fields.zig").BankIncrementalSnapshotPersistence;
+
+const Bank = @import("./bank.zig").Bank;
 
 pub const MERKLE_FANOUT: usize = 16;
 
@@ -47,8 +52,7 @@ pub const AccountsDB = struct {
     account_files: std.AutoArrayHashMap(FileId, AccountFile),
     index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
 
-    // TODO: remove later (only need accounts-db fields)
-    snapshot_fields: SnapshotFields = undefined,
+    accounts_db_fields: AccountsDbFields = undefined,
 
     const Self = @This();
 
@@ -70,17 +74,15 @@ pub const AccountsDB = struct {
             refs.deinit();
         }
         self.index.deinit();
-
-        bincode.free(self.allocator, self.snapshot_fields);
     }
 
     /// loads the account files and create the pubkey indexes
     pub fn loadFromSnapshot(
         self: *Self,
-        snapshot_fields: SnapshotFields,
+        accounts_db_fields: AccountsDbFields,
         accounts_path: []const u8,
     ) !void {
-        self.snapshot_fields = snapshot_fields;
+        self.accounts_db_fields = accounts_db_fields;
 
         // start the indexing
         var timer = std.time.Timer.start() catch unreachable;
@@ -124,7 +126,7 @@ pub const AccountsDB = struct {
             const handle = try std.Thread.spawn(.{}, openAndParseAccountFiles, .{
                 self.allocator,
                 accounts_path,
-                &self.snapshot_fields.accounts_db_fields,
+                &accounts_db_fields,
                 channel,
                 // per task files
                 filenames.items[start_index..end_index],
@@ -362,103 +364,71 @@ pub const AccountsDB = struct {
         };
     }
 
-    /// validates the loaded accounts_db which is loaded from a snapshot
-    /// this verifies:
-    /// - the full account hash is correct
-    /// - the total number of lamports is correct
-    /// - the delta account hash is correct
-    /// - the bankfields metadata matches the genesis config metadata
-    /// - the bankfields are correct
-    /// - the status cache is correct
+    /// validates the accounts_db which was loaded from a snapshot
     pub fn validateLoadFromSnapshot(
         self: *Self,
-        genesis_config: *const GenesisConfig,
-        status_cache: *StatusCache,
+        incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence,
         full_snapshot_slot: Slot,
-        full_snapshot_total_lamports: u64,
+        expected_full_lamports: u64,
     ) !void {
-        const bank_fields = self.snapshot_fields.bank_fields;
-        if (bank_fields.max_tick_height != (bank_fields.slot + 1) * bank_fields.ticks_per_slot) {
-            return error.InvalidBankFields;
-        }
-        if (bank_fields.epoch_schedule.getEpoch(bank_fields.slot) != bank_fields.epoch) {
-            return error.InvalidBankFields;
-        }
+        const expected_accounts_hash = self.accounts_db_fields.bank_hash_info.accounts_hash;
 
-        // the bankfields metadata matches the genesis config metadata
-        if (genesis_config.creation_time != bank_fields.genesis_creation_time) {
-            return error.BankAndGenesisMismatch;
-        }
-        if (genesis_config.ticks_per_slot != bank_fields.ticks_per_slot) {
-            return error.BankAndGenesisMismatch;
-        }
-        const genesis_ns_per_slot = genesis_config.poh_config.target_tick_duration.nanos * @as(u128, genesis_config.ticks_per_slot);
-        if (bank_fields.ns_per_slot != genesis_ns_per_slot) {
-            return error.BankAndGenesisMismatch;
-        }
-
-        const genesis_slots_per_year = yearsAsSlots(1, genesis_config.poh_config.target_tick_duration.nanos, bank_fields.ticks_per_slot);
-        if (genesis_slots_per_year != bank_fields.slots_per_year) {
-            return error.BankAndGenesisMismatch;
-        }
-        if (!std.meta.eql(bank_fields.epoch_schedule, genesis_config.epoch_schedule)) {
-            return error.BankAndGenesisMismatch;
-        }
-
-        const result = try self.computeAccountHashesAndLamports(AccountHashesConfig{ .FullAccountHash = .{
+        // validate the full snapshot
+        const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{ .FullAccountHash = .{
             .max_slot = full_snapshot_slot,
         } });
-        const total_lamports = result.total_lamports;
-        const accounts_hash = result.accounts_hash;
+        const total_lamports = full_result.total_lamports;
+        const accounts_hash = full_result.accounts_hash;
 
-        // const expected_total_lamports = self.snapshot_fields.bank_fields.capitalization;
-        if (full_snapshot_total_lamports != total_lamports) {
+        if (expected_full_lamports != total_lamports) {
             std.debug.print("incorrect total lamports\n", .{});
-            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ full_snapshot_total_lamports, total_lamports });
+            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_full_lamports, total_lamports });
             return error.IncorrectTotalLamports;
         }
-
-        const bank_hash_info = self.snapshot_fields.accounts_db_fields.bank_hash_info;
-        const expected_accounts_hash = bank_hash_info.accounts_hash;
         if (expected_accounts_hash.cmp(&accounts_hash) != .eq) {
             std.debug.print("incorrect accounts hash\n", .{});
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_hash, accounts_hash });
             return error.IncorrectAccountsHash;
         }
 
+        // validate the incremental snapshot
+        if (incremental_snapshot_persistence == null) return;
+        std.debug.print("validating the incremental snapshot\n", .{});
+        const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
+        const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
+
         const incremental_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{ .IncrementalAccountHash = .{
             .min_slot = full_snapshot_slot,
         } });
-
         const incremental_lamports = incremental_result.total_lamports;
-        const expected_incremental_lamports = self.snapshot_fields.bank_fields.incremental_snapshot_persistence.incremental_capitalization;
+        const accounts_delta_hash = incremental_result.accounts_hash;
+
         if (expected_incremental_lamports != incremental_lamports) {
             std.debug.print("incorrect incremental lamports\n", .{});
             std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_incremental_lamports, incremental_lamports });
             return error.IncorrectIncrementalLamports;
         }
 
-        const accounts_delta_hash = incremental_result.accounts_hash;
-        const expected_accounts_delta_hash = self.snapshot_fields.bank_fields.incremental_snapshot_persistence.incremental_hash;
         if (expected_accounts_delta_hash.cmp(&accounts_delta_hash) != .eq) {
             std.debug.print("incorrect accounts delta hash\n", .{});
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
 
-        // validate the status cache
-        std.debug.print("validating status cache\n", .{});
-        const slot_history = try self.getTypeFromAccount(
+        // defer bincode.free(self.allocator, slot_history);
+
+        // try AccountsDB.validateStatusCache(
+        //     self.allocator,
+        //     bank_fields.slot,
+        //     status_cache,
+        //     &slot_history,
+        // );
+    }
+
+    pub fn getSlotHistory(self: *const Self) !sysvars.SlotHistory {
+        return try self.getTypeFromAccount(
             sysvars.SlotHistory,
             &sysvars.IDS.slot_history,
-        );
-        defer bincode.free(self.allocator, slot_history);
-
-        try AccountsDB.validateStatusCache(
-            self.allocator,
-            bank_fields.slot,
-            status_cache,
-            &slot_history,
         );
     }
 
@@ -549,58 +519,7 @@ pub const AccountsDB = struct {
         };
         return t;
     }
-
-    pub fn validateStatusCache(
-        allocator: std.mem.Allocator,
-        bank_slot: Slot,
-        status_cache: *const StatusCache,
-        slot_history: *const sysvars.SlotHistory,
-    ) !void {
-        // status cache validation
-        const len = status_cache.items.len;
-        if (len > MAX_CACHE_ENTRIES) {
-            return error.TooManyCacheEntries;
-        }
-        var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
-        defer slots_seen.deinit();
-
-        for (status_cache.items) |slot_delta| {
-            if (!slot_delta.is_root) {
-                return error.NonRootSlot;
-            }
-            const slot = slot_delta.slot;
-            if (slot > bank_slot) {
-                return error.SlotTooHigh;
-            }
-            const entry = try slots_seen.getOrPut(slot);
-            if (entry.found_existing) {
-                return error.MultipleSlotEntries;
-            }
-        }
-
-        // validate bank matches the status cache
-        if (slot_history.newest() != bank_slot) {
-            return error.SlotHistoryMismatch;
-        }
-        for (slots_seen.keys()) |slot| {
-            if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
-                return error.SlotNotFoundInHistory;
-            }
-        }
-
-        for (slot_history.oldest()..slot_history.newest()) |slot| {
-            if (!slots_seen.contains(slot)) {
-                return error.SlotNotFoundInStatusCache;
-            }
-        }
-    }
 };
-
-pub const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
-
-pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 {
-    return years * SECONDS_PER_YEAR * (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration_ns))) / @as(f64, @floatFromInt(ticks_per_slot));
-}
 
 pub fn printTimeEstimate(
     // timer should be started at the beginning
@@ -905,11 +824,8 @@ pub fn main() !void {
         allocator,
         full_metadata_path,
     );
-
     const full_snapshot_lamports = full_snapshot_fields.bank_fields.capitalization;
     const full_snapshot_slot = full_snapshot_fields.bank_fields.slot;
-    std.debug.print("full snapshot capitalization: {}\n", .{full_snapshot_lamports});
-    std.debug.print("full snapshot slot: {}\n", .{full_snapshot_slot});
 
     if (maybe_largest_incremental_snapshot) |largest_incremental_snapshot| {
         std.debug.print("incremental snapshot: {s}\n", .{largest_incremental_snapshot.path});
@@ -970,8 +886,8 @@ pub fn main() !void {
     defer allocator.free(genesis_path);
 
     // use the genesis to verify loading
-    const gen_config = try GenesisConfig.init(allocator, genesis_path);
-    defer gen_config.deinit(allocator);
+    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
 
     const status_cache_path = try std.fmt.allocPrint(
         allocator,
@@ -994,12 +910,27 @@ pub fn main() !void {
     var accounts_db = AccountsDB.init(allocator);
     defer accounts_db.deinit();
 
-    try accounts_db.loadFromSnapshot(full_snapshot_fields, accounts_path);
+    try accounts_db.loadFromSnapshot(
+        full_snapshot_fields.accounts_db_fields,
+        accounts_path,
+    );
     try accounts_db.validateLoadFromSnapshot(
-        &gen_config,
-        &status_cache,
+        full_snapshot_fields.bank_fields.incremental_snapshot_persistence,
         full_snapshot_slot,
         full_snapshot_lamports,
+    );
+
+    std.debug.print("validating bank...\n", .{});
+    var bank = Bank.init(&accounts_db, &full_snapshot_fields.bank_fields);
+    try bank.validateLoadFromSnapshot(&genesis_config);
+
+    std.debug.print("validating status cache...\n", .{});
+    const slot_history = try accounts_db.getSlotHistory();
+    try validateStatusCache(
+        &status_cache,
+        allocator,
+        full_snapshot_fields.bank_fields.slot,
+        &slot_history,
     );
 
     std.debug.print("done!\n", .{});
@@ -1034,10 +965,10 @@ test "core.accounts_db: load and validate from test snapshot" {
 
     // use the genesis to verify loading
     const genesis_path = "test_data/genesis.bin";
-    const gen_config = try GenesisConfig.init(allocator, genesis_path);
-    defer gen_config.deinit(allocator);
+    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
 
-    try accounts_db.validateLoadFromSnapshot(&gen_config);
+    try accounts_db.validateLoadFromSnapshot(&genesis_config);
 }
 
 test "core.accounts_db: load clock sysvar" {
