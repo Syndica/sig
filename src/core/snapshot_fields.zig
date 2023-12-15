@@ -225,13 +225,13 @@ pub const BankFields = struct {
 
     // we skip these values now because they may be at
     // the end of the snapshot (after account_db_fields)
-    incremental_snapshot_persistence: BankIncrementalSnapshotPersistence = BankIncrementalSnapshotPersistence.default(),
-    epoch_accounts_hash: Hash = Hash.default(),
-    epoch_reward_status: EpochRewardStatus = EpochRewardStatus.default(),
+    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+    epoch_accounts_hash: ?Hash = null,
+    epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(BankIncrementalSnapshotPersistence){ .skip = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(Hash){ .skip = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(EpochRewardStatus){ .skip = true };
+    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .skip = true };
+    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .skip = true };
+    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
 };
 
 pub const AccountFileInfo = struct {
