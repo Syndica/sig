@@ -933,7 +933,7 @@ pub fn main() !void {
 
     std.debug.print("validating bank...\n", .{});
     var bank = Bank.init(&accounts_db, &full_snapshot_fields.bank_fields);
-    try bank.validateLoadFromSnapshot(&genesis_config);
+    try Bank.validateBankFields(bank.bank_fields, &genesis_config);
 
     std.debug.print("validating status cache...\n", .{});
     var slot_history = try accounts_db.getSlotHistory();
