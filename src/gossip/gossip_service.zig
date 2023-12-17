@@ -2520,7 +2520,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
         var endpoint = address.toEndpoint();
 
-        var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+        var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         var contact_info = LegacyContactInfo.default(pubkey);
         contact_info.shred_version = 19;
         contact_info.gossip = address;
