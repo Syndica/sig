@@ -1,4 +1,3 @@
-/// NOTE: broken rn due to json changes in zig, see SKIP_RPC_CALLS_TESTING
 const std = @import("std");
 const json = std.json;
 const Uri = std.Uri;
@@ -70,11 +69,15 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.default_http_headers.deinit();
+        var headers = self.default_http_headers;
+        headers.deinit();
     }
 
     fn defaultCommitmentOr(self: *Self, commitment: ?types.Commitment) types.Commitment {
-        return commitment orelse self.default_commitment;
+        if (commitment) |cmmt| {
+            return cmmt;
+        }
+        return self.default_commitment;
     }
 
     fn makeRequestWithJRpcResponse(self: *Self, comptime Result: type, comptime Params: type, method: []const u8, id: []const u8, params: Params) !jsonrpc.Response(Result) {
@@ -169,17 +172,20 @@ pub const Client = struct {
     };
 
     pub fn getAccountInfo(self: *Self, pubkey: Pubkey, options: GetAccountInfoOptions) !jsonrpc.Response(types.AccountInfo) {
-        var options_obj = std.StringArrayHashMap(json.Value).init(self.allocator);
-        defer options_obj.deinit();
-        try options_obj.put("encoding", .{ .string = options.encoding.string() });
-        try options_obj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
+        var optionsObj = std.StringArrayHashMap(json.Value).init(self.allocator);
+        defer optionsObj.deinit();
+        try optionsObj.put("encoding", .{ .string = options.encoding.string() });
+        try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
 
-        var values = std.ArrayList(json.Value).init(self.allocator);
-        defer values.deinit();
-        try values.append(.{ .string = pubkey.string() });
-        try values.append(.{ .object = options_obj });
+        var arrList = std.ArrayList(json.Value).init(self.allocator);
+        defer arrList.deinit();
 
-        var params = .{ .array = values };
+        var str = pubkey.string();
+
+        try arrList.append(.{ .string = str });
+        try arrList.append(.{ .object = optionsObj });
+
+        var params = .{ .array = arrList };
 
         var resp = try self.makeRequestWithJRpcResponse(types.AccountInfo, json.Value, "getAccountInfo", "1", params);
         return resp;
@@ -198,28 +204,28 @@ pub const Client = struct {
 
     const GetBlockOptions = struct {
         commitment: ?types.Commitment = null,
-        max_supported_transaction_version: i64 = 0,
-        transaction_details: []const u8 = "full",
+        maxSupportedTransactionVersion: i64 = 0,
+        transactionDetails: []const u8 = "full",
         rewards: bool = false,
         /// NOTE: must be json for now
         encoding: types.Encoding = .Json,
     };
 
     pub fn getBlock(self: *Self, slot: u64, options: GetBlockOptions) !jsonrpc.Response(types.BlockInfo) {
-        var options_obj = std.StringArrayHashMap(json.Value).init(self.allocator);
-        defer options_obj.deinit();
-        try options_obj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
-        try options_obj.put("encoding", .{ .string = options.encoding.string() });
-        try options_obj.put("maxSupportedTransactionVersion", .{ .integer = options.max_supported_transaction_version });
-        try options_obj.put("transactionDetails", .{ .string = options.transaction_details });
-        try options_obj.put("rewards", .{ .bool = options.rewards });
+        var optionsObj = std.StringArrayHashMap(json.Value).init(self.allocator);
+        defer optionsObj.deinit();
+        try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
+        try optionsObj.put("encoding", .{ .string = options.encoding.string() });
+        try optionsObj.put("maxSupportedTransactionVersion", .{ .integer = options.maxSupportedTransactionVersion });
+        try optionsObj.put("transactionDetails", .{ .string = options.transactionDetails });
+        try optionsObj.put("rewards", .{ .bool = options.rewards });
 
-        var values = try std.ArrayList(json.Value).initCapacity(self.allocator, 2);
-        defer values.deinit();
-        values.appendAssumeCapacity(.{ .integer = @intCast(slot) });
-        values.appendAssumeCapacity(.{ .object = options_obj });
+        var arrList = std.ArrayList(json.Value).init(self.allocator);
+        defer arrList.deinit();
+        try arrList.append(.{ .integer = @intCast(slot) });
+        try arrList.append(.{ .object = optionsObj });
 
-        var params = .{ .array = values };
+        var params = .{ .array = arrList };
 
         return try self.makeRequestWithJRpcResponse(types.BlockInfo, json.Value, "getBlock", "1", params);
     }
@@ -228,100 +234,72 @@ pub const Client = struct {
         commitment: ?types.Commitment = null,
         identity: ?[]const u8 = null,
         range: ?struct {
-            first_slot: u64,
-            last_slot: ?u64,
+            firstSlot: u64,
+            lastSlot: ?u64,
         } = null,
     };
 
     pub fn getBlockProduction(self: *Self, options: GetBlockProductionOptions) !jsonrpc.ResponseAlt(types.BlockProductionInfo) {
         const Result = jsonrpc.ResponsePayload(types.BlockProductionInfo);
 
-        // construct the request
-        var options_obj = std.StringArrayHashMap(json.Value).init(self.allocator);
-        defer options_obj.deinit();
-        try options_obj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
-
+        var optionsObj = std.StringArrayHashMap(json.Value).init(self.allocator);
+        defer optionsObj.deinit();
+        try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
         if (options.identity) |ident| {
-            try options_obj.put("identity", .{ .string = ident });
+            try optionsObj.put("identity", .{ .string = ident });
         }
-
         if (options.range) |range| {
-            std.debug.print("range: {any}\n", .{range});
-            var range_obj = std.StringArrayHashMap(json.Value).init(self.allocator);
-            try range_obj.put("firstSlot", .{ .integer = @as(i64, @intCast(range.first_slot)) });
-            if (range.last_slot) |last_slot| {
-                try range_obj.put("lastSlot", .{ .integer = @as(i64, @intCast(last_slot)) });
-            }
-            options_obj.put("range", .{ .object = range_obj });
-        }
-        defer {
-            if (options.range) |_| {
-                options_obj.getPtr("range").?.object.deinit();
+            var rangeObj = std.StringArrayHashMap(json.Value).init(self.allocator);
+            defer rangeObj.deinit();
+            try rangeObj.put("firstSlot", .{ .integer = @as(i64, @intCast(range.firstSlot)) });
+            if (range.lastSlot) |lastSlot| {
+                try rangeObj.put("lastSlot", .{ .integer = @as(i64, @intCast(lastSlot)) });
             }
         }
 
-        var values = std.ArrayList(json.Value).init(self.allocator);
-        defer values.deinit();
+        var arrList = std.ArrayList(json.Value).init(self.allocator);
+        defer arrList.deinit();
+        try arrList.append(.{ .object = optionsObj });
 
-        try values.append(.{ .object = options_obj });
-        var params = .{ .array = values };
+        var params = .{ .array = arrList };
 
-        // send the request
         var tree = try self.makeRequestWithJsonValueResponse(json.Value, "getBlockProduction", "1", params);
-
-        // parse the result
-        var maybe_err = tree.root.object.get("error");
+        var errorObject = tree.root.object.get("error");
         var id = tree.root.object.get("id").?.string;
 
         var arena = std.heap.ArenaAllocator.init(self.allocator);
-        var response_allocator = arena.allocator();
-        if (maybe_err) |err| {
-            return jsonrpc.ResponseAlt(types.BlockProductionInfo).init(arena, Result{
-                .jsonrpc = "2.0",
-                .id = id,
-                .result = null,
-                .@"error" = jsonrpc.ErrorObject{
-                    .code = err.object.get("code").?.integer,
-                    .message = err.object.get("message").?.string,
-                },
-            }, tree);
+        var responseAllocator = arena.allocator();
+        if (errorObject) |errObj| {
+            return jsonrpc.ResponseAlt(types.BlockProductionInfo).init(arena, Result{ .jsonrpc = "2.0", .id = id, .result = null, .@"error" = jsonrpc.ErrorObject{
+                .code = errObj.object.get("code").?.integer,
+                .message = errObj.object.get("message").?.string,
+            } }, tree);
         }
 
         var result = tree.root.object.get("result").?;
         var context = result.object.get("context").?;
         var value = result.object.get("value").?;
 
-        var by_identity = std.StringArrayHashMap([]u64).init(response_allocator);
+        var byIdentity = std.StringArrayHashMap([]u64).init(responseAllocator);
         var iter = value.object.get("byIdentity").?.object.iterator();
 
         while (iter.next()) |entry| {
-            var vals = std.ArrayList(u64).init(response_allocator);
-            for (entry.value_ptr.array.items) |val| {
+            var vals = std.ArrayList(u64).init(responseAllocator);
+            for (entry.value_ptr.*.array.items) |val| {
                 try vals.append(@as(u64, @intCast(val.integer)));
             }
-            try by_identity.put(entry.key_ptr.*, vals.items);
+            try byIdentity.put(entry.key_ptr.*, vals.items);
         }
 
-        const range_result = value.object.get("range").?.object;
         return jsonrpc.ResponseAlt(types.BlockProductionInfo).init(
             arena,
-            Result{
-                .jsonrpc = "2.0",
-                .id = id,
-                .result = .{
-                    .context = .{
-                        .apiVersion = context.object.get("apiVersion").?.string,
-                        .slot = @as(u64, @intCast(context.object.get("slot").?.integer)),
-                    },
-                    .value = .{
-                        .byIdentity = by_identity,
-                        .range = .{
-                            .firstSlot = @as(u64, @intCast(range_result.get("firstSlot").?.integer)),
-                            .lastSlot = @as(u64, @intCast(range_result.get("firstSlot").?.integer)),
-                        },
-                    },
-                },
-            },
+            Result{ .jsonrpc = "2.0", .id = id, .result = .{ .context = .{
+                .apiVersion = context.object.get("apiVersion").?.string,
+                .slot = @as(u64, @intCast(context.object.get("slot").?.integer)),
+            }, .value = .{ .byIdentity = byIdentity, .range = .{
+                .firstSlot = @as(u64, @intCast(value.object.get("range").?.object.get("firstSlot").?.integer)),
+                .lastSlot = @as(u64, @intCast(value.object.get("range").?.object.get("firstSlot").?.integer)),
+            } } } },
             tree,
         );
     }
@@ -1318,29 +1296,29 @@ const TestError = error{
     SkipZigTest,
 };
 
-test "rpc.client: client should create successfully" {
+test "client should create successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 }
 
-test "rpc.client: client should accept custom headers" {
-    var custom_headers = [_][2][]const u8{.{ "Cache-Control", "no-cache" }};
+test "client should accept custom headers" {
+    var customHeaders = [_][2][]const u8{.{ "Cache-Control", "no-cache" }};
     var client = try Client.init(testing.allocator, .{
         .http_endpoint = HTTP_ENDPOINT,
-        .http_headers = &custom_headers,
+        .http_headers = &customHeaders,
     });
     defer client.deinit();
 }
 
-test "rpc.client: client should not accept bad headers" {
-    var custom_headers = [_][2][]const u8{.{ "Cache-Control", "" }};
+test "client should not accept bad headers" {
+    var customHeaders = [_][2][]const u8{.{ "Cache-Control", "" }};
     try testing.expectError(Error.InvalidHttpHeaders, Client.init(testing.allocator, .{
         .http_endpoint = HTTP_ENDPOINT,
-        .http_headers = &custom_headers,
+        .http_headers = &customHeaders,
     }));
 }
 
-test "rpc.client: pubkey equality works" {
+test "pubkey equality works" {
     var pubkey1 = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
     var pubkey1Again = try Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa");
     var pubkeyOther = try Pubkey.fromString("Bvg7GuhqwNmV2JVyeZjhAcTPFqPktfmq25VBaZipozda");
@@ -1349,7 +1327,7 @@ test "rpc.client: pubkey equality works" {
     try testing.expect(!pubkey1.equals(&pubkeyOther));
 }
 
-test "rpc.client: pubkey randome works" {
+test "pubkey randome works" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
@@ -1359,7 +1337,7 @@ test "rpc.client: pubkey randome works" {
     try testing.expect(!pubkey_2.equals(&pubkey));
 }
 
-test "rpc.client: make 'getAccountInfo' rpc call successfully" {
+test "make 'getAccountInfo' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1379,7 +1357,7 @@ test "rpc.client: make 'getAccountInfo' rpc call successfully" {
     std.log.debug("Account info: {any}", .{resp.result().value.data});
 }
 
-test "rpc.client: make 'getBalance' rpc call successfully" {
+test "make 'getBalance' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1399,7 +1377,7 @@ test "rpc.client: make 'getBalance' rpc call successfully" {
     std.log.debug("balance info: {any}", .{resp.result().value});
 }
 
-test "rpc.client: make 'getBlockHeight' rpc call successfully" {
+test "make 'getBlockHeight' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1417,7 +1395,7 @@ test "rpc.client: make 'getBlockHeight' rpc call successfully" {
     std.log.debug("block height: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getBlock' rpc call successfully" {
+test "make 'getBlock' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1435,7 +1413,7 @@ test "rpc.client: make 'getBlock' rpc call successfully" {
     std.log.debug("block info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getBlockProduction' rpc call successfully" {
+test "make 'getBlockProduction' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1443,10 +1421,7 @@ test "rpc.client: make 'getBlockProduction' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var resp = try client.getBlockProduction(.{ .identity = "1EWZm7aZYxfZHbyiELXtTgN1yT2vU1HF9d8DWswX2Tp", .range = struct {
-        .first_slot = 0,
-        .last_slot = null,
-    } });
+    var resp = try client.getBlockProduction(.{ .identity = "1EWZm7aZYxfZHbyiELXtTgN1yT2vU1HF9d8DWswX2Tp" });
     defer resp.deinit();
 
     if (resp.err()) |err| {
@@ -1457,7 +1432,7 @@ test "rpc.client: make 'getBlockProduction' rpc call successfully" {
     std.log.debug("block production info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getBlockCommitment' rpc call successfully" {
+test "make 'getBlockCommitment' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1475,7 +1450,7 @@ test "rpc.client: make 'getBlockCommitment' rpc call successfully" {
     std.log.debug("block commitment info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getBlocks' rpc call successfully" {
+test "make 'getBlocks' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1493,7 +1468,7 @@ test "rpc.client: make 'getBlocks' rpc call successfully" {
     std.log.debug("blocks: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getBlocksWithLimit' rpc call successfully" {
+test "make 'getBlocksWithLimit' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1511,7 +1486,7 @@ test "rpc.client: make 'getBlocksWithLimit' rpc call successfully" {
     std.log.debug("blocks: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getBlockTime' rpc call successfully" {
+test "make 'getBlockTime' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1529,7 +1504,7 @@ test "rpc.client: make 'getBlockTime' rpc call successfully" {
     std.log.debug("block time: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getClusterNodes' rpc call successfully" {
+test "make 'getClusterNodes' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1547,7 +1522,7 @@ test "rpc.client: make 'getClusterNodes' rpc call successfully" {
     std.log.debug("cluster nodes: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getEpochInfo' rpc call successfully" {
+test "make 'getEpochInfo' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1565,7 +1540,7 @@ test "rpc.client: make 'getEpochInfo' rpc call successfully" {
     std.log.debug("epoch info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getEpochSchedule' rpc call successfully" {
+test "make 'getEpochSchedule' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1583,7 +1558,7 @@ test "rpc.client: make 'getEpochSchedule' rpc call successfully" {
     std.log.debug("epoch schedule: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getFeeForMessage' rpc call successfully" {
+test "make 'getFeeForMessage' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1601,7 +1576,7 @@ test "rpc.client: make 'getFeeForMessage' rpc call successfully" {
     std.log.debug("message fee info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getFirstAvailableBlock' rpc call successfully" {
+test "make 'getFirstAvailableBlock' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1619,7 +1594,7 @@ test "rpc.client: make 'getFirstAvailableBlock' rpc call successfully" {
     std.log.debug("first available block: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getGenesisHash' rpc call successfully" {
+test "make 'getGenesisHash' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1637,7 +1612,7 @@ test "rpc.client: make 'getGenesisHash' rpc call successfully" {
     std.log.debug("genesis hash: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getHealth' rpc call successfully" {
+test "make 'getHealth' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1655,7 +1630,7 @@ test "rpc.client: make 'getHealth' rpc call successfully" {
     std.log.debug("health: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getHighestSnapshotSlot' rpc call successfully" {
+test "make 'getHighestSnapshotSlot' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1673,7 +1648,7 @@ test "rpc.client: make 'getHighestSnapshotSlot' rpc call successfully" {
     std.log.debug("snapshot info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getIdentity' rpc call successfully" {
+test "make 'getIdentity' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1691,7 +1666,7 @@ test "rpc.client: make 'getIdentity' rpc call successfully" {
     std.log.debug("indentity info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getInflationGovernor' rpc call successfully" {
+test "make 'getInflationGovernor' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1709,7 +1684,7 @@ test "rpc.client: make 'getInflationGovernor' rpc call successfully" {
     std.log.debug("inflation info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getInflationRate' rpc call successfully" {
+test "make 'getInflationRate' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1727,7 +1702,7 @@ test "rpc.client: make 'getInflationRate' rpc call successfully" {
     std.log.debug("inflation rate: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getInflationReward' rpc call successfully" {
+test "make 'getInflationReward' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1753,7 +1728,7 @@ test "rpc.client: make 'getInflationReward' rpc call successfully" {
     std.log.debug("inflation reward info: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getLargestAccounts' rpc call successfully" {
+test "make 'getLargestAccounts' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1771,7 +1746,7 @@ test "rpc.client: make 'getLargestAccounts' rpc call successfully" {
     std.log.debug("largest accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getLatestBlockhash' rpc call successfully" {
+test "make 'getLatestBlockhash' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1789,7 +1764,7 @@ test "rpc.client: make 'getLatestBlockhash' rpc call successfully" {
     std.log.debug("latest blockhash: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getLeaderSchedule' rpc call successfully" {
+test "make 'getLeaderSchedule' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1807,7 +1782,7 @@ test "rpc.client: make 'getLeaderSchedule' rpc call successfully" {
     std.log.debug("leader schedule: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getMaxRetransmitSlot' rpc call successfully" {
+test "make 'getMaxRetransmitSlot' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1825,7 +1800,7 @@ test "rpc.client: make 'getMaxRetransmitSlot' rpc call successfully" {
     std.log.debug("max retransmit slot: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getMaxShredInsertSlot' rpc call successfully" {
+test "make 'getMaxShredInsertSlot' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1843,7 +1818,7 @@ test "rpc.client: make 'getMaxShredInsertSlot' rpc call successfully" {
     std.log.debug("max shred insert slot: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getMinimumBalanceForRentExemption' rpc call successfully" {
+test "make 'getMinimumBalanceForRentExemption' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1861,7 +1836,7 @@ test "rpc.client: make 'getMinimumBalanceForRentExemption' rpc call successfully
     std.log.debug("minimum balance: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getMultipleAccounts' rpc call successfully" {
+test "make 'getMultipleAccounts' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1887,7 +1862,7 @@ test "rpc.client: make 'getMultipleAccounts' rpc call successfully" {
     std.log.debug("multiple accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getProgramAccounts' rpc call successfully" {
+test "make 'getProgramAccounts' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1909,7 +1884,7 @@ test "rpc.client: make 'getProgramAccounts' rpc call successfully" {
     std.log.debug("program accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getRecentPerformanceSamples' rpc call successfully" {
+test "make 'getRecentPerformanceSamples' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1927,7 +1902,7 @@ test "rpc.client: make 'getRecentPerformanceSamples' rpc call successfully" {
     std.log.debug("recent performance samples: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getRecentPrioritizationFees' rpc call successfully" {
+test "make 'getRecentPrioritizationFees' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1945,7 +1920,7 @@ test "rpc.client: make 'getRecentPrioritizationFees' rpc call successfully" {
     std.log.debug("recent prioritization fees: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getSignaturesForAddress' rpc call successfully" {
+test "make 'getSignaturesForAddress' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1963,7 +1938,7 @@ test "rpc.client: make 'getSignaturesForAddress' rpc call successfully" {
     std.log.debug("signatures: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getSignatureStatuses' rpc call successfully" {
+test "make 'getSignatureStatuses' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -1985,7 +1960,7 @@ test "rpc.client: make 'getSignatureStatuses' rpc call successfully" {
     std.log.debug("signature statuses: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getSlotLeader' rpc call successfully" {
+test "make 'getSlotLeader' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2003,7 +1978,7 @@ test "rpc.client: make 'getSlotLeader' rpc call successfully" {
     std.log.debug("slot leader: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getSlotLeaders' rpc call successfully" {
+test "make 'getSlotLeaders' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2021,7 +1996,7 @@ test "rpc.client: make 'getSlotLeaders' rpc call successfully" {
     std.log.debug("slot leaders: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getStakeActivation' rpc call successfully" {
+test "make 'getStakeActivation' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2041,7 +2016,7 @@ test "rpc.client: make 'getStakeActivation' rpc call successfully" {
     std.log.debug("stake activation: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getStakeMinimumDelegation' rpc call successfully" {
+test "make 'getStakeMinimumDelegation' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2059,7 +2034,7 @@ test "rpc.client: make 'getStakeMinimumDelegation' rpc call successfully" {
     std.log.debug("min stake delegation: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getSupply' rpc call successfully" {
+test "make 'getSupply' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2077,7 +2052,7 @@ test "rpc.client: make 'getSupply' rpc call successfully" {
     std.log.debug("get supply: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTokenAccountBalance' rpc call successfully" {
+test "make 'getTokenAccountBalance' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2098,7 +2073,7 @@ test "rpc.client: make 'getTokenAccountBalance' rpc call successfully" {
     std.log.debug("token account balance: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTokenAccountsByDelegate' rpc call successfully" {
+test "make 'getTokenAccountsByDelegate' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2122,7 +2097,7 @@ test "rpc.client: make 'getTokenAccountsByDelegate' rpc call successfully" {
     std.log.debug("token accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTokenAccountsByOwner' rpc call successfully" {
+test "make 'getTokenAccountsByOwner' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2146,7 +2121,7 @@ test "rpc.client: make 'getTokenAccountsByOwner' rpc call successfully" {
     std.log.debug("token accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTokenLargestAccounts' rpc call successfully" {
+test "make 'getTokenLargestAccounts' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2167,7 +2142,7 @@ test "rpc.client: make 'getTokenLargestAccounts' rpc call successfully" {
     std.log.debug("token largest accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTokenSupply' rpc call successfully" {
+test "make 'getTokenSupply' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2188,7 +2163,7 @@ test "rpc.client: make 'getTokenSupply' rpc call successfully" {
     std.log.debug("token supply: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTransaction' rpc call successfully" {
+test "make 'getTransaction' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2207,7 +2182,7 @@ test "rpc.client: make 'getTransaction' rpc call successfully" {
     std.log.debug("transaction: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getTransactionCount' rpc call successfully" {
+test "make 'getTransactionCount' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2225,7 +2200,7 @@ test "rpc.client: make 'getTransactionCount' rpc call successfully" {
     std.log.debug("transaction count: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getVersion' rpc call successfully" {
+test "make 'getVersion' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2243,7 +2218,7 @@ test "rpc.client: make 'getVersion' rpc call successfully" {
     std.log.debug("version: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'getVoteAccounts' rpc call successfully" {
+test "make 'getVoteAccounts' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2264,7 +2239,7 @@ test "rpc.client: make 'getVoteAccounts' rpc call successfully" {
     std.log.debug("vote accounts: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'isBlockhashValid' rpc call successfully" {
+test "make 'isBlockhashValid' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2282,7 +2257,7 @@ test "rpc.client: make 'isBlockhashValid' rpc call successfully" {
     std.log.debug("blockhash valid: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'minimumLedgerSlot' rpc call successfully" {
+test "make 'minimumLedgerSlot' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2300,7 +2275,7 @@ test "rpc.client: make 'minimumLedgerSlot' rpc call successfully" {
     std.log.debug("minimum ledger slot: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'requestAirdrop' rpc call successfully" {
+test "make 'requestAirdrop' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2321,7 +2296,7 @@ test "rpc.client: make 'requestAirdrop' rpc call successfully" {
     std.log.debug("airdrop result: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'sendTransaction' rpc call successfully" {
+test "make 'sendTransaction' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }
@@ -2342,7 +2317,7 @@ test "rpc.client: make 'sendTransaction' rpc call successfully" {
     std.log.debug("tx signature: {any}", .{resp.result()});
 }
 
-test "rpc.client: make 'simulateTransaction' rpc call successfully" {
+test "make 'simulateTransaction' rpc call successfully" {
     if (SKIP_RPC_CALLS_TESTING) {
         return TestError.SkipZigTest;
     }

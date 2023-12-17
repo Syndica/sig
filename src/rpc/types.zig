@@ -66,7 +66,7 @@ const AccountValue = struct {
     data: [][]const u8,
     owner: []const u8,
     executable: bool,
-    rent_epoch: u64,
+    rentEpoch: u64,
 
     const Self = @This();
 
@@ -80,20 +80,14 @@ const AccountValue = struct {
     }
 
     pub fn intoAccount(self: Self, allocator: std.mem.Allocator) !Account {
-        if (std.mem.eql(u8, &self.data[1], &Encoding.Base64.string())) {
-            const data_size = try base64.Decoder.calcSizeForSlice(self.data[0]);
-            const data_decoded = try allocator.alloc(u8, data_size);
-            try base64.Decoder.decode(data_decoded, self.data[0]);
+        if (std.mem.eql(u8, self.data[1][0..], Encoding.Base64.string()[0..])) {
+            const dataSize = try base64.Decoder.calcSizeForSlice(self.data[0]);
+            const dataDecoded = try allocator.alloc(u8, dataSize);
+            try base64.Decoder.decode(dataDecoded, self.data[0]);
 
             var owner = try Pubkey.fromString(allocator, self.owner);
 
-            return Account{
-                .lamports = self.lamports,
-                .data = data_decoded,
-                .owner = owner,
-                .executable = self.executable,
-                .rent_epoch = self.rent_epoch,
-            };
+            return Account.new(self.lamports, dataDecoded, owner, self.executable, self.rentEpoch);
         }
 
         return Error.DataNotBase64;
