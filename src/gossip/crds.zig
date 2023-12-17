@@ -763,9 +763,24 @@ pub const NodeInstance = struct {
     }
 };
 
-pub const ShredType = enum(u32) {
+pub const ShredType = enum(u8) {
     Data = 0b1010_0101,
     Code = 0b0101_1010,
+
+    /// Enables bincode deserializer to deserialize this data from a single byte instead of 4.
+    pub const BincodeSize = u8;
+
+    /// Enables bincode serializer to serialize this data into a single byte instead of 4.
+    pub const @"getty.sb" = struct {
+        pub fn serialize(
+            allocator: ?std.mem.Allocator,
+            value: anytype,
+            serializer: anytype,
+        ) @TypeOf(serializer).Error!@TypeOf(serializer).Ok {
+            _ = allocator;
+            return try serializer.serializeInt(@intFromEnum(value));
+        }
+    };
 };
 
 pub const DuplicateShred = struct {

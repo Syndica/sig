@@ -1,6 +1,6 @@
 .{
     .name = "sig",
-    .version = "0.1.0",
+    .version = "0.1.1",
     .dependencies = .{
         .@"base58-zig" = .{
             .url = "https://github.com/ultd/base58-zig/archive/fe23d156211edbfcede019970d1619184aadb83b.tar.gz",
