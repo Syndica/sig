@@ -6,15 +6,7 @@ const Ordering = std.atomic.Ordering;
 
 const Metric = @import("metric.zig").Metric;
 
-const default_buckets: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
-
-pub fn defaultBuckets(allocator: Allocator) !ArrayList(f64) {
-    var l = try ArrayList(f64).initCapacity(allocator, default_buckets.len);
-    for (default_buckets) |b| {
-        try l.append(b);
-    }
-    return l;
-}
+pub const default_buckets: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
 
 /// Histogram optimized for fast concurrent writes.
 /// Reads and writes are thread-safe if you use the public methods.
@@ -42,7 +34,7 @@ pub const Histogram = struct {
 
     /// Used to ensure reads and writes occur on separate shards.
     /// Atomic representation of `ShardSync`.
-    shard_sync: Atomic(u64),
+    shard_sync: Atomic(u64) = Atomic(u64).init(0),
 
     /// Prevents more than one reader at a time, since read operations actually
     /// execute an internal write by swapping the hot and cold shards.
@@ -61,15 +53,16 @@ pub const Histogram = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, buckets: ArrayList(f64)) !Self {
+    pub fn init(allocator: Allocator, buckets: []const f64) !Self {
+        var upper_bounds = try ArrayList(f64).initCapacity(allocator, buckets.len);
+        upper_bounds.appendSliceAssumeCapacity(buckets);
         return Self{
             .allocator = allocator,
-            .upper_bounds = buckets,
+            .upper_bounds = upper_bounds,
             .shards = .{
-                .{ .buckets = try shardBuckets(allocator, buckets.items.len) },
-                .{ .buckets = try shardBuckets(allocator, buckets.items.len) },
+                .{ .buckets = try shardBuckets(allocator, buckets.len) },
+                .{ .buckets = try shardBuckets(allocator, buckets.len) },
             },
-            .shard_sync = Atomic(u64).init(0),
         };
     }
 
@@ -80,11 +73,9 @@ pub const Histogram = struct {
     }
 
     fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
-        var shard_buckets = try ArrayList(Atomic(u64)).initCapacity(allocator, size);
-        for (0..size) |_| {
-            shard_buckets.appendAssumeCapacity(Atomic(u64).init(0));
-        }
-        return shard_buckets;
+        var slice = try allocator.alloc(u64, size);
+        @memset(slice, 0);
+        return ArrayList(Atomic(u64)).fromOwnedSlice(allocator, @ptrCast(slice));
     }
 
     /// Writes a value into the histogram.
@@ -200,7 +191,7 @@ pub const Bucket = struct {
 
 test "prometheus.histogram: empty" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    var hist = try Histogram.init(allocator, &default_buckets);
     defer hist.deinit();
 
     var snapshot = try hist.getSnapshot(null);
@@ -211,7 +202,7 @@ test "prometheus.histogram: empty" {
 
 test "prometheus.histogram: data goes in correct buckets" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    var hist = try Histogram.init(allocator, &default_buckets);
     defer hist.deinit();
 
     const expected_buckets = observeVarious(&hist);
@@ -224,7 +215,7 @@ test "prometheus.histogram: data goes in correct buckets" {
 
 test "prometheus.histogram: repeated snapshots measure the same thing" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    var hist = try Histogram.init(allocator, &default_buckets);
     defer hist.deinit();
 
     const expected_buckets = observeVarious(&hist);
@@ -239,7 +230,7 @@ test "prometheus.histogram: repeated snapshots measure the same thing" {
 
 test "prometheus.histogram: values accumulate across snapshots" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    var hist = try Histogram.init(allocator, &default_buckets);
     defer hist.deinit();
 
     _ = observeVarious(&hist);

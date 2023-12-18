@@ -10,7 +10,7 @@ metric: Metric = Metric{ .getResultFn = getResult },
 value: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
 
 pub fn inc(self: *Self) void {
-    _ = self.value.fetchAdd(1, .SeqCst);
+    _ = self.value.fetchAdd(1, .Monotonic);
 }
 
 pub fn add(self: *Self, value: anytype) void {
@@ -19,15 +19,15 @@ pub fn add(self: *Self, value: anytype) void {
         else => @compileError("can't add a non-number"),
     }
 
-    _ = self.value.fetchAdd(@intCast(value), .SeqCst);
+    _ = self.value.fetchAdd(@intCast(value), .Monotonic);
 }
 
 pub fn get(self: *const Self) u64 {
-    return self.value.load(.SeqCst);
+    return self.value.load(.Monotonic);
 }
 
 pub fn reset(self: *Self) void {
-    _ = self.value.store(0, .SeqCst);
+    _ = self.value.store(0, .Monotonic);
 }
 
 fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {

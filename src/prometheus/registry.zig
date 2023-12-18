@@ -11,7 +11,7 @@ const Gauge = @import("gauge.zig").Gauge;
 const GaugeFn = @import("gauge_fn.zig").GaugeFn;
 const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
 const Histogram = @import("histogram.zig").Histogram;
-const defaultBuckets = @import("histogram.zig").defaultBuckets;
+const default_buckets = @import("histogram.zig").default_buckets;
 
 pub const GetMetricError = error{
     // Returned when trying to add a metric to an already full registry.
@@ -84,7 +84,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
         pub fn getOrCreateHistogram(
             self: *Self,
             name: []const u8,
-            buckets: std.ArrayList(f64),
+            buckets: []const f64,
         ) GetMetricError!*Histogram {
             return self.getOrCreateMetric(name, Histogram, .{buckets});
         }
@@ -278,12 +278,9 @@ test "prometheus.registry: write" {
             );
         }
 
-        // TODO: redesign buckets code so it uses the registry's allocator
-        const buckets = try defaultBuckets(testing.allocator);
-        defer buckets.deinit();
         // Add a histogram
         {
-            var histogram = try registry.getOrCreateHistogram(tc.histogram_name, buckets);
+            var histogram = try registry.getOrCreateHistogram(tc.histogram_name, &default_buckets);
 
             histogram.observe(5.0012);
             histogram.observe(12.30240);
