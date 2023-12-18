@@ -773,6 +773,137 @@ pub const IncrementalSnapshotPath = struct {
     }
 };
 
+pub const SnapshotPaths = struct {
+    full_snapshot: FullSnapshotPath,
+    incremental_snapshot: ?IncrementalSnapshotPath,
+
+    /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
+    pub fn find(allocator: std.mem.Allocator, snapshot_dir: []const u8) !SnapshotPaths {
+        var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
+        defer snapshot_dir_iter.close();
+
+        var files = try readDirectory(allocator, snapshot_dir_iter);
+        var filenames = files.filenames;
+        defer {
+            filenames.deinit();
+            allocator.free(files.mem);
+        }
+
+        // find the snapshots
+        var maybe_latest_full_snapshot: ?FullSnapshotPath = null;
+        var count: usize = 0;
+        for (filenames.items) |filename| {
+            const snap_path = FullSnapshotPath.fromPath(filename) catch continue;
+            if (count == 0 or snap_path.slot > maybe_latest_full_snapshot.?.slot) {
+                maybe_latest_full_snapshot = snap_path;
+            }
+            count += 1;
+        }
+        var latest_full_snapshot = maybe_latest_full_snapshot orelse return error.NoFullSnapshotFound;
+        // clone the name so we can deinit the full array
+        latest_full_snapshot.path = try allocator.dupe(u8, latest_full_snapshot.path);
+
+        count = 0;
+        var maybe_latest_incremental_snapshot: ?IncrementalSnapshotPath = null;
+        for (filenames.items) |filename| {
+            const snap_path = IncrementalSnapshotPath.fromPath(filename) catch continue;
+            // need to match the base slot
+            if (snap_path.base_slot == latest_full_snapshot.slot and (count == 0 or
+                // this unwrap is safe because count > 0
+                snap_path.slot > maybe_latest_incremental_snapshot.?.slot))
+            {
+                maybe_latest_incremental_snapshot = snap_path;
+            }
+            count += 1;
+        }
+
+        return .{
+            .full_snapshot = latest_full_snapshot,
+            .incremental_snapshot = maybe_latest_incremental_snapshot,
+        };
+    }
+};
+
+pub const Snapshots = struct {
+    full: SnapshotFields,
+    incremental: ?SnapshotFields,
+
+    pub fn readFromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: *const SnapshotPaths) !Snapshots {
+        // unpack
+        const full_metadata_path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/{s}/{d}/{d}",
+            .{ snapshot_dir, "snapshots", paths.full_snapshot.slot, paths.full_snapshot.slot },
+        );
+        defer allocator.free(full_metadata_path);
+
+        var full = try SnapshotFields.readFromFilePath(
+            allocator,
+            full_metadata_path,
+        );
+
+        var incremental: ?SnapshotFields = null;
+        if (paths.incremental_snapshot) |incremental_snapshot_path| {
+            const incremental_metadata_path = try std.fmt.allocPrint(
+                allocator,
+                "{s}/{s}/{d}/{d}",
+                .{ snapshot_dir, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
+            );
+            defer allocator.free(incremental_metadata_path);
+
+            incremental = try SnapshotFields.readFromFilePath(
+                allocator,
+                incremental_metadata_path,
+            );
+        }
+
+        return Snapshots{
+            .full = full,
+            .incremental = incremental,
+        };
+    }
+
+    /// collapse all full and incremental snapshots into one.
+    /// note: this works by stack copying the full snapshot and combining
+    /// the accounts-db account file map.
+    /// this will 1) modify the incremental snapshot account map
+    /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
+    /// (so be sure not to deinit it while still using the returned snapshot)
+    pub fn collapse(self: *Snapshots) !SnapshotFields {
+        // nothing to collapse
+        if (self.incremental == null)
+            return self.full;
+
+        // collapse bank fields into the
+        var snapshot = self.incremental.?; // stack copy
+        const full_slot = self.full.bank_fields.slot;
+
+        // collapse accounts-db fields
+        var storages_map = &self.incremental.?.accounts_db_fields.file_map;
+        // make sure theres no overlap in slots between full and incremental and combine
+        var storages_entry_iter = storages_map.iterator();
+        while (storages_entry_iter.next()) |*incremental_entry| {
+            const slot = incremental_entry.key_ptr.*;
+
+            // only keep slots > full snapshot slot
+            if (!(slot > full_slot)) {
+                _ = storages_map.remove(slot);
+                continue;
+            }
+
+            var slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(slot);
+            if (slot_entry.found_existing) {
+                std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
+            } else {
+                slot_entry.value_ptr.* = incremental_entry.value_ptr.*;
+            }
+        }
+        snapshot.accounts_db_fields = self.full.accounts_db_fields;
+
+        return snapshot;
+    }
+};
+
 /// unpacks a .tar.zstd file into the given directory
 pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_dir: std.fs.Dir) !void {
     const file = try output_dir.openFile(path, .{});
@@ -788,12 +919,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
-    // const snapshot_dir = "test_data/";
-    const snapshot_dir = "../snapshots/";
-    var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
-    defer snapshot_dir_iter.close();
+    const snapshot_dir = "test_data/";
+    // const snapshot_dir = "../snapshots/";
 
-    // note: this should exist before we start to unpack
+    // this should exist before we start to unpack
     const genesis_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
@@ -806,109 +935,7 @@ pub fn main() !void {
         return error.GenesisNotFound;
     };
 
-    var files = try readDirectory(allocator, snapshot_dir_iter);
-    var filenames = files.filenames;
-    defer {
-        filenames.deinit();
-        allocator.free(files.mem);
-    }
-
-    // find the snapshots
-    var maybe_largest_full_snapshot: ?FullSnapshotPath = null;
-    var count: usize = 0;
-    for (filenames.items) |filename| {
-        const snap_path = FullSnapshotPath.fromPath(filename) catch continue;
-        if (count == 0 or snap_path.slot > maybe_largest_full_snapshot.?.slot) {
-            maybe_largest_full_snapshot = snap_path;
-        }
-        count += 1;
-    }
-    var largest_full_snapshot = maybe_largest_full_snapshot.?;
-    std.debug.print("full snapshot: {s}\n", .{largest_full_snapshot.path});
-
-    count = 0;
-    var maybe_largest_incremental_snapshot: ?IncrementalSnapshotPath = null;
-    for (filenames.items) |filename| {
-        const snap_path = IncrementalSnapshotPath.fromPath(filename) catch continue;
-        // need to match the base slot
-        if (snap_path.base_slot == largest_full_snapshot.slot and (count == 0 or
-            // this unwrap is safe because count > 0
-            snap_path.slot > maybe_largest_incremental_snapshot.?.slot))
-        {
-            maybe_largest_incremental_snapshot = snap_path;
-        }
-        count += 1;
-    }
-
-    if (maybe_largest_incremental_snapshot) |largest_incremental_snapshot| {
-        std.debug.print("incremental snapshot: {s}\n", .{largest_incremental_snapshot.path});
-    } else {
-        std.debug.print("no incremental snapshot found\n", .{});
-    }
-
-    // unpack
-    std.debug.print("unpacking...\n", .{});
-    try unpackZstdTarBall(allocator, largest_full_snapshot.path, snapshot_dir_iter.dir);
-    const full_metadata_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}/{d}/{d}",
-        .{ snapshot_dir, "snapshots", largest_full_snapshot.slot, largest_full_snapshot.slot },
-    );
-    defer allocator.free(full_metadata_path);
-
-    var full_snapshot_fields = try SnapshotFields.readFromFilePath(
-        allocator,
-        full_metadata_path,
-    );
-    const full_snapshot_lamports = full_snapshot_fields.bank_fields.capitalization;
-    const full_snapshot_slot = full_snapshot_fields.bank_fields.slot;
-
-    if (maybe_largest_incremental_snapshot) |largest_incremental_snapshot| {
-        std.debug.print("incremental snapshot: {s}\n", .{largest_incremental_snapshot.path});
-        try unpackZstdTarBall(allocator, largest_incremental_snapshot.path, snapshot_dir_iter.dir);
-
-        const incremental_metadata_path = try std.fmt.allocPrint(
-            allocator,
-            "{s}/{s}/{d}/{d}",
-            .{ snapshot_dir, "snapshots", largest_incremental_snapshot.slot, largest_incremental_snapshot.slot },
-        );
-        defer allocator.free(incremental_metadata_path);
-
-        // NOTE: dont deinit because is used in 1) bankfields + 2) accounts-db maps
-        var incremental_snapshot_fields = try SnapshotFields.readFromFilePath(
-            allocator,
-            incremental_metadata_path,
-        );
-
-        // collapse bank fields
-        full_snapshot_fields.bank_fields = incremental_snapshot_fields.bank_fields;
-
-        // collapse accounts-db fields
-        var storages_map = &incremental_snapshot_fields.accounts_db_fields.file_map;
-        // make sure theres no overlap in slots between full and incremental and combine
-        var storages_entry_iter = storages_map.iterator();
-        while (storages_entry_iter.next()) |*incremental_entry| {
-            const slot = incremental_entry.key_ptr.*;
-
-            // only keep slots > full snapshot slot
-            if (slot <= full_snapshot_slot) {
-                _ = storages_map.remove(slot);
-                continue;
-            }
-
-            var full_snapshot_entry = try full_snapshot_fields.accounts_db_fields.file_map.getOrPut(slot);
-            if (full_snapshot_entry.found_existing) {
-                std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
-            } else {
-                full_snapshot_entry.value_ptr.* = incremental_entry.value_ptr.*;
-            }
-        }
-    }
-
-    // load and validate
-    var accounts_db = AccountsDB.init(allocator);
-    defer accounts_db.deinit();
-
+    // if this exists, we wont look for a .tar.zstd
     const accounts_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
@@ -916,15 +943,37 @@ pub fn main() !void {
     );
     defer allocator.free(accounts_path);
 
+    const snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
+
+    std.fs.cwd().access(accounts_path, .{}) catch {
+        // if accounts/ doesnt exist then we unpack the found snapshots
+        var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
+        defer snapshot_dir_iter.close();
+
+        try unpackZstdTarBall(allocator, snapshot_paths.full_snapshot.path, snapshot_dir_iter.dir);
+        if (snapshot_paths.incremental_snapshot) |incremental_snapshot| {
+            try unpackZstdTarBall(allocator, incremental_snapshot.path, snapshot_dir_iter.dir);
+        }
+    };
+
+    var snapshots = try Snapshots.readFromPaths(allocator, snapshot_dir, &snapshot_paths);
+    const full_snapshot = snapshots.full;
+
+    // load and validate
+    var accounts_db = AccountsDB.init(allocator);
+    defer accounts_db.deinit();
+
+    const snapshot = try snapshots.collapse();
+
     try accounts_db.loadFromSnapshot(
-        full_snapshot_fields.accounts_db_fields,
+        snapshot.accounts_db_fields,
         accounts_path,
     );
 
     try accounts_db.validateLoadFromSnapshot(
-        full_snapshot_fields.bank_fields.incremental_snapshot_persistence,
-        full_snapshot_slot,
-        full_snapshot_lamports,
+        snapshot.bank_fields.incremental_snapshot_persistence,
+        full_snapshot.bank_fields.slot,
+        full_snapshot.bank_fields.capitalization,
     );
 
     // use the genesis to validate the bank
@@ -932,12 +981,11 @@ pub fn main() !void {
     defer genesis_config.deinit(allocator);
 
     std.debug.print("validating bank...\n", .{});
-    var bank = Bank.init(&accounts_db, &full_snapshot_fields.bank_fields);
+    var bank = Bank.init(&accounts_db, &snapshot.bank_fields);
     try Bank.validateBankFields(bank.bank_fields, &genesis_config);
 
     // validate the status cache
     std.debug.print("validating status cache...\n", .{});
-
     const status_cache_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
@@ -945,26 +993,14 @@ pub fn main() !void {
     );
     defer allocator.free(status_cache_path);
 
-    var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
-    defer status_cache_file.close();
-
-    var status_cache = try bincode.read(
-        allocator,
-        StatusCache,
-        status_cache_file.reader(),
-        .{},
-    );
-    defer bincode.free(allocator, status_cache);
+    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    defer status_cache.deinit();
 
     var slot_history = try accounts_db.getSlotHistory();
     defer slot_history.deinit(accounts_db.allocator);
 
-    try validateStatusCache(
-        &status_cache,
-        allocator,
-        full_snapshot_fields.bank_fields.slot,
-        &slot_history,
-    );
+    const bank_slot = snapshot.bank_fields.slot;
+    try status_cache.validate(allocator, bank_slot, &slot_history);
 
     std.debug.print("done!\n", .{});
 }

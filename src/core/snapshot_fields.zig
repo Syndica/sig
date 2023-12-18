@@ -199,6 +199,7 @@ pub const BankFields = struct {
     transaction_count: u64,
     tick_height: u64,
     signature_count: u64,
+    // ie, total lamports
     capitalization: u64,
     max_tick_height: u64,
     hashes_per_tick: ?u64,
@@ -630,87 +631,84 @@ const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     result: Result,
 }) });
 const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
-pub const StatusCache = ArrayList(BankSlotDelta);
 
-pub fn validateStatusCache(
-    status_cache: *const StatusCache,
-    allocator: std.mem.Allocator,
-    bank_slot: Slot,
-    slot_history: *const sysvars.SlotHistory,
-) !void {
-    // status cache validation
-    const len = status_cache.items.len;
-    if (len > MAX_CACHE_ENTRIES) {
-        return error.TooManyCacheEntries;
-    }
-    var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
-    defer slots_seen.deinit();
+pub const StatusCache = struct {
+    bank_slot_deltas: ArrayList(BankSlotDelta),
 
-    for (status_cache.items) |slot_delta| {
-        if (!slot_delta.is_root) {
-            return error.NonRootSlot;
-        }
-        const slot = slot_delta.slot;
-        if (slot > bank_slot) {
-            return error.SlotTooHigh;
-        }
-        const entry = try slots_seen.getOrPut(slot);
-        if (entry.found_existing) {
-            return error.MultipleSlotEntries;
-        }
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
+        var status_cache_file = try std.fs.cwd().openFile(path, .{});
+        defer status_cache_file.close();
+
+        var status_cache = try bincode.read(
+            allocator,
+            StatusCache,
+            status_cache_file.reader(),
+            .{},
+        );
+        return status_cache;
     }
 
-    // validate bank's slot_history matches the status cache
-    if (slot_history.newest() != bank_slot) {
-        return error.SlotHistoryMismatch;
+    pub fn deinit(self: *StatusCache) void {
+        bincode.free(self.bank_slot_deltas.allocator, self.*);
     }
-    for (slots_seen.keys()) |slot| {
-        if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
-            return error.SlotNotFoundInHistory;
+
+    pub fn validate(
+        self: *const StatusCache,
+        allocator: std.mem.Allocator,
+        bank_slot: Slot,
+        slot_history: *const sysvars.SlotHistory,
+    ) !void {
+        // status cache validation
+        const len = self.bank_slot_deltas.items.len;
+        if (len > MAX_CACHE_ENTRIES) {
+            return error.TooManyCacheEntries;
+        }
+
+        var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
+        defer slots_seen.deinit();
+
+        for (self.bank_slot_deltas.items) |slot_delta| {
+            if (!slot_delta.is_root) {
+                return error.NonRootSlot;
+            }
+            const slot = slot_delta.slot;
+            if (slot > bank_slot) {
+                return error.SlotTooHigh;
+            }
+            const entry = try slots_seen.getOrPut(slot);
+            if (entry.found_existing) {
+                return error.MultipleSlotEntries;
+            }
+        }
+
+        // validate bank's slot_history matches the status cache
+        if (slot_history.newest() != bank_slot) {
+            return error.SlotHistoryMismatch;
+        }
+        for (slots_seen.keys()) |slot| {
+            if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
+                return error.SlotNotFoundInHistory;
+            }
+        }
+        for (slot_history.oldest()..slot_history.newest()) |slot| {
+            if (!slots_seen.contains(slot)) {
+                return error.SlotNotFoundInStatusCache;
+            }
         }
     }
-    for (slot_history.oldest()..slot_history.newest()) |slot| {
-        if (!slots_seen.contains(slot)) {
-            return error.SlotNotFoundInStatusCache;
-        }
-    }
-}
+};
 
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 
 test "core.snapshot_fields: parse status cache" {
-    const alloc = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";
-    var status_cache_file = try std.fs.cwd().openFile(status_cache_path, .{});
-    defer status_cache_file.close();
+    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    defer status_cache.deinit();
 
-    var status_cache = try bincode.read(alloc, StatusCache, status_cache_file.reader(), .{});
-    defer bincode.free(alloc, status_cache);
-    const bank_slot = 269;
-
-    // structural validation
-    const len = status_cache.items.len;
-    if (len > MAX_CACHE_ENTRIES) {
-        return error.TooManyCacheEntries;
-    }
-    var slots_seen = HashSet(Slot).init(alloc);
-    defer slots_seen.deinit();
-
-    for (status_cache.items) |slot_delta| {
-        if (!slot_delta.is_root) {
-            return error.NonRootSlot;
-        }
-        const slot = slot_delta.slot;
-        if (slot > bank_slot) {
-            return error.SlotTooHigh;
-        }
-        const entry = try slots_seen.getOrPut(slot);
-        if (entry.found_existing) {
-            return error.MultipleSlotEntries;
-        }
-    }
+    try std.testing.expect(status_cache.bank_slot_deltas.items.len > 0);
 }
 
 test "core.snapshot_fields: parse snapshot fields" {
