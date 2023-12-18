@@ -3,31 +3,7 @@ const fmt = std.fmt;
 const mem = std.mem;
 const testing = std.testing;
 
-pub const HistogramResult = struct {
-    pub const Bucket = struct {
-        vmrange: []const u8,
-        count: u64,
-    };
-
-    pub const SumValue = struct {
-        value: f64 = 0,
-
-        pub fn format(self: @This(), comptime format_string: []const u8, options: fmt.FormatOptions, writer: anytype) !void {
-            _ = format_string;
-
-            const as_int: u64 = @intFromFloat(self.value);
-            if (@as(f64, @floatFromInt(as_int)) == self.value) {
-                try fmt.formatInt(as_int, 10, .lower, options, writer);
-            } else {
-                try fmt.formatFloatDecimal(self.value, options, writer);
-            }
-        }
-    };
-
-    buckets: []Bucket,
-    sum: SumValue,
-    count: u64,
-};
+const HistogramSnapshot = @import("histogram.zig").HistogramSnapshot;
 
 pub const Metric = struct {
     pub const Error = error{OutOfMemory} || std.os.WriteError || std.http.Server.Response.Writer.Error;
@@ -38,7 +14,7 @@ pub const Metric = struct {
         counter: u64,
         gauge: f64,
         gauge_int: u64,
-        histogram: HistogramResult,
+        histogram: HistogramSnapshot,
 
         pub fn deinit(self: Self, allocator: mem.Allocator) void {
             switch (self) {
@@ -70,17 +46,17 @@ pub const Metric = struct {
 
                 if (name_and_labels.labels.len > 0) {
                     for (v.buckets) |bucket| {
-                        try writer.print("{s}_bucket{{{s},vmrange=\"{s}\"}} {d:.6}\n", .{
+                        try writer.print("{s}_bucket{{{s},le=\"{s}\"}} {d:.6}\n", .{
                             name_and_labels.name,
                             name_and_labels.labels,
-                            bucket.vmrange,
-                            bucket.count,
+                            floatMetric(bucket.upper_bound),
+                            bucket.cumulative_count,
                         });
                     }
                     try writer.print("{s}_sum{{{s}}} {:.6}\n", .{
                         name_and_labels.name,
                         name_and_labels.labels,
-                        v.sum,
+                        floatMetric(v.sum),
                     });
                     try writer.print("{s}_count{{{s}}} {d}\n", .{
                         name_and_labels.name,
@@ -89,15 +65,15 @@ pub const Metric = struct {
                     });
                 } else {
                     for (v.buckets) |bucket| {
-                        try writer.print("{s}_bucket{{vmrange=\"{s}\"}} {d:.6}\n", .{
+                        try writer.print("{s}_bucket{{le=\"{s}\"}} {d:.6}\n", .{
                             name_and_labels.name,
-                            bucket.vmrange,
-                            bucket.count,
+                            floatMetric(bucket.upper_bound),
+                            bucket.cumulative_count,
                         });
                     }
                     try writer.print("{s}_sum {:.6}\n", .{
                         name_and_labels.name,
-                        v.sum,
+                        floatMetric(v.sum),
                     });
                     try writer.print("{s}_count {d}\n", .{
                         name_and_labels.name,
@@ -108,6 +84,24 @@ pub const Metric = struct {
         }
     }
 };
+
+/// Converts a float into an anonymous type that can be formatted properly for prometheus.
+pub fn floatMetric(value: anytype) struct {
+    value: @TypeOf(value),
+
+    pub fn format(self: @This(), comptime format_string: []const u8, options: fmt.FormatOptions, writer: anytype) !void {
+        _ = format_string;
+
+        const as_int: u64 = @intFromFloat(self.value);
+        if (@as(f64, @floatFromInt(as_int)) == self.value) {
+            try fmt.formatInt(as_int, 10, .lower, options, writer);
+        } else {
+            try fmt.formatFloatDecimal(self.value, options, writer);
+        }
+    }
+} {
+    return .{ .value = value };
+}
 
 const NameAndLabels = struct {
     name: []const u8,

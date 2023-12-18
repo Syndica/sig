@@ -1,63 +1,53 @@
 const std = @import("std");
 const mem = std.mem;
 const testing = std.testing;
+
 const Metric = @import("metric.zig").Metric;
 
-pub const Counter = struct {
-    metric: Metric = Metric{
-        .getResultFn = getResult,
-    },
-    value: std.atomic.Atomic(u64) = .{ .value = 0 },
+const Self = @This();
 
-    const Self = @This();
+metric: Metric = Metric{ .getResultFn = getResult },
+value: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
 
-    pub fn init(allocator: mem.Allocator) !*Self {
-        const self = try allocator.create(Self);
+pub fn init(allocator: mem.Allocator) !*Self {
+    const self = try allocator.create(Self);
 
-        self.* = .{};
+    self.* = .{};
 
-        return self;
+    return self;
+}
+
+pub fn inc(self: *Self) void {
+    _ = self.value.fetchAdd(1, .SeqCst);
+}
+
+pub fn add(self: *Self, value: anytype) void {
+    switch (@typeInfo(@TypeOf(value))) {
+        .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
+        else => @compileError("can't add a non-number"),
     }
 
-    pub fn inc(self: *Self) void {
-        _ = self.value.fetchAdd(1, .SeqCst);
-    }
+    _ = self.value.fetchAdd(@intCast(value), .SeqCst);
+}
 
-    pub fn dec(self: *Self) void {
-        _ = self.value.fetchSub(1, .SeqCst);
-    }
+pub fn get(self: *const Self) u64 {
+    return self.value.load(.SeqCst);
+}
 
-    pub fn add(self: *Self, value: anytype) void {
-        if (!comptime std.meta.trait.isNumber(@TypeOf(value))) {
-            @compileError("can't add a non-number");
-        }
+pub fn reset(self: *Self) void {
+    _ = self.value.store(0, .SeqCst);
+}
 
-        _ = self.value.fetchAdd(@intCast(value), .SeqCst);
-    }
-
-    pub fn get(self: *const Self) u64 {
-        return self.value.load(.SeqCst);
-    }
-
-    pub fn set(self: *Self, value: anytype) void {
-        if (!comptime std.meta.trait.isNumber(@TypeOf(value))) {
-            @compileError("can't set a non-number");
-        }
-
-        _ = self.value.store(@intCast(value), .SeqCst);
-    }
-
-    fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
-        const self = @fieldParentPtr(Self, "metric", metric);
-        return Metric.Result{ .counter = self.get() };
-    }
-};
+fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
+    const self = @fieldParentPtr(Self, "metric", metric);
+    return Metric.Result{ .counter = self.get() };
+}
 
 test "prometheus.counter: inc/add/dec/set/get" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    var counter = try Counter.init(testing.allocator);
+    var counter = try Self.init(testing.allocator);
     defer testing.allocator.destroy(counter);
 
     try testing.expectEqual(@as(u64, 0), counter.get());
@@ -67,16 +57,10 @@ test "prometheus.counter: inc/add/dec/set/get" {
 
     counter.add(200);
     try testing.expectEqual(@as(u64, 201), counter.get());
-
-    counter.dec();
-    try testing.expectEqual(@as(u64, 200), counter.get());
-
-    counter.set(43);
-    try testing.expectEqual(@as(u64, 43), counter.get());
 }
 
 test "prometheus.counter: concurrent" {
-    var counter = try Counter.init(testing.allocator);
+    var counter = try Self.init(testing.allocator);
     defer testing.allocator.destroy(counter);
 
     var threads: [4]std.Thread = undefined;
@@ -84,7 +68,7 @@ test "prometheus.counter: concurrent" {
         thread.* = try std.Thread.spawn(
             .{},
             struct {
-                fn run(c: *Counter) void {
+                fn run(c: *Self) void {
                     var i: usize = 0;
                     while (i < 20) : (i += 1) {
                         c.inc();
@@ -101,9 +85,9 @@ test "prometheus.counter: concurrent" {
 }
 
 test "prometheus.counter: write" {
-    var counter = try Counter.init(testing.allocator);
+    var counter = try Self.init(testing.allocator);
     defer testing.allocator.destroy(counter);
-    counter.set(340);
+    counter.* = .{ .value = .{ .value = 340 } };
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();

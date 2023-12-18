@@ -79,6 +79,8 @@ pub const net = struct {
 pub const prometheus = struct {
     pub usingnamespace @import("prometheus/counter.zig");
     pub usingnamespace @import("prometheus/gauge.zig");
+    pub usingnamespace @import("prometheus/gauge_fn.zig");
+    pub usingnamespace @import("prometheus/http.zig");
     pub usingnamespace @import("prometheus/histogram.zig");
     pub usingnamespace @import("prometheus/metric.zig");
     pub usingnamespace @import("prometheus/registry.zig");

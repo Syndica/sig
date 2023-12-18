@@ -4,11 +4,14 @@ const hash_map = std.hash_map;
 const heap = std.heap;
 const mem = std.mem;
 const testing = std.testing;
+
 const Metric = @import("metric.zig").Metric;
-const Counter = @import("counter.zig").Counter;
+const Counter = @import("counter.zig");
 const Gauge = @import("gauge.zig").Gauge;
+const GaugeFn = @import("gauge_fn.zig").GaugeFn;
+const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
 const Histogram = @import("histogram.zig").Histogram;
-const GaugeCallFnType = @import("gauge.zig").GaugeCallFnType;
+const defaultBuckets = @import("histogram.zig").defaultBuckets;
 
 pub const GetMetricError = error{
     // Returned when trying to add a metric to an already full registry.
@@ -24,21 +27,10 @@ const RegistryOptions = struct {
     max_name_len: comptime_int = 1024,
 };
 
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const gpa_allocator = gpa.allocator();
-pub var registry: *Registry(.{}) = undefined;
-
-pub fn init() error{OutOfMemory}!void {
-    registry = try Registry(.{}).init(gpa_allocator);
-}
-
-pub fn deinit() void {
-    registry.deinit();
-}
-
 pub fn Registry(comptime options: RegistryOptions) type {
     return struct {
         const Self = @This();
+
         const MetricMap = hash_map.StringHashMapUnmanaged(*Metric);
 
         root_allocator: mem.Allocator,
@@ -46,12 +38,12 @@ pub fn Registry(comptime options: RegistryOptions) type {
         mutex: std.Thread.Mutex,
         metrics: MetricMap,
 
-        pub fn init(alloc: mem.Allocator) error{OutOfMemory}!*Self {
-            const self = try alloc.create(Self);
+        pub fn init(allocator: mem.Allocator) !*Self {
+            const self = try allocator.create(Self);
 
             self.* = .{
-                .root_allocator = alloc,
-                .arena_state = heap.ArenaAllocator.init(alloc),
+                .root_allocator = allocator,
+                .arena_state = heap.ArenaAllocator.init(allocator),
                 .mutex = .{},
                 .metrics = MetricMap{},
             };
@@ -69,76 +61,40 @@ pub fn Registry(comptime options: RegistryOptions) type {
         }
 
         pub fn getOrCreateCounter(self: *Self, name: []const u8) GetMetricError!*Counter {
-            if (self.nbMetrics() >= options.max_metrics) return error.TooManyMetrics;
-            if (name.len > options.max_name_len) return error.NameTooLong;
-
-            var allocator = self.arena_state.allocator();
-
-            const duped_name = try allocator.dupe(u8, name);
-
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            var gop = try self.metrics.getOrPut(allocator, duped_name);
-            if (!gop.found_existing) {
-                var real_metric = try Counter.init(allocator);
-                gop.value_ptr.* = &real_metric.metric;
-            }
-
-            return @fieldParentPtr(Counter, "metric", gop.value_ptr.*);
+            return self.getOrCreateMetric(name, Counter, .{});
         }
 
-        pub fn getOrCreateHistogram(self: *Self, name: []const u8) GetMetricError!*Histogram {
-            if (self.nbMetrics() >= options.max_metrics) return error.TooManyMetrics;
-            if (name.len > options.max_name_len) return error.NameTooLong;
-
-            var allocator = self.arena_state.allocator();
-
-            const duped_name = try allocator.dupe(u8, name);
-
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            var gop = try self.metrics.getOrPut(allocator, duped_name);
-            if (!gop.found_existing) {
-                var real_metric = try Histogram.init(allocator);
-                gop.value_ptr.* = &real_metric.metric;
-            }
-
-            return @fieldParentPtr(Histogram, "metric", gop.value_ptr.*);
+        pub fn getOrCreateGauge(self: *Self, name: []const u8) GetMetricError!*Gauge {
+            return self.getOrCreateMetric(name, Gauge, .{});
         }
 
-        pub fn getOrCreateGauge(
+        pub fn getOrCreateGaugeFn(
             self: *Self,
             name: []const u8,
             state: anytype,
             callFn: GaugeCallFnType(@TypeOf(state), f64),
-        ) GetMetricError!*Gauge(@TypeOf(state), f64) {
-            if (self.nbMetrics() >= options.max_metrics) return error.TooManyMetrics;
-            if (name.len > options.max_name_len) return error.NameTooLong;
-
-            var allocator = self.arena_state.allocator();
-
-            const duped_name = try allocator.dupe(u8, name);
-
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            var gop = try self.metrics.getOrPut(allocator, duped_name);
-            if (!gop.found_existing) {
-                var real_metric = try Gauge(@TypeOf(state), f64).init(allocator, callFn, state);
-                gop.value_ptr.* = &real_metric.metric;
-            }
-
-            return @fieldParentPtr(Gauge(@TypeOf(state), f64), "metric", gop.value_ptr.*);
+        ) GetMetricError!*GaugeFn(@TypeOf(state), Return(@TypeOf(callFn))) {
+            return self.getOrCreateMetric(
+                name,
+                GaugeFn(@TypeOf(state), Return(@TypeOf(callFn))),
+                .{ callFn, state },
+            );
         }
 
-        pub fn getOrCreateGaugeInt(
+        pub fn getOrCreateHistogram(
             self: *Self,
             name: []const u8,
-            state: anytype,
-            callFn: GaugeCallFnType(@TypeOf(state), u64),
-        ) GetMetricError!*Gauge(@TypeOf(state), u64) {
+            buckets: std.ArrayList(f64),
+        ) GetMetricError!*Histogram {
+            return self.getOrCreateMetric(name, Histogram, .{buckets});
+        }
+
+        fn getOrCreateMetric(
+            self: *Self,
+            name: []const u8,
+            comptime MetricType: type,
+            args: anytype,
+        ) GetMetricError!*MetricType {
             if (self.nbMetrics() >= options.max_metrics) return error.TooManyMetrics;
             if (name.len > options.max_name_len) return error.NameTooLong;
 
@@ -149,13 +105,13 @@ pub fn Registry(comptime options: RegistryOptions) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            var gop = try self.metrics.getOrPut(allocator, duped_name);
+            const gop = try self.metrics.getOrPut(allocator, duped_name);
             if (!gop.found_existing) {
-                var real_metric = try Gauge(@TypeOf(state), u64).init(allocator, callFn, state);
+                var real_metric = try @call(.auto, MetricType.init, .{allocator} ++ args);
                 gop.value_ptr.* = &real_metric.metric;
             }
 
-            return @fieldParentPtr(Gauge(@TypeOf(state), u64), "metric", gop.value_ptr.*);
+            return @fieldParentPtr(MetricType, "metric", gop.value_ptr.*);
         }
 
         pub fn write(self: *Self, allocator: mem.Allocator, writer: anytype) !void {
@@ -193,29 +149,38 @@ pub fn Registry(comptime options: RegistryOptions) type {
     };
 }
 
+/// Gets the return type of a function or function pointer
+fn Return(comptime FnPtr: type) type {
+    return switch (@typeInfo(FnPtr)) {
+        .Fn => |fun| fun.return_type.?,
+        .Pointer => |ptr| @typeInfo(ptr.child).Fn.return_type.?,
+        else => @compileError("not a function or function pointer"),
+    };
+}
+
 fn stringLessThan(context: void, lhs: []const u8, rhs: []const u8) bool {
     _ = context;
     return mem.lessThan(u8, lhs, rhs);
 }
 
-test "registry getOrCreateCounter" {
-    var reg = try Registry(.{}).create(testing.allocator);
-    defer reg.destroy();
+test "prometheus.registry: getOrCreateCounter" {
+    var registry = try Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
 
     const name = try fmt.allocPrint(testing.allocator, "http_requests{{status=\"{d}\"}}", .{500});
     defer testing.allocator.free(name);
 
     var i: usize = 0;
     while (i < 10) : (i += 1) {
-        var counter = try reg.getOrCreateCounter(name);
+        var counter = try registry.getOrCreateCounter(name);
         counter.inc();
     }
 
-    var counter = try reg.getOrCreateCounter(name);
+    var counter = try registry.getOrCreateCounter(name);
     try testing.expectEqual(@as(u64, 10), counter.get());
 }
 
-test "registry write" {
+test "prometheus.registry: write" {
     const TestCase = struct {
         counter_name: []const u8,
         gauge_name: []const u8,
@@ -261,18 +226,18 @@ test "registry write" {
     };
 
     inline for (test_cases) |tc| {
-        var reg = try Registry(.{}).create(testing.allocator);
-        defer reg.destroy();
+        var registry = try Registry(.{}).init(testing.allocator);
+        defer registry.deinit();
 
         // Add some counters
         {
-            var counter = try reg.getOrCreateCounter(tc.counter_name);
-            counter.set(2);
+            var counter = try registry.getOrCreateCounter(tc.counter_name);
+            counter.* = .{ .value = .{ .value = 2 } };
         }
 
         // Add some gauges
         {
-            _ = try reg.getOrCreateGauge(
+            _ = try registry.getOrCreateGaugeFn(
                 tc.gauge_name,
                 @as(f64, 4.0),
                 struct {
@@ -283,13 +248,16 @@ test "registry write" {
             );
         }
 
-        // Add an histogram
+        // TODO: redesign buckets code so it uses the registry's allocator
+        const buckets = try defaultBuckets(testing.allocator);
+        defer buckets.deinit();
+        // Add a histogram
         {
-            var histogram = try reg.getOrCreateHistogram(tc.histogram_name);
+            var histogram = try registry.getOrCreateHistogram(tc.histogram_name, buckets);
 
-            histogram.update(500.12);
-            histogram.update(1230.240);
-            histogram.update(140);
+            histogram.observe(500.12);
+            histogram.observe(1230.240);
+            histogram.observe(140);
         }
 
         // Write to a buffer
@@ -297,7 +265,7 @@ test "registry write" {
             var buffer = std.ArrayList(u8).init(testing.allocator);
             defer buffer.deinit();
 
-            try reg.write(testing.allocator, buffer.writer());
+            try registry.write(testing.allocator, buffer.writer());
 
             try testing.expectEqualStrings(tc.exp, buffer.items);
         }
@@ -311,7 +279,7 @@ test "registry write" {
                 std.fs.cwd().deleteFile(filename) catch {};
             }
 
-            try reg.write(testing.allocator, file.writer());
+            try registry.write(testing.allocator, file.writer());
 
             try file.seekTo(0);
             const file_data = try file.readToEndAlloc(testing.allocator, std.math.maxInt(usize));
@@ -322,23 +290,20 @@ test "registry write" {
     }
 }
 
-test "registry options" {
-    var reg = try Registry(.{ .max_metrics = 1, .max_name_len = 4 }).create(testing.allocator);
-    defer reg.destroy();
+test "prometheus.registry: options" {
+    var registry = try Registry(.{ .max_metrics = 1, .max_name_len = 4 }).init(testing.allocator);
+    defer registry.deinit();
 
     {
-        try testing.expectError(error.NameTooLong, reg.getOrCreateCounter("hello"));
-        _ = try reg.getOrCreateCounter("foo");
+        try testing.expectError(error.NameTooLong, registry.getOrCreateCounter("hello"));
+        _ = try registry.getOrCreateCounter("foo");
     }
 
     {
-        try testing.expectError(error.TooManyMetrics, reg.getOrCreateCounter("bar"));
+        try testing.expectError(error.TooManyMetrics, registry.getOrCreateCounter("bar"));
     }
 }
 
-test "prometheus.registry: test default registry" {
-    registry = try Registry(.{}).init(testing.allocator);
-    defer registry.deinit();
-    var counter = try registry.getOrCreateCounter("hello");
-    counter.inc();
+test {
+    testing.refAllDecls(@This());
 }

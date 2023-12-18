@@ -1,271 +1,289 @@
 const std = @import("std");
-const fmt = std.fmt;
-const math = std.math;
-const mem = std.mem;
-const testing = std.testing;
+const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
+const Atomic = std.atomic.Atomic;
+const Ordering = std.atomic.Ordering;
 
 const Metric = @import("metric.zig").Metric;
-const HistogramResult = @import("metric.zig").HistogramResult;
 
-const e10_min = -9;
-const e10_max = 18;
-const buckets_per_decimal = 18;
-const decimal_buckets_count = e10_max - e10_min;
-const buckets_count = decimal_buckets_count * buckets_per_decimal;
+const default_buckets: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
 
-const lower_bucket_range = blk: {
-    var buf: [64]u8 = undefined;
-    break :blk fmt.bufPrint(&buf, "0...{e:.3}", .{math.pow(f64, 10, e10_min)}) catch unreachable;
-};
-const upper_bucket_range = blk: {
-    var buf: [64]u8 = undefined;
-    break :blk fmt.bufPrint(&buf, "{e:.3}...+Inf", .{math.pow(f64, 10, e10_max)}) catch unreachable;
-};
-
-const bucket_ranges: [buckets_count][]const u8 = blk: {
-    const bucket_multiplier = math.pow(f64, 10.0, 1.0 / @as(f64, buckets_per_decimal));
-
-    var v = math.pow(f64, 10, e10_min);
-
-    var start = blk2: {
-        var buf: [64]u8 = undefined;
-        break :blk2 fmt.bufPrint(&buf, "{e:.3}", .{v}) catch unreachable;
-    };
-
-    var result: [buckets_count][]const u8 = undefined;
-    for (&result) |*range| {
-        v *= bucket_multiplier;
-
-        const end = blk3: {
-            var buf: [64]u8 = undefined;
-            break :blk3 fmt.bufPrint(&buf, "{e:.3}", .{v}) catch unreachable;
-        };
-
-        range.* = start ++ "..." ++ end;
-
-        start = end;
+pub fn defaultBuckets(allocator: Allocator) !ArrayList(f64) {
+    var l = try ArrayList(f64).initCapacity(allocator, default_buckets.len);
+    for (default_buckets) |b| {
+        try l.append(b);
     }
-
-    break :blk result;
-};
-
-test "bucket ranges" {
-    try testing.expectEqualStrings("0...1.000e-09", lower_bucket_range);
-    try testing.expectEqualStrings("1.000e+18...+Inf", upper_bucket_range);
-
-    try testing.expectEqualStrings("1.000e-09...1.136e-09", bucket_ranges[0]);
-    try testing.expectEqualStrings("1.136e-09...1.292e-09", bucket_ranges[1]);
-    try testing.expectEqualStrings("8.799e-09...1.000e-08", bucket_ranges[buckets_per_decimal - 1]);
-    try testing.expectEqualStrings("1.000e-08...1.136e-08", bucket_ranges[buckets_per_decimal]);
-    try testing.expectEqualStrings("8.799e-01...1.000e+00", bucket_ranges[buckets_per_decimal * (-e10_min) - 1]);
-    try testing.expectEqualStrings("1.000e+00...1.136e+00", bucket_ranges[buckets_per_decimal * (-e10_min)]);
-    try testing.expectEqualStrings("8.799e+17...1.000e+18", bucket_ranges[buckets_per_decimal * (e10_max - e10_min) - 1]);
+    return l;
 }
 
-/// Histogram based on https://github.com/VictoriaMetrics/metrics/blob/master/histogram.go.
+/// Histogram optimized for fast writes.
+/// Reads and writes are thread-safe if you use the public methods.
+/// Writes are lock-free. Reads are locked with a mutex because they occupy a shard.
+///
+/// The histogram state is represented in a shard. There are two shards, hot and cold.
+/// Writes incremenent the hot shard.
+/// Reads flip a switch to change which shard is considered hot for writes,
+/// then wait for the previous hot shard to cool down before reading it.
 pub const Histogram = struct {
-    const Self = @This();
+    allocator: Allocator,
 
-    metric: Metric = .{
-        .getResultFn = getResult,
+    /// The highest value to include in each bucket.
+    upper_bounds: ArrayList(f64),
+
+    /// One hot shard for writing, one cold shard for reading.
+    shards: [2]struct {
+        /// Total of all observed values.
+        sum: Atomic(f64) = Atomic(f64).init(0.0),
+        /// Total number of observations that have finished being recorded to this shard.
+        count: Atomic(u64) = Atomic(u64).init(0),
+        /// Cumulative counts for each upper bound.
+        buckets: ArrayList(Atomic(u64)),
     },
 
-    mutex: std.Thread.Mutex = .{},
-    decimal_buckets: [decimal_buckets_count][buckets_per_decimal]u64 = undefined,
+    /// Used to ensure reads and writes occur on separate shards.
+    /// Atomic representation of `ShardSync`.
+    shard_sync: Atomic(u64),
 
-    lower: u64 = 0,
-    upper: u64 = 0,
+    /// Prevents more than one reader at a time, since read operations actually
+    /// execute an internal write by swapping the hot and cold shards.
+    read_mutex: std.Thread.Mutex = .{},
 
-    sum: f64 = 0.0,
+    /// Used by registry to report the histogram
+    metric: Metric = .{ .getResultFn = getResult },
 
-    pub fn init(allocator: mem.Allocator) !*Self {
-        const self = try allocator.create(Self);
+    const ShardSync = packed struct {
+        /// The total count of events that have started to be recorded (including those that finished).
+        /// If this is larger than the shard count, it means a write is in progress.
+        count: u63 = 0,
+        /// Index of the shard currently being used for writes.
+        shard: u1 = 0,
+    };
 
-        self.* = .{};
-        for (&self.decimal_buckets) |*bucket| {
-            @memset(bucket, 0);
-        }
+    const Self = @This();
 
-        return self;
+    pub fn init(allocator: Allocator, buckets: ArrayList(f64)) !@This() {
+        return .{
+            .allocator = allocator,
+            .upper_bounds = buckets,
+            .shards = .{
+                .{ .buckets = try shardBuckets(allocator, buckets.items.len) },
+                .{ .buckets = try shardBuckets(allocator, buckets.items.len) },
+            },
+            .shard_sync = Atomic(u64).init(0),
+        };
     }
 
-    pub fn update(self: *Self, value: f64) void {
-        if (math.isNan(value) or value < 0) {
-            return;
-        }
-
-        const bucket_idx: f64 = (math.log10(value) - e10_min) * buckets_per_decimal;
-
-        // Keep a lock while updating the histogram.
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        self.sum += value;
-
-        if (bucket_idx < 0) {
-            self.lower += 1;
-        } else if (bucket_idx >= buckets_count) {
-            self.upper += 1;
-        } else {
-            const idx: usize = blk: {
-                const tmp: usize = @intFromFloat(bucket_idx);
-
-                if (bucket_idx == @as(f64, @floatFromInt(tmp)) and tmp > 0) {
-                    // Edge case for 10^n values, which must go to the lower bucket
-                    // according to Prometheus logic for `le`-based histograms.
-                    break :blk tmp - 1;
-                } else {
-                    break :blk tmp;
-                }
-            };
-
-            const decimal_bucket_idx = idx / buckets_per_decimal;
-            const offset = idx % buckets_per_decimal;
-
-            var bucket: []u64 = &self.decimal_buckets[decimal_bucket_idx];
-            bucket[offset] += 1;
-        }
+    pub fn deinit(self: *Self) void {
+        self.shards[0].buckets.deinit();
+        self.shards[1].buckets.deinit();
+        self.upper_bounds.deinit();
     }
 
-    pub fn get(self: *const Self) u64 {
-        _ = self;
-        return 0;
+    fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
+        var shard_buckets = try ArrayList(Atomic(u64)).initCapacity(allocator, size);
+        for (0..size) |_| {
+            shard_buckets.appendAssumeCapacity(Atomic(u64).init(0));
+        }
+        return shard_buckets;
     }
 
-    fn isBucketAllZero(bucket: []const u64) bool {
-        for (bucket) |v| {
-            if (v != 0) return false;
-        }
-        return true;
-    }
-
-    fn getResult(metric: *Metric, allocator: mem.Allocator) Metric.Error!Metric.Result {
-        const self = @fieldParentPtr(Histogram, "metric", metric);
-
-        // Arbitrary maximum capacity
-        var buckets = try std.ArrayList(HistogramResult.Bucket).initCapacity(allocator, 16);
-        var count_total: u64 = 0;
-
-        // Keep a lock while querying the histogram.
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.lower > 0) {
-            try buckets.append(.{
-                .vmrange = lower_bucket_range,
-                .count = self.lower,
-            });
-            count_total += self.lower;
-        }
-
-        for (&self.decimal_buckets, 0..) |bucket, decimal_bucket_idx| {
-            if (isBucketAllZero(&bucket)) continue;
-
-            for (bucket, 0..) |count, offset| {
-                if (count <= 0) continue;
-
-                const bucket_idx = (decimal_bucket_idx * buckets_per_decimal) + offset;
-                const vmrange = bucket_ranges[bucket_idx];
-
-                try buckets.append(.{
-                    .vmrange = vmrange,
-                    .count = count,
-                });
-                count_total += count;
+    /// Writes a value into the histogram.
+    pub fn observe(self: *Self, item: f64) void {
+        const shard_sync = self.incrementCount(.Acquire); // acquires lock. must be first step.
+        const shard = &self.shards[shard_sync.shard];
+        for (0.., self.upper_bounds.items) |i, bound| {
+            if (item <= bound) {
+                _ = shard.buckets.items[i].fetchAdd(1, .Monotonic);
+                break;
             }
         }
+        _ = shard.count.fetchAdd(1, .Release); // releases lock. must be last step.
+    }
 
-        if (self.upper > 0) {
-            try buckets.append(.{
-                .vmrange = upper_bucket_range,
-                .count = self.upper,
-            });
-            count_total += self.upper;
+    /// Reads the current state of the histogram.
+    pub fn getSnapshot(self: *Self, allocator: ?Allocator) !HistogramSnapshot {
+        var alloc = self.allocator;
+        if (allocator) |a| alloc = a;
+
+        // Acquire the lock so no one else executes this function at the same time.
+        self.read_mutex.lock();
+        defer self.read_mutex.unlock();
+
+        // Make the hot shard cold. Some writers may still be writing to it,
+        // but no more will start after this.
+        const shard_sync = self.flipShard(.Monotonic);
+        const cold_shard = &self.shards[shard_sync.shard];
+        const hot_shard = &self.shards[shard_sync.shard +% 1];
+
+        // Wait until all writers are done writing to the cold shard
+        // TODO: switch to a condvar. see: `std.Thread.Condition`
+        while (cold_shard.count.tryCompareAndSwap(shard_sync.count, 0, .Acquire, .Monotonic)) |_| {
+            // Acquire on success: keeps shard usage after.
         }
 
-        return Metric.Result{
-            .histogram = .{
-                .buckets = try buckets.toOwnedSlice(),
-                .sum = .{ .value = self.sum },
-                .count = count_total,
-            },
-        };
+        // Now the cold shard is totally cold and unused by other threads.
+        // - read the cold shard's data
+        // - zero out the cold shard.
+        // - write the cold shard's data into the hot shard.
+        const cold_shard_sum = cold_shard.sum.swap(0.0, .Monotonic);
+        var buckets = try ArrayList(Bucket).initCapacity(alloc, self.upper_bounds.items.len);
+        var cumulative_count: u64 = 0;
+        for (0.., self.upper_bounds.items) |i, upper_bound| {
+            const count = cold_shard.buckets.items[i].swap(0, .Monotonic);
+            cumulative_count += count;
+            buckets.appendAssumeCapacity(.{
+                .cumulative_count = cumulative_count,
+                .upper_bound = upper_bound,
+            });
+            _ = hot_shard.buckets.items[i].fetchAdd(count, .Monotonic);
+        }
+        _ = hot_shard.sum.fetchAdd(cold_shard_sum, .Monotonic);
+        _ = hot_shard.count.fetchAdd(shard_sync.count, .Monotonic);
+
+        return HistogramSnapshot.init(cold_shard_sum, shard_sync.count, buckets);
+    }
+
+    fn getResult(metric: *Metric, allocator: Allocator) Metric.Error!Metric.Result {
+        const self = @fieldParentPtr(Self, "metric", metric);
+        const snapshot = try self.getSnapshot(allocator);
+        return Metric.Result{ .histogram = snapshot };
+    }
+
+    /// Increases the global count (used for synchronization), not a count within a shard.
+    /// Returns the state from before this operation, which was replaced by this operation.
+    fn incrementCount(self: *@This(), comptime ordering: Ordering) ShardSync {
+        return @bitCast(self.shard_sync.fetchAdd(1, ordering));
+    }
+
+    /// Makes the hot shard cold and vice versa.
+    /// Returns the state from before this operation, which was replaced by this operation.
+    fn flipShard(self: *@This(), comptime ordering: Ordering) ShardSync {
+        const data = self.shard_sync.fetchAdd(@bitCast(ShardSync{ .shard = 1 }), ordering);
+        return @bitCast(data);
     }
 };
 
-test "write empty" {
-    var histogram = try Histogram.init(testing.allocator);
-    defer testing.allocator.destroy(histogram);
+/// A snapshot of the histogram state from a point in time.
+pub const HistogramSnapshot = struct {
+    /// Sum of all values observed by the histogram.
+    sum: f64,
+    /// Total number of events observed by the histogram.
+    count: u64,
+    /// Cumulative histogram counts.
+    ///
+    /// The len *must* be the same as the amount of memory that was
+    /// allocated for this slice, or else the memory will leak.
+    buckets: []Bucket,
+    /// Allocator that was used to allocate the buckets.
+    allocator: Allocator,
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var metric = &histogram.metric;
-    try metric.write(testing.allocator, buffer.writer(), "myhistogram");
-
-    try testing.expectEqual(@as(usize, 0), buffer.items.len);
-}
-
-test "update then write" {
-    var histogram = try Histogram.init(testing.allocator);
-    defer testing.allocator.destroy(histogram);
-
-    var i: usize = 98;
-    while (i < 218) : (i += 1) {
-        histogram.update(@floatFromInt(i));
+    pub fn init(sum: f64, count: u64, buckets: ArrayList(Bucket)) @This() {
+        std.debug.assert(buckets.capacity == buckets.items.len);
+        return .{
+            .sum = sum,
+            .count = count,
+            .buckets = buckets.items,
+            .allocator = buckets.allocator,
+        };
     }
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+    pub fn deinit(self: *@This()) void {
+        self.allocator.free(self.buckets);
+    }
+};
 
-    var metric = &histogram.metric;
-    try metric.write(testing.allocator, buffer.writer(), "myhistogram");
+pub const Bucket = struct {
+    cumulative_count: u64 = 0,
+    upper_bound: f64 = 0,
+};
 
-    const exp =
-        \\myhistogram_bucket{vmrange="8.799e+01...1.000e+02"} 3
-        \\myhistogram_bucket{vmrange="1.000e+02...1.136e+02"} 13
-        \\myhistogram_bucket{vmrange="1.136e+02...1.292e+02"} 16
-        \\myhistogram_bucket{vmrange="1.292e+02...1.468e+02"} 17
-        \\myhistogram_bucket{vmrange="1.468e+02...1.668e+02"} 20
-        \\myhistogram_bucket{vmrange="1.668e+02...1.896e+02"} 23
-        \\myhistogram_bucket{vmrange="1.896e+02...2.154e+02"} 26
-        \\myhistogram_bucket{vmrange="2.154e+02...2.448e+02"} 2
-        \\myhistogram_sum 18900
-        \\myhistogram_count 120
-        \\
-    ;
+test "prometheus.histogram: empty" {
+    const allocator = std.testing.allocator;
+    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    defer hist.deinit();
 
-    try testing.expectEqualStrings(exp, buffer.items);
+    var snapshot = try hist.getSnapshot(null);
+    defer snapshot.deinit();
+
+    try expectSnapshot(0, &default_buckets, &(.{0} ** 11), snapshot);
 }
 
-test "update then write with labels" {
-    var histogram = try Histogram.init(testing.allocator);
-    defer testing.allocator.destroy(histogram);
+test "prometheus.histogram: data goes in correct buckets" {
+    const allocator = std.testing.allocator;
+    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    defer hist.deinit();
 
-    var i: usize = 98;
-    while (i < 218) : (i += 1) {
-        histogram.update(@floatFromInt(i));
+    const expected_buckets = observeVarious(&hist);
+
+    var snapshot = try hist.getSnapshot(null);
+    defer snapshot.deinit();
+
+    try expectSnapshot(7, &default_buckets, &expected_buckets, snapshot);
+}
+
+test "prometheus.histogram: repeated snapshots measure the same thing" {
+    const allocator = std.testing.allocator;
+    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    defer hist.deinit();
+
+    const expected_buckets = observeVarious(&hist);
+
+    var snapshot1 = try hist.getSnapshot(null);
+    snapshot1.deinit();
+    var snapshot = try hist.getSnapshot(null);
+    defer snapshot.deinit();
+
+    try expectSnapshot(7, &default_buckets, &expected_buckets, snapshot);
+}
+
+test "prometheus.histogram: values accumulate across snapshots" {
+    const allocator = std.testing.allocator;
+    var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
+    defer hist.deinit();
+
+    _ = observeVarious(&hist);
+
+    var snapshot1 = try hist.getSnapshot(null);
+    snapshot1.deinit();
+
+    hist.observe(1.0);
+
+    var snapshot = try hist.getSnapshot(null);
+    defer snapshot.deinit();
+
+    const expected_buckets: [11]u64 = .{ 1, 1, 1, 1, 4, 4, 4, 6, 7, 7, 7 };
+    try expectSnapshot(8, &default_buckets, &expected_buckets, snapshot);
+}
+
+fn observeVarious(hist: *Histogram) [11]u64 {
+    hist.observe(1.0);
+    hist.observe(0.1);
+    hist.observe(2.0);
+    hist.observe(0.1);
+    hist.observe(0.0000000001);
+    hist.observe(0.1);
+    hist.observe(100.0);
+    return .{ 1, 1, 1, 1, 4, 4, 4, 5, 6, 6, 6 };
+}
+
+fn expectSnapshot(
+    expected_total: u64,
+    expected_bounds: []const f64,
+    expected_buckets: []const u64,
+    snapshot: anytype,
+) !void {
+    try std.testing.expectEqual(expected_total, snapshot.count);
+    try std.testing.expectEqual(default_buckets.len, snapshot.buckets.len);
+    for (0.., snapshot.buckets) |i, bucket| {
+        try expectEqual(expected_buckets[i], bucket.cumulative_count, "value in bucket {}\n", .{i});
+        try expectEqual(expected_bounds[i], bucket.upper_bound, "bound for bucket {}\n", .{i});
     }
+}
 
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
-
-    var metric = &histogram.metric;
-    try metric.write(testing.allocator, buffer.writer(), "myhistogram{route=\"/api/v2/users\"}");
-
-    const exp =
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="8.799e+01...1.000e+02"} 3
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="1.000e+02...1.136e+02"} 13
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="1.136e+02...1.292e+02"} 16
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="1.292e+02...1.468e+02"} 17
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="1.468e+02...1.668e+02"} 20
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="1.668e+02...1.896e+02"} 23
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="1.896e+02...2.154e+02"} 26
-        \\myhistogram_bucket{route="/api/v2/users",vmrange="2.154e+02...2.448e+02"} 2
-        \\myhistogram_sum{route="/api/v2/users"} 18900
-        \\myhistogram_count{route="/api/v2/users"} 120
-        \\
-    ;
-
-    try testing.expectEqualStrings(exp, buffer.items);
+fn expectEqual(expected: anytype, actual: anytype, comptime fmt: anytype, args: anytype) !void {
+    std.testing.expectEqual(expected, actual) catch |e| {
+        std.debug.print(fmt, args);
+        return e;
+    };
+    return;
 }
