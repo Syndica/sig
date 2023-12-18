@@ -144,7 +144,7 @@ fn validator(_: []const []const u8) !void {
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{&gossip_service},
+        .{ &gossip_service, false },
     );
 
     var rpc_service_processor = RpcServiceProcessor.init(gpa_allocator, &gossip_service);

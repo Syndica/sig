@@ -97,7 +97,7 @@ pub fn randomCrdsValue(rng: std.rand.Random, maybe_should_pass_sig_verification:
     // will have random id
     // var value = try CrdsValue.random(rng, &keypair);
     var value = try CrdsValue.randomWithIndex(rng, &keypair, 0);
-    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false));
+    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key));
     try value.sign(&keypair);
 
     const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
@@ -157,7 +157,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     defer bloom.deinit();
 
     var crds_value = try CrdsValue.initSigned(crds.CrdsData{
-        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
+        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key)),
     }, keypair);
 
     var filter = CrdsFilter{
