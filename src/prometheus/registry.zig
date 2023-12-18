@@ -190,9 +190,17 @@ test "prometheus.registry: write" {
 
     const exp1 =
         \\http_conn_pool_size 4.000000
-        \\http_request_size_bucket{vmrange="1.292e+02...1.468e+02"} 1
-        \\http_request_size_bucket{vmrange="4.642e+02...5.275e+02"} 1
-        \\http_request_size_bucket{vmrange="1.136e+03...1.292e+03"} 1
+        \\http_request_size_bucket{le="0.005"} 0
+        \\http_request_size_bucket{le="0.01"} 0
+        \\http_request_size_bucket{le="0.025"} 0
+        \\http_request_size_bucket{le="0.05"} 0
+        \\http_request_size_bucket{le="0.1"} 0
+        \\http_request_size_bucket{le="0.25"} 0
+        \\http_request_size_bucket{le="0.5"} 0
+        \\http_request_size_bucket{le="1"} 0
+        \\http_request_size_bucket{le="2.5"} 0
+        \\http_request_size_bucket{le="5"} 0
+        \\http_request_size_bucket{le="10"} 0
         \\http_request_size_sum 1870.360000
         \\http_request_size_count 3
         \\http_requests 2
@@ -201,9 +209,17 @@ test "prometheus.registry: write" {
 
     const exp2 =
         \\http_conn_pool_size{route="/api/v2/users"} 4.000000
-        \\http_request_size_bucket{route="/api/v2/users",vmrange="1.292e+02...1.468e+02"} 1
-        \\http_request_size_bucket{route="/api/v2/users",vmrange="4.642e+02...5.275e+02"} 1
-        \\http_request_size_bucket{route="/api/v2/users",vmrange="1.136e+03...1.292e+03"} 1
+        \\http_request_size_bucket{route="/api/v2/users",le="0.005"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="0.01"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="0.025"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="0.05"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="0.1"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="0.25"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="0.5"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="1"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="2.5"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="5"} 0
+        \\http_request_size_bucket{route="/api/v2/users",le="10"} 0
         \\http_request_size_sum{route="/api/v2/users"} 1870.360000
         \\http_request_size_count{route="/api/v2/users"} 3
         \\http_requests{route="/api/v2/users"} 2

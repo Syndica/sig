@@ -16,7 +16,7 @@ pub fn defaultBuckets(allocator: Allocator) !ArrayList(f64) {
     return l;
 }
 
-/// Histogram optimized for fast writes.
+/// Histogram optimized for fast concurrent writes.
 /// Reads and writes are thread-safe if you use the public methods.
 /// Writes are lock-free. Reads are locked with a mutex because they occupy a shard.
 ///
@@ -61,8 +61,9 @@ pub const Histogram = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, buckets: ArrayList(f64)) !@This() {
-        return .{
+    pub fn init(allocator: Allocator, buckets: ArrayList(f64)) !*@This() {
+        const self = try allocator.create(Self);
+        self.* = .{
             .allocator = allocator,
             .upper_bounds = buckets,
             .shards = .{
@@ -71,12 +72,14 @@ pub const Histogram = struct {
             },
             .shard_sync = Atomic(u64).init(0),
         };
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
         self.shards[0].buckets.deinit();
         self.shards[1].buckets.deinit();
         self.upper_bounds.deinit();
+        self.allocator.destroy(self);
     }
 
     fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
@@ -88,15 +91,16 @@ pub const Histogram = struct {
     }
 
     /// Writes a value into the histogram.
-    pub fn observe(self: *Self, item: f64) void {
+    pub fn observe(self: *Self, value: f64) void {
         const shard_sync = self.incrementCount(.Acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (0.., self.upper_bounds.items) |i, bound| {
-            if (item <= bound) {
+            if (value <= bound) {
                 _ = shard.buckets.items[i].fetchAdd(1, .Monotonic);
                 break;
             }
         }
+        _ = shard.sum.fetchAdd(value, .Release); // releases lock. must be last step.
         _ = shard.count.fetchAdd(1, .Release); // releases lock. must be last step.
     }
 
@@ -213,7 +217,7 @@ test "prometheus.histogram: data goes in correct buckets" {
     var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
     defer hist.deinit();
 
-    const expected_buckets = observeVarious(&hist);
+    const expected_buckets = observeVarious(hist);
 
     var snapshot = try hist.getSnapshot(null);
     defer snapshot.deinit();
@@ -226,7 +230,7 @@ test "prometheus.histogram: repeated snapshots measure the same thing" {
     var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
     defer hist.deinit();
 
-    const expected_buckets = observeVarious(&hist);
+    const expected_buckets = observeVarious(hist);
 
     var snapshot1 = try hist.getSnapshot(null);
     snapshot1.deinit();
@@ -241,7 +245,7 @@ test "prometheus.histogram: values accumulate across snapshots" {
     var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
     defer hist.deinit();
 
-    _ = observeVarious(&hist);
+    _ = observeVarious(hist);
 
     var snapshot1 = try hist.getSnapshot(null);
     snapshot1.deinit();

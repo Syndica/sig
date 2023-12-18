@@ -9,8 +9,10 @@ pub fn Gauge(comptime T: type) type {
         value: std.atomic.Atomic(T) = .{ .value = 0 },
         metric: Metric = .{ .getResultFn = getResult },
 
-        pub fn init(_: anytype) @This() {
-            return .{};
+        pub fn init(allocator: std.mem.Allocator) @This() {
+            const self = try allocator.create(@This());
+            self.* = .{};
+            return self;
         }
 
         pub fn inc(self: *@This()) void {
