@@ -1758,7 +1758,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
     var contact_info = LegacyContactInfo.default(my_pubkey);
     contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
@@ -2000,7 +2000,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     defer bloom.deinit();
 
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
-    var rando_pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key, true);
+    var rando_pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key);
 
     var ci_data = crds.CrdsData.randomFromIndex(rng.random(), 0);
     ci_data.LegacyContactInfo.id = rando_pubkey;
