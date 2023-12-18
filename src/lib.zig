@@ -1,7 +1,7 @@
-pub const rpc_client = struct {
-    pub usingnamespace @import("rpc-client/client.zig");
+pub const rpc_old = struct {
+    pub usingnamespace @import("rpc-old/client.zig");
     pub const types = struct {
-        pub usingnamespace @import("rpc-client/types.zig");
+        pub usingnamespace @import("rpc-old/types.zig");
     };
 };
 

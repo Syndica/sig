@@ -260,7 +260,7 @@ test "gossip.pull: test build_crds_filters" {
     const rng = rand.random();
 
     for (0..64) |_| {
-        var id = Pubkey.random(rng, .{});
+        var id = Pubkey.random(rng);
         var legacy_contact_info = crds.LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
         var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{

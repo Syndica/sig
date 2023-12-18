@@ -39,7 +39,7 @@ pub const Ping = struct {
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
         const sig = try keypair.sign(&token, null);
         var self = Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(sig.toBytes()),
         };
@@ -52,7 +52,7 @@ pub const Ping = struct {
         var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(sig.toBytes()),
         };
@@ -78,7 +78,7 @@ pub const Pong = struct {
         const sig = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
             .signature = Signature.init(sig.toBytes()),
         };
@@ -252,7 +252,7 @@ test "gossip.ping_pong: PingCache works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var node = PubkeyAndSocketAddr{ Pubkey.random(rng, .{}), SocketAddr.UNSPECIFIED };
+    var node = PubkeyAndSocketAddr{ Pubkey.random(rng), SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 

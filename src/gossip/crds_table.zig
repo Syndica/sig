@@ -839,7 +839,7 @@ test "gossip.crds_table: insert and get votes" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
+    var id = Pubkey.fromPublicKey(&pk);
 
     var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     var crds_value = try CrdsValue.initSigned(CrdsData{
@@ -861,7 +861,7 @@ test "gossip.crds_table: insert and get votes" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    id = Pubkey.random(rng, .{});
+    id = Pubkey.random(rng);
     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },
@@ -878,7 +878,7 @@ test "gossip.crds_table: insert and get votes" {
 
 test "gossip.crds_table: insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
-    var id = Pubkey.fromPublicKey(&kp.public_key, true);
+    var id = Pubkey.fromPublicKey(&kp.public_key);
 
     var legacy_contact_info = crds.LegacyContactInfo.default(id);
     var crds_value = try CrdsValue.initSigned(CrdsData{

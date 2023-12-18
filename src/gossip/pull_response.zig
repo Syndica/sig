@@ -108,7 +108,7 @@ test "gossip.pull: test filter_crds_values" {
 
     // corresponding value
     const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
+    var id = Pubkey.fromPublicKey(&pk);
     var legacy_contact_info = crds.LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());

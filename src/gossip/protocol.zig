@@ -143,10 +143,10 @@ pub const PruneData = struct {
 
     pub fn random(rng: std.rand.Random, keypair: *KeyPair) !PruneData {
         var self = PruneData{
-            .pubkey = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
-            .destination = Pubkey.random(rng, .{}),
+            .destination = Pubkey.random(rng),
             .wallclock = crds.getWallclockMs(),
         };
         try self.sign(keypair);
@@ -186,7 +186,7 @@ pub const PruneData = struct {
 
 test "gossip.protocol: push message serialization is predictable" {
     var rng = DefaultPrng.init(crds.getWallclockMs());
-    var pubkey = Pubkey.random(rng.random(), .{});
+    var pubkey = Pubkey.random(rng.random());
     var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
     defer values.deinit();
 
@@ -232,10 +232,10 @@ test "gossip.protocol: test prune data sig verify" {
     const rust_bytes = [_]u8{ 80, 98, 7, 181, 129, 96, 249, 247, 34, 39, 251, 41, 125, 241, 31, 25, 122, 103, 202, 48, 78, 160, 222, 65, 228, 81, 171, 237, 233, 87, 248, 29, 37, 0, 19, 66, 83, 207, 78, 86, 232, 157, 184, 144, 71, 12, 223, 86, 144, 169, 160, 171, 139, 248, 106, 63, 194, 178, 144, 119, 51, 60, 201, 7 };
 
     var prune_v2 = PruneData{
-        .pubkey = Pubkey.fromPublicKey(&keypair.public_key, true),
+        .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
         .prunes = &[0]Pubkey{},
         .signature = Signature.init(.{0} ** 64),
-        .destination = Pubkey.fromPublicKey(&keypair.public_key, true),
+        .destination = Pubkey.fromPublicKey(&keypair.public_key),
         .wallclock = 0,
     };
     try prune_v2.sign(&keypair);
@@ -281,7 +281,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     // pull requests only use ContactInfo CRDS data
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
@@ -326,7 +326,7 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk, true);
+    const id = Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();

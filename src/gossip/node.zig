@@ -287,7 +287,7 @@ test "new contact info" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
 }
 
@@ -316,7 +316,7 @@ test "set & get socket on contact info" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
     try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
 

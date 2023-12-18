@@ -10,6 +10,7 @@ const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 const JsonRpcServer = @import("../rpc/server.zig").JsonRpcServer;
 const State = @import("../rpc/server.zig").State;
+const RpcServiceProcessor = @import("../rpc/service.zig").RpcServiceProcessor;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -111,7 +112,7 @@ fn validator(_: []const []const u8) !void {
     std.debug.print("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = LegacyContactInfo.default(my_pubkey);
     contact_info.shred_version = 0; // TODO: double check
     contact_info.gossip = gossip_address;
@@ -146,7 +147,9 @@ fn validator(_: []const []const u8) !void {
         .{&gossip_service},
     );
 
-    var state = State.init(&gossip_service);
+    var rpc_service_processor = RpcServiceProcessor.init(gpa_allocator, &gossip_service);
+
+    var state = State.init(&rpc_service_processor);
     var rpc_server_port: u16 = @intCast(rpc_server_port_option.value.int.?);
     var server = try JsonRpcServer.init(gpa_allocator, state, logger, rpc_server_port);
     var json_rpc_server_handle = try std.Thread.spawn(
@@ -174,7 +177,7 @@ fn gossip(_: []const []const u8) !void {
     std.debug.print("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = LegacyContactInfo.default(my_pubkey);
     contact_info.shred_version = 0; // TODO: double check
     contact_info.gossip = gossip_address;

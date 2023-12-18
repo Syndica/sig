@@ -256,7 +256,7 @@ pub const LegacyContactInfo = struct {
 
     pub fn random(rng: std.rand.Random) LegacyContactInfo {
         return LegacyContactInfo{
-            .id = Pubkey.random(rng, .{ .skip_encoding = false }),
+            .id = Pubkey.random(rng),
             .gossip = SocketAddr.random(rng),
             .tvu = SocketAddr.random(rng),
             .tvu_forwards = SocketAddr.random(rng),
@@ -467,7 +467,7 @@ pub const Vote = struct {
 
     pub fn random(rng: std.rand.Random) Vote {
         return Vote{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .transaction = Transaction.default(),
             .wallclock = getWallclockMs(),
             .slot = rng.int(u64),
@@ -508,7 +508,7 @@ pub const LowestSlot = struct {
         var slots: [0]u64 = .{};
         var stash: [0]DeprecatedEpochIncompleteSlots = .{};
         return LowestSlot{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .root = 0,
             .lowest = rng.int(u64),
             .slots = &slots,
@@ -540,7 +540,7 @@ pub const AccountsHashes = struct {
     pub fn random(rng: std.rand.Random) AccountsHashes {
         var slice: [0]struct { u64, Hash } = .{};
         return AccountsHashes{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .hashes = &slice,
             .wallclock = getWallclockMs(),
         };
@@ -565,7 +565,7 @@ pub const EpochSlots = struct {
     pub fn random(rng: std.rand.Random) EpochSlots {
         var slice: [0]CompressedSlots = .{};
         return EpochSlots{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .slots = &slice,
             .wallclock = getWallclockMs(),
         };
@@ -639,7 +639,7 @@ pub const LegacyVersion = struct {
 
     pub fn random(rng: std.rand.Random) LegacyVersion {
         return LegacyVersion{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .wallclock = getWallclockMs(),
             .version = LegacyVersion1.random(rng),
         };
@@ -687,7 +687,7 @@ pub const Version = struct {
 
     pub fn random(rng: std.rand.Random) Version {
         return Version{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .wallclock = getWallclockMs(),
             .version = LegacyVersion2.random(rng),
         };
@@ -736,7 +736,7 @@ pub const NodeInstance = struct {
 
     pub fn random(rng: std.rand.Random) Self {
         return Self{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .wallclock = getWallclockMs(),
             .timestamp = rng.int(u64),
             .token = rng.int(u64),
@@ -786,7 +786,7 @@ pub const DuplicateShred = struct {
         var chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
 
         return DuplicateShred{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .wallclock = getWallclockMs(),
             .slot = rng.int(u64),
             .shred_index = rng.int(u32),
@@ -814,7 +814,7 @@ pub const SnapshotHashes = struct {
     pub fn random(rng: std.rand.Random) SnapshotHashes {
         var slice: [0]struct { Slot, Hash } = .{};
         return SnapshotHashes{
-            .from = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .from = Pubkey.random(rng),
             .full = .{ rng.int(u64), Hash.random() },
             .incremental = &slice,
             .wallclock = getWallclockMs(),
@@ -824,7 +824,7 @@ pub const SnapshotHashes = struct {
 
 test "gossip.crds: test sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     var rng = std.rand.DefaultPrng.init(0);
     var data = DuplicateShred.random(rng.random());
     data.from = pubkey;
@@ -848,7 +848,7 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
     var kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
+    var id = Pubkey.fromPublicKey(&pk);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
@@ -865,7 +865,7 @@ test "gossip.crds: pubkey matches rust" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk, true);
+    const id = Pubkey.fromPublicKey(&pk);
 
     const rust_bytes = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92 };
     var buf = [_]u8{0} ** 1024;
@@ -880,7 +880,7 @@ test "gossip.crds: contact info serialization matches rust" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk, true);
+    const id = Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
@@ -900,7 +900,7 @@ test "gossip.crds: crds data serialization matches rust" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk, true);
+    const id = Pubkey.fromPublicKey(&pk);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
