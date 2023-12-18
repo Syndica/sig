@@ -61,9 +61,8 @@ pub const Histogram = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, buckets: ArrayList(f64)) !*@This() {
-        const self = try allocator.create(Self);
-        self.* = .{
+    pub fn init(allocator: Allocator, buckets: ArrayList(f64)) !Self {
+        return Self{
             .allocator = allocator,
             .upper_bounds = buckets,
             .shards = .{
@@ -72,14 +71,12 @@ pub const Histogram = struct {
             },
             .shard_sync = Atomic(u64).init(0),
         };
-        return self;
     }
 
     pub fn deinit(self: *Self) void {
         self.shards[0].buckets.deinit();
         self.shards[1].buckets.deinit();
         self.upper_bounds.deinit();
-        self.allocator.destroy(self);
     }
 
     fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
@@ -217,7 +214,7 @@ test "prometheus.histogram: data goes in correct buckets" {
     var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
     defer hist.deinit();
 
-    const expected_buckets = observeVarious(hist);
+    const expected_buckets = observeVarious(&hist);
 
     var snapshot = try hist.getSnapshot(null);
     defer snapshot.deinit();
@@ -230,7 +227,7 @@ test "prometheus.histogram: repeated snapshots measure the same thing" {
     var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
     defer hist.deinit();
 
-    const expected_buckets = observeVarious(hist);
+    const expected_buckets = observeVarious(&hist);
 
     var snapshot1 = try hist.getSnapshot(null);
     snapshot1.deinit();
@@ -245,7 +242,7 @@ test "prometheus.histogram: values accumulate across snapshots" {
     var hist = try Histogram.init(allocator, try defaultBuckets(allocator));
     defer hist.deinit();
 
-    _ = observeVarious(hist);
+    _ = observeVarious(&hist);
 
     var snapshot1 = try hist.getSnapshot(null);
     snapshot1.deinit();

@@ -9,40 +9,36 @@ pub fn Gauge(comptime T: type) type {
         value: std.atomic.Atomic(T) = .{ .value = 0 },
         metric: Metric = .{ .getResultFn = getResult },
 
-        pub fn init(allocator: std.mem.Allocator) @This() {
-            const self = try allocator.create(@This());
-            self.* = .{};
-            return self;
-        }
+        const Self = @This();
 
-        pub fn inc(self: *@This()) void {
+        pub fn inc(self: *Self) void {
             self.value.fetchAdd(1, .Unordered);
         }
 
-        pub fn add(self: *@This(), v: T) void {
+        pub fn add(self: *Self, v: T) void {
             self.value.fetchAdd(v, .Unordered);
         }
 
-        pub fn dec(self: *@This()) void {
+        pub fn dec(self: *Self) void {
             self.value.fetchSub(1, .Unordered);
         }
 
-        pub fn sub(self: *@This(), v: T) void {
+        pub fn sub(self: *Self, v: T) void {
             self.value.fetchAdd(v, .Unordered);
         }
 
-        pub fn set(self: *@This(), v: T) void {
+        pub fn set(self: *Self, v: T) void {
             self.value.store(v, .Unordered);
         }
 
-        pub fn get(self: *@This()) T {
+        pub fn get(self: *Self) T {
             return self.value.load(.Unordered);
         }
 
         fn getResult(metric: *Metric, allocator: std.mem.Allocator) Metric.Error!Metric.Result {
             _ = allocator;
 
-            const self = @fieldParentPtr(@This(), "metric", metric);
+            const self = @fieldParentPtr(Self, "metric", metric);
 
             return switch (T) {
                 f64 => Metric.Result{ .gauge = self.get() },

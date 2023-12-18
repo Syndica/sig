@@ -89,6 +89,10 @@ pub fn Registry(comptime options: RegistryOptions) type {
             return self.getOrCreateMetric(name, Histogram, .{buckets});
         }
 
+        /// MetricType must be initializable in one of these ways:
+        /// - try MetricType.init(allocator, ...args)
+        /// - MetricType.init(...args)
+        /// - as args struct (only if no init method is defined)
         fn getOrCreateMetric(
             self: *Self,
             name: []const u8,
@@ -107,7 +111,17 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
             const gop = try self.metrics.getOrPut(allocator, duped_name);
             if (!gop.found_existing) {
-                var real_metric = try @call(.auto, MetricType.init, .{allocator} ++ args);
+                var real_metric = try allocator.create(MetricType);
+                if (@hasDecl(MetricType, "init")) {
+                    const params = @typeInfo(@TypeOf(MetricType.init)).Fn.params;
+                    if (params.len != 0 and params[0].type.? == mem.Allocator) {
+                        real_metric.* = try @call(.auto, MetricType.init, .{allocator} ++ args);
+                    } else {
+                        real_metric.* = @call(.auto, MetricType.init, args);
+                    }
+                } else {
+                    real_metric.* = args;
+                }
                 gop.value_ptr.* = &real_metric.metric;
             }
 
@@ -198,10 +212,10 @@ test "prometheus.registry: write" {
         \\http_request_size_bucket{le="0.25"} 0
         \\http_request_size_bucket{le="0.5"} 0
         \\http_request_size_bucket{le="1"} 0
-        \\http_request_size_bucket{le="2.5"} 0
-        \\http_request_size_bucket{le="5"} 0
-        \\http_request_size_bucket{le="10"} 0
-        \\http_request_size_sum 1870.360000
+        \\http_request_size_bucket{le="2.5"} 1
+        \\http_request_size_bucket{le="5"} 1
+        \\http_request_size_bucket{le="10"} 2
+        \\http_request_size_sum 18.703600
         \\http_request_size_count 3
         \\http_requests 2
         \\
@@ -217,10 +231,10 @@ test "prometheus.registry: write" {
         \\http_request_size_bucket{route="/api/v2/users",le="0.25"} 0
         \\http_request_size_bucket{route="/api/v2/users",le="0.5"} 0
         \\http_request_size_bucket{route="/api/v2/users",le="1"} 0
-        \\http_request_size_bucket{route="/api/v2/users",le="2.5"} 0
-        \\http_request_size_bucket{route="/api/v2/users",le="5"} 0
-        \\http_request_size_bucket{route="/api/v2/users",le="10"} 0
-        \\http_request_size_sum{route="/api/v2/users"} 1870.360000
+        \\http_request_size_bucket{route="/api/v2/users",le="2.5"} 1
+        \\http_request_size_bucket{route="/api/v2/users",le="5"} 1
+        \\http_request_size_bucket{route="/api/v2/users",le="10"} 2
+        \\http_request_size_sum{route="/api/v2/users"} 18.703600
         \\http_request_size_count{route="/api/v2/users"} 3
         \\http_requests{route="/api/v2/users"} 2
         \\
@@ -271,9 +285,9 @@ test "prometheus.registry: write" {
         {
             var histogram = try registry.getOrCreateHistogram(tc.histogram_name, buckets);
 
-            histogram.observe(500.12);
-            histogram.observe(1230.240);
-            histogram.observe(140);
+            histogram.observe(5.0012);
+            histogram.observe(12.30240);
+            histogram.observe(1.40);
         }
 
         // Write to a buffer

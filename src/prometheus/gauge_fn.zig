@@ -25,14 +25,11 @@ pub fn GaugeFn(comptime StateType: type, comptime Return: type) type {
         callFn: CallFnType = undefined,
         state: StateType = undefined,
 
-        pub fn init(allocator: mem.Allocator, callFn: CallFnType, state: StateType) !*Self {
-            const self = try allocator.create(Self);
-
-            self.* = .{};
-            self.callFn = callFn;
-            self.state = state;
-
-            return self;
+        pub fn init(callFn: CallFnType, state: StateType) Self {
+            return .{
+                .callFn = callFn,
+                .state = state,
+            };
         }
 
         pub fn get(self: *Self) Return {
@@ -88,8 +85,7 @@ test "prometheus.gauge_fn: get" {
 
         var state = State{ .value = 20 };
 
-        var gauge = try GaugeFn(*State, InnerType).init(
-            testing.allocator,
+        var gauge = GaugeFn(*State, InnerType).init(
             struct {
                 fn get(s: *State) InnerType {
                     return s.value + 1;
@@ -97,7 +93,6 @@ test "prometheus.gauge_fn: get" {
             }.get,
             &state,
         );
-        defer testing.allocator.destroy(gauge);
 
         try testing.expectEqual(@as(InnerType, 21), gauge.get());
     }
@@ -109,8 +104,7 @@ test "prometheus.gauge_fn: optional state" {
     };
     var state = State{ .value = 20.0 };
 
-    var gauge = try GaugeFn(?*State, f64).init(
-        testing.allocator,
+    var gauge = GaugeFn(?*State, f64).init(
         struct {
             fn get(s: *State) f64 {
                 return s.value + 1.0;
@@ -118,14 +112,12 @@ test "prometheus.gauge_fn: optional state" {
         }.get,
         &state,
     );
-    defer testing.allocator.destroy(gauge);
 
     try testing.expectEqual(@as(f64, 21.0), gauge.get());
 }
 
 test "prometheus.gauge_fn: non-pointer state" {
-    var gauge = try GaugeFn(f64, f64).init(
-        testing.allocator,
+    var gauge = GaugeFn(f64, f64).init(
         struct {
             fn get(s: *f64) f64 {
                 s.* += 1.0;
@@ -134,7 +126,6 @@ test "prometheus.gauge_fn: non-pointer state" {
         }.get,
         0.0,
     );
-    defer testing.allocator.destroy(gauge);
 
     try testing.expectEqual(@as(f64, 1.0), gauge.get());
 }
@@ -147,8 +138,7 @@ test "prometheus.gauge_fn: shared state" {
     var shared_state = State{};
     defer shared_state.items.deinit();
 
-    var gauge = try GaugeFn(*State, f64).init(
-        testing.allocator,
+    var gauge = GaugeFn(*State, f64).init(
         struct {
             fn get(state: *State) f64 {
                 return @floatFromInt(state.items.items.len);
@@ -156,7 +146,6 @@ test "prometheus.gauge_fn: shared state" {
         }.get,
         &shared_state,
     );
-    defer testing.allocator.destroy(gauge);
 
     var threads: [4]std.Thread = undefined;
     for (&threads, 0..) |*thread, thread_index| {
@@ -182,8 +171,7 @@ test "prometheus.gauge_fn: shared state" {
 }
 
 test "prometheus.gauge_fn: write" {
-    var gauge = try GaugeFn(usize, f64).init(
-        testing.allocator,
+    var gauge = GaugeFn(usize, f64).init(
         struct {
             fn get(state: *usize) f64 {
                 state.* += 340;
@@ -192,7 +180,6 @@ test "prometheus.gauge_fn: write" {
         }.get,
         @as(usize, 0),
     );
-    defer testing.allocator.destroy(gauge);
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();

@@ -9,14 +9,6 @@ const Self = @This();
 metric: Metric = Metric{ .getResultFn = getResult },
 value: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
 
-pub fn init(allocator: mem.Allocator) !*Self {
-    const self = try allocator.create(Self);
-
-    self.* = .{};
-
-    return self;
-}
-
 pub fn inc(self: *Self) void {
     _ = self.value.fetchAdd(1, .SeqCst);
 }
@@ -47,8 +39,7 @@ test "prometheus.counter: inc/add/dec/set/get" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    var counter = try Self.init(testing.allocator);
-    defer testing.allocator.destroy(counter);
+    var counter = Self{};
 
     try testing.expectEqual(@as(u64, 0), counter.get());
 
@@ -60,8 +51,7 @@ test "prometheus.counter: inc/add/dec/set/get" {
 }
 
 test "prometheus.counter: concurrent" {
-    var counter = try Self.init(testing.allocator);
-    defer testing.allocator.destroy(counter);
+    var counter = Self{};
 
     var threads: [4]std.Thread = undefined;
     for (&threads) |*thread| {
@@ -75,7 +65,7 @@ test "prometheus.counter: concurrent" {
                     }
                 }
             }.run,
-            .{counter},
+            .{&counter},
         );
     }
 
@@ -85,9 +75,7 @@ test "prometheus.counter: concurrent" {
 }
 
 test "prometheus.counter: write" {
-    var counter = try Self.init(testing.allocator);
-    defer testing.allocator.destroy(counter);
-    counter.* = .{ .value = .{ .value = 340 } };
+    var counter = Self{ .value = .{ .value = 340 } };
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
