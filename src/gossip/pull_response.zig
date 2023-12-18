@@ -17,7 +17,6 @@ const CrdsFilter = crds_pull_req.CrdsFilter;
 
 pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 
-// TODO: make it batch
 pub fn filterCrdsValues(
     alloc: std.mem.Allocator,
     crds_table: *const CrdsTable,
@@ -36,13 +35,14 @@ pub fn filterCrdsValues(
     const jitter = rng.intRangeAtMost(u64, 0, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
-    var output = ArrayList(CrdsValue).init(alloc);
-    errdefer output.deinit();
-
     var bloom = filter.filter;
 
     var match_indexs = try crds_table.getBitmaskMatches(alloc, filter.mask, filter.mask_bits);
     defer match_indexs.deinit();
+
+    const output_size = @min(max_number_values, match_indexs.items.len);
+    var output = try ArrayList(CrdsValue).initCapacity(alloc, output_size);
+    errdefer output.deinit();
 
     for (match_indexs.items) |entry_index| {
         var entry = crds_table.store.iterator().values[entry_index];
@@ -71,7 +71,9 @@ pub fn filterCrdsValues(
 }
 
 test "gossip.pull: test filter_crds_values" {
-    var crds_table = try CrdsTable.init(std.testing.allocator);
+    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+    var tp = ThreadPool.init(.{});
+    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
     var crds_table_rw = RwMux(CrdsTable).init(crds_table);
     defer {
         var lg = crds_table_rw.write();

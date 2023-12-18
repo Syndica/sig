@@ -57,6 +57,7 @@ pub const Server = struct {
     port: u16,
     conns: *Channel(*Response),
     conns_in_flight: Atomic(usize),
+    exit: *const Atomic(bool),
 
     const Self = @This();
     const Response = http.Server.Response;
@@ -66,6 +67,7 @@ pub const Server = struct {
         allocator: std.mem.Allocator,
         port: u16,
         logger: Logger,
+        exit: *const Atomic(bool),
     ) Self {
         return Self{
             .allocator = allocator,
@@ -74,6 +76,7 @@ pub const Server = struct {
             .logger = logger,
             .conns = Channel(*Response).init(allocator, 1024),
             .conns_in_flight = Atomic(usize).init(0),
+            .exit = exit,
         };
     }
 
@@ -132,7 +135,8 @@ pub const Server = struct {
         self: *Self,
     ) !void {
         self.logger.debug("accepting new connections");
-        while (!self.conns.isClosed()) {
+        while (!self.conns.isClosed() and !self.exit.load(std.atomic.Ordering.Unordered)) {
+            // TODO: change to non-blocking socket
             var response = self.server.accept(.{
                 .allocator = self.allocator,
                 .header_strategy = .{ .dynamic = MAX_REQ_HEADER_SIZE },
@@ -305,7 +309,9 @@ test "net.echo: Server works" {
     defer logger.deinit();
     logger.spawn();
 
-    var server = Server.init(testing.allocator, port, logger);
+    var exit = Atomic(bool).init(false);
+
+    var server = Server.init(testing.allocator, port, logger, &exit);
     defer server.deinit();
     var server_thread_handle = try std.Thread.spawn(.{}, Server.listenAndServe, .{&server});
     if (builtin.os.tag == .linux) try server_thread_handle.setName("server_thread");

@@ -174,7 +174,7 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn fromEndpoint(endpoint: network.EndPoint) Self {
+    pub fn fromEndpoint(endpoint: *const network.EndPoint) Self {
         switch (endpoint.address) {
             .ipv4 => |v4| {
                 return Self{
@@ -325,6 +325,12 @@ pub const IpAddr = union(enum(u32)) {
         }
     }
 };
+
+pub fn endpointToString(allocator: std.mem.Allocator, endpoint: *const network.EndPoint) error{OutOfMemory}!std.ArrayList(u8) {
+    var endpoint_buf = try std.ArrayList(u8).initCapacity(allocator, 14);
+    try endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
+    return endpoint_buf;
+}
 
 test "gossip.net: invalid ipv4 socket parsing" {
     {
