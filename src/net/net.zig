@@ -227,6 +227,7 @@ pub const SocketAddr = union(enum(u8)) {
                 return try std.fmt.bufPrint(buff, "{d}.{d}.{d}.{d}:{d}", .{ v4.ip.octets[0], v4.ip.octets[1], v4.ip.octets[2], v4.ip.octets[3], v4.port });
             },
             .V6 => |_| {
+                // TODO: properly print ipv6
                 return try std.fmt.bufPrint(buff, "N/A", .{});
             },
         }

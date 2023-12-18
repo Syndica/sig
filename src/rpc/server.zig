@@ -5,7 +5,7 @@ const Logger = @import("../trace/log.zig").Logger;
 const testing = std.testing;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const t = @import("types.zig");
-const RpcServiceProcessor = @import("service.zig").RpcServiceProcessor;
+const RpcServiceProcessor = @import("service.zig").RpcRequestProcessor;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const allocator = gpa.allocator();
