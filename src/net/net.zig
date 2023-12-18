@@ -219,6 +219,26 @@ pub const SocketAddr = union(enum(u8)) {
             },
         }
     }
+
+    // TODO: decide on `toString` method approach
+    pub fn toString(self: Self, buff: []u8) ![]const u8 {
+        switch (self) {
+            .V4 => |v4| {
+                return try std.fmt.bufPrint(buff, "{d}.{d}.{d}.{d}:{d}", .{ v4.ip.octets[0], v4.ip.octets[1], v4.ip.octets[2], v4.ip.octets[3], v4.port });
+            },
+            .V6 => |_| {
+                return try std.fmt.bufPrint(buff, "N/A", .{});
+            },
+        }
+    }
+
+    pub fn jsonStringify(
+        self: *const Self,
+        jw: anytype,
+    ) !void {
+        var buff = [_]u8{0} ** 24;
+        try jw.write(self.toString(&buff) catch unreachable);
+    }
 };
 
 pub const SocketAddrV4 = struct {

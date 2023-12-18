@@ -1,6 +1,7 @@
 const std = @import("std");
 const t = @import("types.zig");
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const CrdsTable = @import("../gossip/crds_table.zig").CrdsTable;
 
 pub const RpcServiceProcessor = struct {
     gossip_service: *GossipService,
@@ -85,9 +86,27 @@ pub const RpcServiceProcessor = struct {
     }
 
     pub fn getClusterNodes(self: *Self) t.Result([]t.RpcContactInfo) {
-        _ = self;
+        var crds_table_rlock = self.gossip_service.crds_table_rw.read();
+        defer crds_table_rlock.unlock();
+        var crds_table: *const CrdsTable = crds_table_rlock.get();
 
-        return .{ .Err = t.Error.Unimplemented };
+        var contact_infos = crds_table.getAllContactInfos() catch return .{ .Err = t.Error.Internal };
+        var rpc_contact_infos = std.ArrayList(t.RpcContactInfo).initCapacity(self.allocator, contact_infos.items.len) catch return .{ .Err = t.Error.Internal };
+
+        for (contact_infos.items) |contact_info| {
+            rpc_contact_infos.appendAssumeCapacity(t.RpcContactInfo{
+                .feature_set = null,
+                .gossip = contact_info.gossip,
+                .pubkey = contact_info.id,
+                .pubsub = contact_info.rpc_pubsub,
+                .rpc = contact_info.rpc,
+                .shred_version = contact_info.shred_version,
+                .tpu = contact_info.tpu,
+                .tpu_quic = contact_info.tpu_forwards, // TODO: correct value
+                .version = null, // TODO: populate
+            });
+        }
+        return .{ .Ok = rpc_contact_infos.items };
     }
 
     pub fn getConfirmedBlock(self: *Self, slot: t.Slot, config: t.RpcEncodingConfigWrapper(t.RpcConfirmedBlockConfig)) t.Result(?t.UiConfirmedBlock) {
@@ -189,7 +208,7 @@ pub const RpcServiceProcessor = struct {
     pub fn getHealth(self: *Self) t.Result([]const u8) {
         _ = self;
 
-        return .{ .Err = t.Error.Unimplemented };
+        return .{ .Ok = "ok" };
     }
 
     pub fn getHighestSnapshotSlot(self: *Self) t.Result(t.RpcSnapshotSlotInfo) {
@@ -200,9 +219,11 @@ pub const RpcServiceProcessor = struct {
 
     pub fn getIdentity(self: *Self) t.Result(t.RpcIdentity) {
         var identity: []const u8 = self.gossip_service.my_pubkey.toString(self.allocator) catch @panic("could not toString a Pubkey");
-        return .{ .Ok = t.RpcIdentity{
-            .identity = identity,
-        } };
+        return .{
+            .Ok = t.RpcIdentity{
+                .identity = identity,
+            },
+        };
     }
 
     pub fn getInflationGovernor(self: *Self, commitment: ?t.CommitmentConfig) t.Result(t.RpcInflationGovernor) {

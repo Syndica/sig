@@ -116,8 +116,39 @@ fn rpcHandler(ctx: ReqCtx, req: *httpz.Request, res: *httpz.Response) !void {
                     });
                 },
             }
+        } else if (std.mem.eql(u8, jrpc_request.value.method, "getClusterNodes")) {
+            var result = ctx.state.rpc_service_processor.getClusterNodes();
+            switch (result) {
+                .Err => |err| {
+                    _ = err;
+
+                    var error_response: t.JsonRpcResponse([]t.RpcContactInfo) = .{
+                        .id = "1",
+                        .jsonrpc = "2.0",
+                        .@"error" = t.ErrorObject{
+                            .code = -32000,
+                            .message = "error",
+                        },
+                        .result = null,
+                    };
+                    return try res.json(error_response, .{});
+                },
+                .Ok => |value| {
+                    var success_response: t.JsonRpcResponse([]t.RpcContactInfo) = .{
+                        .id = "1",
+                        .jsonrpc = "2.0",
+                        .result = value,
+                        .@"error" = null,
+                    };
+
+                    return try res.json(success_response, .{
+                        .emit_null_optional_fields = false,
+                        .emit_strings_as_arrays = false,
+                    });
+                },
+            }
         } else {
-            var error_response: t.JsonRpcResponse(t.RpcIdentity) = .{
+            var error_response: t.JsonRpcResponse([]t.RpcContactInfo) = .{
                 .id = "1",
                 .jsonrpc = "2.0",
                 .@"error" = t.ErrorObject{

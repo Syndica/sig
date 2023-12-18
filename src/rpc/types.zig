@@ -50,6 +50,7 @@ pub const Error = union(enum(u8)) {
         context_slot: Slot,
     },
     Unimplemented,
+    Internal,
 };
 
 // TODO: incorporate a way to `free` memory allocated
@@ -505,7 +506,7 @@ pub const EpochInfo = struct {
 
 pub const RpcContactInfo = struct {
     /// Pubkey of the node as a base-58 string
-    pubkey: []const u8,
+    pubkey: Pubkey,
     /// Gossip port
     gossip: ?SocketAddr,
     /// Tpu UDP port

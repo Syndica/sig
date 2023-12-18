@@ -70,6 +70,14 @@ pub const Pubkey = struct {
     pub fn fromPublicKey(public_key: *const Ed25519.PublicKey) Self {
         return Self.fromBytes(public_key.bytes[0..]) catch unreachable;
     }
+
+    pub fn jsonStringify(
+        self: *const Self,
+        jw: anytype,
+    ) !void {
+        var out = base58_encode(&self.data) catch @panic("should not panic");
+        try jw.write(out);
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
