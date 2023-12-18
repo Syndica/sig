@@ -64,8 +64,8 @@ pub fn Registry(comptime options: RegistryOptions) type {
             return self.getOrCreateMetric(name, Counter, .{});
         }
 
-        pub fn getOrCreateGauge(self: *Self, name: []const u8) GetMetricError!*Gauge {
-            return self.getOrCreateMetric(name, Gauge, .{});
+        pub fn getOrCreateGauge(self: *Self, name: []const u8, comptime T: type) GetMetricError!*Gauge(T) {
+            return self.getOrCreateMetric(name, Gauge(T), .{});
         }
 
         pub fn getOrCreateGaugeFn(
@@ -124,7 +124,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 }
                 gop.value_ptr.* = &real_metric.metric;
             }
-
+            // std.debug.assert(ok);
             return @fieldParentPtr(MetricType, "metric", gop.value_ptr.*);
         }
 
@@ -198,12 +198,14 @@ test "prometheus.registry: write" {
     const TestCase = struct {
         counter_name: []const u8,
         gauge_name: []const u8,
+        gauge_fn_name: []const u8,
         histogram_name: []const u8,
         exp: []const u8,
     };
 
     const exp1 =
         \\http_conn_pool_size 4.000000
+        \\http_gauge 13
         \\http_request_size_bucket{le="0.005"} 0
         \\http_request_size_bucket{le="0.01"} 0
         \\http_request_size_bucket{le="0.025"} 0
@@ -223,6 +225,7 @@ test "prometheus.registry: write" {
 
     const exp2 =
         \\http_conn_pool_size{route="/api/v2/users"} 4.000000
+        \\http_gauge{route="/api/v2/users"} 13
         \\http_request_size_bucket{route="/api/v2/users",le="0.005"} 0
         \\http_request_size_bucket{route="/api/v2/users",le="0.01"} 0
         \\http_request_size_bucket{route="/api/v2/users",le="0.025"} 0
@@ -243,13 +246,15 @@ test "prometheus.registry: write" {
     const test_cases = &[_]TestCase{
         .{
             .counter_name = "http_requests",
-            .gauge_name = "http_conn_pool_size",
+            .gauge_name = "http_gauge",
+            .gauge_fn_name = "http_conn_pool_size",
             .histogram_name = "http_request_size",
             .exp = exp1,
         },
         .{
             .counter_name = "http_requests{route=\"/api/v2/users\"}",
-            .gauge_name = "http_conn_pool_size{route=\"/api/v2/users\"}",
+            .gauge_name = "http_gauge{route=\"/api/v2/users\"}",
+            .gauge_fn_name = "http_conn_pool_size{route=\"/api/v2/users\"}",
             .histogram_name = "http_request_size{route=\"/api/v2/users\"}",
             .exp = exp2,
         },
@@ -267,8 +272,14 @@ test "prometheus.registry: write" {
 
         // Add some gauges
         {
+            var counter = try registry.getOrCreateGauge(tc.gauge_name, u64);
+            counter.* = .{ .value = .{ .value = 13 } };
+        }
+
+        // Add some gauge_fns
+        {
             _ = try registry.getOrCreateGaugeFn(
-                tc.gauge_name,
+                tc.gauge_fn_name,
                 @as(f64, 4.0),
                 struct {
                     fn get(s: *f64) f64 {
