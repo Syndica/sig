@@ -74,6 +74,8 @@ fn gossip(_: []const []const u8) !void {
     defer logger.deinit();
     logger.spawn();
 
+    // var logger: Logger = .noop;
+
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
@@ -83,7 +85,7 @@ fn gossip(_: []const []const u8) !void {
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.shred_version = 0; // TODO: double check
+    contact_info.shred_version = 0;
     contact_info.gossip = gossip_address;
 
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
@@ -113,7 +115,7 @@ fn gossip(_: []const []const u8) !void {
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{&gossip_service},
+        .{ &gossip_service, true },
     );
 
     handle.join();

@@ -11,9 +11,10 @@ pub const core = struct {
     pub usingnamespace @import("core/transaction.zig");
     pub usingnamespace @import("core/hash.zig");
     pub usingnamespace @import("core/signature.zig");
-    pub usingnamespace @import("core/slot.zig");
+    pub usingnamespace @import("core/clock.zig");
     pub usingnamespace @import("core/hard_forks.zig");
     pub usingnamespace @import("core/shred.zig");
+    pub usingnamespace @import("core/genesis_config.zig");
 };
 
 pub const gossip = struct {
@@ -45,6 +46,7 @@ pub const sync = struct {
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
     pub usingnamespace @import("sync/mux.zig");
+    pub usingnamespace @import("sync/thread_pool.zig");
 };
 
 pub const utils = struct {

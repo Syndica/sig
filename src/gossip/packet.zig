@@ -14,11 +14,18 @@ pub const Packet = struct {
     const Self = @This();
 
     pub fn init(addr: network.EndPoint, data: [PACKET_DATA_SIZE]u8, size: usize) Self {
-        var self = Self{
+        return .{
             .addr = addr,
             .data = data,
             .size = size,
         };
-        return self;
+    }
+
+    pub fn default() Self {
+        return .{
+            .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
+            .data = undefined,
+            .size = 0,
+        };
     }
 };

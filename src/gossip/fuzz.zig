@@ -3,11 +3,12 @@
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
+const socket_utils = @import("./socket_utils.zig");
 
 const _gossip_service = @import("./gossip_service.zig");
 const GossipService = _gossip_service.GossipService;
 const ChunkType = _gossip_service.ChunkType;
-const crds_values_to_packets = _gossip_service.crdsValuesToPackets;
+const crdsValuesToPackets = _gossip_service.crdsValuesToPackets;
 const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
 
 const Logger = @import("../trace/log.zig").Logger;
@@ -18,7 +19,7 @@ const AtomicBool = std.atomic.Atomic(bool);
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const get_wallclock_ms = @import("crds.zig").getWallclockMs;
+const getWallclockMs = @import("crds.zig").getWallclockMs;
 
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
@@ -94,7 +95,10 @@ pub fn randomCrdsValue(rng: std.rand.Random, maybe_should_pass_sig_verification:
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
 
     // will have random id
-    var value = try CrdsValue.random(rng, &keypair);
+    // var value = try CrdsValue.random(rng, &keypair);
+    var value = try CrdsValue.randomWithIndex(rng, &keypair, 0);
+    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false));
+    try value.sign(&keypair);
 
     const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
     if (should_pass_sig_verification) {
@@ -115,7 +119,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try crds_values_to_packets(
+    const packets = try crdsValuesToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
         &crds_values,
@@ -135,7 +139,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try crds_values_to_packets(
+    const packets = try crdsValuesToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
         &crds_values,
@@ -152,8 +156,8 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    const crds_value = try CrdsValue.initSigned(crds.CrdsData{
-        .LegacyContactInfo = LegacyContactInfo.random(rng),
+    var crds_value = try CrdsValue.initSigned(crds.CrdsData{
+        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
     }, keypair);
 
     var filter = CrdsFilter{
@@ -162,7 +166,8 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         .mask_bits = N_FILTER_BITS,
     };
 
-    const invalid_filter = rng.boolean();
+    // const invalid_filter = rng.boolean();
+    const invalid_filter = false;
     if (invalid_filter) {
         filter.mask = (~@as(usize, 0)) >> rng.intRangeAtMost(u6, 1, 10);
         filter.mask_bits = rng.intRangeAtMost(u6, 1, 10);
@@ -178,6 +183,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     } else {
         // add some valid hashes
         var filter_set = try pull_request.CrdsFilterSet.initTest(allocator, filter.mask_bits);
+
         for (0..5) |_| {
             var value = try randomCrdsValue(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -191,6 +197,9 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
 
+        for (filters.items[1..]) |*filter_i| {
+            filter_i.filter.deinit();
+        }
         filters.deinit();
     }
 
@@ -199,6 +208,11 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
+
+    if (!invalid_filter) {
+        filter.filter.deinit();
+    }
+
     return packet;
 }
 
@@ -214,40 +228,50 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
-    var logger = Logger.init(gpa.allocator(), .debug);
-    defer logger.deinit();
-    logger.spawn();
+    // parse cli args to define where to send packets
+    var cli_args = try std.process.argsWithAllocator(allocator);
+    defer cli_args.deinit();
+    _ = cli_args.skip();
+    // zig build fuzz -- <entrypoint> <seed> <max_messages>
+    var maybe_entrypoint = cli_args.next();
+    var maybe_seed = cli_args.next();
+    var maybe_max_messages_string = cli_args.next();
 
-    // setup the gossip service
-    var gossip_port: u16 = 9997;
-    var gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, gossip_port);
+    const entrypoint = blk: {
+        if (maybe_entrypoint) |entrypoint| {
+            var addr = SocketAddr.parse(entrypoint) catch @panic("invalid entrypoint");
+            break :blk addr;
+        } else {
+            @panic("usage: zig build fuzz -- <entrypoint> <seed> <num_messages>");
+        }
+    };
+    var to_endpoint = entrypoint.toEndpoint();
+    var entrypoints = std.ArrayList(SocketAddr).init(allocator);
+    defer entrypoints.deinit();
+    try entrypoints.append(entrypoint);
 
-    var my_keypair = try KeyPair.create(null);
-    var exit = AtomicBool.init(false);
+    var seed = blk: {
+        if (maybe_seed) |seed_str| {
+            break :blk try std.fmt.parseInt(u64, seed_str, 10);
+        } else {
+            break :blk getWallclockMs();
+        }
+    };
 
-    // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.shred_version = 0;
-    contact_info.gossip = gossip_address;
+    var maybe_max_messages = blk: {
+        if (maybe_max_messages_string) |max_messages_str| {
+            break :blk try std.fmt.parseInt(usize, max_messages_str, 10);
+        } else {
+            break :blk null;
+        }
+    };
 
-    // start running gossip
-    var gossip_service = try GossipService.init(
-        allocator,
-        contact_info,
-        my_keypair,
-        null,
-        &exit,
-        logger,
-    );
-    defer gossip_service.deinit();
+    std.debug.print("using seed: {d}\n", .{seed});
+    var rng = std.rand.DefaultPrng.init(seed);
 
-    var handle = try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{&gossip_service},
-    );
-    std.debug.print("gossip service started on port {d}\n", .{gossip_port});
+    // var logger = Logger.init(gpa.allocator(), .debug);
+    // defer logger.deinit();
+    // logger.spawn();
 
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
@@ -263,42 +287,61 @@ pub fn main() !void {
         allocator,
         fuzz_contact_info,
         fuzz_keypair,
-        null,
+        entrypoints,
         &fuzz_exit,
-        logger,
-    );
-    var fuzz_handle = try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{&gossip_service_fuzzer},
+        .noop,
     );
 
-    // blast it
-    var seed = get_wallclock_ms();
-    // var seed: u64 = 1693494238796;
-    std.debug.print("SEED: {d}\n", .{seed});
-    var rng = std.rand.DefaultPrng.init(seed);
+    var fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service_fuzzer, true });
+
+    // std.debug.print("setting up", .{});
+    // while (true) {
+    //     var lg = gossip_service_fuzzer.crds_table_rw.read();
+    //     var table: *const CrdsTable = lg.get();
+    //     var n_contacts = table.contact_infos.iterator().len;
+    //     lg.unlock();
+
+    //     if (n_contacts > 0) {
+    //         break;
+    //     }
+    //     std.debug.print(".", .{});
+    //     std.time.sleep(std.time.ns_per_ms);
+    // }
+
+    const SLEEP_TIME = 0;
+    // const SLEEP_TIME = std.time.ns_per_ms * 10;
+    // const SLEEP_TIME = std.time.ns_per_s;
 
     // wait for keyboard input to exit
     var loop_exit = AtomicBool.init(false);
     var exit_handle = try std.Thread.spawn(.{}, waitForExit, .{&loop_exit});
 
+    var msg_count: usize = 0;
     while (!loop_exit.load(std.atomic.Ordering.Unordered)) {
+        if (maybe_max_messages) |max_messages| {
+            if (msg_count >= max_messages) {
+                break;
+            }
+        }
+
         var command = rng.random().intRangeAtMost(u8, 0, 4);
+        // var command: usize = if (msg_count % 2 == 0) 2 else 4;
+        // var command: usize = 4;
+
         var packet = switch (command) {
             0 => blk: {
                 // send ping message
-                const packet = randomPingPacket(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+                const packet = randomPingPacket(rng.random(), &fuzz_keypair, to_endpoint);
                 break :blk packet;
             },
             1 => blk: {
                 // send pong message
-                const packet = randomPongPacket(rng.random(), &fuzz_keypair, gossip_address.toEndpoint());
+                const packet = randomPongPacket(rng.random(), &fuzz_keypair, to_endpoint);
                 break :blk packet;
             },
             2 => blk: {
                 // send push message
-                const packets = randomPushMessage(rng.random(), &fuzz_keypair, gossip_address.toEndpoint()) catch |err| {
+                const packets = randomPushMessage(rng.random(), &fuzz_keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -309,7 +352,7 @@ pub fn main() !void {
             },
             3 => blk: {
                 // send pull response
-                const packets = randomPullResponse(rng.random(), &fuzz_keypair, gossip_address.toEndpoint()) catch |err| {
+                const packets = randomPullResponse(rng.random(), &fuzz_keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -324,7 +367,7 @@ pub fn main() !void {
                     allocator,
                     rng.random(),
                     &fuzz_keypair,
-                    gossip_address.toEndpoint(),
+                    to_endpoint,
                 );
                 break :blk packet;
             },
@@ -335,23 +378,29 @@ pub fn main() !void {
             continue;
         };
 
-        try gossip_service_fuzzer.packet_outgoing_channel.send(send_packet);
+        // batch it
+        var packet_batch = std.ArrayList(Packet).init(allocator);
+        try packet_batch.append(send_packet);
+        msg_count +|= 1;
 
         var send_duplicate = rng.random().boolean();
         if (send_duplicate) {
-            try gossip_service_fuzzer.packet_outgoing_channel.send(send_packet);
+            msg_count +|= 1;
+            try packet_batch.append(send_packet);
         }
 
-        std.time.sleep(std.time.ns_per_ms * 10);
-        // std.time.sleep(std.time.ns_per_s);
+        // send it
+        try gossip_service_fuzzer.packet_outgoing_channel.send(packet_batch);
+
+        std.time.sleep(SLEEP_TIME);
+
+        if (msg_count % 1000 == 0) {
+            std.debug.print("{d} messages sent\n", .{msg_count});
+        }
     }
 
     // cleanup
     std.debug.print("\t=> shutting down...\n", .{});
-    exit.store(true, std.atomic.Ordering.Unordered);
-    handle.join();
-    std.debug.print("\t=> gossip service shutdown\n", .{});
-
     fuzz_exit.store(true, std.atomic.Ordering.Unordered);
     fuzz_handle.join();
     gossip_service_fuzzer.deinit();
