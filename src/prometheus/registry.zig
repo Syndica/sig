@@ -14,12 +14,14 @@ const Histogram = @import("histogram.zig").Histogram;
 const default_buckets = @import("histogram.zig").default_buckets;
 
 pub const GetMetricError = error{
-    // Returned when trying to add a metric to an already full registry.
+    /// Returned when trying to add a metric to an already full registry.
     TooManyMetrics,
-    // Returned when the name of name is bigger than the configured max_name_len.
+    /// Returned when the name of name is bigger than the configured max_name_len.
     NameTooLong,
 
     OutOfMemory,
+    /// Attempted to get a metric of the wrong type.
+    InvalidType,
 };
 
 const RegistryOptions = struct {
@@ -31,7 +33,11 @@ pub fn Registry(comptime options: RegistryOptions) type {
     return struct {
         const Self = @This();
 
-        const MetricMap = hash_map.StringHashMapUnmanaged(*Metric);
+        const MetricMap = hash_map.StringHashMapUnmanaged(struct {
+            /// Used to validate the pointer is cast into a valid  type.
+            type_name: []const u8,
+            metric: *Metric,
+        });
 
         root_allocator: mem.Allocator,
         arena_state: heap.ArenaAllocator,
@@ -122,10 +128,15 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 } else {
                     real_metric.* = args;
                 }
-                gop.value_ptr.* = &real_metric.metric;
+                gop.value_ptr.* = .{
+                    .type_name = @typeName(MetricType),
+                    .metric = &real_metric.metric,
+                };
+            } else if (!std.mem.eql(u8, gop.value_ptr.*.type_name, @typeName(MetricType))) {
+                return GetMetricError.InvalidType;
             }
-            // std.debug.assert(ok);
-            return @fieldParentPtr(MetricType, "metric", gop.value_ptr.*);
+
+            return @fieldParentPtr(MetricType, "metric", gop.value_ptr.*.metric);
         }
 
         pub fn write(self: *Self, allocator: mem.Allocator, writer: anytype) !void {
@@ -156,8 +167,8 @@ pub fn Registry(comptime options: RegistryOptions) type {
 
             // Write each metric in key order
             for (keys) |key| {
-                var metric = map.get(key) orelse unreachable;
-                try metric.write(allocator, writer, key);
+                var value = map.get(key) orelse unreachable;
+                try value.metric.write(allocator, writer, key);
             }
         }
     };
@@ -192,6 +203,17 @@ test "prometheus.registry: getOrCreateCounter" {
 
     var counter = try registry.getOrCreateCounter(name);
     try testing.expectEqual(@as(u64, 10), counter.get());
+}
+
+test "prometheus.registry: getOrCreateX requires the same type" {
+    var registry = try Registry(.{}).init(testing.allocator);
+    defer registry.deinit();
+
+    const name = try fmt.allocPrint(testing.allocator, "http_requests{{status=\"{d}\"}}", .{500});
+    defer testing.allocator.free(name);
+
+    _ = try registry.getOrCreateCounter(name);
+    if (registry.getOrCreateGauge(name, u64)) |_| try testing.expect(false) else |_| {}
 }
 
 test "prometheus.registry: write" {
