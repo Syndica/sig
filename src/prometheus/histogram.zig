@@ -179,7 +179,7 @@ pub const HistogramSnapshot = struct {
         };
     }
 
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *const @This()) void {
         self.allocator.free(self.buckets);
     }
 };
@@ -247,6 +247,41 @@ test "prometheus.histogram: values accumulate across snapshots" {
     try expectSnapshot(8, &default_buckets, &expected_buckets, snapshot);
 }
 
+test "prometheus.histogram: totals add up after concurrent reads and writes" {
+    const allocator = std.testing.allocator;
+    var hist = try Histogram.init(allocator, &default_buckets);
+    defer hist.deinit();
+
+    var threads: [4]std.Thread = undefined;
+    for (&threads) |*thread| {
+        thread.* = try std.Thread.spawn(
+            .{},
+            struct {
+                fn run(h: *Histogram) void {
+                    for (0..1000) |i| {
+                        _ = observeVarious(h);
+                        if (i % 10 == 0) {
+                            (h.getSnapshot(null) catch @panic("snapshot")).deinit();
+                        }
+                    }
+                }
+            }.run,
+            .{&hist},
+        );
+    }
+    for (&threads) |*thread| thread.join();
+
+    const snapshot = try hist.getSnapshot(allocator);
+    defer snapshot.deinit();
+
+    var expected = ArrayList(u64).init(allocator);
+    defer expected.deinit();
+    for (result) |r| {
+        try expected.append(4000 * r);
+    }
+    try expectSnapshot(28000, &default_buckets, expected.items, snapshot);
+}
+
 fn observeVarious(hist: *Histogram) [11]u64 {
     hist.observe(1.0);
     hist.observe(0.1);
@@ -255,8 +290,10 @@ fn observeVarious(hist: *Histogram) [11]u64 {
     hist.observe(0.0000000001);
     hist.observe(0.1);
     hist.observe(100.0);
-    return .{ 1, 1, 1, 1, 4, 4, 4, 5, 6, 6, 6 };
+    return result;
 }
+
+const result: [11]u64 = .{ 1, 1, 1, 1, 4, 4, 4, 5, 6, 6, 6 };
 
 fn expectSnapshot(
     expected_total: u64,
