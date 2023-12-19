@@ -163,6 +163,21 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         benchmark_cmd.addArgs(args);
     }
-
     b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
+
+    // test prometheus http endpoint
+    const test_prometheus = b.addExecutable(.{
+        .name = "test-prometheus",
+        .root_source_file = .{ .path = "src/prometheus/http.zig" },
+        .target = target,
+        .optimize = optimize,
+        .main_pkg_path = .{ .path = "src" },
+    });
+    b.installArtifact(test_prometheus);
+    const test_prometheus_cmd = b.addRunArtifact(test_prometheus);
+    if (b.args) |args| {
+        test_prometheus_cmd.addArgs(args);
+    }
+    b.step("test-prometheus", "run test prometheus endpoint with dummy data")
+        .dependOn(&test_prometheus_cmd.step);
 }

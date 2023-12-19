@@ -3,7 +3,9 @@
 const std = @import("std");
 
 const Registry = @import("registry.zig").Registry;
+const default_buckets = @import("histogram.zig").default_buckets;
 const Logger = @import("../trace/log.zig").Logger;
+const Level = @import("../trace/level.zig").Level;
 
 pub fn servePrometheus(
     allocator: std.mem.Allocator,
@@ -26,7 +28,7 @@ pub fn servePrometheus(
                 else => return err,
             };
             handleRequest(allocator, &response, registry, logger) catch |e| {
-                logger.err("prometheus http: Failed to handle request. {}", .{e});
+                logger.errf("prometheus http: Failed to handle request. {}", .{e});
             };
         }
     }
@@ -38,7 +40,7 @@ fn handleRequest(
     registry: *Registry(.{}),
     logger: Logger,
 ) !void {
-    logger.debug("prometheus http: {s} {s} {s}\n", .{
+    logger.debugf("prometheus http: {s} {s} {s}\n", .{
         @tagName(response.request.method),
         @tagName(response.request.version),
         response.request.target,
@@ -57,4 +59,35 @@ fn handleRequest(
         try response.do();
         try response.finish();
     }
+}
+
+/// Runs a test prometheus endpoint with dummy data.
+pub fn main() !void {
+    const a = std.heap.page_allocator;
+    var registry = try Registry(.{}).init(a);
+    _ = try std.Thread.spawn(
+        .{},
+        struct {
+            fn run(r: *Registry(.{})) !void {
+                var secs_counter = try r.getOrCreateCounter("seconds_since_start");
+                var gauge = try r.getOrCreateGauge("seconds_hand", u64);
+                var hist = try r.getOrCreateHistogram("hist", &default_buckets);
+                while (true) {
+                    std.time.sleep(1_000_000_000);
+                    secs_counter.inc();
+                    gauge.set(@as(u64, @intCast(std.time.timestamp())) % @as(u64, 60));
+                    hist.observe(1.1);
+                    hist.observe(0.02);
+                }
+            }
+        }.run,
+        .{registry},
+    );
+    const logger = Logger.init(a, Level.debug);
+    try servePrometheus(
+        a,
+        registry,
+        try std.net.Address.parseIp4("0.0.0.0", 1234),
+        logger,
+    );
 }
