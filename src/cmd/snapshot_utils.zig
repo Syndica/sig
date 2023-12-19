@@ -1,6 +1,5 @@
 const std = @import("std");
 const cli = @import("zig-cli");
-const bincode = @import("../bincode/bincode.zig");
 const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
 const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
@@ -16,6 +15,7 @@ const Batch = ThreadPool.Batch;
 
 const Channel = @import("../sync/channel.zig").Channel;
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
+const SnapshotPaths = @import("../core/accounts_db.zig").SnapshotPaths;
 
 pub const AccountAndPubkey = struct {
     pubkey: Pubkey,
@@ -350,59 +350,17 @@ var app = &cli.App{
                 &owner_filter_option,
             },
         },
-        &cli.Command{
-            .name = "dump_account_fields",
-            .help = "dumps account db fields for faster loading (should run first)",
-            .options = &.{
-                &snapshot_dir_option,
-            },
-            .action = dumpAccountFields,
-        },
     },
 };
 
 pub fn main() !void {
     // eg,
     // zig build -Doptimize=ReleaseSafe
-    // 1) dump the account fields
-    // ./zig-out/bin/snapshot_utils dump_account_fields -s /Users/tmp/snapshots
-    // 2) dump the snapshot info
     // ./zig-out/bin/snapshot_utils dump_snapshot -s /Users/tmp/snapshots
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
     try cli.run(app, allocator);
-}
-
-/// we do this bc the bank_fields in the snapshot metadata is very large
-pub fn dumpAccountFields(_: []const []const u8) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
-
-    const snapshot_dir = snapshot_dir_option.value.string.?;
-    const cwd = std.fs.cwd();
-
-    // iterate through the snapshot dir
-    const metadata_path = try findSnapshotMetadataPath(allocator, snapshot_dir);
-    const output_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "accounts_db.bincode" },
-    );
-
-    std.debug.print("reading metadata path: {s}\n", .{metadata_path});
-    std.debug.print("saving to output path: {s}\n", .{output_path});
-
-    var fields = try SnapshotFields.readFromFilePath(allocator, metadata_path);
-
-    // rewrite the accounts_db_fields seperate
-    const db_file = try cwd.createFile(output_path, .{});
-    defer db_file.close();
-
-    var db_buf = try bincode.writeToArray(allocator, fields.accounts_db_fields, .{});
-    defer db_buf.deinit();
-
-    _ = try db_file.write(db_buf.items);
 }
 
 pub fn dumpSnapshot(_: []const []const u8) !void {
@@ -417,11 +375,6 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
 
     const cwd = std.fs.cwd();
     const snapshot_dir = snapshot_dir_option.value.string.?;
-    const accounts_db_fields_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "accounts_db.bincode" },
-    );
     const accounts_dir_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
@@ -433,7 +386,6 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
         .{ snapshot_dir, "accounts.csv" },
     );
     defer {
-        allocator.free(accounts_db_fields_path);
         allocator.free(accounts_dir_path);
         allocator.free(dump_csv_path);
     }
@@ -441,12 +393,22 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     const csv_file = try cwd.createFile(dump_csv_path, .{});
     defer csv_file.close();
 
-    const accounts_db_fields_file = cwd.openFile(accounts_db_fields_path, .{}) catch {
-        std.debug.print("could not open accounts_db.bincode - run `prepare` first\n", .{});
-        return;
-    };
-    var accounts_db_fields = try bincode.read(allocator, AccountsDbFields, accounts_db_fields_file.reader(), .{});
-    defer bincode.free(allocator, accounts_db_fields);
+    var paths = try SnapshotPaths.find(allocator, snapshot_dir);
+    paths.incremental_snapshot = null; // not supported rn
+
+    // unpack
+    const full_metadata_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}/{d}/{d}",
+        .{ snapshot_dir, "snapshots", paths.full_snapshot.slot, paths.full_snapshot.slot },
+    );
+    defer allocator.free(full_metadata_path);
+
+    var snapshot_fields = try SnapshotFields.readFromFilePath(
+        allocator,
+        full_metadata_path,
+    );
+    defer snapshot_fields.deinit(allocator);
 
     var accounts_dir = try cwd.openIterableDir(accounts_dir_path, .{});
     var accounts_dir_iter = accounts_dir.iterate();
@@ -480,7 +442,7 @@ pub fn dumpSnapshot(_: []const []const u8) !void {
     for (0..tasks.len) |i| {
         tasks[i] = CsvTask{
             .task = .{ .callback = CsvTask.callback },
-            .accounts_db_fields = &accounts_db_fields,
+            .accounts_db_fields = &snapshot_fields.accounts_db_fields,
             .accounts_dir_path = accounts_dir_path,
             .allocator = allocator,
             .channel = channel,

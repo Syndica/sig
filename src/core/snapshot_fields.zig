@@ -299,7 +299,11 @@ pub const SnapshotFields = struct {
         var file = try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
-        var snapshot_fields = try bincode.read(allocator, SnapshotFields, file.reader(), .{});
+        const size = (try file.stat()).size;
+        const contents = try file.readToEndAlloc(allocator, size);
+        defer allocator.free(contents);
+
+        var snapshot_fields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
 
         // if these are available, we push them onto the banks
         var bank_fields = &snapshot_fields.bank_fields;

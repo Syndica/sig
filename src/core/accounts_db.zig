@@ -25,13 +25,9 @@ const Batch = ThreadPool.Batch;
 const Channel = @import("../sync/channel.zig").Channel;
 
 const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
-const findSnapshotMetadataPath = @import("../cmd/snapshot_utils.zig").findSnapshotMetadataPath;
 const GenesisConfig = @import("../core/genesis_config.zig").GenesisConfig;
 const StatusCache = @import("../core/snapshot_fields.zig").StatusCache;
-const validateStatusCache = @import("../core/snapshot_fields.zig").validateStatusCache;
 
-const MAX_CACHE_ENTRIES = @import("../core/snapshot_fields.zig").MAX_CACHE_ENTRIES;
-const HashSet = @import("../core/snapshot_fields.zig").HashSet;
 
 const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
 const BankIncrementalSnapshotPersistence = @import("../core/snapshot_fields.zig").BankIncrementalSnapshotPersistence;
@@ -218,11 +214,26 @@ pub const AccountsDB = struct {
         var timer = try std.time.Timer.start();
         var file_count: usize = 0;
         var max_file_id: usize = 0;
+        var account_count: usize = 0;
+
+        var init_capacity: usize = 10_000_000;
+        if (builtin.is_test) {
+            init_capacity = 500;
+        }
+        try self.index.ensureTotalCapacity(init_capacity); // TODO: tune?
 
         while (file_count != total_files) {
             const maybe_task_outputs = channel.try_drain() catch unreachable;
             var task_outputs = maybe_task_outputs orelse continue;
             defer channel.allocator.free(task_outputs);
+
+            // // prealloc ahead of time
+            // var task_size: usize = 0;
+            // for (task_outputs) |task_output| {
+            //     const refs: ArrayList(PubkeyAccountRef) = task_output[1];
+            //     task_size += refs.items.len;
+            // }
+            // try self.index.ensureTotalCapacity(task_size);
 
             for (task_outputs) |task_output| {
                 const account_file: AccountFile = task_output[0];
@@ -233,6 +244,8 @@ pub const AccountsDB = struct {
                 max_file_id = @max(account_file.id, max_file_id);
                 const u32_id: u32 = @intCast(account_file.id);
                 try self.account_files.putNoClobber(u32_id, account_file);
+
+                account_count += refs.items.len;
 
                 // populate index
                 for (refs.items) |account_ref| {
@@ -249,12 +262,13 @@ pub const AccountsDB = struct {
                 }
 
                 file_count += 1;
-                if (file_count % 1000 == 0 or file_count < 1000) {
+                if (file_count % 100 == 0 or (total_files - file_count) < 100) {
                     printTimeEstimate(&timer, total_files, file_count, "recvAndIndexAccounts");
                 }
             }
         }
 
+        std.debug.print("indexed {d} accounts\n", .{account_count});
         std.debug.assert(max_file_id <= std.math.maxInt(u32) / 2);
     }
 
@@ -383,7 +397,9 @@ pub const AccountsDB = struct {
     /// validates the accounts_db which was loaded from a snapshot
     pub fn validateLoadFromSnapshot(
         self: *Self,
+        // used to verify the incremental snapshot
         incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence,
+        // used to verify the full snapshot
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
     ) !void {
@@ -547,30 +563,15 @@ pub fn printTimeEstimate(
 
     const elapsed = timer.read();
     const ns_per_vec = elapsed / i;
-    const time_left = ns_per_vec * left;
+    const ns_left = ns_per_vec * left;
 
-    const min_left = time_left / std.time.ns_per_min;
-    const sec_left = (time_left / std.time.ns_per_s) - (min_left * std.time.s_per_min);
-
-    if (sec_left < 10) {
-        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {d}:0{d})\r", .{
-            name,
-            i,
-            total,
-            p_done,
-            min_left,
-            sec_left,
-        });
-    } else {
-        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {d}:{d})\r", .{
-            name,
-            i,
-            total,
-            p_done,
-            min_left,
-            sec_left,
-        });
-    }
+    std.debug.print("{s}: {d}/{d} ({d}%) (time left: {s})\r", .{
+        name,
+        i,
+        total,
+        p_done,
+        std.fmt.fmtDuration(ns_left),
+    });
 }
 
 pub fn readDirectory(
@@ -919,8 +920,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
-    const snapshot_dir = "test_data/";
-    // const snapshot_dir = "../snapshots/";
+    // const snapshot_dir = "test_data/";
+    const snapshot_dir = "../snapshots/";
 
     // this should exist before we start to unpack
     const genesis_path = try std.fmt.allocPrint(
@@ -943,9 +944,17 @@ pub fn main() !void {
     );
     defer allocator.free(accounts_path);
 
-    const snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
+    var snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
+
+    // TMP: remove later
+    snapshot_paths.incremental_snapshot = null;
+
+    if (snapshot_paths.incremental_snapshot == null) {
+        std.debug.print("no incremental snapshot found\n", .{});
+    }
 
     std.fs.cwd().access(accounts_path, .{}) catch {
+        std.debug.print("accounts/ not found ... unpacking snapshots...\n", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
         var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
         defer snapshot_dir_iter.close();
@@ -956,7 +965,10 @@ pub fn main() !void {
         }
     };
 
+    var timer = try std.time.Timer.start();
+    std.debug.print("reading snapshots...\n", .{});
     var snapshots = try Snapshots.readFromPaths(allocator, snapshot_dir, &snapshot_paths);
+    std.debug.print("read snapshots in {s}\n", .{std.fmt.fmtDuration(timer.read())});
     const full_snapshot = snapshots.full;
 
     // load and validate

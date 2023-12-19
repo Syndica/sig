@@ -8,9 +8,7 @@ const Hash = @import("./hash.zig").Hash;
 const Slot = @import("./time.zig").Slot;
 const Epoch = @import("./time.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
-const bincode = @import("../bincode/bincode.zig");
 
-const AccountsDbFields = @import("./snapshot_fields.zig").AccountsDbFields;
 const AccountFileInfo = @import("./snapshot_fields.zig").AccountFileInfo;
 
 pub const FileId = u32;
@@ -233,102 +231,3 @@ pub const AccountFile = struct {
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
 };
-
-pub const AccountInAccountFileRef = struct {
-    slot: usize,
-    accounts_file_id: usize,
-    offset: usize,
-};
-
-pub const AccountsIndex = struct {
-    // only support RAM for now
-    ram_map: HashMap(Pubkey, ArrayList(AccountInAccountFileRef)),
-    // TODO: disk_map
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return Self{
-            .ram_map = HashMap(Pubkey, ArrayList(AccountInAccountFileRef)).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        var iter = self.ram_map.iterator();
-        while (iter.next()) |*entry| {
-            entry.value_ptr.deinit();
-        }
-        self.ram_map.deinit();
-    }
-
-    pub fn insertNewAccountRef(
-        self: *Self,
-        pubkey: Pubkey,
-        account_ref: AccountInAccountFileRef,
-    ) !void {
-        var maybe_entry = self.ram_map.getEntry(pubkey);
-
-        // if the pubkey already exists
-        if (maybe_entry) |*entry| {
-            var existing_refs: *ArrayList(AccountInAccountFileRef) = entry.value_ptr;
-
-            // search: if slot already exists, replace the value
-            var found_matching_slot = false;
-            for (existing_refs.items) |*existing_ref| {
-                if (existing_ref.slot == account_ref.slot) {
-                    if (!found_matching_slot) {
-                        existing_ref.* = account_ref;
-                        found_matching_slot = true;
-                        break;
-                    }
-                    // TODO: rust impl continues to scan and removes other slot duplicates
-                    // do we need to do this?
-                }
-            }
-
-            // otherwise we append the new slot
-            if (!found_matching_slot) {
-                try existing_refs.append(account_ref);
-            }
-        } else {
-            var account_refs = try ArrayList(AccountInAccountFileRef).initCapacity(self.ram_map.allocator, 1);
-            account_refs.appendAssumeCapacity(account_ref);
-            try self.ram_map.putNoClobber(pubkey, account_refs);
-        }
-    }
-};
-
-test "core.accounts_file: parse accounts out of accounts file" {
-    // to run this test
-    // 1) run the test `core.snapshot_fields: parse snapshot fields`
-    //     - to build accounts_db.bincode file
-    // 2) change paths for `accounts_db_fields_path` and `accounts_dir_path`
-    // 3) run the test
-    const alloc = std.testing.allocator;
-
-    const accounts_db_fields_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts_db.bincode";
-    const accounts_db_fields_file = std.fs.openFileAbsolute(accounts_db_fields_path, .{}) catch |err| {
-        std.debug.print("failed to open accounts-db fields file: {s} ... skipping test\n", .{@errorName(err)});
-        return;
-    };
-
-    var accounts_db_fields = try bincode.read(alloc, AccountsDbFields, accounts_db_fields_file.reader(), .{});
-    defer bincode.free(alloc, accounts_db_fields);
-
-    const accounts_dir_path = "/Users/tmp/Documents/zig-solana/snapshots/accounts";
-    _ = accounts_dir_path;
-
-    // // time it
-    // var timer = try std.time.Timer.start();
-
-    // var accounts_db = AccountsDB.init(alloc);
-    // defer accounts_db.deinit();
-    // try accounts_db.load(alloc, accounts_db_fields, accounts_dir_path, null);
-
-    // const elapsed = timer.read();
-    // std.debug.print("elapsed: {d}\n", .{elapsed / std.time.ns_per_s});
-
-    // note: didnt untar the full snapshot (bc time)
-    // n_valid_accountsfile: 328_811, total_accounts_file: 328_812
-    // std.debug.print("n_valid_accountsfile: {d}, total_accounts_file: {d}\n", .{ n_valid_accountsfile, n_accountsfile });
-}
