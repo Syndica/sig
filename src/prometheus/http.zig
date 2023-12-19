@@ -1,23 +1,22 @@
 //! Basic HTTP adapter for prometheus using the http server in std.
 
 const std = @import("std");
-const Registry = @import("registry.zig").Registry;
 
-// TODO: log with correct logger
+const Registry = @import("registry.zig").Registry;
+const Logger = @import("../trace/log.zig").Logger;
 
 pub fn servePrometheus(
     allocator: std.mem.Allocator,
     registry: *Registry(.{}),
     listen_addr: std.net.Address,
+    logger: Logger,
 ) !void {
     var server = std.http.Server.init(allocator, .{});
     defer server.deinit();
     try server.listen(listen_addr);
 
     outer: while (true) {
-        var response = try server.accept(.{
-            .allocator = allocator,
-        });
+        var response = try server.accept(.{ .allocator = allocator });
         defer response.deinit();
 
         while (response.reset() != .closing) {
@@ -26,8 +25,8 @@ pub fn servePrometheus(
                 error.EndOfStream => continue,
                 else => return err,
             };
-            handleRequest(allocator, &response, registry) catch |e| {
-                std.debug.print("Failed while handling prometheus http request. {}", .{e});
+            handleRequest(allocator, &response, registry, logger) catch |e| {
+                logger.err("prometheus http: Failed to handle request. {}", .{e});
             };
         }
     }
@@ -37,8 +36,9 @@ fn handleRequest(
     allocator: std.mem.Allocator,
     response: *std.http.Server.Response,
     registry: *Registry(.{}),
+    logger: Logger,
 ) !void {
-    std.debug.print("{s} {s} {s}\n", .{
+    logger.debug("prometheus http: {s} {s} {s}\n", .{
         @tagName(response.request.method),
         @tagName(response.request.version),
         response.request.target,
