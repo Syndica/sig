@@ -31,6 +31,15 @@ var gossip_entrypoints_option = cli.Option{
     .value_name = "Entrypoints",
 };
 
+var gossip_spy_node_option = cli.Option{
+    .long_name = "spy-node",
+    .help = "run as a gossip spy node (minimize outgoing packets)",
+    .short_alias = 's',
+    .value = cli.OptionValue{ .bool = false },
+    .required = false,
+    .value_name = "Spy Node",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
@@ -52,6 +61,7 @@ var app = &cli.App{
         , .action = gossip, .options = &.{
             &gossip_port_option,
             &gossip_entrypoints_option,
+            &gossip_spy_node_option,
         } },
     },
 };
@@ -112,10 +122,11 @@ fn gossip(_: []const []const u8) !void {
     );
     defer gossip_service.deinit();
 
+    const spy_node = gossip_spy_node_option.value.bool;
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, true },
+        .{ &gossip_service, spy_node },
     );
 
     handle.join();
