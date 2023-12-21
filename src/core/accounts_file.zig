@@ -82,6 +82,7 @@ pub const PubkeyAccountRef = struct {
     pubkey: Pubkey,
     offset: usize,
     slot: Slot,
+    file_id: usize,
 };
 
 const u64_size: usize = @sizeOf(u64);
@@ -180,6 +181,7 @@ pub const AccountFile = struct {
                 .pubkey = pubkey,
                 .offset = offset,
                 .slot = self.slot,
+                .file_id = self.id,
             });
 
             offset = offset + account.len;

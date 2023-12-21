@@ -629,6 +629,9 @@ const Result = union(enum) {
     Error: TransactionError,
 };
 
+pub const MAX_RECENT_BLOCKHASHES: usize = 300;
+pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
+
 const CACHED_KEY_SIZE: usize = 20;
 const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     key_slice: [CACHED_KEY_SIZE]u8,
@@ -701,9 +704,6 @@ pub const StatusCache = struct {
         }
     }
 };
-
-pub const MAX_RECENT_BLOCKHASHES: usize = 300;
-pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 
 test "core.snapshot_fields: parse status cache" {
     const allocator = std.testing.allocator;
