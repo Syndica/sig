@@ -157,6 +157,7 @@ pub const StandardEntry = struct {
 
     pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) {
+            self.deinit();
             return;
         }
         var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
@@ -169,6 +170,7 @@ pub const StandardEntry = struct {
 
     pub fn log(self: *Self, level: Level, msg: []const u8) void {
         if (@intFromEnum(self.max_level) < @intFromEnum(level)) {
+            self.deinit();
             return;
         }
         var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
@@ -201,7 +203,7 @@ const A = enum(u8) {
 test "trace.entry: should info log correctly" {
     var logger = Logger.init(testing.allocator, Level.info);
     defer logger.deinit();
-    var entry = StandardEntry.init(testing.allocator, logger.standard.channel);
+    var entry = StandardEntry.init(testing.allocator, logger.standard.channel, .debug);
     defer entry.deinit();
 
     var anull: ?u8 = null;
