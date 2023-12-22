@@ -64,7 +64,7 @@ pub fn readSocket(
         }
         try incoming_channel.send(packet_batch);
     }
-    logger.debugf("readSocket loop closed\n", .{});
+    logger.debugf("readSocket loop closed", .{});
 }
 
 pub fn recvMmsg(
@@ -131,7 +131,7 @@ pub fn sendSocket(
         for (packet_batches) |*packet_batch| {
             for (packet_batch.items) |*p| {
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
-                    logger.debugf("send_socket error: {s}\n", .{@errorName(e)});
+                    logger.debugf("send_socket error: {s}", .{@errorName(e)});
                     continue;
                 };
                 packets_sent +|= 1;
@@ -139,7 +139,7 @@ pub fn sendSocket(
             }
         }
     }
-    logger.debugf("sendSocket loop closed\n", .{});
+    logger.debugf("sendSocket loop closed", .{});
 }
 
 pub const BenchmarkPacketProcessing = struct {

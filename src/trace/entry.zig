@@ -15,8 +15,8 @@ pub const Entry = union(enum) {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry)) Self {
-        return .{ .standard = StandardEntry.init(allocator, channel) };
+    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry), max_level: Level) Self {
+        return .{ .standard = StandardEntry.init(allocator, channel, max_level) };
     }
 
     pub fn deinit(self: Self) void {
@@ -41,72 +41,50 @@ pub const Entry = union(enum) {
     }
 
     pub fn debugf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        switch (self) {
-            .standard => |entry| {
-                entry.logf(.debug, fmt, args);
-            },
-            .noop => {},
-        }
+        self.logf(.debug, fmt, args);
     }
 
     pub fn errf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        switch (self) {
-            .standard => |entry| {
-                entry.logf(.err, fmt, args);
-            },
-            .noop => {},
-        }
+        self.logf(.err, fmt, args);
     }
 
     pub fn warnf(self: Self, comptime fmt: []const u8, args: anytype) void {
-        switch (self) {
-            .standard => |entry| {
-                entry.logf(.warn, fmt, args);
-            },
-            .noop => {},
-        }
+        self.logf(.warn, fmt, args);
     }
 
     pub fn infof(self: Self, comptime fmt: []const u8, args: anytype) void {
-        switch (self) {
-            .standard => |entry| {
-                entry.logf(.info, fmt, args);
-            },
-            .noop => {},
-        }
+        self.logf(.info, fmt, args);
     }
 
     pub fn info(self: Self, msg: []const u8) void {
-        switch (self) {
-            .standard => |entry| {
-                entry.log(.info, msg);
-            },
-            .noop => {},
-        }
+        self.log(.info, msg);
     }
 
     pub fn debug(self: Self, msg: []const u8) void {
-        switch (self) {
-            .standard => |entry| {
-                entry.log(.debug, msg);
-            },
-            .noop => {},
-        }
+        self.log(.debug, msg);
     }
 
     pub fn err(self: Self, msg: []const u8) void {
+        self.log(.err, msg);
+    }
+
+    pub fn warn(self: Self, msg: []const u8) void {
+        self.log(.warn, msg);
+    }
+
+    pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
             .standard => |entry| {
-                entry.log(.err, msg);
+                entry.logf(level, fmt, args);
             },
             .noop => {},
         }
     }
 
-    pub fn warn(self: Self, msg: []const u8) void {
+    pub fn log(self: Self, level: Level, msg: []const u8) void {
         switch (self) {
             .standard => |entry| {
-                entry.log(.warn, msg);
+                entry.log(level, msg);
             },
             .noop => {},
         }
@@ -137,6 +115,9 @@ pub const Entry = union(enum) {
 };
 
 pub const StandardEntry = struct {
+    /// Log levels more granular than this will not be logged.
+    max_level: Level,
+    /// Level to log this message as.
     level: Level,
     allocator: std.mem.Allocator,
     fields: std.ArrayList(Field),
@@ -146,11 +127,12 @@ pub const StandardEntry = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry)) *Self {
+    pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry), max_level: Level) *Self {
         var self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
         self.* = Self{
             .allocator = allocator,
             .fields = std.ArrayList(Field).init(allocator),
+            .max_level = max_level,
             .level = Level.debug,
             .channel = channel,
             .time = time.DateTime.epoch_unix,
@@ -174,6 +156,9 @@ pub const StandardEntry = struct {
     }
 
     pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+        if (@intFromEnum(self.max_level) < @intFromEnum(level)) {
+            return;
+        }
         var message = std.ArrayList(u8).initCapacity(self.allocator, fmt.len * 2) catch @panic("could not initCapacity for message");
         std.fmt.format(message.writer(), fmt, args) catch @panic("could not format");
         self.message = message;
@@ -183,6 +168,9 @@ pub const StandardEntry = struct {
     }
 
     pub fn log(self: *Self, level: Level, msg: []const u8) void {
+        if (@intFromEnum(self.max_level) < @intFromEnum(level)) {
+            return;
+        }
         var message = std.ArrayList(u8).initCapacity(self.allocator, msg.len) catch @panic("could not initCapacity for message");
         message.appendSlice(msg[0..]) catch @panic("could not appendSlice for message");
         self.message = message;

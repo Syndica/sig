@@ -51,6 +51,7 @@ pub const sync = struct {
 
 pub const utils = struct {
     pub usingnamespace @import("utils/shortvec.zig");
+    pub usingnamespace @import("utils/types.zig");
     pub usingnamespace @import("utils/varint.zig");
 };
 
