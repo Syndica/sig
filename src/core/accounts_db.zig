@@ -151,7 +151,6 @@ pub const AccountsDB = struct {
             tasks.appendAssumeCapacity(index_task);
 
             const handle = try std.Thread.spawn(.{}, binAccountFiles, .{
-                self.allocator,
                 accounts_path,
                 &accounts_db_fields,
                 &self.index_bins,
@@ -187,6 +186,8 @@ pub const AccountsDB = struct {
         }
         // preallocate the memory for the arraylists
         var account_ref_memory = try self.allocator.alloc(AccountRef, total_accounts);
+        std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
 
         chunk_size = n_bins / n_threads;
         if (chunk_size == 0) {
@@ -234,9 +235,7 @@ pub const AccountsDB = struct {
         timer.reset();
     }
 
-
     pub fn binAccountFiles(
-        allocator: std.mem.Allocator,
         accounts_dir_path: []const u8,
         accounts_db_fields: *const AccountsDbFields,
         index_bins: *AccountIndexBins,
@@ -245,6 +244,9 @@ pub const AccountsDB = struct {
         thread_bins: []ArrayList(*PubkeyAccountRef),
         file_map: *std.AutoArrayHashMap(FileId, AccountFile),
     ) !void {
+        var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = false }){};
+        var allocator = gpa.allocator();
+
         // preallocate some things
         const accounts_per_file_estimate = 900; // TODO: tune?
         const n_refs_estimate = accounts_per_file_estimate * file_names.len;
@@ -289,7 +291,7 @@ pub const AccountsDB = struct {
             };
 
             const file_id_u32: u32 = @intCast(accounts_file_id);
-            try file_map.putNoClobber(file_id_u32, accounts_file);
+            file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
 
             if (file_count % 1000 == 0 or (file_names.len - file_count) < 1000) {
                 const n_accounts_str = try std.fmt.bufPrint(
@@ -307,9 +309,15 @@ pub const AccountsDB = struct {
         for (thread_bins) |*bin| {
             bin.* = try ArrayList(*PubkeyAccountRef).initCapacity(allocator, n_refs_per_bin);
         }
-        for (refs.items) |*ref| {
+
+        timer.reset();
+        for (refs.items, 0..) |*ref, i | {
             const bin = &thread_bins[index_bins.getBinIndex(&ref.pubkey)];
             try bin.append(ref);
+
+            if (i % 1000 == 0 or (refs.items.len - i) < 1000) {
+                printTimeEstimate(&timer, refs.items.len, i, "binning accounts", null);
+            }
         }
     }
 
