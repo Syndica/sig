@@ -4,42 +4,44 @@ const testing = std.testing;
 
 const Metric = @import("metric.zig").Metric;
 
-const Self = @This();
+pub const Counter = struct {
+    const Self = @This();
 
-metric: Metric = Metric{ .getResultFn = getResult },
-value: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
+    metric: Metric = Metric{ .getResultFn = getResult },
+    value: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
 
-pub fn inc(self: *Self) void {
-    _ = self.value.fetchAdd(1, .Monotonic);
-}
-
-pub fn add(self: *Self, value: anytype) void {
-    switch (@typeInfo(@TypeOf(value))) {
-        .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
-        else => @compileError("can't add a non-number"),
+    pub fn inc(self: *Self) void {
+        _ = self.value.fetchAdd(1, .Monotonic);
     }
 
-    _ = self.value.fetchAdd(@intCast(value), .Monotonic);
-}
+    pub fn add(self: *Self, value: anytype) void {
+        switch (@typeInfo(@TypeOf(value))) {
+            .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
+            else => @compileError("can't add a non-number"),
+        }
 
-pub fn get(self: *const Self) u64 {
-    return self.value.load(.Monotonic);
-}
+        _ = self.value.fetchAdd(@intCast(value), .Monotonic);
+    }
 
-pub fn reset(self: *Self) void {
-    _ = self.value.store(0, .Monotonic);
-}
+    pub fn get(self: *const Self) u64 {
+        return self.value.load(.Monotonic);
+    }
 
-fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
-    const self = @fieldParentPtr(Self, "metric", metric);
-    return Metric.Result{ .counter = self.get() };
-}
+    pub fn reset(self: *Self) void {
+        _ = self.value.store(0, .Monotonic);
+    }
+
+    fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
+        const self = @fieldParentPtr(Self, "metric", metric);
+        return Metric.Result{ .counter = self.get() };
+    }
+};
 
 test "prometheus.counter: inc/add/dec/set/get" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    var counter = Self{};
+    var counter = Counter{};
 
     try testing.expectEqual(@as(u64, 0), counter.get());
 
@@ -51,14 +53,14 @@ test "prometheus.counter: inc/add/dec/set/get" {
 }
 
 test "prometheus.counter: concurrent" {
-    var counter = Self{};
+    var counter = Counter{};
 
     var threads: [4]std.Thread = undefined;
     for (&threads) |*thread| {
         thread.* = try std.Thread.spawn(
             .{},
             struct {
-                fn run(c: *Self) void {
+                fn run(c: *Counter) void {
                     var i: usize = 0;
                     while (i < 20) : (i += 1) {
                         c.inc();
@@ -75,7 +77,7 @@ test "prometheus.counter: concurrent" {
 }
 
 test "prometheus.counter: write" {
-    var counter = Self{ .value = .{ .value = 340 } };
+    var counter = Counter{ .value = .{ .value = 340 } };
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();

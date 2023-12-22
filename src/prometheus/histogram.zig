@@ -88,7 +88,7 @@ pub const Histogram = struct {
                 break;
             }
         }
-        _ = shard.sum.fetchAdd(value, .Release); // releases lock. must be last step.
+        _ = shard.sum.fetchAdd(value, .Monotonic);
         _ = shard.count.fetchAdd(1, .Release); // releases lock. must be last step.
     }
 

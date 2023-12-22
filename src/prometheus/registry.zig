@@ -5,8 +5,10 @@ const heap = std.heap;
 const mem = std.mem;
 const testing = std.testing;
 
+const OnceCell = @import("../sync/once_cell.zig").OnceCell;
+
 const Metric = @import("metric.zig").Metric;
-const Counter = @import("counter.zig");
+const Counter = @import("counter.zig").Counter;
 const Gauge = @import("gauge.zig").Gauge;
 const GaugeFn = @import("gauge_fn.zig").GaugeFn;
 const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
@@ -24,6 +26,10 @@ pub const GetMetricError = error{
     InvalidType,
 };
 
+/// Global registry singleton for convenience.
+pub const global_registry: *OnceCell(Registry(.{})) = &global_registry_owned;
+var global_registry_owned: OnceCell(Registry(.{})) = .{};
+
 const RegistryOptions = struct {
     max_metrics: comptime_int = 8192,
     max_name_len: comptime_int = 1024,
@@ -39,27 +45,20 @@ pub fn Registry(comptime options: RegistryOptions) type {
             metric: *Metric,
         });
 
-        root_allocator: mem.Allocator,
         arena_state: heap.ArenaAllocator,
         mutex: std.Thread.Mutex,
         metrics: MetricMap,
 
-        pub fn init(allocator: mem.Allocator) !*Self {
-            const self = try allocator.create(Self);
-
-            self.* = .{
-                .root_allocator = allocator,
+        pub fn init(allocator: mem.Allocator) Self {
+            return .{
                 .arena_state = heap.ArenaAllocator.init(allocator),
                 .mutex = .{},
                 .metrics = MetricMap{},
             };
-
-            return self;
         }
 
         pub fn deinit(self: *Self) void {
             self.arena_state.deinit();
-            self.root_allocator.destroy(self);
         }
 
         fn nbMetrics(self: *const Self) usize {
@@ -189,7 +188,7 @@ fn stringLessThan(context: void, lhs: []const u8, rhs: []const u8) bool {
 }
 
 test "prometheus.registry: getOrCreateCounter" {
-    var registry = try Registry(.{}).init(testing.allocator);
+    var registry = Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
     const name = try fmt.allocPrint(testing.allocator, "http_requests{{status=\"{d}\"}}", .{500});
@@ -206,7 +205,7 @@ test "prometheus.registry: getOrCreateCounter" {
 }
 
 test "prometheus.registry: getOrCreateX requires the same type" {
-    var registry = try Registry(.{}).init(testing.allocator);
+    var registry = Registry(.{}).init(testing.allocator);
     defer registry.deinit();
 
     const name = try fmt.allocPrint(testing.allocator, "http_requests{{status=\"{d}\"}}", .{500});
@@ -283,7 +282,7 @@ test "prometheus.registry: write" {
     };
 
     inline for (test_cases) |tc| {
-        var registry = try Registry(.{}).init(testing.allocator);
+        var registry = Registry(.{}).init(testing.allocator);
         defer registry.deinit();
 
         // Add some counters
@@ -351,7 +350,7 @@ test "prometheus.registry: write" {
 }
 
 test "prometheus.registry: options" {
-    var registry = try Registry(.{ .max_metrics = 1, .max_name_len = 4 }).init(testing.allocator);
+    var registry = Registry(.{ .max_metrics = 1, .max_name_len = 4 }).init(testing.allocator);
     defer registry.deinit();
 
     {

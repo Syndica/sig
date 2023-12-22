@@ -8,6 +8,9 @@ const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
+const global_registry = @import("../prometheus/registry.zig").global_registry;
+const Registry = @import("../prometheus/registry.zig").Registry;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -76,6 +79,8 @@ fn gossip(_: []const []const u8) !void {
 
     // var logger: Logger = .noop;
 
+    _ = try spawnMetrics(gpa_allocator, 12345);
+
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
@@ -119,6 +124,15 @@ fn gossip(_: []const []const u8) !void {
     );
 
     handle.join();
+}
+
+/// Initializes the global registry.
+/// Spawns a thread to serve the metrics over http.
+/// Returns error if registry was already initialized.
+/// Uses same allocator for both registry and http adapter.
+fn spawnMetrics(allocator: std.mem.Allocator, port: u16) !std.Thread {
+    const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
+    return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, port });
 }
 
 pub fn run() !void {
