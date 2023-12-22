@@ -1,9 +1,11 @@
 const std = @import("std");
 const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
+const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
 const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
 const Logger = @import("../trace/log.zig").Logger;
+const Level = @import("../trace/level.zig").Level;
 const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -34,6 +36,23 @@ var gossip_entrypoints_option = cli.Option{
     .value_name = "Entrypoints",
 };
 
+var gossip_spy_node_option = cli.Option{
+    .long_name = "spy-node",
+    .help = "run as a gossip spy node (minimize outgoing packets)",
+    .value = cli.OptionValue{ .bool = false },
+    .required = false,
+    .value_name = "Spy Node",
+};
+
+var log_level_option = cli.Option{
+    .long_name = "log-level",
+    .help = "The amount of detail to log (default = debug)",
+    .short_alias = 'l',
+    .value = cli.OptionValue{ .string = "debug" },
+    .required = false,
+    .value_name = "err|warn|info|debug",
+};
+
 var metrics_port_option = cli.Option{
     .long_name = "metrics-port",
     .help = "port to expose prometheus metrics via http",
@@ -48,7 +67,7 @@ var app = &cli.App{
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
     .version = "0.1.1",
     .author = "Syndica & Contributors",
-    .options = &.{&metrics_port_option},
+    .options = &.{ &log_level_option, &metrics_port_option },
     .subcommands = &.{
         &cli.Command{
             .name = "identity",
@@ -65,13 +84,14 @@ var app = &cli.App{
         , .action = gossip, .options = &.{
             &gossip_port_option,
             &gossip_entrypoints_option,
+            &gossip_spy_node_option,
         } },
     },
 };
 
 // prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, .debug);
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     defer logger.deinit();
     logger.spawn();
 
@@ -83,7 +103,7 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, .debug);
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     defer logger.deinit();
     logger.spawn();
 
@@ -127,10 +147,11 @@ fn gossip(_: []const []const u8) !void {
     );
     defer gossip_service.deinit();
 
+    const spy_node = gossip_spy_node_option.value.bool;
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, true },
+        .{ &gossip_service, spy_node },
     );
 
     handle.join();

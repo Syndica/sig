@@ -17,8 +17,8 @@ pub const Logger = union(enum) {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, default_level: Level) Self {
-        return .{ .standard = StandardErrLogger.init(allocator, default_level) };
+    pub fn init(allocator: std.mem.Allocator, max_level: Level) Self {
+        return .{ .standard = StandardErrLogger.init(allocator, max_level) };
     }
 
     pub fn spawn(self: Self) void {
@@ -125,18 +125,19 @@ pub const Logger = union(enum) {
 
 pub const StandardErrLogger = struct {
     allocator: std.mem.Allocator,
-    default_level: Level,
+    /// Messages more granular than this will not be logged
+    max_level: Level,
     exit_sig: AtomicBool,
     handle: ?std.Thread,
     channel: *Channel(*StandardEntry),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, default_level: Level) *Self {
+    pub fn init(allocator: std.mem.Allocator, max_level: Level) *Self {
         var self = allocator.create(Self) catch @panic("could not allocator.create Logger");
         self.* = .{
             .allocator = allocator,
-            .default_level = default_level,
+            .max_level = max_level,
             .exit_sig = AtomicBool.init(false),
             .handle = null,
             .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
@@ -180,48 +181,54 @@ pub const StandardErrLogger = struct {
     }
 
     pub fn field(self: *Self, name: []const u8, value: anytype) Entry {
-        var e = Entry.init(self.allocator, self.channel);
+        var e = Entry.init(self.allocator, self.channel, self.max_level);
         return e.field(name, value);
     }
 
     pub fn info(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.info(msg);
+        self.log(.info, msg);
     }
 
     pub fn debug(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.debug(msg);
+        self.log(.debug, msg);
     }
 
     pub fn warn(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.warn(msg);
+        self.log(.warn, msg);
     }
 
     pub fn err(self: *Self, msg: []const u8) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.err(msg);
+        self.log(.err, msg);
     }
 
     pub fn infof(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.infof(fmt, args);
+        self.logf(.info, fmt, args);
     }
 
     pub fn debugf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.debugf(fmt, args);
+        self.logf(.debug, fmt, args);
     }
 
     pub fn warnf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.warnf(fmt, args);
+        self.logf(.warn, fmt, args);
     }
 
     pub fn errf(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        var e = Entry.init(self.allocator, self.channel);
-        e.errf(fmt, args);
+        self.logf(.err, fmt, args);
+    }
+
+    pub fn log(self: *Self, level: Level, msg: []const u8) void {
+        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
+            var e = Entry.init(self.allocator, self.channel, self.max_level);
+            e.log(level, msg);
+        }
+    }
+
+    pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
+            var e = Entry.init(self.allocator, self.channel, self.max_level);
+            e.logf(level, fmt, args);
+        }
     }
 };
 
