@@ -18,5 +18,9 @@
             .url = "https://github.com/getty-zig/getty/archive/5b0e750d92ee4ef8e46ad743bb8ced63723acd00.tar.gz",
             .hash = "12209398657d260abcd6dae946d8da4cd3057b8c7990608476a9f8011aae570d2ebb",
         },
+        .httpz = .{
+            .url = "https://github.com/karlseguin/http.zig/archive/7a751549a751d9b45952037abdb127b3225b2ac1.tar.gz",
+            .hash = "122004f74adf46001fe9129d8cec54bd4a98895ce89f0897790e13b60fa99e527b99",
+        },
     },
 }

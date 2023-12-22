@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     const zig_network_module = b.dependency("zig-network", opts).module("network");
     const zig_cli_module = b.dependency("zig-cli", opts).module("zig-cli");
     const getty_mod = b.dependency("getty", opts).module("getty");
+    const httpz_mod = b.dependency("httpz", opts).module("httpz");
 
     const lib = b.addStaticLibrary(.{
         .name = "sig",
@@ -53,6 +54,10 @@ pub fn build(b: *std.Build) void {
                 .name = "getty",
                 .module = getty_mod,
             },
+            .{
+                .name = "httpz",
+                .module = httpz_mod,
+            },
         },
     });
 
@@ -60,6 +65,7 @@ pub fn build(b: *std.Build) void {
     lib.addModule("zig-network", zig_network_module);
     lib.addModule("zig-cli", zig_cli_module);
     lib.addModule("getty", getty_mod);
+    lib.addModule("httpz", httpz_mod);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -77,6 +83,8 @@ pub fn build(b: *std.Build) void {
     tests.addModule("base58-zig", base58_module);
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
+    tests.addModule("httpz", httpz_mod);
+
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&lib.step);
@@ -94,6 +102,7 @@ pub fn build(b: *std.Build) void {
     exe.addModule("zig-network", zig_network_module);
     exe.addModule("zig-cli", zig_cli_module);
     exe.addModule("getty", getty_mod);
+    exe.addModule("httpz", httpz_mod);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -137,6 +146,8 @@ pub fn build(b: *std.Build) void {
     fuzz_exe.addModule("zig-network", zig_network_module);
     fuzz_exe.addModule("zig-cli", zig_cli_module);
     fuzz_exe.addModule("getty", getty_mod);
+    fuzz_exe.addModule("httpz", httpz_mod);
+
     b.installArtifact(fuzz_exe);
     const fuzz_cmd = b.addRunArtifact(fuzz_exe);
     if (b.args) |args| {
@@ -158,11 +169,12 @@ pub fn build(b: *std.Build) void {
     benchmark_exe.addModule("zig-network", zig_network_module);
     benchmark_exe.addModule("zig-cli", zig_cli_module);
     benchmark_exe.addModule("getty", getty_mod);
+    benchmark_exe.addModule("httpz", httpz_mod);
+
     b.installArtifact(benchmark_exe);
     const benchmark_cmd = b.addRunArtifact(benchmark_exe);
     if (b.args) |args| {
         benchmark_cmd.addArgs(args);
     }
-
     b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
 }

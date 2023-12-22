@@ -8,6 +8,9 @@ const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
+const global_registry = @import("../prometheus/registry.zig").global_registry;
+const Registry = @import("../prometheus/registry.zig").Registry;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -31,11 +34,21 @@ var gossip_entrypoints_option = cli.Option{
     .value_name = "Entrypoints",
 };
 
+var metrics_port_option = cli.Option{
+    .long_name = "metrics-port",
+    .help = "port to expose prometheus metrics via http",
+    .short_alias = 'm',
+    .value = cli.OptionValue{ .int = 12345 },
+    .required = false,
+    .value_name = "port_number",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
     .version = "0.1.1",
     .author = "Syndica & Contributors",
+    .options = &.{&metrics_port_option},
     .subcommands = &.{
         &cli.Command{
             .name = "identity",
@@ -75,6 +88,8 @@ fn gossip(_: []const []const u8) !void {
     logger.spawn();
 
     // var logger: Logger = .noop;
+
+    const metrics_thread = try spawnMetrics(gpa_allocator);
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
@@ -119,6 +134,16 @@ fn gossip(_: []const []const u8) !void {
     );
 
     handle.join();
+    metrics_thread.detach();
+}
+
+/// Initializes the global registry. Returns error if registry was already initialized.
+/// Spawns a thread to serve the metrics over http on the CLI configured port.
+/// Uses same allocator for both registry and http adapter.
+fn spawnMetrics(allocator: std.mem.Allocator) !std.Thread {
+    var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
+    const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
+    return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }
 
 pub fn run() !void {
