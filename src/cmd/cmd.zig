@@ -34,11 +34,21 @@ var gossip_entrypoints_option = cli.Option{
     .value_name = "Entrypoints",
 };
 
+var metrics_port_option = cli.Option{
+    .long_name = "metrics-port",
+    .help = "port to expose prometheus metrics via http",
+    .short_alias = 'm',
+    .value = cli.OptionValue{ .int = 12345 },
+    .required = false,
+    .value_name = "port_number",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
     .version = "0.1.1",
     .author = "Syndica & Contributors",
+    .options = &.{&metrics_port_option},
     .subcommands = &.{
         &cli.Command{
             .name = "identity",
@@ -79,7 +89,7 @@ fn gossip(_: []const []const u8) !void {
 
     // var logger: Logger = .noop;
 
-    _ = try spawnMetrics(gpa_allocator, 12345);
+    _ = try spawnMetrics(gpa_allocator);
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
@@ -126,13 +136,13 @@ fn gossip(_: []const []const u8) !void {
     handle.join();
 }
 
-/// Initializes the global registry.
-/// Spawns a thread to serve the metrics over http.
-/// Returns error if registry was already initialized.
+/// Initializes the global registry. Returns error if registry was already initialized.
+/// Spawns a thread to serve the metrics over http on the CLI configured port.
 /// Uses same allocator for both registry and http adapter.
-fn spawnMetrics(allocator: std.mem.Allocator, port: u16) !std.Thread {
+fn spawnMetrics(allocator: std.mem.Allocator) !std.Thread {
+    var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
     const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
-    return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, port });
+    return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }
 
 pub fn run() !void {
