@@ -35,7 +35,7 @@ pub fn OnceCell(comptime T: type) type {
         /// Tries to initialize the inner value and returns pointer to it, or return error if it fails.
         /// Returns error if it was already initialized.
         /// Blocks while other threads are in the process of initialization.
-        pub fn tryInitialize(self: *Self, initLogic: anytype, init_args: anytype) !*T {
+        pub fn tryInit(self: *Self, initLogic: anytype, init_args: anytype) !*T {
             if (!self.acquire()) return error.AlreadyInitialized;
             errdefer self.started.store(false, .Release);
             self.value = try @call(.auto, initLogic, init_args);
@@ -95,4 +95,106 @@ pub fn OnceCell(comptime T: type) type {
             return error.NotInitialized;
         }
     };
+}
+
+test "sync.once_cell: init returns correctly" {
+    var oc = OnceCell(u64).init();
+    const x = try oc.initialize(returns(10), .{});
+    try std.testing.expect(10 == x.*);
+}
+
+test "sync.once_cell: cannot get uninitialized" {
+    var oc = OnceCell(u64).init();
+    if (oc.get()) |_| {
+        try std.testing.expect(false);
+    } else |_| {}
+}
+
+test "sync.once_cell: can get initialized" {
+    var oc = OnceCell(u64).init();
+    _ = try oc.initialize(returns(10), .{});
+    const x = try oc.get();
+    try std.testing.expect(10 == x.*);
+}
+
+test "sync.once_cell: tryInit returns error on failure" {
+    var oc = OnceCell(u64).init();
+    const err = oc.tryInit(returnErr, .{});
+    try std.testing.expectError(error.TestErr, err);
+}
+
+test "sync.once_cell: tryInit works on success" {
+    var oc = OnceCell(u64).init();
+    const x1 = try oc.tryInit(returnNotErr(10), .{});
+    const x2 = try oc.get();
+    try std.testing.expect(10 == x1.*);
+    try std.testing.expect(10 == x2.*);
+}
+
+test "sync.once_cell: tryInit returns error if initialized" {
+    var oc = OnceCell(u64).init();
+    const x1 = try oc.tryInit(returnNotErr(10), .{});
+    const err = oc.tryInit(returnNotErr(11), .{});
+    const x2 = try oc.get();
+    try std.testing.expect(10 == x1.*);
+    try std.testing.expectError(error.AlreadyInitialized, err);
+    try std.testing.expect(10 == x2.*);
+}
+
+test "sync.once_cell: getOrInit can initialize when needed" {
+    var oc = OnceCell(u64).init();
+    const x1 = oc.getOrInit(returns(10), .{});
+    const x2 = try oc.get();
+    try std.testing.expect(10 == x1.*);
+    try std.testing.expect(10 == x2.*);
+}
+
+test "sync.once_cell: getOrInit uses already initialized value" {
+    var oc = OnceCell(u64).init();
+    const x1 = oc.getOrInit(returns(10), .{});
+    const x2 = oc.getOrInit(returns(11), .{});
+    try std.testing.expect(10 == x1.*);
+    try std.testing.expect(10 == x2.*);
+}
+
+test "sync.once_cell: getOrTryInit returns error on failure" {
+    var oc = OnceCell(u64).init();
+    const err = oc.getOrTryInit(returnErr, .{});
+    try std.testing.expectError(error.TestErr, err);
+}
+
+test "sync.once_cell: getOrTryInit works on success" {
+    var oc = OnceCell(u64).init();
+    const x1 = try oc.getOrTryInit(returnNotErr(10), .{});
+    const x2 = try oc.get();
+    try std.testing.expect(10 == x1.*);
+    try std.testing.expect(10 == x2.*);
+}
+
+test "sync.once_cell: getOrTryInit uses already initialized value" {
+    var oc = OnceCell(u64).init();
+    const x1 = try oc.getOrTryInit(returnNotErr(10), .{});
+    const x2 = try oc.getOrTryInit(returnNotErr(11), .{});
+    try std.testing.expect(10 == x1.*);
+    try std.testing.expect(10 == x2.*);
+}
+
+fn returns(comptime x: u64) fn () u64 {
+    return struct {
+        fn get() u64 {
+            return x;
+        }
+    }.get;
+}
+
+fn returnNotErr(comptime x: u64) fn () error{}!u64 {
+    return struct {
+        fn get() !u64 {
+            return x;
+        }
+    }.get;
+}
+
+fn returnErr() !u64 {
+    return error.TestErr;
 }
