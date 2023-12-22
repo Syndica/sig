@@ -36,7 +36,6 @@ var gossip_entrypoints_option = cli.Option{
 var gossip_spy_node_option = cli.Option{
     .long_name = "spy-node",
     .help = "run as a gossip spy node (minimize outgoing packets)",
-    .short_alias = 's',
     .value = cli.OptionValue{ .bool = false },
     .required = false,
     .value_name = "Spy Node",
