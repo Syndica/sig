@@ -89,7 +89,7 @@ fn gossip(_: []const []const u8) !void {
 
     // var logger: Logger = .noop;
 
-    _ = try spawnMetrics(gpa_allocator);
+    const metrics_thread = try spawnMetrics(gpa_allocator);
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
@@ -134,6 +134,7 @@ fn gossip(_: []const []const u8) !void {
     );
 
     handle.join();
+    metrics_thread.detach();
 }
 
 /// Initializes the global registry. Returns error if registry was already initialized.
