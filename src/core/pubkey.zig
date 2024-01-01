@@ -83,7 +83,10 @@ pub const Pubkey = struct {
     }
 
     pub fn equals(self: *const Self, other: *const Pubkey) bool {
-        return std.mem.eql(u8, &self.data, &other.data);
+        const xx: @Vector(32, u8) = self.data;
+        const yy: @Vector(32, u8) = other.data;
+        const r = @reduce(.And, xx == yy);
+        return r;
     }
 
     pub fn fromPublicKey(public_key: *const Ed25519.PublicKey) Self {

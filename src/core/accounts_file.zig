@@ -195,6 +195,25 @@ pub const AccountFile = struct {
         self.n_accounts = n_accounts;
     }
 
+    /// get account without parsing data (a lot faster if the data field isnt used anyway)
+    pub fn getAccountFast(self: *const Self, start_offset: usize) error{EOF}!AccountFileAccountInfo {
+        var offset = start_offset;
+
+        var store_info = try self.getType(&offset, AccountFileStoreInfo);
+        var account_info = try self.getType(&offset, AccountFileInnerAccountInfo);
+        var hash = try self.getType(&offset, Hash);
+
+        return AccountFileAccountInfo{
+            .store_info = store_info,
+            .account_info = account_info,
+            .hash = hash,
+            // these shouldnt be used
+            .data = &[_]u8{},
+            .len = 0,
+            .offset = 0,
+        };
+    }
+
     pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AccountFileAccountInfo {
         var offset = start_offset;
 

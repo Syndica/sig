@@ -24,7 +24,8 @@ const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 const Channel = @import("../sync/channel.zig").Channel;
 
-const merkleTreeHash = @import("../common/merkle_tree.zig").merkleTreeHash;
+const NestedHashTree = @import("../common/merkle_tree.zig").NestedHashTree;
+
 const GenesisConfig = @import("../core/genesis_config.zig").GenesisConfig;
 const StatusCache = @import("../core/snapshot_fields.zig").StatusCache;
 
@@ -47,9 +48,7 @@ pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
     account_file_map: std.AutoArrayHashMap(FileId, AccountFile),
 
-    index: std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)),
-    index_bins: AccountIndexBins,
-
+    index: AccountIndexBins,
     accounts_db_fields: AccountsDbFields = undefined,
 
     const Self = @This();
@@ -57,8 +56,7 @@ pub const AccountsDB = struct {
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .account_file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
-            .index = std.AutoArrayHashMap(Pubkey, ArrayList(AccountRef)).init(allocator),
-            .index_bins = try AccountIndexBins.init(allocator, ACCOUNT_INDEX_BINS),
+            .index = try AccountIndexBins.init(allocator, ACCOUNT_INDEX_BINS),
             .allocator = allocator,
         };
     }
@@ -68,27 +66,22 @@ pub const AccountsDB = struct {
             af.deinit();
         }
         self.account_file_map.deinit();
-
-        for (self.index.values()) |*refs| {
-            refs.deinit();
-        }
-        self.index.deinit();
     }
 
-    pub const IndexTask = struct {
-        thread_bins: []ArrayList(*PubkeyAccountRef),
+    /// used to build AccountsDB from a snapshot in parallel
+    pub const ThreadAccountsDB = struct {
+        index: AccountIndexBins,
         file_map: std.AutoArrayHashMap(FileId, AccountFile),
 
         pub fn init(allocator: std.mem.Allocator, n_bins: usize) !@This() {
-            var thread_bins = try allocator.alloc(ArrayList(*PubkeyAccountRef), n_bins);
             return @This(){
-                .thread_bins = thread_bins,
+                .index = try AccountIndexBins.init(allocator, n_bins),
                 .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
             };
         }
     };
 
-    /// loads the account files and create the pubkey indexes
+    /// loads the account files and indexes the accounts
     pub fn loadFromSnapshot(
         self: *Self,
         accounts_db_fields: AccountsDbFields,
@@ -122,52 +115,32 @@ pub const AccountsDB = struct {
         std.debug.print("found {d} account files\n", .{n_account_files});
         std.debug.assert(n_account_files > 0);
 
-        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
-        var chunk_size = n_account_files / n_threads;
-        if (chunk_size == 0) {
-            n_threads = 1;
-            chunk_size = n_account_files;
+        const n_bins = self.index.bins.len;
+        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+        var thread_indexes = try ArrayList(ThreadAccountsDB).initCapacity(self.allocator, n_threads);
+        for (0..n_threads) |_| {
+            const thread_index = try ThreadAccountsDB.init(self.allocator, n_bins);
+            thread_indexes.appendAssumeCapacity(thread_index);
         }
-        std.debug.print("using {d} threads with {d} account_files per thread\n", .{ n_threads, chunk_size });
 
-        var handles = try ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
-        defer handles.deinit();
-
-        var tasks = try ArrayList(IndexTask).initCapacity(self.allocator, n_threads);
-        // defer tasks.deinit();
-
-        const n_bins = self.index_bins.bins.len;
-
-        var start_index: usize = 0;
-        var end_index: usize = 0;
-        for (0..n_threads) |i| {
-            if (i == (n_threads - 1)) {
-                end_index = filenames.items.len;
-            } else {
-                end_index = start_index + chunk_size;
-            }
-
-            var index_task = try IndexTask.init(self.allocator, n_bins);
-            tasks.appendAssumeCapacity(index_task);
-
-            const handle = try std.Thread.spawn(.{}, binAccountFiles, .{
-                accounts_path,
+        var handles = try spawnThreadTasks(
+            self.allocator,
+            binAccountFiles,
+            .{
                 &accounts_db_fields,
-                &self.index_bins,
-                // per task files
-                filenames.items[start_index..end_index],
-                tasks.items[i].thread_bins,
-                &tasks.items[i].file_map,
-            });
-
-            handles.appendAssumeCapacity(handle);
-            start_index = end_index;
-        }
-        std.debug.assert(end_index == filenames.items.len);
+                accounts_path,
+                thread_indexes.items,
+                filenames.items,
+            },
+            filenames.items.len,
+            n_threads,
+        );
 
         for (handles.items) |handle| {
             handle.join();
         }
+        handles.deinit();
+
         std.debug.print("\n", .{});
         std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
@@ -176,51 +149,27 @@ pub const AccountsDB = struct {
         std.debug.print("preallocating size for full bins\n", .{});
         var total_accounts: usize = 0;
         for (0..n_bins) |i| {
-            var bin_total_accounts: usize = 0;
-            for (tasks.items) |*task| {
-                bin_total_accounts += task.thread_bins[i].items.len;
+            for (thread_indexes.items) |*t_index| {
+                total_accounts += @as(u32, @intCast(t_index.index.bins[i].flat_map.items.len));
             }
-            total_accounts += bin_total_accounts;
-            // allocate all the keys and values (pubkeys and ptr to arraylists)
-            try self.index_bins.bins[i].pubkey_map.ensureTotalCapacity(bin_total_accounts);
         }
-        // preallocate the memory for the arraylists
-        var account_ref_memory = try self.allocator.alloc(AccountRef, total_accounts);
+        var account_ref_memory = try self.allocator.alloc(*PubkeyAccountRef, total_accounts);
         std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        chunk_size = n_bins / n_threads;
-        if (chunk_size == 0) {
-            n_threads = 1;
-            chunk_size = n_bins;
-        }
-        std.debug.print("using {d} threads with {d} bins per thread\n", .{ n_threads, chunk_size });
-
-        handles.clearRetainingCapacity();
-
-        start_index = 0;
-        end_index = 0;
-        for (0..n_threads) |i| {
-            if (i == (n_threads - 1)) {
-                end_index = n_bins;
-            } else {
-                end_index = start_index + chunk_size;
-            }
-
-            const handle = try std.Thread.spawn(.{}, indexFromBins, .{
-                &self.index_bins,
-                // per task files
-                &tasks,
+        handles = try spawnThreadTasks(
+            self.allocator,
+            indexFromBins,
+            .{
+                &self.index,
+                &thread_indexes,
                 account_ref_memory,
-                start_index,
-                end_index,
-            });
+            },
+            n_bins,
+            n_threads,
+        );
 
-            handles.appendAssumeCapacity(handle);
-            start_index = end_index;
-        }
-
-        for (tasks.items) |*task| {
+        for (thread_indexes.items) |*task| {
             var iter = task.file_map.iterator();
             while (iter.next()) |entry| {
                 try self.account_file_map.putNoClobber(entry.key_ptr.*, entry.value_ptr.*);
@@ -230,35 +179,43 @@ pub const AccountsDB = struct {
         for (handles.items) |handle| {
             handle.join();
         }
+        handles.deinit();
+
         std.debug.print("\n", .{});
         std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
     }
 
     pub fn binAccountFiles(
-        accounts_dir_path: []const u8,
         accounts_db_fields: *const AccountsDbFields,
-        index_bins: *AccountIndexBins,
-        // task specific
+        accounts_dir_path: []const u8,
+        thread_indexes: []ThreadAccountsDB,
         file_names: [][]const u8,
-        thread_bins: []ArrayList(*PubkeyAccountRef),
-        file_map: *std.AutoArrayHashMap(FileId, AccountFile),
+        // task specific
+        start_index: usize,
+        end_index: usize,
+        thread_id: usize,
     ) !void {
         var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = false }){};
         var allocator = gpa.allocator();
 
         // preallocate some things
+        const thread_filenames = file_names[start_index..end_index];
         const accounts_per_file_estimate = 900; // TODO: tune?
-        const n_refs_estimate = accounts_per_file_estimate * file_names.len;
+        const n_refs_estimate = accounts_per_file_estimate * thread_filenames.len;
         var refs = try ArrayList(PubkeyAccountRef).initCapacity(allocator, n_refs_estimate);
-        try file_map.ensureTotalCapacity(file_names.len);
+
+        const thread_bins = &thread_indexes[thread_id].index;
+
+        const file_map = &thread_indexes[thread_id].file_map;
+        try file_map.ensureTotalCapacity(thread_filenames.len);
 
         var timer = try std.time.Timer.start();
         var str_buf: [1024]u8 = undefined;
         // NOTE: might need to be longer depending on abs path length
         var abs_path_buf: [1024]u8 = undefined;
 
-        for (file_names, 1..) |file_name, file_count| {
+        for (thread_filenames, 1..) |file_name, file_count| {
             // parse "{slot}.{id}" from the file_name
             var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
             const slot = std.fmt.parseInt(Slot, fiter.next().?, 10) catch |err| {
@@ -293,27 +250,26 @@ pub const AccountsDB = struct {
             const file_id_u32: u32 = @intCast(accounts_file_id);
             file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
 
-            if (file_count % 1000 == 0 or (file_names.len - file_count) < 1000) {
+            if (file_count % 1000 == 0 or (thread_filenames.len - file_count) < 1000) {
                 const n_accounts_str = try std.fmt.bufPrint(
                     &str_buf,
                     "n_accounts: {d}",
                     .{refs.items.len},
                 );
-                printTimeEstimate(&timer, file_names.len, file_count, "read and index accounts", n_accounts_str);
+                printTimeEstimate(&timer, thread_filenames.len, file_count, "read and index accounts", n_accounts_str);
             }
         }
 
         // bin it all
-        const n_bins = index_bins.bins.len;
-        const n_refs_per_bin = refs.items.len / n_bins;
-        for (thread_bins) |*bin| {
-            bin.* = try ArrayList(*PubkeyAccountRef).initCapacity(allocator, n_refs_per_bin);
+        const n_refs_per_bin = refs.items.len / thread_bins.numberOfBins();
+        for (thread_bins.bins) |*index| {
+            index.* = AccountIndex{ .flat_map = try std.ArrayListUnmanaged(*PubkeyAccountRef).initCapacity(allocator, n_refs_per_bin) };
         }
 
         timer.reset();
-        for (refs.items, 0..) |*ref, i | {
-            const bin = &thread_bins[index_bins.getBinIndex(&ref.pubkey)];
-            try bin.append(ref);
+        for (refs.items, 0..) |*ref, i| {
+            const index = thread_bins.getPubkeyBin(&ref.pubkey);
+            try index.flat_map.append(allocator, ref);
 
             if (i % 1000 == 0 or (refs.items.len - i) < 1000) {
                 printTimeEstimate(&timer, refs.items.len, i, "binning accounts", null);
@@ -322,55 +278,43 @@ pub const AccountsDB = struct {
     }
 
     pub fn indexFromBins(
-        index_bin: *AccountIndexBins,
-        tasks: *ArrayList(IndexTask),
-        account_ref_memory: []AccountRef,
+        index: *AccountIndexBins,
+        thread_indexes: *ArrayList(ThreadAccountsDB),
+        mem: []*PubkeyAccountRef,
+        //
         bin_start_index: usize,
         bin_end_index: usize,
+        thread_id: usize,
     ) !void {
-        // NOTE: this is ok to leave hanging because we wont ever dealloc this memory
-        // we use a different one per thread so we dont need to lock it on allocs
-        var gpa = std.heap.GeneralPurposeAllocator(.{ .thread_safe = false }){};
-        var allocator = gpa.allocator();
-
+        _ = thread_id;
         const total_bins = bin_end_index - bin_start_index;
         var timer = try std.time.Timer.start();
 
-        // compute where this thread should start to write to
         var mem_index: usize = 0;
         for (0..bin_start_index) |bin_index| {
-            for (tasks.items) |*task| {
-                mem_index += task.thread_bins[bin_index].items.len;
+            for (thread_indexes.items) |*t_index| {
+                mem_index += t_index.index.getBin(bin_index).len();
             }
         }
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, count| {
-            for (tasks.items) |*task| {
-                var thread_bin = &task.thread_bins[bin_index];
-                for (thread_bin.items) |ref| {
-                    var entry = index_bin.bins[bin_index].pubkey_map.getOrPutAssumeCapacity(ref.pubkey);
+            var start_index = mem_index;
+            for (thread_indexes.items) |*t_index| {
+                const thread_bin = t_index.index.getBin(bin_index);
+                const n_thread_refs = thread_bin.len();
 
-                    const account_ref_ptr = &account_ref_memory[mem_index];
-                    account_ref_ptr.* = AccountRef{
-                        .slot = ref.slot,
-                        .file_id = @as(u32, @intCast(ref.file_id)),
-                        .offset = @as(u32, @intCast(ref.offset)),
-                    };
-                    defer mem_index += 1;
-
-                    if (!entry.found_existing) {
-                        var slice = try allocator.alloc(*AccountRef, 1);
-                        slice[0] = account_ref_ptr;
-                        var slot_list = std.ArrayList(*AccountRef).fromOwnedSlice(allocator, slice);
-
-                        entry.value_ptr.* = slot_list;
-                    } else {
-                        var ptr = try entry.value_ptr.addOne();
-                        ptr.* = account_ref_ptr;
-                    }
-                }
+                @memcpy(mem[mem_index..(mem_index + n_thread_refs)], thread_bin.flat_map.items);
+                mem_index += n_thread_refs;
             }
+            const bin_slice = mem[start_index..mem_index];
 
+            std.mem.sort(*PubkeyAccountRef, bin_slice, {}, struct {
+                fn lessThan(_: void, lhs: *PubkeyAccountRef, rhs: *PubkeyAccountRef) bool {
+                    return std.mem.lessThan(u8, &lhs.pubkey.data, &rhs.pubkey.data);
+                }
+            }.lessThan);
+
+            index.getBin(bin_index).flat_map = std.ArrayListUnmanaged(*PubkeyAccountRef).fromOwnedSlice(bin_slice);
             printTimeEstimate(&timer, total_bins, count, "combining bins", null);
         }
     }
@@ -386,57 +330,36 @@ pub const AccountsDB = struct {
         },
     };
 
-    /// computes the full accounts hash, accounts-delta-hash, and total lamports
-    /// using index data (not account file data)
+    /// computes a hash across all accounts in the db, and total lamports of those accounts
+    /// using index data. depending on the config, this can compute
+    /// either full or incremental snapshot values.
     pub fn computeAccountHashesAndLamports(self: *Self, config: AccountHashesConfig) !struct { accounts_hash: Hash, total_lamports: u64 } {
-        std.debug.print("computing account hashes\n", .{});
-
-        // logic for computing the hashes
-        var n_bins: usize = PUBKEY_BINS_FOR_CALCULATING_HASHES;
-        // NOTE: because we preallocate sizes per bin, this can be expensive
-        // for a large number of bins
-        if (builtin.is_test or self.index.count() < 100_000) {
-            n_bins = 256;
-        }
-        var bins = try PubkeyBins.initAndPreAlloc(self.allocator, n_bins, 1_000);
-        defer bins.deinit();
-
-        // populate the bins
-        for (self.index_bins.bins) |*bin| {
-            for (bin.pubkey_map.keys()) |*pubkey| {
-                try bins.insert(pubkey);
-            }
-        }
-
-        std.debug.print("sorting {d} bins\n", .{n_bins});
         var timer = try std.time.Timer.start();
-        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
-        var chunk_size = n_bins / n_threads;
-        if (chunk_size == 0) {
-            n_threads = 1;
-            chunk_size = n_bins;
+        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+
+        // alloc the result
+        var hashes = try self.allocator.alloc(ArrayList(Hash), n_threads);
+        var lamports = try self.allocator.alloc(u64, n_threads);
+        @memset(lamports, 0);
+        defer {
+            for (hashes) |*h| h.deinit();
+            self.allocator.free(hashes);
+            self.allocator.free(lamports);
         }
 
-        var handles = try std.ArrayList(std.Thread).initCapacity(self.allocator, n_threads);
-        defer handles.deinit();
-
-        var start_index: usize = 0;
-        var end_index: usize = 0;
-        for (0..n_threads) |i| {
-            if (i == (n_threads - 1)) {
-                end_index = n_bins;
-            } else {
-                end_index = start_index + chunk_size;
-            }
-            var handle = try std.Thread.spawn(.{}, sortBins, .{
-                bins.bins,
-                start_index,
-                end_index,
-            });
-            handles.appendAssumeCapacity(handle);
-            start_index = end_index;
-        }
-        std.debug.assert(end_index == n_bins);
+        // split processing the bins over muliple threads
+        var handles = try spawnThreadTasks(
+            self.allocator,
+            getHashesFromIndex,
+            .{
+                self,
+                config,
+                hashes,
+                lamports,
+            },
+            self.index.numberOfBins(),
+            n_threads,
+        );
 
         for (handles.items) |handle| {
             handle.join();
@@ -445,51 +368,16 @@ pub const AccountsDB = struct {
         std.debug.print("sorting took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        // compute merkle tree over the slices
-        std.debug.print("gathering account hashes\n", .{});
-        var total_accounts: usize = 0;
-        for (bins.bins) |*bin| {
-            total_accounts += bin.items.len;
-        }
-
-        // used for full hashes
-        var hashes = try ArrayList(Hash).initCapacity(self.allocator, total_accounts);
-        defer hashes.deinit();
+        var hash_tree = NestedHashTree{ .hashes = hashes };
+        std.debug.print("computing the full account merkle root over {d} accounts\n", .{hash_tree.len()});
+        const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
+        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
 
         var total_lamports: u64 = 0;
-        for (bins.bins) |*bin| {
-            for (bin.items) |pubkey| {
-                const bin_ptr = try self.index_bins.getBin(pubkey);
-                const slot_list: ArrayList(*AccountRef) = bin_ptr.pubkey_map.get(pubkey.*).?;
-                std.debug.assert(slot_list.items.len > 0);
-
-                // get the most recent state of the account
-                const max_slot_index = switch (config) {
-                    .FullAccountHash => |full_config| slotListArgmaxWithMax(slot_list, full_config.max_slot),
-                    .IncrementalAccountHash => |inc_config| slotListArgmaxWithMin(slot_list, inc_config.min_slot),
-                } orelse continue;
-
-                const max_account_loc = slot_list.items[max_slot_index];
-                const account = try self.getAccountInner(
-                    max_account_loc.file_id,
-                    @as(usize, @intCast(max_account_loc.offset)),
-                );
-
-                // only include non-zero lamport accounts (for full snapshots)
-                const lamports = account.lamports();
-                if (config == .FullAccountHash and lamports == 0) continue;
-
-                hashes.appendAssumeCapacity(account.hash.*);
-                total_lamports += lamports;
-            }
+        for (lamports) |lamport| {
+            total_lamports += lamport;
         }
-        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
-        timer.reset();
-
-        std.debug.print("computing the full account merkle root over {d} accounts\n", .{hashes.items.len});
-        const accounts_hash = try merkleTreeHash(hashes.items, MERKLE_FANOUT);
-        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
-        timer.reset();
 
         return .{
             .accounts_hash = accounts_hash.*,
@@ -517,15 +405,15 @@ pub const AccountsDB = struct {
         const total_lamports = full_result.total_lamports;
         const accounts_hash = full_result.accounts_hash;
 
-        if (expected_full_lamports != total_lamports) {
-            std.debug.print("incorrect total lamports\n", .{});
-            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_full_lamports, total_lamports });
-            return error.IncorrectTotalLamports;
-        }
         if (expected_accounts_hash.cmp(&accounts_hash) != .eq) {
             std.debug.print("incorrect accounts hash\n", .{});
             std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_hash, accounts_hash });
             return error.IncorrectAccountsHash;
+        }
+        if (expected_full_lamports != total_lamports) {
+            std.debug.print("incorrect total lamports\n", .{});
+            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_full_lamports, total_lamports });
+            return error.IncorrectTotalLamports;
         }
 
         // validate the incremental snapshot
@@ -555,6 +443,71 @@ pub const AccountsDB = struct {
         }
     }
 
+    pub fn getHashesFromIndex(
+        self: *AccountsDB,
+        config: AccountsDB.AccountHashesConfig,
+        hashes: []ArrayList(Hash),
+        total_lamports: []u64,
+        // spawing thread specific params
+        bin_start_index: usize,
+        bin_end_index: usize,
+        thread_index: usize,
+    ) !void {
+        const thread_bins = self.index.bins[bin_start_index..bin_end_index];
+        const thread_hashes = &hashes[thread_index];
+
+        var total_len: usize = 0;
+        for (thread_bins) |*bin| {
+            total_len += bin.flat_map.items.len;
+        }
+        thread_hashes.* = try ArrayList(Hash).initCapacity(self.allocator, total_len);
+
+        var local_total_lamports: u64 = 0;
+
+        var timer = try std.time.Timer.start();
+        for (thread_bins, 1..) |bin_ptr, count| {
+            var start_index: usize = 0;
+
+            while (start_index < bin_ptr.flat_map.items.len) {
+                var slot_start_index: usize = start_index;
+                var slot_end_index: usize = start_index;
+                var current_pubkey = &bin_ptr.flat_map.items[start_index].pubkey;
+
+                for (bin_ptr.flat_map.items[start_index..]) |ref| {
+                    if (ref.pubkey.equals(current_pubkey)) {
+                        slot_end_index += 1;
+                    } else break;
+                }
+                start_index = slot_end_index;
+
+                const slot_list = bin_ptr.flat_map.items[slot_start_index..slot_end_index];
+                std.debug.assert(slot_list.len > 0);
+
+                // get the most recent state of the account
+                const max_slot_index = switch (config) {
+                    .FullAccountHash => |full_config| AccountsDB.slotListArgmaxWithMax(slot_list, full_config.max_slot),
+                    .IncrementalAccountHash => |inc_config| AccountsDB.slotListArgmaxWithMin(slot_list, inc_config.min_slot),
+                } orelse continue;
+
+                const max_account_loc = slot_list[max_slot_index];
+                const account = try self.getAccountInnerFast(
+                    @as(u32, @intCast(max_account_loc.file_id)),
+                    @as(usize, @intCast(max_account_loc.offset)),
+                );
+
+                // only include non-zero lamport accounts (for full snapshots)
+                const lamports = account.lamports();
+                if (config == .FullAccountHash and lamports == 0) continue;
+
+                thread_hashes.appendAssumeCapacity(account.hash.*);
+                local_total_lamports += lamports;
+            }
+            printTimeEstimate(&timer, thread_bins.len, count, "gathering account hashes", null);
+        }
+
+        total_lamports[thread_index] = local_total_lamports;
+    }
+
     pub fn getSlotHistory(self: *const Self) !sysvars.SlotHistory {
         return try self.getTypeFromAccount(
             sysvars.SlotHistory,
@@ -563,16 +516,16 @@ pub const AccountsDB = struct {
     }
 
     pub inline fn slotListArgmaxWithMin(
-        slot_list: ArrayList(*AccountRef),
+        slot_list: []*PubkeyAccountRef,
         min_slot: Slot,
     ) ?usize {
-        if (slot_list.items.len == 0) {
+        if (slot_list.len == 0) {
             return null;
         }
 
-        var biggest: *AccountRef = undefined;
+        var biggest: *PubkeyAccountRef = undefined;
         var biggest_index: ?usize = null;
-        for (slot_list.items, 0..) |item, i| {
+        for (slot_list, 0..) |item, i| {
             if (item.slot > min_slot and (biggest_index == null or item.slot > biggest.slot)) {
                 biggest = item;
                 biggest_index = i;
@@ -583,16 +536,16 @@ pub const AccountsDB = struct {
     }
 
     pub inline fn slotListArgmaxWithMax(
-        slot_list: ArrayList(*AccountRef),
+        slot_list: []*PubkeyAccountRef,
         max_slot: Slot,
     ) ?usize {
-        if (slot_list.items.len == 0) {
+        if (slot_list.len == 0) {
             return null;
         }
 
-        var biggest: *AccountRef = undefined;
+        var biggest: *PubkeyAccountRef = undefined;
         var biggest_index: ?usize = null;
-        for (slot_list.items, 0..) |item, i| {
+        for (slot_list, 0..) |item, i| {
             if (item.slot <= max_slot and (biggest_index == null or item.slot > biggest.slot)) {
                 biggest = item;
                 biggest_index = i;
@@ -603,14 +556,14 @@ pub const AccountsDB = struct {
     }
 
     pub inline fn slotListArgmax(
-        slot_list: ArrayList(*AccountRef),
+        slot_list: []*PubkeyAccountRef,
     ) ?usize {
         return std.sort.argMax(
-            *AccountRef,
-            slot_list.items,
+            *PubkeyAccountRef,
+            slot_list,
             {},
             struct {
-                fn lessThan(_: void, a: *AccountRef, b: *AccountRef) bool {
+                fn lessThan(_: void, a: *PubkeyAccountRef, b: *PubkeyAccountRef) bool {
                     return a.slot < b.slot;
                 }
             }.lessThan,
@@ -619,17 +572,17 @@ pub const AccountsDB = struct {
 
     /// gets an account given an associated pubkey
     pub fn getAccount(self: *const Self, pubkey: *const Pubkey) !AccountFileAccountInfo {
-        const bin = try self.index_bins.getBin(pubkey);
-        const refs = bin.pubkey_map.get(pubkey.*) orelse {
+        const pubkey_index = self.index.getPubkeyBin(pubkey);
+        const refs = pubkey_index.getSlotList(pubkey);
+        if (refs.len == 0) {
             return error.PubkeyNotInIndex;
-        };
-        std.debug.assert(refs.items.len > 0);
+        }
 
         // this is a safe unwrap because we know refs.len > 0
         const max_account_index = slotListArgmax(refs).?;
-        const max_account_loc = refs.items[max_account_index];
+        const max_account_loc = refs[max_account_index];
         const account = try self.getAccountInner(
-            max_account_loc.file_id,
+            @as(u32, @intCast(max_account_loc.file_id)),
             @as(usize, @intCast(max_account_loc.offset)),
         );
         return account;
@@ -644,6 +597,16 @@ pub const AccountsDB = struct {
         return account;
     }
 
+    /// gets an account given an file_id and offset value
+    /// used when reading all the account hashes from the index
+    pub fn getAccountInnerFast(self: *const Self, file_id: FileId, offset: usize) !AccountFileAccountInfo {
+        const accounts_file: AccountFile = self.account_file_map.get(file_id) orelse return error.FileIdNotFound;
+        const account = accounts_file.getAccountFast(offset) catch {
+            return error.InvalidOffset;
+        };
+        return account;
+    }
+
     pub fn getTypeFromAccount(self: *const Self, comptime T: type, pubkey: *const Pubkey) !T {
         const account = try self.getAccount(pubkey);
         const t = bincode.readFromSlice(self.allocator, T, account.data, .{}) catch {
@@ -652,6 +615,41 @@ pub const AccountsDB = struct {
         return t;
     }
 };
+
+/// Spawns tasks and returns a list of threads
+/// task function should take {params} ++ {start_index, end_index, thread_id}
+pub fn spawnThreadTasks(
+    allocator: std.mem.Allocator,
+    f: anytype,
+    params: anytype,
+    data_len: usize,
+    max_n_threads: usize,
+) !std.ArrayList(std.Thread) {
+    var chunk_size = data_len / max_n_threads;
+    var n_threads = max_n_threads;
+    if (chunk_size == 0) {
+        n_threads = 1;
+        chunk_size = data_len;
+    }
+
+    var handles = try std.ArrayList(std.Thread).initCapacity(allocator, n_threads);
+
+    var start_index: usize = 0;
+    var end_index: usize = 0;
+    for (0..n_threads) |i| {
+        if (i == (n_threads - 1)) {
+            end_index = data_len;
+        } else {
+            end_index = start_index + chunk_size;
+        }
+        const handle = try std.Thread.spawn(.{}, f, params ++ .{ start_index, end_index, i });
+        handles.appendAssumeCapacity(handle);
+
+        start_index = end_index;
+    }
+
+    return handles;
+}
 
 pub fn printTimeEstimate(
     // timer should be started at the beginning
@@ -760,20 +758,48 @@ pub const PubkeyBinCalculator = struct {
 
 pub const PUBKEY_BINS_FOR_CALCULATING_HASHES: usize = 65_536;
 
-pub const AccountIndex = struct {
-    pubkey_map: std.AutoArrayHashMap(Pubkey, ArrayList(*AccountRef)),
-    mux: std.Thread.Mutex = .{},
+pub fn PubkeyPtrMap(comptime Value: type) type {
+    return std.HashMap(*const Pubkey, Value, struct {
+        pub fn hash(ctx: @This(), x: *const Pubkey) u64 {
+            _ = ctx;
+            return @as(u64, x.data[0]) |
+                @as(u64, x.data[1]) << 8 |
+                @as(u64, x.data[2]) << 16 |
+                @as(u64, x.data[3]) << 24;
+        }
 
-    pub fn init(allocator: std.mem.Allocator) !AccountIndex {
-        return AccountIndex{ .pubkey_map = std.AutoArrayHashMap(Pubkey, ArrayList(*AccountRef)).init(allocator) };
+        pub fn eql(_: @This(), a: *const Pubkey, b: *const Pubkey) bool {
+            return a.equals(b);
+        }
+    }, 80);
+}
+
+pub const AccountIndex = struct {
+    flat_map: std.ArrayListUnmanaged(*PubkeyAccountRef) = .{},
+
+    pub fn len(self: *const AccountIndex) usize {
+        return self.flat_map.items.len;
     }
 
-    pub fn deinit(self: *AccountIndex) void {
-        var iter = self.pubkey_map.iterator();
-        while (iter.next()) |*entry| {
-            entry.value_ptr.deinit();
+    pub fn getSlotList(self: *const AccountIndex, pubkey: *const Pubkey) []*PubkeyAccountRef {
+        var slot_start_index: usize = 0;
+        var slot_end_index: usize = 0;
+        var found = false;
+
+        for (self.flat_map.items, 0..) |ref, index| {
+            if (ref.pubkey.equals(pubkey)) {
+                if (!found) {
+                    slot_start_index = index;
+                    slot_end_index = index;
+                    found = true;
+                }
+                slot_end_index += 1;
+            } else if (found) {
+                break;
+            }
         }
-        self.pubkey_map.deinit();
+
+        return self.flat_map.items[slot_start_index..slot_end_index];
     }
 };
 
@@ -788,7 +814,7 @@ pub const AccountIndexBins = struct {
 
         var bins = try allocator.alloc(AccountIndex, n_bins);
         for (bins) |*bin| {
-            bin.* = try AccountIndex.init(allocator);
+            bin.* = AccountIndex{};
         }
 
         return Self{
@@ -805,13 +831,17 @@ pub const AccountIndexBins = struct {
         allocator.free(self.bins);
     }
 
-    pub fn getBinIndex(self: *Self, pubkey: *const Pubkey) usize {
-        return self.calculator.binIndex(pubkey);
+    pub fn getBin(self: *const Self, index: usize) *AccountIndex {
+        return &self.bins[index];
     }
 
-    pub fn getBin(self: *const Self, pubkey: *const Pubkey) !*AccountIndex {
+    pub fn getPubkeyBin(self: *const Self, pubkey: *const Pubkey) *AccountIndex {
         const bin_index = self.calculator.binIndex(pubkey);
         return &self.bins[bin_index];
+    }
+
+    pub fn numberOfBins(self: *const Self) usize {
+        return self.bins.len;
     }
 };
 
@@ -992,6 +1022,9 @@ pub const SnapshotPaths = struct {
             }
             count += 1;
         }
+        if (maybe_latest_incremental_snapshot) |*latest_incremental_snapshot| {
+            latest_incremental_snapshot.path = try allocator.dupe(u8, latest_incremental_snapshot.path);
+        }
 
         return .{
             .full_snapshot = latest_full_snapshot,
@@ -1013,6 +1046,8 @@ pub const Snapshots = struct {
         );
         defer allocator.free(full_metadata_path);
 
+        std.debug.print("reading full snapshot from {s}\n", .{full_metadata_path});
+
         var full = try SnapshotFields.readFromFilePath(
             allocator,
             full_metadata_path,
@@ -1026,6 +1061,8 @@ pub const Snapshots = struct {
                 .{ snapshot_dir, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
             );
             defer allocator.free(incremental_metadata_path);
+
+            std.debug.print("reading incremental snapshot from {s}\n", .{incremental_metadata_path});
 
             incremental = try SnapshotFields.readFromFilePath(
                 allocator,
@@ -1096,13 +1133,13 @@ pub fn main() !void {
     var allocator = gpa.allocator();
 
     // const snapshot_dir = "test_data/";
-    const snapshot_dir = "../snapshots/";
+    const snapshot_dir = "../../snapshots/";
 
     // this should exist before we start to unpack
     const genesis_path = try std.fmt.allocPrint(
         allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "genesis.bin" },
+        "{s}/genesis.bin",
+        .{snapshot_dir},
     );
     defer allocator.free(genesis_path);
 
@@ -1114,15 +1151,16 @@ pub fn main() !void {
     // if this exists, we wont look for a .tar.zstd
     const accounts_path = try std.fmt.allocPrint(
         allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "accounts" },
+        "{s}/accounts/",
+        // "{s}/accounts/run",
+        .{snapshot_dir},
     );
     defer allocator.free(accounts_path);
 
     var snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
 
     // TMP: remove later
-    if (std.mem.eql(u8, snapshot_dir, "../snapshots/")) {
+    if (!std.mem.eql(u8, snapshot_dir, "test_data/")) {
         snapshot_paths.incremental_snapshot = null;
     }
 
@@ -1142,6 +1180,7 @@ pub fn main() !void {
         }
     };
 
+    var full_timer = try std.time.Timer.start();
     var timer = try std.time.Timer.start();
     std.debug.print("reading snapshots...\n", .{});
     var snapshots = try Snapshots.readFromPaths(allocator, snapshot_dir, &snapshot_paths);
@@ -1166,6 +1205,8 @@ pub fn main() !void {
         full_snapshot.bank_fields.slot,
         full_snapshot.bank_fields.capitalization,
     );
+    std.debug.print("validated from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
+    std.debug.print("full timer: {s}\n", .{std.fmt.fmtDuration(full_timer.read())});
 
     // use the genesis to validate the bank
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);

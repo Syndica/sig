@@ -310,6 +310,9 @@ pub fn Deserializer(comptime Reader: type) type {
                                         continue;
                                     }
                                 }
+                                errdefer {
+                                    std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                                }
                                 @field(data, field.name) = try getty.deserialize(alloc, field.type, dd);
                             }
                         }

@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const Packet = @import("packet.zig").Packet;
