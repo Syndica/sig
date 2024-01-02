@@ -992,7 +992,10 @@ fn loadTestAccountsDB() !struct { AccountsDB, SnapshotFields } {
         full_metadata_path,
     );
 
-    var accounts_db = try AccountsDB.init(allocator);
+    var logger = Logger { 
+        .noop = {}
+    };
+    var accounts_db = try AccountsDB.init(allocator, logger);
 
     const accounts_path = "test_data/accounts";
     const dir = try std.fs.cwd().openDir("test_data", .{});
