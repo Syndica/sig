@@ -9,37 +9,36 @@ const Slot = @import("./time.zig").Slot;
 const Epoch = @import("./time.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 
-const AccountFileInfo = @import("./snapshot_fields.zig").AccountFileInfo;
+const AccountFileInfo = @import("./snapshots.zig").AccountFileInfo;
 
 pub const FileId = u32;
 
-// metadata which is stored inside an AccountFile
-pub const AccountFileStoreInfo = struct {
-    write_version_obsolete: u64,
-    data_len: u64,
-    pubkey: Pubkey,
-};
-
-pub const AccountFileInnerAccountInfo = struct {
-    lamports: u64,
-    rent_epoch: Epoch,
-    owner: Pubkey,
-    executable: bool,
-};
-
-// account meta data which is stored inside an AccountFile
-pub const AccountFileAccountInfo = struct {
-    store_info: *AccountFileStoreInfo,
-    account_info: *AccountFileInnerAccountInfo,
+// an account thats stored in an AccountFile
+pub const AccountInFile = struct {
+    store_info: *Header1,
+    account_info: *Header2,
 
     data: []u8,
     offset: usize,
     len: usize,
     hash: *Hash,
 
+    pub const Header1 = struct {
+        write_version_obsolete: u64,
+        data_len: u64,
+        pubkey: Pubkey,
+    };
+
+    pub const Header2 = struct {
+        lamports: u64,
+        rent_epoch: Epoch,
+        owner: Pubkey,
+        executable: bool,
+    };
+
     pub fn sanitize(self: *const @This()) !void {
         // make sure upper bits are zero
-        const exec_byte = @as(*u8, @ptrCast(&self.account_info.executable));
+        const exec_byte = @as(*u8, @ptrCast(self.executable()));
         const valid_exec = exec_byte.* & ~@as(u8, 1) == 0;
         if (!valid_exec) {
             return error.InvalidExecutableFlag;
@@ -48,33 +47,33 @@ pub const AccountFileAccountInfo = struct {
         var valid_lamports = self.account_info.lamports != 0 or (
         // ie, is default account
             self.data.len == 0 and
-            self.account_info.owner.isDefault() and
-            self.account_info.executable == false and
-            self.account_info.rent_epoch == 0);
+            self.owner().isDefault() and
+            self.executable().* == false and
+            self.rent_epoch().* == 0);
         if (!valid_lamports) {
             return error.InvalidLamports;
         }
     }
 
     // pubkey
-    pub inline fn pubkey(self: *const @This()) Pubkey {
-        return self.store_info.pubkey;
+    pub inline fn pubkey(self: *const @This()) *Pubkey {
+        return &self.store_info.pubkey;
     }
 
-    pub inline fn lamports(self: *const @This()) u64 {
-        return self.account_info.lamports;
+    pub inline fn lamports(self: *const @This()) *u64 {
+        return &self.account_info.lamports;
     }
 
-    pub inline fn owner(self: *const @This()) Pubkey {
-        return self.account_info.owner;
+    pub inline fn owner(self: *const @This()) *Pubkey {
+        return &self.account_info.owner;
     }
 
-    pub inline fn executable(self: *const @This()) bool {
-        return self.account_info.executable;
+    pub inline fn executable(self: *const @This()) *bool {
+        return &self.account_info.executable;
     }
 
-    pub inline fn rent_epoch(self: *const @This()) Epoch {
-        return self.account_info.rent_epoch;
+    pub inline fn rent_epoch(self: *const @This()) *Epoch {
+        return &self.account_info.rent_epoch;
     }
 };
 
@@ -196,14 +195,14 @@ pub const AccountFile = struct {
     }
 
     /// get account without parsing data (a lot faster if the data field isnt used anyway)
-    pub fn getAccountFast(self: *const Self, start_offset: usize) error{EOF}!AccountFileAccountInfo {
+    pub fn getAccountFast(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
         var offset = start_offset;
 
-        var store_info = try self.getType(&offset, AccountFileStoreInfo);
-        var account_info = try self.getType(&offset, AccountFileInnerAccountInfo);
+        var store_info = try self.getType(&offset, AccountInFile.Header1);
+        var account_info = try self.getType(&offset, AccountInFile.Header2);
         var hash = try self.getType(&offset, Hash);
 
-        return AccountFileAccountInfo{
+        return AccountInFile{
             .store_info = store_info,
             .account_info = account_info,
             .hash = hash,
@@ -214,17 +213,17 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AccountFileAccountInfo {
+    pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
         var offset = start_offset;
 
-        var store_info = try self.getType(&offset, AccountFileStoreInfo);
-        var account_info = try self.getType(&offset, AccountFileInnerAccountInfo);
+        var store_info = try self.getType(&offset, AccountInFile.Header1);
+        var account_info = try self.getType(&offset, AccountInFile.Header2);
         var hash = try self.getType(&offset, Hash);
         var data = try self.getSlice(&offset, store_info.data_len);
 
         var len = offset - start_offset;
 
-        return AccountFileAccountInfo{
+        return AccountInFile{
             .store_info = store_info,
             .account_info = account_info,
             .hash = hash,

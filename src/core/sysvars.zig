@@ -6,7 +6,7 @@ const Epoch = @import("time.zig").Epoch;
 const Pubkey = @import("pubkey.zig").Pubkey;
 const Hash = @import("hash.zig").Hash;
 
-const StakeHistoryEntry = @import("./snapshot_fields.zig").StakeHistoryEntry;
+const StakeHistoryEntry = @import("./snapshots.zig").StakeHistoryEntry;
 const UnixTimestamp = @import("genesis_config.zig").UnixTimestamp;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;

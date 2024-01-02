@@ -17,6 +17,7 @@ const Pubkey = @import("./pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
 pub const sysvars = @import("./sysvars.zig");
+const readDirectory = @import("../utils/directory.zig").readDirectory;
 
 pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
@@ -704,6 +705,246 @@ pub const StatusCache = struct {
         }
     }
 };
+
+pub const FullSnapshotPath = struct {
+    path: []const u8,
+    slot: Slot,
+    hash: []const u8,
+
+    /// matches with the regex: r"^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
+    pub fn fromPath(path: []const u8) !FullSnapshotPath {
+        var ext_parts = std.mem.splitSequence(u8, path, ".");
+        const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
+
+        var extn = ext_parts.rest();
+        // only support tar.zst
+        if (!std.mem.eql(u8, extn, "tar.zst"))
+            return error.InvalidSnapshotPath;
+
+        var parts = std.mem.splitSequence(u8, stem, "-");
+        const header = parts.next() orelse return error.InvalidSnapshotPath;
+        if (!std.mem.eql(u8, header, "snapshot"))
+            return error.InvalidSnapshotPath;
+
+        const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
+        const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
+
+        var hash = parts.next() orelse return error.InvalidSnapshotPath;
+
+        return FullSnapshotPath{ .path = path, .slot = slot, .hash = hash };
+    }
+};
+
+pub const IncrementalSnapshotPath = struct {
+    path: []const u8,
+    // this references the full snapshot slot
+    base_slot: Slot,
+    slot: Slot,
+    hash: []const u8,
+
+    /// matches against regex: r"^incremental-snapshot-(?P<base>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
+    pub fn fromPath(path: []const u8) !IncrementalSnapshotPath {
+        var ext_parts = std.mem.splitSequence(u8, path, ".");
+        const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
+
+        var extn = ext_parts.rest();
+        // only support tar.zst
+        if (!std.mem.eql(u8, extn, "tar.zst"))
+            return error.InvalidSnapshotPath;
+
+        var parts = std.mem.splitSequence(u8, stem, "-");
+        var header = parts.next() orelse return error.InvalidSnapshotPath;
+        if (!std.mem.eql(u8, header, "incremental"))
+            return error.InvalidSnapshotPath;
+
+        header = parts.next() orelse return error.InvalidSnapshotPath;
+        if (!std.mem.eql(u8, header, "snapshot"))
+            return error.InvalidSnapshotPath;
+
+        const base_slot_str = parts.next() orelse return error.InvalidSnapshotPath;
+        const base_slot = std.fmt.parseInt(Slot, base_slot_str, 10) catch return error.InvalidSnapshotPath;
+
+        const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
+        const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
+
+        var hash = parts.next() orelse return error.InvalidSnapshotPath;
+
+        return IncrementalSnapshotPath{
+            .path = path,
+            .slot = slot,
+            .base_slot = base_slot,
+            .hash = hash,
+        };
+    }
+};
+
+pub const SnapshotPaths = struct {
+    full_snapshot: FullSnapshotPath,
+    incremental_snapshot: ?IncrementalSnapshotPath,
+
+    /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
+    pub fn find(allocator: std.mem.Allocator, snapshot_dir: []const u8) !SnapshotPaths {
+        var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
+        defer snapshot_dir_iter.close();
+
+        var files = try readDirectory(allocator, snapshot_dir_iter);
+        var filenames = files.filenames;
+        defer {
+            filenames.deinit();
+            allocator.free(files.filename_memory);
+        }
+
+        // find the snapshots
+        var maybe_latest_full_snapshot: ?FullSnapshotPath = null;
+        var count: usize = 0;
+        for (filenames.items) |filename| {
+            const snap_path = FullSnapshotPath.fromPath(filename) catch continue;
+            if (count == 0 or snap_path.slot > maybe_latest_full_snapshot.?.slot) {
+                maybe_latest_full_snapshot = snap_path;
+            }
+            count += 1;
+        }
+        var latest_full_snapshot = maybe_latest_full_snapshot orelse return error.NoFullSnapshotFound;
+        // clone the name so we can deinit the full array
+        latest_full_snapshot.path = try allocator.dupe(u8, latest_full_snapshot.path);
+
+        count = 0;
+        var maybe_latest_incremental_snapshot: ?IncrementalSnapshotPath = null;
+        for (filenames.items) |filename| {
+            const snap_path = IncrementalSnapshotPath.fromPath(filename) catch continue;
+            // need to match the base slot
+            if (snap_path.base_slot == latest_full_snapshot.slot and (count == 0 or
+                // this unwrap is safe because count > 0
+                snap_path.slot > maybe_latest_incremental_snapshot.?.slot))
+            {
+                maybe_latest_incremental_snapshot = snap_path;
+            }
+            count += 1;
+        }
+        if (maybe_latest_incremental_snapshot) |*latest_incremental_snapshot| {
+            latest_incremental_snapshot.path = try allocator.dupe(u8, latest_incremental_snapshot.path);
+        }
+
+        return .{
+            .full_snapshot = latest_full_snapshot,
+            .incremental_snapshot = maybe_latest_incremental_snapshot,
+        };
+    }
+};
+
+pub const Snapshots = struct {
+    full: SnapshotFields,
+    incremental: ?SnapshotFields,
+
+    pub fn readFromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: *const SnapshotPaths) !Snapshots {
+        // unpack
+        const full_metadata_path = try std.fmt.allocPrint(
+            allocator,
+            "{s}/{s}/{d}/{d}",
+            .{ snapshot_dir, "snapshots", paths.full_snapshot.slot, paths.full_snapshot.slot },
+        );
+        defer allocator.free(full_metadata_path);
+
+        std.debug.print("reading full snapshot from {s}\n", .{full_metadata_path});
+
+        var full = try SnapshotFields.readFromFilePath(
+            allocator,
+            full_metadata_path,
+        );
+
+        var incremental: ?SnapshotFields = null;
+        if (paths.incremental_snapshot) |incremental_snapshot_path| {
+            const incremental_metadata_path = try std.fmt.allocPrint(
+                allocator,
+                "{s}/{s}/{d}/{d}",
+                .{ snapshot_dir, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
+            );
+            defer allocator.free(incremental_metadata_path);
+
+            std.debug.print("reading incremental snapshot from {s}\n", .{incremental_metadata_path});
+
+            incremental = try SnapshotFields.readFromFilePath(
+                allocator,
+                incremental_metadata_path,
+            );
+        }
+
+        return Snapshots{
+            .full = full,
+            .incremental = incremental,
+        };
+    }
+
+    /// collapse all full and incremental snapshots into one.
+    /// note: this works by stack copying the full snapshot and combining
+    /// the accounts-db account file map.
+    /// this will 1) modify the incremental snapshot account map
+    /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
+    /// (so be sure not to deinit it while still using the returned snapshot)
+    pub fn collapse(self: *Snapshots) !SnapshotFields {
+        // nothing to collapse
+        if (self.incremental == null)
+            return self.full;
+
+        // collapse bank fields into the
+        var snapshot = self.incremental.?; // stack copy
+        const full_slot = self.full.bank_fields.slot;
+
+        // collapse accounts-db fields
+        var storages_map = &self.incremental.?.accounts_db_fields.file_map;
+        // make sure theres no overlap in slots between full and incremental and combine
+        var storages_entry_iter = storages_map.iterator();
+        while (storages_entry_iter.next()) |*incremental_entry| {
+            const slot = incremental_entry.key_ptr.*;
+
+            // only keep slots > full snapshot slot
+            if (!(slot > full_slot)) {
+                _ = storages_map.remove(slot);
+                continue;
+            }
+
+            var slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(slot);
+            if (slot_entry.found_existing) {
+                std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
+            } else {
+                slot_entry.value_ptr.* = incremental_entry.value_ptr.*;
+            }
+        }
+        snapshot.accounts_db_fields = self.full.accounts_db_fields;
+
+        return snapshot;
+    }
+};
+
+/// unpacks a .tar.zstd file into the given directory
+pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_dir: std.fs.Dir) !void {
+    const file = try output_dir.openFile(path, .{});
+    defer file.close();
+
+    var timer = try std.time.Timer.start();
+    var stream = std.compress.zstd.decompressStream(allocator, file.reader());
+    try std.tar.pipeToFileSystem(output_dir, stream.reader(), .{ .mode_mode = .ignore });
+    std.debug.print("unpacked {s} in {s}\n", .{ path, std.fmt.fmtDuration(timer.read()) });
+}
+
+test "core.accounts_db: test full snapshot path parsing" {
+    const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
+    const snapshot_info = try FullSnapshotPath.fromPath(full_snapshot_path);
+
+    try std.testing.expect(snapshot_info.slot == 269);
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.hash, "EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn"));
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.path, full_snapshot_path));
+}
+
+test "core.accounts_db: test incremental snapshot path parsing" {
+    const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
+    const snapshot_info = try IncrementalSnapshotPath.fromPath(path);
+
+    try std.testing.expect(snapshot_info.base_slot == 269);
+    try std.testing.expect(snapshot_info.slot == 307);
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.hash, "4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB"));
+    try std.testing.expect(std.mem.eql(u8, snapshot_info.path, path));
+}
 
 test "core.snapshot_fields: parse status cache" {
     const allocator = std.testing.allocator;

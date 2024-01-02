@@ -1,9 +1,9 @@
 const std = @import("std");
 const AccountsDB = @import("./accounts_db.zig").AccountsDB;
 const GenesisConfig = @import("./genesis_config.zig").GenesisConfig;
-const BankFields = @import("./snapshot_fields.zig").BankFields;
+const BankFields = @import("./snapshots.zig").BankFields;
 
-const SnapshotFields = @import("./snapshot_fields.zig").SnapshotFields;
+const SnapshotFields = @import("./snapshots.zig").SnapshotFields;
 
 pub const Bank = struct {
     accounts_db: *AccountsDB,

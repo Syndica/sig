@@ -1,7 +1,7 @@
 const std = @import("std");
 const cli = @import("zig-cli");
-const AccountsDbFields = @import("../core/snapshot_fields.zig").AccountsDbFields;
-const AccountFileInfo = @import("../core/snapshot_fields.zig").AccountFileInfo;
+const AccountsDbFields = @import("../core/snapshots.zig").AccountsDbFields;
+const AccountFileInfo = @import("../core/snapshots.zig").AccountFileInfo;
 const AccountFile = @import("../core/accounts_file.zig").AccountFile;
 const PubkeyAccountRef = @import("../core/accounts_file.zig").PubkeyAccountRef;
 
@@ -14,8 +14,8 @@ const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
 const Channel = @import("../sync/channel.zig").Channel;
-const SnapshotFields = @import("../core/snapshot_fields.zig").SnapshotFields;
-const SnapshotPaths = @import("../core/accounts_db.zig").SnapshotPaths;
+const SnapshotFields = @import("../core/snapshots.zig").SnapshotFields;
+const SnapshotPaths = @import("../core/snapshots.zig").SnapshotPaths;
 
 pub const AccountAndPubkey = struct {
     pubkey: Pubkey,
