@@ -151,7 +151,7 @@ pub const GossipService = struct {
             .max_threads = n_threads,
             .stack_size = 2 * 1024 * 1024,
         });
-        logger.debugf("using n_threads in gossip: {}\n", .{n_threads});
+        logger.debugf("using n_threads in gossip: {}", .{n_threads});
 
         var crds_table = try CrdsTable.init(allocator, thread_pool);
         errdefer crds_table.deinit();
@@ -314,18 +314,18 @@ pub const GossipService = struct {
                 self.packet.data[0..self.packet.size],
                 bincode.Params.standard,
             ) catch {
-                self.logger.debugf("gossip: packet_verify: failed to deserialize\n", .{});
+                self.logger.errf("gossip: packet_verify: failed to deserialize", .{});
                 return;
             };
 
             protocol_message.sanitize() catch {
-                self.logger.debugf("gossip: packet_verify: failed to sanitize\n", .{});
+                self.logger.errf("gossip: packet_verify: failed to sanitize", .{});
                 bincode.free(self.allocator, protocol_message);
                 return;
             };
 
             protocol_message.verifySignature() catch {
-                self.logger.debugf("gossip: packet_verify: failed to verify signature\n", .{});
+                self.logger.errf("gossip: packet_verify: failed to verify signature", .{});
                 bincode.free(self.allocator, protocol_message);
                 return;
             };
@@ -400,7 +400,7 @@ pub const GossipService = struct {
             }
         }
 
-        self.logger.debugf("verify_packets loop closed\n", .{});
+        self.logger.debugf("verify_packets loop closed", .{});
     }
 
     // structs used in process_messages loop
@@ -564,10 +564,10 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = push_messages.items.len;
                 self.handleBatchPushMessages(&push_messages) catch |err| {
-                    self.logger.debugf("handleBatchPushMessages failed: {}\n", .{err});
+                    self.logger.errf("handleBatchPushMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch push took {} with {} items @{}\n", .{ elapsed, length, msg_count });
+                self.logger.debugf("handle batch push took {} with {} items @{}", .{ elapsed, length, msg_count });
                 push_messages.clearRetainingCapacity();
             }
 
@@ -576,7 +576,7 @@ pub const GossipService = struct {
                 const length = prune_messages.items.len;
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch prune took {} with {} items @{}\n", .{ elapsed, length, msg_count });
+                self.logger.debugf("handle batch prune took {} with {} items @{}", .{ elapsed, length, msg_count });
                 prune_messages.clearRetainingCapacity();
             }
 
@@ -584,10 +584,10 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = pull_requests.items.len;
                 self.handleBatchPullRequest(pull_requests) catch |err| {
-                    self.logger.debugf("handleBatchPullRequest failed: {}\n", .{err});
+                    self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_req took {} with {} items @{}\n", .{ elapsed, length, msg_count });
+                self.logger.debugf("handle batch pull_req took {} with {} items @{}", .{ elapsed, length, msg_count });
                 pull_requests.clearRetainingCapacity();
             }
 
@@ -595,10 +595,10 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const length = pull_responses.items.len;
                 self.handleBatchPullResponses(&pull_responses) catch |err| {
-                    self.logger.debugf("handleBatchPullResponses failed: {}\n", .{err});
+                    self.logger.errf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_resp took {} with {} items @{}\n", .{ elapsed, length, msg_count });
+                self.logger.debugf("handle batch pull_resp took {} with {} items @{}", .{ elapsed, length, msg_count });
                 pull_responses.clearRetainingCapacity();
             }
 
@@ -606,9 +606,9 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const n_ping_messages = ping_messages.items.len;
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
-                    self.logger.debugf("handleBatchPingMessages failed: {}\n", .{err});
+                    self.logger.errf("handleBatchPingMessages failed: {}", .{err});
                 };
-                self.logger.debugf("handle batch ping took {} with {} items @{}\n", .{ x_timer.read(), n_ping_messages, msg_count });
+                self.logger.debugf("handle batch ping took {} with {} items @{}", .{ x_timer.read(), n_ping_messages, msg_count });
                 ping_messages.clearRetainingCapacity();
             }
 
@@ -616,7 +616,7 @@ pub const GossipService = struct {
                 var x_timer = std.time.Timer.start() catch unreachable;
                 const n_pong_messages = pong_messages.items.len;
                 self.handleBatchPongMessages(&pong_messages);
-                self.logger.debugf("handle batch pong took {} with {} items @{}\n", .{ x_timer.read(), n_pong_messages, msg_count });
+                self.logger.debugf("handle batch pong took {} with {} items @{}", .{ x_timer.read(), n_pong_messages, msg_count });
                 pong_messages.clearRetainingCapacity();
             }
 
@@ -631,16 +631,16 @@ pub const GossipService = struct {
                     self.logger.warnf("error trimming crds table: {s}", .{@errorName(err)});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch crds_trim took {} with {} items @{}\n", .{ elapsed, 1, msg_count });
+                self.logger.debugf("handle batch crds_trim took {} with {} items @{}", .{ elapsed, 1, msg_count });
             }
 
             const elapsed = timer.read();
-            self.logger.debugf("{} messages processed in {}ns\n", .{ msg_count, elapsed });
+            self.logger.debugf("{} messages processed in {}ns", .{ msg_count, elapsed });
             // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
             self.messages_processed.store(msg_count, std.atomic.Ordering.Release);
         }
 
-        self.logger.debugf("process_messages loop closed\n", .{});
+        self.logger.debugf("process_messages loop closed", .{});
     }
 
     /// main gossip loop for periodically sending new protocol messages.
@@ -661,7 +661,7 @@ pub const GossipService = struct {
                 var packets = self.buildPullRequests(
                     pull_request.MAX_BLOOM_SIZE,
                 ) catch |e| {
-                    self.logger.debugf("failed to generate pull requests: {any}", .{e});
+                    self.logger.errf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
                 try self.packet_outgoing_channel.send(packets);
@@ -672,7 +672,7 @@ pub const GossipService = struct {
             // new push msgs
             self.drainPushQueueToCrdsTable(getWallclockMs());
             var maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
-                self.logger.debugf("failed to generate push messages: {any}\n", .{e});
+                self.logger.errf("failed to generate push messages: {any}", .{e});
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
