@@ -992,9 +992,7 @@ fn loadTestAccountsDB() !struct { AccountsDB, SnapshotFields } {
         full_metadata_path,
     );
 
-    var logger = Logger { 
-        .noop = {}
-    };
+    var logger = Logger{ .noop = {} };
     var accounts_db = try AccountsDB.init(allocator, logger);
 
     const accounts_path = "test_data/accounts";
