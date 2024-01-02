@@ -66,7 +66,7 @@ pub const Hash = struct {
         return hash;
     }
 
-    pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
+    pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const b58_encoder = base58.Encoder.init(.{});
         var buf: [44]u8 = undefined;
         const size = b58_encoder.encode(&self.data, &buf) catch unreachable;

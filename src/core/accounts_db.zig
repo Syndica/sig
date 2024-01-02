@@ -38,6 +38,9 @@ const SnapshotPaths = @import("./snapshots.zig").SnapshotPaths;
 const Snapshots = @import("./snapshots.zig").Snapshots;
 const unpackZstdTarBall = @import("./snapshots.zig").unpackZstdTarBall;
 
+const Logger = @import("../trace/log.zig").Logger;
+const Level = @import("../trace/level.zig").Level;
+
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 
@@ -53,14 +56,16 @@ pub const AccountsDB = struct {
 
     index: AccountIndexBins,
     accounts_db_fields: AccountsDbFields = undefined,
+    logger: Logger,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
+    pub fn init(allocator: std.mem.Allocator, logger: Logger) !Self {
         return Self{
             .account_file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
             .index = try AccountIndexBins.init(allocator, ACCOUNT_INDEX_BINS),
             .allocator = allocator,
+            .logger = logger,
         };
     }
 
@@ -105,7 +110,7 @@ pub const AccountsDB = struct {
 
         // start the indexing
         var timer = std.time.Timer.start() catch unreachable;
-        std.debug.print("starting indexing...\n", .{});
+        self.logger.infof("loading accounts from snapshot...\n", .{});
         timer.reset();
 
         var accounts_dir = try std.fs.cwd().openIterableDir(accounts_path, .{});
@@ -126,7 +131,7 @@ pub const AccountsDB = struct {
                 n_account_files += 1;
             }
         }
-        std.debug.print("found {d} account files\n", .{n_account_files});
+        self.logger.infof("found {d} account files\n", .{n_account_files});
         std.debug.assert(n_account_files > 0);
 
         const n_bins = self.index.bins.len;
@@ -150,6 +155,7 @@ pub const AccountsDB = struct {
             thread_indexes.deinit();
         }
 
+        self.logger.infof("reading and binning accounts...\n", .{});
         var handles = try spawnThreadTasks(
             self.allocator,
             binAccountFiles,
@@ -168,12 +174,11 @@ pub const AccountsDB = struct {
         }
         handles.deinit();
 
-        std.debug.print("\n", .{});
-        std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("\n", .{});
+        self.logger.infof("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
         // preallocate per bin
-        std.debug.print("preallocating size for full bins\n", .{});
         var total_accounts: usize = 0;
         for (0..n_bins) |i| {
             for (thread_indexes.items) |*t_index| {
@@ -181,9 +186,10 @@ pub const AccountsDB = struct {
             }
         }
         try self.index.preallocate(total_accounts);
-        std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("found {d} accounts\n", .{total_accounts});
         timer.reset();
 
+        self.logger.infof("combining thread accounts...\n", .{});
         handles = try spawnThreadTasks(
             self.allocator,
             indexFromBins,
@@ -207,8 +213,8 @@ pub const AccountsDB = struct {
         }
         handles.deinit();
 
-        std.debug.print("\n", .{});
-        std.debug.print("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debugf("\n", .{});
+        self.logger.debugf("combining thread indexes took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
     }
 
@@ -385,6 +391,7 @@ pub const AccountsDB = struct {
         }
 
         // split processing the bins over muliple threads
+        self.logger.infof("collecting hashes from accounts...", .{});
         var handles = try spawnThreadTasks(
             self.allocator,
             getHashesFromIndex,
@@ -403,14 +410,15 @@ pub const AccountsDB = struct {
         }
         handles.deinit();
 
-        std.debug.print("\n", .{});
-        std.debug.print("sorting took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debugf("\n", .{});
+        self.logger.debugf("took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
+        self.logger.infof("computing the merkle root over accounts...\n", .{});
         var hash_tree = NestedHashTree{ .hashes = hashes };
-        std.debug.print("computing the full account merkle root over {d} accounts\n", .{hash_tree.len()});
         const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
-        std.debug.print("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+
+        self.logger.debugf("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
         var total_lamports: u64 = 0;
@@ -437,6 +445,7 @@ pub const AccountsDB = struct {
         const expected_accounts_hash = self.accounts_db_fields.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
+        self.logger.infof("validating the full snapshot\n", .{});
         const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
             .FullAccountHash = .{
                 .max_slot = full_snapshot_slot,
@@ -446,19 +455,23 @@ pub const AccountsDB = struct {
         const accounts_hash = full_result.accounts_hash;
 
         if (expected_accounts_hash.cmp(&accounts_hash) != .eq) {
-            std.debug.print("incorrect accounts hash\n", .{});
-            std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_hash, accounts_hash });
+            self.logger.errf(
+                \\ incorrect accounts hash
+                \\ expected vs calculated: {d} vs {d}
+            , .{ expected_accounts_hash, accounts_hash });
             return error.IncorrectAccountsHash;
         }
         if (expected_full_lamports != total_lamports) {
-            std.debug.print("incorrect total lamports\n", .{});
-            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_full_lamports, total_lamports });
+            self.logger.errf(
+                \\ incorrect total lamports
+                \\ expected vs calculated: {d} vs {d}
+            , .{ expected_full_lamports, total_lamports });
             return error.IncorrectTotalLamports;
         }
 
         // validate the incremental snapshot
         if (incremental_snapshot_persistence == null) return;
-        std.debug.print("validating the incremental snapshot\n", .{});
+        self.logger.infof("validating the incremental snapshot\n", .{});
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
 
@@ -471,14 +484,18 @@ pub const AccountsDB = struct {
         const accounts_delta_hash = incremental_result.accounts_hash;
 
         if (expected_incremental_lamports != incremental_lamports) {
-            std.debug.print("incorrect incremental lamports\n", .{});
-            std.debug.print("expected vs calculated: {d} vs {d}\n", .{ expected_incremental_lamports, incremental_lamports });
+            self.logger.errf(
+                \\ incorrect incremental lamports
+                \\ expected vs calculated: {d} vs {d}
+            , .{ expected_incremental_lamports, incremental_lamports });
             return error.IncorrectIncrementalLamports;
         }
 
         if (expected_accounts_delta_hash.cmp(&accounts_delta_hash) != .eq) {
-            std.debug.print("incorrect accounts delta hash\n", .{});
-            std.debug.print("expected vs calculated: {s} vs {s}\n", .{ expected_accounts_delta_hash, accounts_delta_hash });
+            self.logger.errf(
+                \\ incorrect accounts delta hash
+                \\ expected vs calculated: {d} vs {d}
+            , .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
     }
@@ -864,8 +881,10 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var allocator = gpa.allocator();
 
-    // const snapshot_dir = "test_data/";
-    const snapshot_dir = "../../snapshots/";
+    const snapshot_dir = "test_data/";
+    // const snapshot_dir = "../../snapshots/";
+
+    const logger = Logger.init(allocator, Level.debug);
 
     // this should exist before we start to unpack
     const genesis_path = try std.fmt.allocPrint(
@@ -913,7 +932,7 @@ pub fn main() !void {
     const full_snapshot = snapshots.full;
 
     // load and validate
-    var accounts_db = try AccountsDB.init(allocator);
+    var accounts_db = try AccountsDB.init(allocator, logger);
     defer accounts_db.deinit();
 
     const snapshot = try snapshots.collapse();
