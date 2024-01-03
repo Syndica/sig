@@ -51,11 +51,13 @@ pub const ContactInfo = struct {
     version: Version,
     addrs: ArrayList(IpAddr),
     sockets: ArrayList(SocketEntry),
+    extensions: ArrayList(void) = ArrayList(void).init(undefined),
     cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
 
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
     pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
     pub const @"!bincode-config:sockets" = ShortVecArrayListConfig(SocketEntry);
+    pub const @"!bincode-config:extensions" = ShortVecArrayListConfig(void);
     pub const @"!bincode-config:wallclock" = var_int_config_u64;
 
     const Self = @This();
@@ -333,7 +335,7 @@ test "contact info bincode serialize matches rust bincode" {
         1,   1,  2,   3,  4,   0,   0,  0,   5,   0,   0,   0,   6,   4,   0,   0,  0,   0,   127, 0,   0,
         1,   0,  0,   0,  0,   127, 0,  0,   1,   0,   0,   0,   0,   127, 0,   0,  1,   0,   0,   0,   0,
         127, 0,  0,   1,  6,   10,  20, 30,  10,  20,  30,  10,  20,  30,  10,  20, 30,  10,  20,  30,  10,
-        20,  30,
+        20,  30, 0,
     };
 
     var pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
@@ -354,6 +356,31 @@ test "contact info bincode serialize matches rust bincode" {
     try testing.expect(ci2.sockets.items.len == 6);
     try testing.expect(ci2.pubkey.equals(&ci.pubkey));
     try testing.expect(ci2.outset == ci.outset);
+}
+
+test "gossip.node: ContactInfo bincode roundtrip maintains data integrity" {
+    var contact_info_bytes_from_mainnet = [109]u8{
+        168, 36,  147, 159, 43,  110, 51,  177, 21,  191, 96,  206,
+        25,  12,  133, 238, 147, 223, 2,   133, 105, 29,  83,  234,
+        44,  111, 123, 246, 244, 15,  167, 219, 185, 175, 235, 255,
+        204, 49,  220, 224, 176, 3,   13,  13,  6,   0,   242, 150,
+        1,   17,  9,   0,   0,   0,   0,   22,  194, 36,  85,  0,
+        1,   0,   0,   0,   0,   34,  221, 220, 125, 12,  0,   0,
+        192, 62,  10,  0,   1,   11,  0,   1,   5,   0,   1,   6,
+        0,   1,   9,   0,   1,   4,   0,   3,   8,   0,   1,   7,
+        0,   1,   1,   0,   1,   2,   0,   248, 6,   3,   0,   1,
+        0,
+    };
+
+    var stream = std.io.fixedBufferStream(&contact_info_bytes_from_mainnet);
+    var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
+    defer bincode.free(testing.allocator, ci2);
+
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    bincode.write(null, buf.writer(), ci2, bincode.Params.standard) catch unreachable;
+    defer buf.deinit();
+
+    try testing.expect(std.mem.eql(u8, buf.items, &contact_info_bytes_from_mainnet));
 }
 
 test "SocketEntry serializer works" {

@@ -326,8 +326,11 @@ pub const GossipService = struct {
                 return;
             };
 
-            protocol_message.verifySignature() catch {
-                self.logger.errf("gossip: packet_verify: failed to verify signature", .{});
+            protocol_message.verifySignature() catch |e| {
+                self.logger.errf(
+                    "gossip: packet_verify: failed to verify signature: {} from {}",
+                    .{ e, self.packet.addr },
+                );
                 bincode.free(self.allocator, protocol_message);
                 return;
             };
