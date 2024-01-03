@@ -176,6 +176,5 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| {
         benchmark_cmd.addArgs(args);
     }
-
     b.step("benchmark", "benchmark gossip").dependOn(&benchmark_cmd.step);
 }

@@ -1,9 +1,11 @@
 const std = @import("std");
 const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
+const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
 const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
 const Logger = @import("../trace/log.zig").Logger;
+const Level = @import("../trace/level.zig").Level;
 const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -11,6 +13,9 @@ const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 const JsonRpcServer = @import("../rpc/server.zig").JsonRpcServer;
 const State = @import("../rpc/server.zig").State;
 const RpcRequestProcessor = @import("../rpc/processor.zig").RpcRequestProcessor;
+const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
+const global_registry = @import("../prometheus/registry.zig").global_registry;
+const Registry = @import("../prometheus/registry.zig").Registry;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -34,11 +39,38 @@ var gossip_entrypoints_option = cli.Option{
     .value_name = "Entrypoints",
 };
 
+var gossip_spy_node_option = cli.Option{
+    .long_name = "spy-node",
+    .help = "run as a gossip spy node (minimize outgoing packets)",
+    .value = cli.OptionValue{ .bool = false },
+    .required = false,
+    .value_name = "Spy Node",
+};
+
+var log_level_option = cli.Option{
+    .long_name = "log-level",
+    .help = "The amount of detail to log (default = debug)",
+    .short_alias = 'l',
+    .value = cli.OptionValue{ .string = "debug" },
+    .required = false,
+    .value_name = "err|warn|info|debug",
+};
+
+var metrics_port_option = cli.Option{
+    .long_name = "metrics-port",
+    .help = "port to expose prometheus metrics via http",
+    .short_alias = 'm',
+    .value = cli.OptionValue{ .int = 12345 },
+    .required = false,
+    .value_name = "port_number",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
     .version = "0.1.1",
     .author = "Syndica & Contributors",
+    .options = &.{ &log_level_option, &metrics_port_option },
     .subcommands = &.{
         &cli.Command{
             .name = "identity",
@@ -60,6 +92,7 @@ var app = &cli.App{
             .options = &.{
                 &gossip_port_option,
                 &gossip_entrypoints_option,
+                &gossip_spy_node_option,
             },
         },
         &cli.Command{
@@ -89,7 +122,7 @@ var rpc_server_port_option = cli.Option{
 
 // prints (and creates if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, .debug);
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     defer logger.deinit();
     logger.spawn();
 
@@ -167,11 +200,13 @@ fn validator(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, .debug);
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     defer logger.deinit();
     logger.spawn();
 
     // var logger: Logger = .noop;
+
+    const metrics_thread = try spawnMetrics(gpa_allocator);
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
@@ -209,13 +244,24 @@ fn gossip(_: []const []const u8) !void {
     );
     defer gossip_service.deinit();
 
+    const spy_node = gossip_spy_node_option.value.bool;
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, true },
+        .{ &gossip_service, spy_node },
     );
 
     handle.join();
+    metrics_thread.detach();
+}
+
+/// Initializes the global registry. Returns error if registry was already initialized.
+/// Spawns a thread to serve the metrics over http on the CLI configured port.
+/// Uses same allocator for both registry and http adapter.
+fn spawnMetrics(allocator: std.mem.Allocator) !std.Thread {
+    var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
+    const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
+    return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }
 
 pub fn run() !void {

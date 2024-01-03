@@ -46,11 +46,13 @@ pub const sync = struct {
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
     pub usingnamespace @import("sync/mux.zig");
+    pub usingnamespace @import("sync/once_cell.zig");
     pub usingnamespace @import("sync/thread_pool.zig");
 };
 
 pub const utils = struct {
     pub usingnamespace @import("utils/shortvec.zig");
+    pub usingnamespace @import("utils/types.zig");
     pub usingnamespace @import("utils/varint.zig");
 };
 
@@ -78,5 +80,17 @@ pub const net = struct {
 };
 
 pub const rpc = struct {
+    pub usingnamespace @import("rpc/processor.zig");
     pub usingnamespace @import("rpc/server.zig");
+    pub usingnamespace @import("rpc/types.zig");
+};
+
+pub const prometheus = struct {
+    pub usingnamespace @import("prometheus/counter.zig");
+    pub usingnamespace @import("prometheus/gauge.zig");
+    pub usingnamespace @import("prometheus/gauge_fn.zig");
+    pub usingnamespace @import("prometheus/http.zig");
+    pub usingnamespace @import("prometheus/histogram.zig");
+    pub usingnamespace @import("prometheus/metric.zig");
+    pub usingnamespace @import("prometheus/registry.zig");
 };
