@@ -421,35 +421,35 @@ pub const RpcConfirmedTransactionConfig = struct {
 };
 
 pub const RpcGetConfirmedSignaturesForAddress2Config = struct {
-    before: ?[]const u8, // Signature as base-58 string
-    until: ?[]const u8, // Signature as base-58 string
-    limit: ?usize,
-    commitment: ?CommitmentConfig,
+    before: ?[]const u8 = null, // Signature as base-58 string
+    until: ?[]const u8 = null, // Signature as base-58 string
+    limit: ?usize = null,
+    commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcConfirmedBlocksConfigWrapper = union(enum(u8)) {
-    end_slot_only: ?Slot,
-    commitment_only: ?CommitmentConfig,
+    end_slot_only: ?Slot = null,
+    commitment_only: ?CommitmentConfig = null,
 };
 
 pub const RpcConfirmedBlockConfig = struct {
-    encoding: ?UiTransactionEncoding,
-    transaction_details: ?TransactionDetails,
-    rewards: ?bool,
-    commitment: ?CommitmentConfig,
+    encoding: ?UiTransactionEncoding = null,
+    transaction_details: ?TransactionDetails = null,
+    rewards: ?bool = null,
+    commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcSimulateTransactionConfig = struct {
     sig_verify: bool,
     replace_recent_blockhash: bool,
-    commitment: ?CommitmentConfig,
-    encoding: ?UiTransactionEncoding,
-    accounts: ?RpcSimulateTransactionAccountsConfig,
-    min_context_slot: ?Slot,
+    commitment: ?CommitmentConfig = null,
+    encoding: ?UiTransactionEncoding = null,
+    accounts: ?RpcSimulateTransactionAccountsConfig = null,
+    min_context_slot: ?Slot = null,
 };
 
 pub const RpcSimulateTransactionAccountsConfig = struct {
-    encoding: ?UiAccountEncoding,
+    encoding: ?UiAccountEncoding = null,
     addresses: [][]const u8,
 };
 
@@ -462,34 +462,34 @@ pub const RpcSendTransactionConfig = struct {
 };
 
 pub const RpcRequestAirdropConfig = struct {
-    recent_blockhash: ?[]const u8, // base-58 encoded blockhash
-    commitment: ?CommitmentConfig,
+    recent_blockhash: ?[]const u8 = null, // base-58 encoded blockhash
+    commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcVersionInfo = struct {
     /// The current version of solana-core
     solana_core: []const u8,
     /// first 4 bytes of the FeatureSet identifier
-    feature_set: ?u32,
+    feature_set: ?u32 = null,
 };
 
 pub const EncodedConfirmedTransactionWithStatusMeta = struct {
     slot: Slot,
     transaction: EncodedTransactionWithStatusMeta,
-    block_time: ?UnixTimestamp,
+    block_time: ?UnixTimestamp = null,
 };
 
 pub fn RpcEncodingConfigWrapper(comptime Config: type) type {
     return union(enum(u8)) {
-        deprecated: ?UiTransactionEncoding,
-        current: ?Config,
+        deprecated: ?UiTransactionEncoding = null,
+        current: ?Config = null,
     };
 }
 
 pub const RpcTransactionConfig = struct {
-    encoding: ?UiTransactionEncoding,
-    commitment: ?CommitmentConfig,
-    max_supported_transaction_version: ?u8,
+    encoding: ?UiTransactionEncoding = null,
+    commitment: ?CommitmentConfig = null,
+    max_supported_transaction_version: ?u8 = null,
 };
 
 pub const RpcTokenAccountBalance = struct {
@@ -516,17 +516,17 @@ pub const StakeActivationState = enum {
 };
 
 pub const RpcEpochConfig = struct {
-    epoch: ?Epoch,
-    commitment: ?CommitmentConfig,
-    min_context_slot: ?Slot,
+    epoch: ?Epoch = null,
+    commitment: ?CommitmentConfig = null,
+    min_context_slot: ?Slot = null,
 };
 
 pub const TransactionStatus = struct {
     slot: Slot,
-    confirmations: ?usize, // None = rooted
-    status: ?TransactionError, // formerly: TransactionResult - legacy field
-    err: ?TransactionError,
-    confirmation_status: ?TransactionConfirmationStatus,
+    confirmations: ?usize = null, // None = rooted
+    status: ?TransactionError = null, // formerly: TransactionResult - legacy field
+    err: ?TransactionError = null,
+    confirmation_status: ?TransactionConfirmationStatus = null,
 };
 
 pub const RpcSignatureStatusConfig = struct {
@@ -536,10 +536,10 @@ pub const RpcSignatureStatusConfig = struct {
 pub const RpcConfirmedTransactionStatusWithSignature = struct {
     signature: []const u8,
     slot: Slot,
-    err: ?TransactionError,
-    memo: ?[]const u8,
-    block_time: ?UnixTimestamp,
-    confirmation_status: ?TransactionConfirmationStatus,
+    err: ?TransactionError = null,
+    memo: ?[]const u8 = null,
+    block_time: ?UnixTimestamp = null,
+    confirmation_status: ?TransactionConfirmationStatus = null,
 };
 
 pub const TransactionConfirmationStatus = enum {
@@ -556,7 +556,7 @@ pub const RpcPrioritizationFee = struct {
 pub const RpcPerfSample = struct {
     slot: Slot,
     num_transactions: u64,
-    num_non_vote_transactions: ?u64,
+    num_non_vote_transactions: ?u64 = null,
     num_slots: u64,
     sample_period_secs: u16,
 };
@@ -564,13 +564,13 @@ pub const RpcPerfSample = struct {
 pub const RpcLeaderSchedule = std.StringArrayHashMap([]Slot);
 
 pub const RpcLeaderScheduleConfigWrapper = union(enum(u8)) {
-    slot_only: ?Slot,
-    config_only: ?RpcLeaderScheduleConfig,
+    slot_only: ?Slot = null,
+    config_only: ?RpcLeaderScheduleConfig = null,
 };
 
 pub const RpcLeaderScheduleConfig = struct {
-    identity: ?[]const u8, // validator identity, as a base-58 encoded string
-    commitment: ?CommitmentConfig,
+    identity: ?[]const u8 = null, // validator identity, as a base-58 encoded string
+    commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcBlockhash = struct {
@@ -585,7 +585,7 @@ pub const RpcIdentity = struct {
 
 pub const RpcSnapshotSlotInfo = struct {
     full: Slot,
-    incremental: ?Slot,
+    incremental: ?Slot = null,
 };
 
 pub const EpochInfo = struct {
@@ -600,28 +600,28 @@ pub const EpochInfo = struct {
     /// The current block height
     block_height: u64,
     /// Total number of transactions processed without error since genesis
-    transaction_count: ?u64,
+    transaction_count: ?u64 = null,
 };
 
 pub const RpcContactInfo = struct {
     /// Pubkey of the node as a base-58 string
     pubkey: Pubkey,
     /// Gossip port
-    gossip: ?SocketAddr,
+    gossip: ?SocketAddr = null,
     /// Tpu UDP port
-    tpu: ?SocketAddr,
+    tpu: ?SocketAddr = null,
     /// Tpu QUIC port
-    tpu_quic: ?SocketAddr,
+    tpu_quic: ?SocketAddr = null,
     /// JSON RPC port
-    rpc: ?SocketAddr,
+    rpc: ?SocketAddr = null,
     /// WebSocket PubSub port
-    pubsub: ?SocketAddr,
+    pubsub: ?SocketAddr = null,
     /// Software version
-    version: ?[]const u8,
+    version: ?[]const u8 = null,
     /// First 4 bytes of the FeatureSet identifier
-    feature_set: ?u32,
+    feature_set: ?u32 = null,
     /// Shred version
-    shred_version: ?u16,
+    shred_version: ?u16 = null,
 };
 
 pub const RpcBlockProduction = struct {
@@ -631,9 +631,9 @@ pub const RpcBlockProduction = struct {
 };
 
 pub const RpcBlockProductionConfig = struct {
-    identity: ?[]const u8, // validator identity, as a base-58 encoded string
-    range: ?RpcBlockProductionConfigRange, // current epoch if `None`
-    commitment: ?CommitmentConfig,
+    identity: ?[]const u8 = null, // validator identity, as a base-58 encoded string
+    range: ?RpcBlockProductionConfigRange = null, // current epoch if `None`
+    commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcBlockProductionRange = struct {
@@ -643,16 +643,16 @@ pub const RpcBlockProductionRange = struct {
 
 pub const RpcBlockProductionConfigRange = struct {
     first_slot: Slot,
-    last_slot: ?Slot,
+    last_slot: ?Slot = null,
 };
 
 pub const RpcSimulateTransactionResult = struct {
-    err: ?TransactionError,
-    logs: ?[][]const u8,
-    accounts: ?[]?UiAccount,
-    units_consumed: ?u64,
-    return_data: ?UiTransactionReturnData,
-    inner_instructions: ?[]UiInnerInstructions,
+    err: ?TransactionError = null,
+    logs: ?[][]const u8 = null,
+    accounts: ?[]?UiAccount = null,
+    units_consumed: ?u64 = null,
+    return_data: ?UiTransactionReturnData = null,
+    inner_instructions: ?[]UiInnerInstructions = null,
 };
 
 pub const UiTransactionReturnData = struct {
@@ -856,11 +856,11 @@ pub const UiConfirmedBlock = struct {
 };
 
 pub const RpcBlockConfig = struct {
-    encoding: ?UiTransactionEncoding,
-    transaction_details: ?TransactionDetails,
-    rewards: ?bool,
-    commitment: ?CommitmentConfig,
-    max_supported_transaction_version: ?u8,
+    encoding: ?UiTransactionEncoding = null,
+    transaction_details: ?TransactionDetails = null,
+    rewards: ?bool = null,
+    commitment: ?CommitmentConfig = null,
+    max_supported_transaction_version: ?u8 = null,
 };
 
 pub const UiTransactionEncoding = enum {
@@ -911,10 +911,10 @@ pub const RpcVoteAccountInfo = struct {
 };
 
 pub const RpcGetVoteAccountsConfig = struct {
-    vote_pubkey: ?[]const u8, // validator vote address, as a base-58 encoded string
-    commitment: ?CommitmentConfig,
-    keep_unstaked_delinquents: ?bool,
-    delinquent_slot_distance: ?u64,
+    vote_pubkey: ?[]const u8 = null, // validator vote address, as a base-58 encoded string
+    commitment: ?CommitmentConfig = null,
+    keep_unstaked_delinquents: ?bool = null,
+    delinquent_slot_distance: ?u64 = null,
 };
 
 pub const RpcSupply = struct {
@@ -925,7 +925,7 @@ pub const RpcSupply = struct {
 };
 
 pub const RpcSupplyConfig = struct {
-    commitment: ?CommitmentConfig,
+    commitment: ?CommitmentConfig = null,
     exclude_non_circulating_accounts_list: bool,
 };
 
@@ -940,12 +940,12 @@ pub const RpcLargestAccountsFilter = enum {
 };
 
 pub const RpcLargestAccountsConfig = struct {
-    commitment: ?CommitmentConfig,
-    filter: ?RpcLargestAccountsFilter,
+    commitment: ?CommitmentConfig = null,
+    filter: ?RpcLargestAccountsFilter = null,
 };
 
 pub const RpcBlockCommitment = struct {
-    commitment: ?BlockCommitmentArray,
+    commitment: ?BlockCommitmentArray = null,
     total_stake: u64,
 };
 
@@ -999,8 +999,8 @@ pub const FeeCalculator = struct {
 };
 
 pub const RpcContextConfig = struct {
-    commitment: ?CommitmentConfig,
-    min_context_slot: ?Slot,
+    commitment: ?CommitmentConfig = null,
+    min_context_slot: ?Slot = null,
 };
 
 pub const EpochSchedule = struct {
@@ -1147,10 +1147,10 @@ pub const CommitmentLevel = enum {
 };
 
 pub const RpcAccountInfoConfig = struct {
-    encoding: ?UiAccountEncoding,
-    data_slice: ?UiDataSliceConfig,
-    commitment: ?CommitmentConfig,
-    min_context_slot: ?Slot,
+    encoding: ?UiAccountEncoding = null,
+    data_slice: ?UiDataSliceConfig = null,
+    commitment: ?CommitmentConfig = null,
+    min_context_slot: ?Slot = null,
 };
 
 pub const RpcResponseContext = struct {
