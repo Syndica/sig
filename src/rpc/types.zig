@@ -428,8 +428,8 @@ pub const RpcGetConfirmedSignaturesForAddress2Config = struct {
 };
 
 pub const RpcConfirmedBlocksConfigWrapper = union(enum(u8)) {
-    end_slot_only: ?Slot = null,
-    commitment_only: ?CommitmentConfig = null,
+    end_slot_only: ?Slot,
+    commitment_only: ?CommitmentConfig,
 };
 
 pub const RpcConfirmedBlockConfig = struct {
@@ -481,8 +481,8 @@ pub const EncodedConfirmedTransactionWithStatusMeta = struct {
 
 pub fn RpcEncodingConfigWrapper(comptime Config: type) type {
     return union(enum(u8)) {
-        deprecated: ?UiTransactionEncoding = null,
-        current: ?Config = null,
+        deprecated: ?UiTransactionEncoding,
+        current: ?Config,
     };
 }
 
@@ -561,11 +561,11 @@ pub const RpcPerfSample = struct {
     sample_period_secs: u16,
 };
 
-pub const RpcLeaderSchedule = std.StringArrayHashMap([]Slot);
+pub const RpcLeaderSchedule = std.json.ArrayHashMap([]Slot);
 
 pub const RpcLeaderScheduleConfigWrapper = union(enum(u8)) {
-    slot_only: ?Slot = null,
-    config_only: ?RpcLeaderScheduleConfig = null,
+    slot_only: ?Slot,
+    config_only: ?RpcLeaderScheduleConfig,
 };
 
 pub const RpcLeaderScheduleConfig = struct {
@@ -626,7 +626,7 @@ pub const RpcContactInfo = struct {
 
 pub const RpcBlockProduction = struct {
     /// Map of leader base58 identity pubkeys to a tuple of `(number of leader slots, number of blocks produced)`
-    by_identity: std.StringArrayHashMap(struct { usize, usize }),
+    by_identity: std.json.ArrayHashMap(struct { usize, usize }),
     range: RpcBlockProductionRange,
 };
 
