@@ -10,7 +10,7 @@ const SocketAddr = @import("../net/net.zig").SocketAddr;
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 const JsonRpcServer = @import("../rpc/server.zig").JsonRpcServer;
 const State = @import("../rpc/server.zig").State;
-const RpcRequestProcessor = @import("../rpc/service.zig").RpcRequestProcessor;
+const RpcRequestProcessor = @import("../rpc/processor.zig").RpcRequestProcessor;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -147,11 +147,12 @@ fn validator(_: []const []const u8) !void {
         .{ &gossip_service, false },
     );
 
-    var rpc_request_processor = RpcRequestProcessor.init(gpa_allocator, &gossip_service);
+    var rpc_request_processor = RpcRequestProcessor.init(&gossip_service);
 
     var state = State.init(&rpc_request_processor);
     var rpc_server_port: u16 = @intCast(rpc_server_port_option.value.int.?);
     var server = try JsonRpcServer.init(gpa_allocator, state, logger, rpc_server_port);
+
     var json_rpc_server_handle = try std.Thread.spawn(
         .{},
         JsonRpcServer.listenAndServe,

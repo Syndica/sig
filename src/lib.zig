@@ -61,6 +61,7 @@ pub const trace = struct {
 
 pub const common = struct {
     pub usingnamespace @import("common/lru.zig");
+    pub usingnamespace @import("common/uuid.zig");
 };
 
 pub const bincode = struct {

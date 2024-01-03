@@ -5,10 +5,18 @@ pub const Hash = @import("../core/hash.zig").Hash;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 pub const Signature = @import("../core/signature.zig").Signature;
 const InstructionError = @import("../core/transaction.zig").InstructionError;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const gpa_allocator = gpa.allocator();
 
 pub const Slot = u64;
 pub const Epoch = u64;
 pub const UnixTimestamp = i64;
+
+pub const jrpc_error_code_parse_error: i32 = -32700;
+pub const jrpc_error_code_invalid_request: i32 = -32600;
+pub const jrpc_error_code_method_not_found: i32 = -32601;
+pub const jrpc_error_code_invalid_params: i32 = -32602;
+pub const jrpc_error_code_internal_error: i32 = -32603;
 
 pub const Error = union(enum(u8)) {
     BlockCleanedUp: struct {
@@ -51,6 +59,14 @@ pub const Error = union(enum(u8)) {
     },
     Unimplemented,
     Internal,
+
+    pub fn toErrorObject(self: *const Error) ErrorObject {
+        return switch (self.*) {
+            .Unimplemented => ErrorObject.init(jrpc_error_code_internal_error, "not implemented"),
+            .Internal => ErrorObject.init(jrpc_error_code_internal_error, "internal error"),
+            else => ErrorObject.init(jrpc_error_code_invalid_request, "invalid request"),
+        };
+    }
 };
 
 // TODO: incorporate a way to `free` memory allocated
@@ -63,77 +79,149 @@ pub fn Result(comptime T: type) type {
 
 pub fn RpcServiceImpl(comptime Self: type) type {
     return struct {
-        getAccountInfo: *const fn (ctx: *Self, pubkey: Pubkey, config: ?RpcAccountInfoConfig) Result(RpcResponse(?UiAccount)),
-        getBalance: *const fn (ctx: *Self, pubkey: Pubkey, config: RpcContextConfig) Result(RpcResponse(u64)),
-        getBlock: *const fn (ctx: *Self, slot: Slot, config: ?RpcBlockConfig) Result(UiConfirmedBlock),
-        getBlockCommitment: *const fn (ctx: *Self, block: Slot) Result(RpcBlockCommitment),
-        getBlockHeight: *const fn (ctx: *Self, config: RpcContextConfig) Result(u64),
-        getBlockProduction: *const fn (ctx: *Self, config: ?RpcBlockProductionConfig) Result(RpcResponse(RpcBlockProduction)),
-        getBlocks: *const fn (ctx: *Self, start_slot: Slot, end_slot: Slot, commitment: ?CommitmentConfig) Result([]Slot),
-        getBlocksWithLimit: *const fn (ctx: *Self, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Result([]Slot),
-        getBlockTime: *const fn (ctx: *Self, slot: Slot) Result(?UnixTimestamp),
-        getClusterNodes: *const fn (ctx: *Self) Result([]RpcContactInfo),
-        getConfirmedBlock: *const fn (ctx: *Self, slot: Slot, config: RpcEncodingConfigWrapper(RpcConfirmedBlockConfig)) Result(?UiConfirmedBlock),
-        getConfirmedBlocks: *const fn (ctx: *Self, start_slot: Slot, config: ?RpcConfirmedBlocksConfigWrapper, commitment: ?CommitmentConfig) Result([]Slot),
-        getConfirmedBlocksWithLimit: *const fn (ctx: *Self, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Result([]Slot),
-        getConfirmedSignaturesForAddress2: *const fn (ctx: *Self, address: []const u8, config: ?RpcGetConfirmedSignaturesForAddress2Config) Result([]RpcConfirmedTransactionStatusWithSignature),
-        getConfirmedTransaction: *const fn (ctx: *Self, signature: []const u8, config: ?RpcEncodingConfigWrapper(RpcConfirmedTransactionConfig)) Result(?EncodedConfirmedTransactionWithStatusMeta),
-        getEpochInfo: *const fn (ctx: *Self, config: ?RpcContextConfig) Result(EpochInfo),
-        getEpochSchedule: *const fn (ctx: *Self) Result(EpochSchedule),
-        getFeeCalculatorForBlockhash: *const fn (ctx: *Self, blockhash: Hash, commitment: ?CommitmentConfig) Result(RpcResponse(?RpcFeeCalculator)),
-        getFeeForMessage: *const fn (ctx: *Self, data: []const u8, config: ?RpcContextConfig) Result(RpcResponse(?u64)),
-        getFeeRateGovernor: *const fn (ctx: *Self) Result(RpcResponse(RpcFeeRateGovernor)),
-        getFees: *const fn (ctx: *Self, commitment: ?CommitmentConfig) Result(RpcResponse(RpcFees)),
-        getFirstAvailableBlock: *const fn (ctx: *Self) Result(u64),
-        getGenesisHash: *const fn (ctx: *Self) Result([]const u8),
-        getHealth: *const fn (ctx: *Self) Result([]const u8),
-        getHighestSnapshotSlot: *const fn (ctx: *Self) Result(RpcSnapshotSlotInfo),
-        getIdentity: *const fn (ctx: *Self) Result(RpcIdentity),
-        getInflationGovernor: *const fn (ctx: *Self, commitment: ?CommitmentConfig) Result(RpcInflationGovernor),
-        getInflationRate: *const fn (ctx: *Self) Result(RpcInflationRate),
-        getInflationReward: *const fn (ctx: *Self, addresses: []Pubkey, config: ?RpcEpochConfig) Result([]?RpcInflationReward),
-        getLargestAccounts: *const fn (ctx: *Self, config: ?RpcLargestAccountsConfig) Result(RpcResponse([]RpcAccountBalance)),
-        getLatestBlockhash: *const fn (ctx: *Self, config: ?RpcContextConfig) Result(RpcResponse(RpcBlockhash)),
-        getLeaderSchedule: *const fn (ctx: *Self, options: ?RpcLeaderScheduleConfigWrapper, config: ?RpcLeaderScheduleConfig) Result(?RpcLeaderSchedule),
-        getMaxRetransmitSlot: *const fn (ctx: *Self) Result(Slot),
-        getMaxShredInsertSlot: *const fn (ctx: *Self) Result(Slot),
-        getMinimumBalanceForRentExemption: *const fn (ctx: *Self, data_len: usize, commitment_config: ?CommitmentConfig) Result(u64),
-        getMultipleAccounts: *const fn (ctx: *Self, publeys: []Pubkey, config: ?RpcAccountInfoConfig) Result(RpcResponse([]?UiAccount)),
-        getProgramAccounts: *const fn (ctx: *Self, program_id: Pubkey, config: ?RpcAccountInfoConfig, filters: []AccountFilter, with_context: bool) Result(OptionalContext([]RpcKeyedAccount)),
-        getRecentBlockhash: *const fn (ctx: *Self, commitment: ?CommitmentConfig) Result(RpcResponse(RpcBlockhashFeeCalculator)),
-        getRecentPerformanceSamples: *const fn (ctx: *Self, limit: ?usize) Result([]RpcPerfSample),
-        getRecentPrioritizationFees: *const fn (ctx: *Self, pubkeys: []Pubkey) Result([]RpcPrioritizationFee),
-        getSignaturesForAddress: *const fn (ctx: *Self, address: Pubkey, before: ?Signature, until: ?Signature, limit: usize, config: RpcContextConfig) Result([]RpcConfirmedTransactionStatusWithSignature),
-        getSignatureStatuses: *const fn (ctx: *Self, signatures: [][]const u8, config: ?RpcSignatureStatusConfig) Result(RpcResponse([]?TransactionStatus)),
-        getSlot: *const fn (ctx: *Self, config: RpcContextConfig) Result(Slot),
-        getSlotLeader: *const fn (ctx: *Self, config: RpcContextConfig) Result([]const u8),
-        getSlotLeaders: *const fn (ctx: *Self, commitment: ?CommitmentConfig, start_slot: Slot, limit: usize) Result([]Pubkey),
-        getSnapshotSlot: *const fn (ctx: *Self) Result(Slot),
-        getStakeActivation: *const fn (ctx: *Self, pubkey: Pubkey, config: ?RpcEpochConfig) Result(RpcStakeActivation),
-        getStakeMinimumDelegation: *const fn (ctx: *Self, config: RpcContextConfig) Result(RpcResponse(u64)),
-        getSupply: *const fn (ctx: *Self, config: ?RpcSupplyConfig) Result(RpcResponse(RpcSupply)),
-        getTokenAccountBalance: *const fn (ctx: *Self, pubkey: Pubkey, commitment: ?CommitmentConfig) Result(RpcResponse(UiTokenAmount)),
-        getTokenAccountsByDelegate: *const fn (ctx: *Self, delegate: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Result(RpcResponse([]RpcKeyedAccount)),
-        getTokenAccountsByOwner: *const fn (ctx: *Self, owner: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Result(RpcResponse([]RpcKeyedAccount)),
-        getTokenLargestAccounts: *const fn (ctx: *Self, mint: Pubkey, commitment: ?CommitmentConfig) Result(RpcResponse([]RpcTokenAccountBalance)),
-        getTokenSupply: *const fn (ctx: *Self, mint: Pubkey, commitment: CommitmentConfig) Result(RpcResponse(UiTokenAmount)),
-        getTotalSupply: *const fn (ctx: *Self, commitment: ?CommitmentConfig) Result(u64),
-        getTransaction: *const fn (ctx: *Self, signature: Signature, config: RpcEncodingConfigWrapper(RpcTransactionConfig)) Result(?EncodedConfirmedTransactionWithStatusMeta),
-        getTransactionCount: *const fn (ctx: *Self, config: RpcContextConfig) Result(u64),
-        getVersion: *const fn (ctx: *Self) Result(RpcVersionInfo),
-        getVoteAccounts: *const fn (ctx: *Self, config: ?RpcGetVoteAccountsConfig) Result(RpcVoteAccountStatus),
-        isBlockhashValid: *const fn (ctx: *Self, hash: Hash, config: RpcContextConfig) Result(RpcResponse(bool)),
-        minimumLedgerSlot: *const fn (ctx: *Self) Result(Slot),
-        requestAirdrop: *const fn (ctx: *Self, pubkey: Pubkey, lamports: u64, config: ?RpcRequestAirdropConfig) Result([]const u8),
-        sendTransaction: *const fn (ctx: *Self, data: []const u8, config: ?RpcSendTransactionConfig) Result([]const u8),
-        simulateTransaction: *const fn (ctx: *Self, data: []const u8, config: ?RpcSimulateTransactionConfig) Result(RpcResponse(RpcSimulateTransactionResult)),
+        getAccountInfo: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: ?RpcAccountInfoConfig) Result(RpcResponse(?UiAccount)),
+        getBalance: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: RpcContextConfig) Result(RpcResponse(u64)),
+        getBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot, config: ?RpcBlockConfig) Result(UiConfirmedBlock),
+        getBlockCommitment: *const fn (ctx: *Self, allocator: std.mem.Allocator, block: Slot) Result(RpcBlockCommitment),
+        getBlockHeight: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(u64),
+        getBlockProduction: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcBlockProductionConfig) Result(RpcResponse(RpcBlockProduction)),
+        getBlocks: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, end_slot: Slot, commitment: ?CommitmentConfig) Result([]Slot),
+        getBlocksWithLimit: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Result([]Slot),
+        getBlockTime: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot) Result(?UnixTimestamp),
+        getClusterNodes: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result([]RpcContactInfo),
+        getConfirmedBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot, config: RpcEncodingConfigWrapper(RpcConfirmedBlockConfig)) Result(?UiConfirmedBlock),
+        getConfirmedBlocks: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, config: ?RpcConfirmedBlocksConfigWrapper, commitment: ?CommitmentConfig) Result([]Slot),
+        getConfirmedBlocksWithLimit: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Result([]Slot),
+        getConfirmedSignaturesForAddress2: *const fn (ctx: *Self, allocator: std.mem.Allocator, address: []const u8, config: ?RpcGetConfirmedSignaturesForAddress2Config) Result([]RpcConfirmedTransactionStatusWithSignature),
+        getConfirmedTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, signature: []const u8, config: ?RpcEncodingConfigWrapper(RpcConfirmedTransactionConfig)) Result(?EncodedConfirmedTransactionWithStatusMeta),
+        getEpochInfo: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcContextConfig) Result(EpochInfo),
+        getEpochSchedule: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(EpochSchedule),
+        getFeeCalculatorForBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, blockhash: Hash, commitment: ?CommitmentConfig) Result(RpcResponse(?RpcFeeCalculator)),
+        getFeeForMessage: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcContextConfig) Result(RpcResponse(?u64)),
+        getFeeRateGovernor: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcResponse(RpcFeeRateGovernor)),
+        getFees: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(RpcResponse(RpcFees)),
+        getFirstAvailableBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(u64),
+        getGenesisHash: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result([]const u8),
+        getHealth: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result([]const u8),
+        getHighestSnapshotSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcSnapshotSlotInfo),
+        getIdentity: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcIdentity),
+        getInflationGovernor: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(RpcInflationGovernor),
+        getInflationRate: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcInflationRate),
+        getInflationReward: *const fn (ctx: *Self, allocator: std.mem.Allocator, addresses: []Pubkey, config: ?RpcEpochConfig) Result([]?RpcInflationReward),
+        getLargestAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcLargestAccountsConfig) Result(RpcResponse([]RpcAccountBalance)),
+        getLatestBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcContextConfig) Result(RpcResponse(RpcBlockhash)),
+        getLeaderSchedule: *const fn (ctx: *Self, allocator: std.mem.Allocator, options: ?RpcLeaderScheduleConfigWrapper, config: ?RpcLeaderScheduleConfig) Result(?RpcLeaderSchedule),
+        getMaxRetransmitSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
+        getMaxShredInsertSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
+        getMinimumBalanceForRentExemption: *const fn (ctx: *Self, allocator: std.mem.Allocator, data_len: usize, commitment_config: ?CommitmentConfig) Result(u64),
+        getMultipleAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, publeys: []Pubkey, config: ?RpcAccountInfoConfig) Result(RpcResponse([]?UiAccount)),
+        getProgramAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, program_id: Pubkey, config: ?RpcAccountInfoConfig, filters: []AccountFilter, with_context: bool) Result(OptionalContext([]RpcKeyedAccount)),
+        getRecentBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(RpcResponse(RpcBlockhashFeeCalculator)),
+        getRecentPerformanceSamples: *const fn (ctx: *Self, allocator: std.mem.Allocator, limit: ?usize) Result([]RpcPerfSample),
+        getRecentPrioritizationFees: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkeys: []Pubkey) Result([]RpcPrioritizationFee),
+        getSignaturesForAddress: *const fn (ctx: *Self, allocator: std.mem.Allocator, address: Pubkey, before: ?Signature, until: ?Signature, limit: usize, config: RpcContextConfig) Result([]RpcConfirmedTransactionStatusWithSignature),
+        getSignatureStatuses: *const fn (ctx: *Self, allocator: std.mem.Allocator, signatures: [][]const u8, config: ?RpcSignatureStatusConfig) Result(RpcResponse([]?TransactionStatus)),
+        getSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(Slot),
+        getSlotLeader: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result([]const u8),
+        getSlotLeaders: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig, start_slot: Slot, limit: usize) Result([]Pubkey),
+        getSnapshotSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
+        getStakeActivation: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: ?RpcEpochConfig) Result(RpcStakeActivation),
+        getStakeMinimumDelegation: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(RpcResponse(u64)),
+        getSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcSupplyConfig) Result(RpcResponse(RpcSupply)),
+        getTokenAccountBalance: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, commitment: ?CommitmentConfig) Result(RpcResponse(UiTokenAmount)),
+        getTokenAccountsByDelegate: *const fn (ctx: *Self, allocator: std.mem.Allocator, delegate: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Result(RpcResponse([]RpcKeyedAccount)),
+        getTokenAccountsByOwner: *const fn (ctx: *Self, allocator: std.mem.Allocator, owner: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Result(RpcResponse([]RpcKeyedAccount)),
+        getTokenLargestAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, mint: Pubkey, commitment: ?CommitmentConfig) Result(RpcResponse([]RpcTokenAccountBalance)),
+        getTokenSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, mint: Pubkey, commitment: CommitmentConfig) Result(RpcResponse(UiTokenAmount)),
+        getTotalSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(u64),
+        getTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, signature: Signature, config: RpcEncodingConfigWrapper(RpcTransactionConfig)) Result(?EncodedConfirmedTransactionWithStatusMeta),
+        getTransactionCount: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(u64),
+        getVersion: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcVersionInfo),
+        getVoteAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcGetVoteAccountsConfig) Result(RpcVoteAccountStatus),
+        isBlockhashValid: *const fn (ctx: *Self, allocator: std.mem.Allocator, hash: Hash, config: RpcContextConfig) Result(RpcResponse(bool)),
+        minimumLedgerSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
+        requestAirdrop: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, lamports: u64, config: ?RpcRequestAirdropConfig) Result([]const u8),
+        sendTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcSendTransactionConfig) Result([]const u8),
+        simulateTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcSimulateTransactionConfig) Result(RpcResponse(RpcSimulateTransactionResult)),
     };
 }
 
 const TwoPointZero = *const [3:0]u8;
 
+pub const Id = union(enum(u8)) {
+    string: []const u8,
+    number: i64,
+    null,
+
+    pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Id {
+        var value = try std.json.Value.jsonParse(allocator, source, options);
+        switch (value) {
+            .string => |str| {
+                return .{ .string = str };
+            },
+            .integer => |int| {
+                return .{ .number = int };
+            },
+            .null => {
+                return .null;
+            },
+            else => {
+                return error.InvalidNumber;
+            },
+        }
+    }
+
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: anytype, _: std.json.ParseOptions) !Id {
+        switch (source.*) {
+            .string => |str| {
+                return .{ .string = str };
+            },
+            .integer => |int| {
+                return .{ .number = int };
+            },
+            .null => {
+                return .null;
+            },
+            else => {
+                return error.InvalidNumber;
+            },
+        }
+    }
+
+    pub fn jsonStringify(
+        self: *const Id,
+        jw: anytype,
+    ) !void {
+        switch (self.*) {
+            .string => |str| {
+                try jw.write(str);
+            },
+            .number => |int| {
+                try jw.write(int);
+            },
+            .null => {
+                try jw.write(null);
+            },
+        }
+    }
+
+    pub fn toValue(self: *const Id) std.json.Value {
+        return switch (self.*) {
+            .string => |str| {
+                std.json.Value{ .string = str };
+            },
+            .number => |num| {
+                std.json.Value{ .integer = num };
+            },
+            .null => {
+                std.json.Value{.null};
+            },
+        };
+    }
+};
+
 pub const JsonRpcRequest = struct {
-    id: []const u8,
+    id: Id,
     jsonrpc: TwoPointZero,
     method: []const u8,
     params: std.json.Value,
@@ -141,7 +229,7 @@ pub const JsonRpcRequest = struct {
 
 pub fn JsonRpcResponse(comptime T: type) type {
     return struct {
-        id: []const u8,
+        id: Id,
         jsonrpc: TwoPointZero,
         @"error": ?ErrorObject,
         result: ?T,
@@ -151,6 +239,17 @@ pub fn JsonRpcResponse(comptime T: type) type {
 pub const ErrorObject = struct {
     code: i32,
     message: []const u8,
+
+    pub fn init(code: i32, message: []const u8) ErrorObject {
+        return ErrorObject{
+            .code = code,
+            .message = message,
+        };
+    }
+
+    pub fn deinit(self: *ErrorObject) void {
+        _ = self;
+    }
 };
 
 pub const TransactionError = union(enum(u8)) {
@@ -356,10 +455,10 @@ pub const RpcSimulateTransactionAccountsConfig = struct {
 
 pub const RpcSendTransactionConfig = struct {
     skip_preflight: bool,
-    preflight_commitment: ?CommitmentLevel,
-    encoding: ?UiTransactionEncoding,
-    max_retries: ?usize,
-    min_context_slot: ?Slot,
+    preflight_commitment: ?CommitmentLevel = null,
+    encoding: ?UiTransactionEncoding = null,
+    max_retries: ?usize = null,
+    min_context_slot: ?Slot = null,
 };
 
 pub const RpcRequestAirdropConfig = struct {

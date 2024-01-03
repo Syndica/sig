@@ -5,25 +5,25 @@ const CrdsTable = @import("../gossip/crds_table.zig").CrdsTable;
 
 pub const RpcRequestProcessor = struct {
     gossip_service: *GossipService,
-    allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, gossip_service: *GossipService) Self {
+    pub fn init(gossip_service: *GossipService) Self {
         return Self{
             .gossip_service = gossip_service,
-            .allocator = allocator,
         };
     }
 
-    pub fn getAccountInfo(self: *Self, pubkey: t.Pubkey, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse(?t.UiAccount)) {
+    pub fn getAccountInfo(self: *Self, allocator: std.mem.Allocator, pubkey: t.Pubkey, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse(?t.UiAccount)) {
+        _ = allocator;
         _ = self;
         _ = pubkey;
         _ = config;
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBalance(self: *Self, pubkey: t.Pubkey, config: t.RpcContextConfig) t.Result(t.RpcResponse(u64)) {
+    pub fn getBalance(self: *Self, allocator: std.mem.Allocator, pubkey: t.Pubkey, config: t.RpcContextConfig) t.Result(t.RpcResponse(u64)) {
+        _ = allocator;
         _ = self;
         _ = pubkey;
         _ = config;
@@ -31,7 +31,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlock(self: *Self, slot: t.Slot, config: ?t.RpcBlockConfig) t.Result(t.UiConfirmedBlock) {
+    pub fn getBlock(self: *Self, allocator: std.mem.Allocator, slot: t.Slot, config: ?t.RpcBlockConfig) t.Result(t.UiConfirmedBlock) {
+        _ = allocator;
         _ = self;
         _ = slot;
         _ = config;
@@ -39,28 +40,32 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlockCommitment(self: *Self, block: t.Slot) t.Result(t.RpcBlockCommitment) {
+    pub fn getBlockCommitment(self: *Self, allocator: std.mem.Allocator, block: t.Slot) t.Result(t.RpcBlockCommitment) {
+        _ = allocator;
         _ = self;
         _ = block;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlockHeight(self: *Self, config: t.RpcContextConfig) t.Result(u64) {
+    pub fn getBlockHeight(self: *Self, allocator: std.mem.Allocator, config: t.RpcContextConfig) t.Result(u64) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlockProduction(self: *Self, config: ?t.RpcBlockProductionConfig) t.Result(t.RpcResponse(t.RpcBlockProduction)) {
+    pub fn getBlockProduction(self: *Self, allocator: std.mem.Allocator, config: ?t.RpcBlockProductionConfig) t.Result(t.RpcResponse(t.RpcBlockProduction)) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlocks(self: *Self, start_slot: t.Slot, end_slot: t.Slot, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+    pub fn getBlocks(self: *Self, allocator: std.mem.Allocator, start_slot: t.Slot, end_slot: t.Slot, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+        _ = allocator;
         _ = self;
         _ = start_slot;
         _ = end_slot;
@@ -69,7 +74,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlocksWithLimit(self: *Self, start_slot: t.Slot, limit: usize, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+    pub fn getBlocksWithLimit(self: *Self, allocator: std.mem.Allocator, start_slot: t.Slot, limit: usize, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+        _ = allocator;
         _ = self;
         _ = start_slot;
         _ = limit;
@@ -78,20 +84,24 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getBlockTime(self: *Self, slot: t.Slot) t.Result(?t.UnixTimestamp) {
+    pub fn getBlockTime(self: *Self, allocator: std.mem.Allocator, slot: t.Slot) t.Result(?t.UnixTimestamp) {
+        _ = allocator;
         _ = self;
         _ = slot;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getClusterNodes(self: *Self) t.Result([]t.RpcContactInfo) {
+    pub fn getClusterNodes(
+        self: *Self,
+        allocator: std.mem.Allocator,
+    ) t.Result([]t.RpcContactInfo) {
         var crds_table_rlock = self.gossip_service.crds_table_rw.read();
         defer crds_table_rlock.unlock();
         var crds_table: *const CrdsTable = crds_table_rlock.get();
 
         var contact_infos = crds_table.getAllContactInfos() catch return .{ .Err = t.Error.Internal };
-        var rpc_contact_infos = std.ArrayList(t.RpcContactInfo).initCapacity(self.allocator, contact_infos.items.len) catch return .{ .Err = t.Error.Internal };
+        var rpc_contact_infos = std.ArrayList(t.RpcContactInfo).initCapacity(allocator, contact_infos.items.len) catch return .{ .Err = t.Error.Internal };
 
         for (contact_infos.items) |contact_info| {
             rpc_contact_infos.appendAssumeCapacity(t.RpcContactInfo{
@@ -109,7 +119,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Ok = rpc_contact_infos.items };
     }
 
-    pub fn getConfirmedBlock(self: *Self, slot: t.Slot, config: t.RpcEncodingConfigWrapper(t.RpcConfirmedBlockConfig)) t.Result(?t.UiConfirmedBlock) {
+    pub fn getConfirmedBlock(self: *Self, allocator: std.mem.Allocator, slot: t.Slot, config: t.RpcEncodingConfigWrapper(t.RpcConfirmedBlockConfig)) t.Result(?t.UiConfirmedBlock) {
+        _ = allocator;
         _ = self;
         _ = slot;
         _ = config;
@@ -117,7 +128,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getConfirmedBlocks(self: *Self, start_slot: t.Slot, config: ?t.RpcConfirmedBlocksConfigWrapper, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+    pub fn getConfirmedBlocks(self: *Self, allocator: std.mem.Allocator, start_slot: t.Slot, config: ?t.RpcConfirmedBlocksConfigWrapper, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+        _ = allocator;
         _ = self;
         _ = start_slot;
         _ = config;
@@ -126,7 +138,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getConfirmedBlocksWithLimit(self: *Self, start_slot: t.Slot, limit: usize, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+    pub fn getConfirmedBlocksWithLimit(self: *Self, allocator: std.mem.Allocator, start_slot: t.Slot, limit: usize, commitment: ?t.CommitmentConfig) t.Result([]t.Slot) {
+        _ = allocator;
         _ = self;
         _ = start_slot;
         _ = limit;
@@ -135,7 +148,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getConfirmedSignaturesForAddress2(self: *Self, address: []const u8, config: ?t.RpcGetConfirmedSignaturesForAddress2Config) t.Result([]t.RpcConfirmedTransactionStatusWithSignature) {
+    pub fn getConfirmedSignaturesForAddress2(self: *Self, allocator: std.mem.Allocator, address: []const u8, config: ?t.RpcGetConfirmedSignaturesForAddress2Config) t.Result([]t.RpcConfirmedTransactionStatusWithSignature) {
+        _ = allocator;
         _ = self;
         _ = address;
         _ = config;
@@ -143,7 +157,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getConfirmedTransaction(self: *Self, signature: []const u8, config: ?t.RpcEncodingConfigWrapper(t.RpcConfirmedTransactionConfig)) t.Result(?t.EncodedConfirmedTransactionWithStatusMeta) {
+    pub fn getConfirmedTransaction(self: *Self, allocator: std.mem.Allocator, signature: []const u8, config: ?t.RpcEncodingConfigWrapper(t.RpcConfirmedTransactionConfig)) t.Result(?t.EncodedConfirmedTransactionWithStatusMeta) {
+        _ = allocator;
         _ = self;
         _ = signature;
         _ = config;
@@ -151,20 +166,24 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getEpochInfo(self: *Self, config: ?t.RpcContextConfig) t.Result(t.EpochInfo) {
+    pub fn getEpochInfo(self: *Self, allocator: std.mem.Allocator, config: ?t.RpcContextConfig) t.Result(t.EpochInfo) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getEpochSchedule(self: *Self) t.Result(t.EpochSchedule) {
+    pub fn getEpochSchedule(self: *Self, allocator: std.mem.Allocator) t.Result(t.EpochSchedule) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getFeeCalculatorForBlockhash(self: *Self, blockhash: t.Hash, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(?t.RpcFeeCalculator)) {
+    pub fn getFeeCalculatorForBlockhash(self: *Self, allocator: std.mem.Allocator, blockhash: t.Hash, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(?t.RpcFeeCalculator)) {
+        _ = allocator;
         _ = self;
         _ = blockhash;
         _ = commitment;
@@ -172,7 +191,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getFeeForMessage(self: *Self, data: []const u8, config: ?t.RpcContextConfig) t.Result(t.RpcResponse(?u64)) {
+    pub fn getFeeForMessage(self: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?t.RpcContextConfig) t.Result(t.RpcResponse(?u64)) {
+        _ = allocator;
         _ = self;
         _ = data;
         _ = config;
@@ -180,45 +200,56 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getFeeRateGovernor(self: *Self) t.Result(t.RpcResponse(t.RpcFeeRateGovernor)) {
+    pub fn getFeeRateGovernor(self: *Self, allocator: std.mem.Allocator) t.Result(t.RpcResponse(t.RpcFeeRateGovernor)) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getFees(self: *Self, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(t.RpcFees)) {
+    pub fn getFees(self: *Self, allocator: std.mem.Allocator, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(t.RpcFees)) {
+        _ = allocator;
         _ = self;
         _ = commitment;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getFirstAvailableBlock(self: *Self) t.Result(u64) {
+    pub fn getFirstAvailableBlock(self: *Self, allocator: std.mem.Allocator) t.Result(u64) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getGenesisHash(self: *Self) t.Result([]const u8) {
+    pub fn getGenesisHash(self: *Self, allocator: std.mem.Allocator) t.Result([]const u8) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getHealth(self: *Self) t.Result([]const u8) {
+    pub fn getHealth(self: *Self, allocator: std.mem.Allocator) t.Result([]const u8) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Ok = "ok" };
     }
 
-    pub fn getHighestSnapshotSlot(self: *Self) t.Result(t.RpcSnapshotSlotInfo) {
+    pub fn getHighestSnapshotSlot(self: *Self, allocator: std.mem.Allocator) t.Result(t.RpcSnapshotSlotInfo) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getIdentity(self: *Self) t.Result(t.RpcIdentity) {
-        var identity: []const u8 = self.gossip_service.my_pubkey.toString(self.allocator) catch @panic("could not toString a Pubkey");
+    pub fn getIdentity(self: *Self, allocator: std.mem.Allocator) t.Result(t.RpcIdentity) {
+        var identity: []const u8 = self.gossip_service.my_pubkey.toString(allocator) catch @panic("could not toString a Pubkey");
         return .{
             .Ok = t.RpcIdentity{
                 .identity = identity,
@@ -226,20 +257,24 @@ pub const RpcRequestProcessor = struct {
         };
     }
 
-    pub fn getInflationGovernor(self: *Self, commitment: ?t.CommitmentConfig) t.Result(t.RpcInflationGovernor) {
+    pub fn getInflationGovernor(self: *Self, allocator: std.mem.Allocator, commitment: ?t.CommitmentConfig) t.Result(t.RpcInflationGovernor) {
+        _ = allocator;
         _ = self;
         _ = commitment;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getInflationRate(self: *Self) t.Result(t.RpcInflationRate) {
+    pub fn getInflationRate(self: *Self, allocator: std.mem.Allocator) t.Result(t.RpcInflationRate) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getInflationReward(self: *Self, addresses: []t.Pubkey, config: ?t.RpcEpochConfig) t.Result([]?t.RpcInflationReward) {
+    pub fn getInflationReward(self: *Self, allocator: std.mem.Allocator, addresses: []t.Pubkey, config: ?t.RpcEpochConfig) t.Result([]?t.RpcInflationReward) {
+        _ = allocator;
         _ = self;
         _ = addresses;
         _ = config;
@@ -247,21 +282,24 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getLargestAccounts(self: *Self, config: ?t.RpcLargestAccountsConfig) t.Result(t.RpcResponse([]t.RpcAccountBalance)) {
+    pub fn getLargestAccounts(self: *Self, allocator: std.mem.Allocator, config: ?t.RpcLargestAccountsConfig) t.Result(t.RpcResponse([]t.RpcAccountBalance)) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getLatestBlockhash(self: *Self, config: ?t.RpcContextConfig) t.Result(t.RpcResponse(t.RpcBlockhash)) {
+    pub fn getLatestBlockhash(self: *Self, allocator: std.mem.Allocator, config: ?t.RpcContextConfig) t.Result(t.RpcResponse(t.RpcBlockhash)) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getLeaderSchedule(self: *Self, options: ?t.RpcLeaderScheduleConfigWrapper, config: ?t.RpcLeaderScheduleConfig) t.Result(?t.RpcLeaderSchedule) {
+    pub fn getLeaderSchedule(self: *Self, allocator: std.mem.Allocator, options: ?t.RpcLeaderScheduleConfigWrapper, config: ?t.RpcLeaderScheduleConfig) t.Result(?t.RpcLeaderSchedule) {
+        _ = allocator;
         _ = self;
         _ = options;
         _ = config;
@@ -269,19 +307,24 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getMaxRetransmitSlot(self: *Self) t.Result(t.Slot) {
+    pub fn getMaxRetransmitSlot(self: *Self, allocator: std.mem.Allocator) t.Result(t.Slot) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getMaxShredInsertSlot(self: *Self) t.Result(t.Slot) {
+    pub fn getMaxShredInsertSlot(self: *Self, allocator: std.mem.Allocator) t.Result(t.Slot) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getMinimumBalanceForRentExemption(self: *Self, data_len: usize, commitment_config: ?t.CommitmentConfig) t.Result(u64) {
+    pub fn getMinimumBalanceForRentExemption(self: *Self, allocator: std.mem.Allocator, data_len: usize, commitment_config: ?t.CommitmentConfig) t.Result(u64) {
+        _ = allocator;
         _ = self;
         _ = data_len;
         _ = commitment_config;
@@ -289,7 +332,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getMultipleAccounts(self: *Self, publeys: []t.Pubkey, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse([]?t.UiAccount)) {
+    pub fn getMultipleAccounts(self: *Self, allocator: std.mem.Allocator, publeys: []t.Pubkey, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse([]?t.UiAccount)) {
+        _ = allocator;
         _ = self;
         _ = publeys;
         _ = config;
@@ -297,7 +341,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getProgramAccounts(self: *Self, program_id: t.Pubkey, config: ?t.RpcAccountInfoConfig, filters: []t.AccountFilter, with_context: bool) t.Result(t.OptionalContext([]t.RpcKeyedAccount)) {
+    pub fn getProgramAccounts(self: *Self, allocator: std.mem.Allocator, program_id: t.Pubkey, config: ?t.RpcAccountInfoConfig, filters: []t.AccountFilter, with_context: bool) t.Result(t.OptionalContext([]t.RpcKeyedAccount)) {
+        _ = allocator;
         _ = self;
         _ = program_id;
         _ = config;
@@ -307,28 +352,32 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getRecentBlockhash(self: *Self, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(t.RpcBlockhashFeeCalculator)) {
+    pub fn getRecentBlockhash(self: *Self, allocator: std.mem.Allocator, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(t.RpcBlockhashFeeCalculator)) {
+        _ = allocator;
         _ = self;
         _ = commitment;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getRecentPerformanceSamples(self: *Self, limit: ?usize) t.Result([]t.RpcPerfSample) {
+    pub fn getRecentPerformanceSamples(self: *Self, allocator: std.mem.Allocator, limit: ?usize) t.Result([]t.RpcPerfSample) {
+        _ = allocator;
         _ = self;
         _ = limit;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getRecentPrioritizationFees(self: *Self, pubkeys: []t.Pubkey) t.Result([]t.RpcPrioritizationFee) {
+    pub fn getRecentPrioritizationFees(self: *Self, allocator: std.mem.Allocator, pubkeys: []t.Pubkey) t.Result([]t.RpcPrioritizationFee) {
+        _ = allocator;
         _ = self;
         _ = pubkeys;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSignaturesForAddress(self: *Self, address: t.Pubkey, before: ?t.Signature, until: ?t.Signature, limit: usize, config: t.RpcContextConfig) t.Result([]t.RpcConfirmedTransactionStatusWithSignature) {
+    pub fn getSignaturesForAddress(self: *Self, allocator: std.mem.Allocator, address: t.Pubkey, before: ?t.Signature, until: ?t.Signature, limit: usize, config: t.RpcContextConfig) t.Result([]t.RpcConfirmedTransactionStatusWithSignature) {
+        _ = allocator;
         _ = self;
         _ = address;
         _ = before;
@@ -339,7 +388,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSignatureStatuses(self: *Self, signatures: [][]const u8, config: ?t.RpcSignatureStatusConfig) t.Result(t.RpcResponse([]?t.TransactionStatus)) {
+    pub fn getSignatureStatuses(self: *Self, allocator: std.mem.Allocator, signatures: [][]const u8, config: ?t.RpcSignatureStatusConfig) t.Result(t.RpcResponse([]?t.TransactionStatus)) {
+        _ = allocator;
         _ = self;
         _ = signatures;
         _ = config;
@@ -347,21 +397,24 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSlot(self: *Self, config: t.RpcContextConfig) t.Result(t.Slot) {
+    pub fn getSlot(self: *Self, allocator: std.mem.Allocator, config: t.RpcContextConfig) t.Result(t.Slot) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSlotLeader(self: *Self, config: t.RpcContextConfig) t.Result([]const u8) {
+    pub fn getSlotLeader(self: *Self, allocator: std.mem.Allocator, config: t.RpcContextConfig) t.Result([]const u8) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSlotLeaders(self: *Self, commitment: ?t.CommitmentConfig, start_slot: t.Slot, limit: usize) t.Result([]t.Pubkey) {
+    pub fn getSlotLeaders(self: *Self, allocator: std.mem.Allocator, commitment: ?t.CommitmentConfig, start_slot: t.Slot, limit: usize) t.Result([]t.Pubkey) {
+        _ = allocator;
         _ = self;
         _ = commitment;
         _ = start_slot;
@@ -370,13 +423,16 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSnapshotSlot(self: *Self) t.Result(t.Slot) {
+    pub fn getSnapshotSlot(self: *Self, allocator: std.mem.Allocator) t.Result(t.Slot) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getStakeActivation(self: *Self, pubkey: t.Pubkey, config: ?t.RpcEpochConfig) t.Result(t.RpcStakeActivation) {
+    pub fn getStakeActivation(self: *Self, allocator: std.mem.Allocator, pubkey: t.Pubkey, config: ?t.RpcEpochConfig) t.Result(t.RpcStakeActivation) {
+        _ = allocator;
         _ = self;
         _ = pubkey;
         _ = config;
@@ -384,21 +440,24 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getStakeMinimumDelegation(self: *Self, config: t.RpcContextConfig) t.Result(t.RpcResponse(u64)) {
+    pub fn getStakeMinimumDelegation(self: *Self, allocator: std.mem.Allocator, config: t.RpcContextConfig) t.Result(t.RpcResponse(u64)) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getSupply(self: *Self, config: ?t.RpcSupplyConfig) t.Result(t.RpcResponse(t.RpcSupply)) {
+    pub fn getSupply(self: *Self, allocator: std.mem.Allocator, config: ?t.RpcSupplyConfig) t.Result(t.RpcResponse(t.RpcSupply)) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTokenAccountBalance(self: *Self, pubkey: t.Pubkey, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(t.UiTokenAmount)) {
+    pub fn getTokenAccountBalance(self: *Self, allocator: std.mem.Allocator, pubkey: t.Pubkey, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse(t.UiTokenAmount)) {
+        _ = allocator;
         _ = self;
         _ = pubkey;
         _ = commitment;
@@ -406,7 +465,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTokenAccountsByDelegate(self: *Self, delegate: t.Pubkey, token_account_filter: t.TokenAccountsFilter, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse([]t.RpcKeyedAccount)) {
+    pub fn getTokenAccountsByDelegate(self: *Self, allocator: std.mem.Allocator, delegate: t.Pubkey, token_account_filter: t.TokenAccountsFilter, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse([]t.RpcKeyedAccount)) {
+        _ = allocator;
         _ = self;
         _ = delegate;
         _ = token_account_filter;
@@ -415,7 +475,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTokenAccountsByOwner(self: *Self, owner: t.Pubkey, token_account_filter: t.TokenAccountsFilter, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse([]t.RpcKeyedAccount)) {
+    pub fn getTokenAccountsByOwner(self: *Self, allocator: std.mem.Allocator, owner: t.Pubkey, token_account_filter: t.TokenAccountsFilter, config: ?t.RpcAccountInfoConfig) t.Result(t.RpcResponse([]t.RpcKeyedAccount)) {
+        _ = allocator;
         _ = self;
         _ = owner;
         _ = token_account_filter;
@@ -424,7 +485,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTokenLargestAccounts(self: *Self, mint: t.Pubkey, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse([]t.RpcTokenAccountBalance)) {
+    pub fn getTokenLargestAccounts(self: *Self, allocator: std.mem.Allocator, mint: t.Pubkey, commitment: ?t.CommitmentConfig) t.Result(t.RpcResponse([]t.RpcTokenAccountBalance)) {
+        _ = allocator;
         _ = self;
         _ = mint;
         _ = commitment;
@@ -432,7 +494,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTokenSupply(self: *Self, mint: t.Pubkey, commitment: t.CommitmentConfig) t.Result(t.RpcResponse(t.UiTokenAmount)) {
+    pub fn getTokenSupply(self: *Self, allocator: std.mem.Allocator, mint: t.Pubkey, commitment: t.CommitmentConfig) t.Result(t.RpcResponse(t.UiTokenAmount)) {
+        _ = allocator;
         _ = self;
         _ = mint;
         _ = commitment;
@@ -440,14 +503,16 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTotalSupply(self: *Self, commitment: ?t.CommitmentConfig) t.Result(u64) {
+    pub fn getTotalSupply(self: *Self, allocator: std.mem.Allocator, commitment: ?t.CommitmentConfig) t.Result(u64) {
+        _ = allocator;
         _ = self;
         _ = commitment;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTransaction(self: *Self, signature: t.Signature, config: t.RpcEncodingConfigWrapper(t.RpcTransactionConfig)) t.Result(?t.EncodedConfirmedTransactionWithStatusMeta) {
+    pub fn getTransaction(self: *Self, allocator: std.mem.Allocator, signature: t.Signature, config: t.RpcEncodingConfigWrapper(t.RpcTransactionConfig)) t.Result(?t.EncodedConfirmedTransactionWithStatusMeta) {
+        _ = allocator;
         _ = self;
         _ = signature;
         _ = config;
@@ -455,27 +520,37 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getTransactionCount(self: *Self, config: t.RpcContextConfig) t.Result(u64) {
+    pub fn getTransactionCount(self: *Self, allocator: std.mem.Allocator, config: t.RpcContextConfig) t.Result(u64) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn getVersion(self: *Self) t.Result(t.RpcVersionInfo) {
+    pub fn getVersion(self: *Self, allocator: std.mem.Allocator) t.Result(t.RpcVersionInfo) {
+        _ = allocator;
+
         _ = self;
 
-        return .{ .Err = t.Error.Unimplemented };
+        return .{
+            .Ok = t.RpcVersionInfo{
+                .solana_core = "",
+                .feature_set = 0,
+            },
+        };
     }
 
-    pub fn getVoteAccounts(self: *Self, config: ?t.RpcGetVoteAccountsConfig) t.Result(t.RpcVoteAccountStatus) {
+    pub fn getVoteAccounts(self: *Self, allocator: std.mem.Allocator, config: ?t.RpcGetVoteAccountsConfig) t.Result(t.RpcVoteAccountStatus) {
+        _ = allocator;
         _ = self;
         _ = config;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn isBlockhashValid(self: *Self, hash: t.Hash, config: t.RpcContextConfig) t.Result(t.RpcResponse(bool)) {
+    pub fn isBlockhashValid(self: *Self, allocator: std.mem.Allocator, hash: t.Hash, config: t.RpcContextConfig) t.Result(t.RpcResponse(bool)) {
+        _ = allocator;
         _ = self;
         _ = hash;
         _ = config;
@@ -483,13 +558,16 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn minimumLedgerSlot(self: *Self) t.Result(t.Slot) {
+    pub fn minimumLedgerSlot(self: *Self, allocator: std.mem.Allocator) t.Result(t.Slot) {
+        _ = allocator;
+
         _ = self;
 
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn requestAirdrop(self: *Self, pubkey: t.Pubkey, lamports: u64, config: ?t.RpcRequestAirdropConfig) t.Result([]const u8) {
+    pub fn requestAirdrop(self: *Self, allocator: std.mem.Allocator, pubkey: t.Pubkey, lamports: u64, config: ?t.RpcRequestAirdropConfig) t.Result([]const u8) {
+        _ = allocator;
         _ = self;
         _ = pubkey;
         _ = lamports;
@@ -498,7 +576,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn sendTransaction(self: *Self, data: []const u8, config: ?t.RpcSendTransactionConfig) t.Result([]const u8) {
+    pub fn sendTransaction(self: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?t.RpcSendTransactionConfig) t.Result([]const u8) {
+        _ = allocator;
         _ = self;
         _ = data;
         _ = config;
@@ -506,7 +585,8 @@ pub const RpcRequestProcessor = struct {
         return .{ .Err = t.Error.Unimplemented };
     }
 
-    pub fn simulateTransaction(self: *Self, data: []const u8, config: ?t.RpcSimulateTransactionConfig) t.Result(t.RpcResponse(t.RpcSimulateTransactionResult)) {
+    pub fn simulateTransaction(self: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?t.RpcSimulateTransactionConfig) t.Result(t.RpcResponse(t.RpcSimulateTransactionResult)) {
+        _ = allocator;
         _ = self;
         _ = data;
         _ = config;
