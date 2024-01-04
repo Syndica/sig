@@ -51,13 +51,13 @@ pub const ContactInfo = struct {
     version: Version,
     addrs: ArrayList(IpAddr),
     sockets: ArrayList(SocketEntry),
-    extensions: ArrayList(void) = ArrayList(void).init(undefined),
+    extensions: ArrayList(Extension),
     cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
 
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
     pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
     pub const @"!bincode-config:sockets" = ShortVecArrayListConfig(SocketEntry);
-    pub const @"!bincode-config:extensions" = ShortVecArrayListConfig(void);
+    pub const @"!bincode-config:extensions" = ShortVecArrayListConfig(Extension);
     pub const @"!bincode-config:wallclock" = var_int_config_u64;
 
     const Self = @This();
@@ -92,6 +92,7 @@ pub const ContactInfo = struct {
             .version = Version.default(),
             .addrs = ArrayList(IpAddr).init(allocator),
             .sockets = ArrayList(SocketEntry).init(allocator),
+            .extensions = ArrayList(void).init(allocator),
             .cache = socket_addrs_unspecified(),
         };
     }
@@ -122,6 +123,7 @@ pub const ContactInfo = struct {
             .version = Version.new(1, 2, 3, 4, 5, 6),
             .addrs = addrs,
             .sockets = sockets,
+            .extensions = ArrayList(Extension).init(allocator),
         };
     }
 
@@ -206,6 +208,11 @@ pub const ContactInfo = struct {
         }
     }
 };
+
+/// This exists for future proofing to allow easier additions to ContactInfo.
+/// Currently, ContactInfo has no extensions.
+/// This may be changed in the future to a union or enum as extensions are added.
+const Extension = void;
 
 const NodePort = union(enum) {
     gossip: network.EndPoint,
