@@ -1,10 +1,3 @@
-pub const rpc_old = struct {
-    pub usingnamespace @import("rpc-old/client.zig");
-    pub const types = struct {
-        pub usingnamespace @import("rpc-old/types.zig");
-    };
-};
-
 pub const core = struct {
     pub usingnamespace @import("core/pubkey.zig");
     pub usingnamespace @import("core/account.zig");
