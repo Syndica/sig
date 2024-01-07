@@ -5,6 +5,8 @@ pub const Hash = @import("../core/hash.zig").Hash;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 pub const Signature = @import("../core/signature.zig").Signature;
 const InstructionError = @import("../core/transaction.zig").InstructionError;
+const Parsed = std.json.Parsed;
+
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
 
@@ -19,6 +21,45 @@ pub const jrpc_error_code_invalid_params: i32 = -32602;
 pub const jrpc_error_code_internal_error: i32 = -32603;
 
 pub const Error = union(enum(u8)) {
+    ClientError: []const u8,
+    Internal,
+    Unimplemented,
+
+    pub fn toErrorObject(self: *const Error, allocator: std.mem.Allocator) ErrorObject {
+        var msg = std.ArrayList(u8).init(allocator);
+        errdefer msg.deinit();
+        var writer = msg.writer();
+
+        inline for (@typeInfo(Error).Union.fields) |field| {
+            if (std.mem.eql(u8, @tagName(self.*), field.name)) {
+                switch (@typeInfo(field.type)) {
+                    .Struct => |struct_type| {
+                        writer.writeAll(field.name) catch unreachable;
+                        writer.writeAll("{") catch unreachable;
+                        inline for (struct_type.fields, 0..) |struct_field, i| {
+                            writer.writeAll(struct_field.name) catch unreachable;
+                            writer.writeAll(" = ") catch unreachable;
+                            writer.writeAll(std.fmt.allocPrint(allocator, if (struct_field.type == []const u8) "\"{s}\"" else "{any}", .{@field(@field(self.*, field.name), struct_field.name)}) catch unreachable) catch unreachable;
+                            if (i != struct_type.fields.len - 1) {
+                                writer.writeAll(", ") catch unreachable;
+                            }
+                        }
+                        writer.writeAll("}") catch unreachable;
+                    },
+                    else => {
+                        std.fmt.format(writer, "{any}", .{self.*}) catch unreachable;
+                    },
+                }
+
+                msg.shrinkAndFree(msg.items.len);
+                return ErrorObject.init(jrpc_error_code_internal_error, msg.items);
+            }
+        }
+        unreachable;
+    }
+};
+
+pub const UiTransactionStatusError = union(enum(u8)) {
     BlockCleanedUp: struct {
         slot: Slot,
         first_available_block: Slot,
@@ -57,16 +98,6 @@ pub const Error = union(enum(u8)) {
     MinContextSlotNotReached: struct {
         context_slot: Slot,
     },
-    Unimplemented,
-    Internal,
-
-    pub fn toErrorObject(self: *const Error) ErrorObject {
-        return switch (self.*) {
-            .Unimplemented => ErrorObject.init(jrpc_error_code_internal_error, "not implemented"),
-            .Internal => ErrorObject.init(jrpc_error_code_internal_error, "internal error"),
-            else => ErrorObject.init(jrpc_error_code_invalid_request, "invalid request"),
-        };
-    }
 };
 
 // TODO: incorporate a way to `free` memory allocated
@@ -77,72 +108,72 @@ pub fn Result(comptime T: type) type {
     };
 }
 
-pub fn RpcServiceImpl(comptime Self: type) type {
+pub fn RpcServiceImpl(comptime Self: type, comptime Wrapper: anytype) type {
     return struct {
-        getAccountInfo: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: ?RpcAccountInfoConfig) Result(RpcResponse(?UiAccount)),
-        getBalance: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: RpcContextConfig) Result(RpcResponse(u64)),
-        getBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot, config: ?RpcBlockConfig) Result(UiConfirmedBlock),
-        getBlockCommitment: *const fn (ctx: *Self, allocator: std.mem.Allocator, block: Slot) Result(RpcBlockCommitment),
-        getBlockHeight: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(u64),
-        getBlockProduction: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcBlockProductionConfig) Result(RpcResponse(RpcBlockProduction)),
-        getBlocks: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, end_slot: Slot, commitment: ?CommitmentConfig) Result([]Slot),
-        getBlocksWithLimit: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Result([]Slot),
-        getBlockTime: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot) Result(?UnixTimestamp),
-        getClusterNodes: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result([]RpcContactInfo),
-        getConfirmedBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot, config: RpcEncodingConfigWrapper(RpcConfirmedBlockConfig)) Result(?UiConfirmedBlock),
-        getConfirmedBlocks: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, config: ?RpcConfirmedBlocksConfigWrapper, commitment: ?CommitmentConfig) Result([]Slot),
-        getConfirmedBlocksWithLimit: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Result([]Slot),
-        getConfirmedSignaturesForAddress2: *const fn (ctx: *Self, allocator: std.mem.Allocator, address: []const u8, config: ?RpcGetConfirmedSignaturesForAddress2Config) Result([]RpcConfirmedTransactionStatusWithSignature),
-        getConfirmedTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, signature: []const u8, config: ?RpcEncodingConfigWrapper(RpcConfirmedTransactionConfig)) Result(?EncodedConfirmedTransactionWithStatusMeta),
-        getEpochInfo: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcContextConfig) Result(EpochInfo),
-        getEpochSchedule: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(EpochSchedule),
-        getFeeCalculatorForBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, blockhash: Hash, commitment: ?CommitmentConfig) Result(RpcResponse(?RpcFeeCalculator)),
-        getFeeForMessage: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcContextConfig) Result(RpcResponse(?u64)),
-        getFeeRateGovernor: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcResponse(RpcFeeRateGovernor)),
-        getFees: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(RpcResponse(RpcFees)),
-        getFirstAvailableBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(u64),
-        getGenesisHash: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result([]const u8),
-        getHealth: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result([]const u8),
-        getHighestSnapshotSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcSnapshotSlotInfo),
-        getIdentity: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcIdentity),
-        getInflationGovernor: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(RpcInflationGovernor),
-        getInflationRate: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcInflationRate),
-        getInflationReward: *const fn (ctx: *Self, allocator: std.mem.Allocator, addresses: []Pubkey, config: ?RpcEpochConfig) Result([]?RpcInflationReward),
-        getLargestAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcLargestAccountsConfig) Result(RpcResponse([]RpcAccountBalance)),
-        getLatestBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcContextConfig) Result(RpcResponse(RpcBlockhash)),
-        getLeaderSchedule: *const fn (ctx: *Self, allocator: std.mem.Allocator, options: ?RpcLeaderScheduleConfigWrapper, config: ?RpcLeaderScheduleConfig) Result(?RpcLeaderSchedule),
-        getMaxRetransmitSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
-        getMaxShredInsertSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
-        getMinimumBalanceForRentExemption: *const fn (ctx: *Self, allocator: std.mem.Allocator, data_len: usize, commitment_config: ?CommitmentConfig) Result(u64),
-        getMultipleAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, publeys: []Pubkey, config: ?RpcAccountInfoConfig) Result(RpcResponse([]?UiAccount)),
-        getProgramAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, program_id: Pubkey, config: ?RpcAccountInfoConfig, filters: []AccountFilter, with_context: bool) Result(OptionalContext([]RpcKeyedAccount)),
-        getRecentBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(RpcResponse(RpcBlockhashFeeCalculator)),
-        getRecentPerformanceSamples: *const fn (ctx: *Self, allocator: std.mem.Allocator, limit: ?usize) Result([]RpcPerfSample),
-        getRecentPrioritizationFees: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkeys: []Pubkey) Result([]RpcPrioritizationFee),
-        getSignaturesForAddress: *const fn (ctx: *Self, allocator: std.mem.Allocator, address: Pubkey, before: ?Signature, until: ?Signature, limit: usize, config: RpcContextConfig) Result([]RpcConfirmedTransactionStatusWithSignature),
-        getSignatureStatuses: *const fn (ctx: *Self, allocator: std.mem.Allocator, signatures: [][]const u8, config: ?RpcSignatureStatusConfig) Result(RpcResponse([]?TransactionStatus)),
-        getSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(Slot),
-        getSlotLeader: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result([]const u8),
-        getSlotLeaders: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig, start_slot: Slot, limit: usize) Result([]Pubkey),
-        getSnapshotSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
-        getStakeActivation: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: ?RpcEpochConfig) Result(RpcStakeActivation),
-        getStakeMinimumDelegation: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(RpcResponse(u64)),
-        getSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcSupplyConfig) Result(RpcResponse(RpcSupply)),
-        getTokenAccountBalance: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, commitment: ?CommitmentConfig) Result(RpcResponse(UiTokenAmount)),
-        getTokenAccountsByDelegate: *const fn (ctx: *Self, allocator: std.mem.Allocator, delegate: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Result(RpcResponse([]RpcKeyedAccount)),
-        getTokenAccountsByOwner: *const fn (ctx: *Self, allocator: std.mem.Allocator, owner: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Result(RpcResponse([]RpcKeyedAccount)),
-        getTokenLargestAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, mint: Pubkey, commitment: ?CommitmentConfig) Result(RpcResponse([]RpcTokenAccountBalance)),
-        getTokenSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, mint: Pubkey, commitment: CommitmentConfig) Result(RpcResponse(UiTokenAmount)),
-        getTotalSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Result(u64),
-        getTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, signature: Signature, config: RpcEncodingConfigWrapper(RpcTransactionConfig)) Result(?EncodedConfirmedTransactionWithStatusMeta),
-        getTransactionCount: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Result(u64),
-        getVersion: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(RpcVersionInfo),
-        getVoteAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcGetVoteAccountsConfig) Result(RpcVoteAccountStatus),
-        isBlockhashValid: *const fn (ctx: *Self, allocator: std.mem.Allocator, hash: Hash, config: RpcContextConfig) Result(RpcResponse(bool)),
-        minimumLedgerSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Result(Slot),
-        requestAirdrop: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, lamports: u64, config: ?RpcRequestAirdropConfig) Result([]const u8),
-        sendTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcSendTransactionConfig) Result([]const u8),
-        simulateTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcSimulateTransactionConfig) Result(RpcResponse(RpcSimulateTransactionResult)),
+        getAccountInfo: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: ?RpcAccountInfoConfig) Wrapper(RpcResponse(?UiAccount)),
+        getBalance: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: RpcContextConfig) Wrapper(RpcResponse(u64)),
+        getBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot, config: ?RpcBlockConfig) Wrapper(UiConfirmedBlock),
+        getBlockCommitment: *const fn (ctx: *Self, allocator: std.mem.Allocator, block: Slot) Wrapper(RpcBlockCommitment),
+        getBlockHeight: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Wrapper(u64),
+        getBlockProduction: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcBlockProductionConfig) Wrapper(RpcResponse(RpcBlockProduction)),
+        getBlocks: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, end_slot: Slot, commitment: ?CommitmentConfig) Wrapper([]Slot),
+        getBlocksWithLimit: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Wrapper([]Slot),
+        getBlockTime: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot) Wrapper(?UnixTimestamp),
+        getClusterNodes: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper([]RpcContactInfo),
+        getConfirmedBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator, slot: Slot, config: RpcEncodingConfigWrapper(RpcConfirmedBlockConfig)) Wrapper(?UiConfirmedBlock),
+        getConfirmedBlocks: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, config: ?RpcConfirmedBlocksConfigWrapper, commitment: ?CommitmentConfig) Wrapper([]Slot),
+        getConfirmedBlocksWithLimit: *const fn (ctx: *Self, allocator: std.mem.Allocator, start_slot: Slot, limit: usize, commitment: ?CommitmentConfig) Wrapper([]Slot),
+        getConfirmedSignaturesForAddress2: *const fn (ctx: *Self, allocator: std.mem.Allocator, address: []const u8, config: ?RpcGetConfirmedSignaturesForAddress2Config) Wrapper([]RpcConfirmedTransactionStatusWithSignature),
+        getConfirmedTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, signature: []const u8, config: ?RpcEncodingConfigWrapper(RpcConfirmedTransactionConfig)) Wrapper(?EncodedConfirmedTransactionWithStatusMeta),
+        getEpochInfo: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcContextConfig) Wrapper(EpochInfo),
+        getEpochSchedule: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(EpochSchedule),
+        getFeeCalculatorForBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, blockhash: Hash, commitment: ?CommitmentConfig) Wrapper(RpcResponse(?RpcFeeCalculator)),
+        getFeeForMessage: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcContextConfig) Wrapper(RpcResponse(?u64)),
+        getFeeRateGovernor: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(RpcResponse(RpcFeeRateGovernor)),
+        getFees: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Wrapper(RpcResponse(RpcFees)),
+        getFirstAvailableBlock: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(u64),
+        getGenesisHash: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper([]const u8),
+        getHealth: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper([]const u8),
+        getHighestSnapshotSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(RpcSnapshotSlotInfo),
+        getIdentity: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(RpcIdentity),
+        getInflationGovernor: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Wrapper(RpcInflationGovernor),
+        getInflationRate: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(RpcInflationRate),
+        getInflationReward: *const fn (ctx: *Self, allocator: std.mem.Allocator, addresses: []Pubkey, config: ?RpcEpochConfig) Wrapper([]?RpcInflationReward),
+        getLargestAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcLargestAccountsConfig) Wrapper(RpcResponse([]RpcAccountBalance)),
+        getLatestBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcContextConfig) Wrapper(RpcResponse(RpcBlockhash)),
+        getLeaderSchedule: *const fn (ctx: *Self, allocator: std.mem.Allocator, options: ?RpcLeaderScheduleConfigWrapper, config: ?RpcLeaderScheduleConfig) Wrapper(?RpcLeaderSchedule),
+        getMaxRetransmitSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(Slot),
+        getMaxShredInsertSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(Slot),
+        getMinimumBalanceForRentExemption: *const fn (ctx: *Self, allocator: std.mem.Allocator, data_len: usize, commitment_config: ?CommitmentConfig) Wrapper(u64),
+        getMultipleAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, publeys: []Pubkey, config: ?RpcAccountInfoConfig) Wrapper(RpcResponse([]?UiAccount)),
+        getProgramAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, program_id: Pubkey, config: ?RpcAccountInfoConfig, filters: []AccountFilter, with_context: bool) Wrapper(OptionalContext([]RpcKeyedAccount)),
+        getRecentBlockhash: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Wrapper(RpcResponse(RpcBlockhashFeeCalculator)),
+        getRecentPerformanceSamples: *const fn (ctx: *Self, allocator: std.mem.Allocator, limit: ?usize) Wrapper([]RpcPerfSample),
+        getRecentPrioritizationFees: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkeys: []Pubkey) Wrapper([]RpcPrioritizationFee),
+        getSignaturesForAddress: *const fn (ctx: *Self, allocator: std.mem.Allocator, address: Pubkey, before: ?Signature, until: ?Signature, limit: usize, config: RpcContextConfig) Wrapper([]RpcConfirmedTransactionStatusWithSignature),
+        getSignatureStatuses: *const fn (ctx: *Self, allocator: std.mem.Allocator, signatures: [][]const u8, config: ?RpcSignatureStatusConfig) Wrapper(RpcResponse([]?TransactionStatus)),
+        getSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Wrapper(Slot),
+        getSlotLeader: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Wrapper([]const u8),
+        getSlotLeaders: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig, start_slot: Slot, limit: usize) Wrapper([]Pubkey),
+        getSnapshotSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(Slot),
+        getStakeActivation: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, config: ?RpcEpochConfig) Wrapper(RpcStakeActivation),
+        getStakeMinimumDelegation: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Wrapper(RpcResponse(u64)),
+        getSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcSupplyConfig) Wrapper(RpcResponse(RpcSupply)),
+        getTokenAccountBalance: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, commitment: ?CommitmentConfig) Wrapper(RpcResponse(UiTokenAmount)),
+        getTokenAccountsByDelegate: *const fn (ctx: *Self, allocator: std.mem.Allocator, delegate: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Wrapper(RpcResponse([]RpcKeyedAccount)),
+        getTokenAccountsByOwner: *const fn (ctx: *Self, allocator: std.mem.Allocator, owner: Pubkey, token_account_filter: TokenAccountsFilter, config: ?RpcAccountInfoConfig) Wrapper(RpcResponse([]RpcKeyedAccount)),
+        getTokenLargestAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, mint: Pubkey, commitment: ?CommitmentConfig) Wrapper(RpcResponse([]RpcTokenAccountBalance)),
+        getTokenSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, mint: Pubkey, commitment: CommitmentConfig) Wrapper(RpcResponse(UiTokenAmount)),
+        getTotalSupply: *const fn (ctx: *Self, allocator: std.mem.Allocator, commitment: ?CommitmentConfig) Wrapper(u64),
+        getTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, signature: Signature, config: RpcEncodingConfigWrapper(RpcTransactionConfig)) Wrapper(?EncodedConfirmedTransactionWithStatusMeta),
+        getTransactionCount: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: RpcContextConfig) Wrapper(u64),
+        getVersion: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(RpcVersionInfo),
+        getVoteAccounts: *const fn (ctx: *Self, allocator: std.mem.Allocator, config: ?RpcGetVoteAccountsConfig) Wrapper(RpcVoteAccountStatus),
+        isBlockhashValid: *const fn (ctx: *Self, allocator: std.mem.Allocator, hash: Hash, config: RpcContextConfig) Wrapper(RpcResponse(bool)),
+        minimumLedgerSlot: *const fn (ctx: *Self, allocator: std.mem.Allocator) Wrapper(Slot),
+        requestAirdrop: *const fn (ctx: *Self, allocator: std.mem.Allocator, pubkey: Pubkey, lamports: u64, config: ?RpcRequestAirdropConfig) Wrapper([]const u8),
+        sendTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcSendTransactionConfig) Wrapper([]const u8),
+        simulateTransaction: *const fn (ctx: *Self, allocator: std.mem.Allocator, data: []const u8, config: ?RpcSimulateTransactionConfig) Wrapper(RpcResponse(RpcSimulateTransactionResult)),
     };
 }
 
@@ -152,6 +183,15 @@ pub const Id = union(enum(u8)) {
     string: []const u8,
     number: i64,
     null,
+
+    pub fn free(self: *Id, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .string => |str| {
+                allocator.free(str);
+            },
+            else => {},
+        }
+    }
 
     pub fn jsonParse(allocator: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !Id {
         var value = try std.json.Value.jsonParse(allocator, source, options);
@@ -171,8 +211,8 @@ pub const Id = union(enum(u8)) {
         }
     }
 
-    pub fn jsonParseFromValue(_: std.mem.Allocator, source: anytype, _: std.json.ParseOptions) !Id {
-        switch (source.*) {
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) !Id {
+        switch (source) {
             .string => |str| {
                 return .{ .string = str };
             },
@@ -227,12 +267,29 @@ pub const JsonRpcRequest = struct {
     params: std.json.Value,
 };
 
+pub fn TypedJsonRpcRequest(comptime T: type) type {
+    return struct {
+        id: Id,
+        jsonrpc: TwoPointZero,
+        method: []const u8,
+        params: T,
+    };
+}
+
 pub fn JsonRpcResponse(comptime T: type) type {
     return struct {
         id: Id,
         jsonrpc: TwoPointZero,
-        @"error": ?ErrorObject,
-        result: ?T,
+        @"error": ?ErrorObject = null,
+        result: ?T = null,
+    };
+}
+
+pub fn JsonRpcSuccessResponse(comptime T: type) type {
+    return struct {
+        id: Id,
+        jsonrpc: TwoPointZero,
+        result: ?T = null,
     };
 }
 
@@ -249,6 +306,16 @@ pub const ErrorObject = struct {
 
     pub fn deinit(self: *ErrorObject) void {
         _ = self;
+    }
+
+    pub fn format(self: *const ErrorObject, fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.writeAll("ErrorObject{");
+        try std.fmt.format(writer, "{d}, ", .{self.code});
+        try writer.writeAll(self.message);
+        try writer.writeAll("}");
     }
 };
 
@@ -408,16 +475,16 @@ pub const TransactionError = union(enum(u8)) {
 };
 
 pub const RpcFeeCalculator = struct {
-    fee_calculator: FeeCalculator,
+    feeCalculator: FeeCalculator,
 };
 
 pub const RpcFeeRateGovernor = struct {
-    fee_rate_governor: FeeRateGovernor,
+    feeRateGovernor: FeeRateGovernor,
 };
 
 pub const RpcConfirmedTransactionConfig = struct {
-    encoding: ?UiTransactionEncoding,
-    commitment: ?CommitmentConfig,
+    encoding: ?UiTransactionEncoding = null,
+    commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcGetConfirmedSignaturesForAddress2Config = struct {
@@ -428,24 +495,24 @@ pub const RpcGetConfirmedSignaturesForAddress2Config = struct {
 };
 
 pub const RpcConfirmedBlocksConfigWrapper = union(enum(u8)) {
-    end_slot_only: ?Slot,
-    commitment_only: ?CommitmentConfig,
+    endSlotOnly: ?Slot,
+    commitmentOnly: ?CommitmentConfig,
 };
 
 pub const RpcConfirmedBlockConfig = struct {
     encoding: ?UiTransactionEncoding = null,
-    transaction_details: ?TransactionDetails = null,
+    transactionDetails: ?TransactionDetails = null,
     rewards: ?bool = null,
     commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcSimulateTransactionConfig = struct {
-    sig_verify: bool,
-    replace_recent_blockhash: bool,
+    sigVerify: bool,
+    replaceRecentBlockhash: bool,
     commitment: ?CommitmentConfig = null,
     encoding: ?UiTransactionEncoding = null,
     accounts: ?RpcSimulateTransactionAccountsConfig = null,
-    min_context_slot: ?Slot = null,
+    minContextSlot: ?Slot = null,
 };
 
 pub const RpcSimulateTransactionAccountsConfig = struct {
@@ -454,29 +521,29 @@ pub const RpcSimulateTransactionAccountsConfig = struct {
 };
 
 pub const RpcSendTransactionConfig = struct {
-    skip_preflight: bool,
-    preflight_commitment: ?CommitmentLevel = null,
+    skipPreflight: bool,
+    preflightCommitment: ?CommitmentLevel = null,
     encoding: ?UiTransactionEncoding = null,
-    max_retries: ?usize = null,
-    min_context_slot: ?Slot = null,
+    maxRetries: ?usize = null,
+    minContextSlot: ?Slot = null,
 };
 
 pub const RpcRequestAirdropConfig = struct {
-    recent_blockhash: ?[]const u8 = null, // base-58 encoded blockhash
+    recentBlockhash: ?[]const u8 = null, // base-58 encoded blockhash
     commitment: ?CommitmentConfig = null,
 };
 
 pub const RpcVersionInfo = struct {
     /// The current version of solana-core
-    solana_core: []const u8,
+    @"solana-core": []const u8,
     /// first 4 bytes of the FeatureSet identifier
-    feature_set: ?u32 = null,
+    @"feature-set": ?u32 = null,
 };
 
 pub const EncodedConfirmedTransactionWithStatusMeta = struct {
     slot: Slot,
     transaction: EncodedTransactionWithStatusMeta,
-    block_time: ?UnixTimestamp = null,
+    blockTime: ?UnixTimestamp = null,
 };
 
 pub fn RpcEncodingConfigWrapper(comptime Config: type) type {
@@ -489,7 +556,7 @@ pub fn RpcEncodingConfigWrapper(comptime Config: type) type {
 pub const RpcTransactionConfig = struct {
     encoding: ?UiTransactionEncoding = null,
     commitment: ?CommitmentConfig = null,
-    max_supported_transaction_version: ?u8 = null,
+    maxSupportedTransactionVersion: ?u8 = null,
 };
 
 pub const RpcTokenAccountBalance = struct {
@@ -499,7 +566,7 @@ pub const RpcTokenAccountBalance = struct {
 
 pub const TokenAccountsFilter = union(enum(u8)) {
     mint: Pubkey,
-    program_id: Pubkey,
+    programId: Pubkey,
 };
 
 pub const RpcStakeActivation = struct {
@@ -518,7 +585,7 @@ pub const StakeActivationState = enum {
 pub const RpcEpochConfig = struct {
     epoch: ?Epoch = null,
     commitment: ?CommitmentConfig = null,
-    min_context_slot: ?Slot = null,
+    minContextSlot: ?Slot = null,
 };
 
 pub const TransactionStatus = struct {
@@ -526,11 +593,11 @@ pub const TransactionStatus = struct {
     confirmations: ?usize = null, // None = rooted
     status: ?TransactionError = null, // formerly: TransactionResult - legacy field
     err: ?TransactionError = null,
-    confirmation_status: ?TransactionConfirmationStatus = null,
+    confirmationStatus: ?TransactionConfirmationStatus = null,
 };
 
 pub const RpcSignatureStatusConfig = struct {
-    search_transaction_history: bool,
+    searchTransactionHistory: bool,
 };
 
 pub const RpcConfirmedTransactionStatusWithSignature = struct {
@@ -538,8 +605,8 @@ pub const RpcConfirmedTransactionStatusWithSignature = struct {
     slot: Slot,
     err: ?TransactionError = null,
     memo: ?[]const u8 = null,
-    block_time: ?UnixTimestamp = null,
-    confirmation_status: ?TransactionConfirmationStatus = null,
+    blockTime: ?UnixTimestamp = null,
+    confirmationStatus: ?TransactionConfirmationStatus = null,
 };
 
 pub const TransactionConfirmationStatus = enum {
@@ -550,22 +617,22 @@ pub const TransactionConfirmationStatus = enum {
 
 pub const RpcPrioritizationFee = struct {
     slot: Slot,
-    prioritization_fee: u64,
+    prioritizationFee: u64,
 };
 
 pub const RpcPerfSample = struct {
     slot: Slot,
-    num_transactions: u64,
-    num_non_vote_transactions: ?u64 = null,
-    num_slots: u64,
-    sample_period_secs: u16,
+    numTransactions: u64,
+    numNonVoteTransactions: ?u64 = null,
+    numSlots: u64,
+    samplePeriodSecs: u16,
 };
 
 pub const RpcLeaderSchedule = std.json.ArrayHashMap([]Slot);
 
 pub const RpcLeaderScheduleConfigWrapper = union(enum(u8)) {
-    slot_only: ?Slot,
-    config_only: ?RpcLeaderScheduleConfig,
+    slotOnly: ?Slot,
+    configOnly: ?RpcLeaderScheduleConfig,
 };
 
 pub const RpcLeaderScheduleConfig = struct {
@@ -575,7 +642,7 @@ pub const RpcLeaderScheduleConfig = struct {
 
 pub const RpcBlockhash = struct {
     blockhash: []const u8,
-    last_valid_block_height: u64,
+    lastValidBlockHeight: u64,
 };
 
 pub const RpcIdentity = struct {
@@ -592,15 +659,15 @@ pub const EpochInfo = struct {
     /// The current epoch
     epoch: Epoch,
     /// The current slot, relative to the start of the current epoch
-    slot_index: u64,
+    slotIndex: u64,
     /// The number of slots in this epoch
-    slots_in_epoch: u64,
+    slotsInEpoch: u64,
     /// The absolute current slot
-    absolute_slot: Slot,
+    absoluteSlot: Slot,
     /// The current block height
-    block_height: u64,
+    blockHeight: u64,
     /// Total number of transactions processed without error since genesis
-    transaction_count: ?u64 = null,
+    transactionCount: ?u64 = null,
 };
 
 pub const RpcContactInfo = struct {
@@ -611,7 +678,7 @@ pub const RpcContactInfo = struct {
     /// Tpu UDP port
     tpu: ?SocketAddr = null,
     /// Tpu QUIC port
-    tpu_quic: ?SocketAddr = null,
+    tpuQuic: ?SocketAddr = null,
     /// JSON RPC port
     rpc: ?SocketAddr = null,
     /// WebSocket PubSub port
@@ -619,14 +686,14 @@ pub const RpcContactInfo = struct {
     /// Software version
     version: ?[]const u8 = null,
     /// First 4 bytes of the FeatureSet identifier
-    feature_set: ?u32 = null,
+    featureSet: ?u32 = null,
     /// Shred version
-    shred_version: ?u16 = null,
+    shredVersion: ?u16 = null,
 };
 
 pub const RpcBlockProduction = struct {
     /// Map of leader base58 identity pubkeys to a tuple of `(number of leader slots, number of blocks produced)`
-    by_identity: std.json.ArrayHashMap(struct { usize, usize }),
+    byIdentity: std.json.ArrayHashMap(struct { usize, usize }),
     range: RpcBlockProductionRange,
 };
 
@@ -637,26 +704,26 @@ pub const RpcBlockProductionConfig = struct {
 };
 
 pub const RpcBlockProductionRange = struct {
-    first_slot: Slot,
-    last_slot: Slot,
+    firstSlot: Slot,
+    lastSlot: Slot,
 };
 
 pub const RpcBlockProductionConfigRange = struct {
-    first_slot: Slot,
-    last_slot: ?Slot = null,
+    firstSlot: Slot,
+    lastSlot: ?Slot = null,
 };
 
 pub const RpcSimulateTransactionResult = struct {
     err: ?TransactionError = null,
     logs: ?[][]const u8 = null,
     accounts: ?[]?UiAccount = null,
-    units_consumed: ?u64 = null,
-    return_data: ?UiTransactionReturnData = null,
-    inner_instructions: ?[]UiInnerInstructions = null,
+    unitsConsumed: ?u64 = null,
+    returnData: ?UiTransactionReturnData = null,
+    innerInstructions: ?[]UiInnerInstructions = null,
 };
 
 pub const UiTransactionReturnData = struct {
-    program_id: []const u8,
+    programId: []const u8,
     data: struct { []const u8, UiReturnDataEncoding },
 };
 
@@ -672,7 +739,7 @@ pub const UiInnerInstructions = struct {
 };
 
 pub const EncodedTransaction = union(enum(u8)) {
-    legacy_binary: []const u8, // Old way of expressing base-58, retained for RPC backwards compatibility
+    legacyBinary: []const u8, // Old way of expressing base-58, retained for RPC backwards compatibility
     binary: struct { []const u8, TransactionBinaryEncoding },
     json: UiTransaction,
     accounts: UiAccountsList,
@@ -680,12 +747,12 @@ pub const EncodedTransaction = union(enum(u8)) {
 
 pub const UiAccountsList = struct {
     signatures: [][]const u8,
-    account_keys: []ParsedAccount,
+    accountKeys: []ParsedAccount,
 };
 
 pub const UiTransaction = struct {
     signatures: [][]const u8,
-    message: UiMessage,
+    message: UiRawMessage, // TODO: UiMessage,
 };
 
 pub const UiMessage = union(enum(u8)) {
@@ -698,36 +765,36 @@ pub const MessageHeader = struct {
     /// valid. The signers of those signatures must match the first
     /// `num_required_signatures` of [`Message::account_keys`].
     // NOTE: Serialization-related changes must be paired with the direct read at sigverify.
-    num_required_signatures: u8,
+    numRequiredSignatures: u8,
 
     /// The last `num_readonly_signed_accounts` of the signed keys are read-only
     /// accounts.
-    num_readonly_signed_accounts: u8,
+    numReadonlySignedAccounts: u8,
 
     /// The last `num_readonly_unsigned_accounts` of the unsigned keys are
     /// read-only accounts.
-    num_readonly_unsigned_accounts: u8,
+    numReadonlyUnsignedAccounts: u8,
 };
 
 pub const UiRawMessage = struct {
     header: MessageHeader,
-    account_keys: [][]const u8,
-    recent_blockhash: []const u8,
+    accountKeys: [][]const u8,
+    recentBlockhash: []const u8,
     instructions: []UiCompiledInstruction,
-    address_table_lookups: ?[]UiAddressTableLookup,
+    addressTableLookups: ?[]UiAddressTableLookup = null,
 };
 
 pub const UiParsedMessage = struct {
-    account_keys: []ParsedAccount,
-    recent_blockhash: []const u8,
+    accountKeys: []ParsedAccount,
+    recentBlockhash: []const u8,
     instructions: []UiInstruction,
-    address_table_lookups: ?[]UiAddressTableLookup,
+    addressTableLookups: ?[]UiAddressTableLookup = null,
 };
 
 pub const UiAddressTableLookup = struct {
-    account_key: []const u8,
-    writable_indexes: []u8,
-    readonly_indexes: []u8,
+    accountKey: []const u8,
+    writableIndexes: []u8,
+    readonlyIndexes: []u8,
 };
 
 pub const UiInstruction = union(enum(u8)) {
@@ -737,28 +804,28 @@ pub const UiInstruction = union(enum(u8)) {
 
 pub const UiParsedInstruction = union(enum(u8)) {
     parsed: ParsedInstruction,
-    partially_decoded: UiPartiallyDecodedInstruction,
+    partiallyDecoded: UiPartiallyDecodedInstruction,
 };
 
 pub const UiPartiallyDecodedInstruction = struct {
-    program_id: []const u8,
+    programId: []const u8,
     accounts: []const u8,
     data: []const u8,
-    stack_height: ?u32,
+    stackHeight: ?u32,
 };
 
 pub const ParsedInstruction = struct {
     program: []const u8,
-    program_id: []const u8,
+    programId: []const u8,
     parsed: std.json.Value,
-    stack_height: ?u32,
+    stackHeight: ?u32,
 };
 
 pub const UiCompiledInstruction = struct {
-    program_id_index: u8,
+    programIdIndex: u8,
     accounts: []u8,
     data: []const u8,
-    stack_height: ?u32,
+    stackHeight: ?u32,
 };
 
 pub const ParsedAccount = struct {
@@ -770,7 +837,7 @@ pub const ParsedAccount = struct {
 
 pub const ParsedAccountSource = enum {
     transaction,
-    lookup_table,
+    lookupTable,
 };
 
 pub const TransactionBinaryEncoding = enum {
@@ -780,18 +847,18 @@ pub const TransactionBinaryEncoding = enum {
 
 pub const UiTransactionStatusMeta = struct {
     err: ?TransactionError,
-    status: ?Error, // This field is deprecated.  See https://github.com/solana-labs/solana/issues/9302
+    status: ?UiTransactionStatusError, // This field is deprecated.  See https://github.com/solana-labs/solana/issues/9302
     fee: u64,
-    pre_balances: []u64,
-    post_balances: []u64,
-    inner_instructions: ?[]UiInnerInstructions,
-    log_messages: ?[][]const u8,
-    pre_token_balances: ?[]UiTransactionTokenBalance,
-    post_token_balances: ?[]UiTransactionTokenBalance,
+    preBalances: []u64,
+    postBalances: []u64,
+    innerInstructions: ?[]UiInnerInstructions,
+    logMessages: ?[][]const u8,
+    preTokenBalances: ?[]UiTransactionTokenBalance,
+    postTokenBalances: ?[]UiTransactionTokenBalance,
     rewards: ?[]Reward,
-    loaded_addresses: ?UiLoadedAddresses,
-    return_data: ?UiTransactionReturnData,
-    compute_units_consumed: ?u64,
+    loadedAddresses: ?UiLoadedAddresses,
+    returnData: ?UiTransactionReturnData,
+    computeUnitsConsumed: ?u64,
 };
 
 pub const UiLoadedAddresses = struct {
@@ -802,8 +869,8 @@ pub const UiLoadedAddresses = struct {
 pub const Reward = struct {
     pubkey: []const u8,
     lamports: i64,
-    post_balance: u64, // Account balance in lamports after `lamports` was applied
-    reward_type: ?RewardType,
+    postBalance: u64, // Account balance in lamports after `lamports` was applied
+    rewardType: ?RewardType,
     commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
 };
 
@@ -815,24 +882,24 @@ pub const RewardType = enum {
 };
 
 pub const UiTransactionTokenBalance = struct {
-    account_index: u8,
+    accountIndex: u8,
     mint: []const u8,
-    ui_token_amount: UiTokenAmount,
+    uiTokenAmount: UiTokenAmount,
     owner: ?[]const u8,
-    program_id: ?[]const u8,
+    programId: ?[]const u8,
 };
 
 pub const UiTokenAmount = struct {
-    ui_amount: ?f64,
+    uiAmount: ?f64,
     decimals: u8,
     amount: []const u8,
-    ui_amount_string: []const u8,
+    uiAmountString: []const u8,
 };
 
 pub const EncodedTransactionWithStatusMeta = struct {
-    transaction: EncodedTransaction,
-    meta: ?UiTransactionStatusMeta,
-    version: ?TransactionVersion,
+    transaction: UiTransaction, // TODO: EncodedTransaction,
+    meta: ?UiTransactionStatusMeta = null,
+    version: ?TransactionVersion = null,
 };
 
 pub const TransactionVersion = union(enum(u8)) {
@@ -845,22 +912,22 @@ pub const Legacy = enum {
 };
 
 pub const UiConfirmedBlock = struct {
-    previous_blockhash: []const u8,
+    previousBlockhash: []const u8,
     blockhash: []const u8,
-    parent_slot: Slot,
-    transactions: ?[]EncodedTransactionWithStatusMeta,
-    signatures: ?[][]const u8,
-    rewards: ?[]Reward,
-    block_time: ?UnixTimestamp,
-    block_height: ?u64,
+    parentSlot: Slot,
+    transactions: ?[]EncodedTransactionWithStatusMeta = null,
+    signatures: ?[][]const u8 = null,
+    rewards: ?[]Reward = null,
+    blockTime: ?UnixTimestamp = null,
+    blockHeight: ?u64 = null,
 };
 
 pub const RpcBlockConfig = struct {
     encoding: ?UiTransactionEncoding = null,
-    transaction_details: ?TransactionDetails = null,
+    transactionDetails: ?TransactionDetails = null,
     rewards: ?bool = null,
     commitment: ?CommitmentConfig = null,
-    max_supported_transaction_version: ?u8 = null,
+    maxSupportedTransactionVersion: ?u8 = null,
 };
 
 pub const UiTransactionEncoding = enum {
@@ -868,7 +935,7 @@ pub const UiTransactionEncoding = enum {
     base64,
     base58,
     json,
-    json_parsed,
+    jsonParsed,
 };
 
 pub const TransactionDetails = enum {
@@ -885,48 +952,48 @@ pub const RpcVoteAccountStatus = struct {
 
 pub const RpcVoteAccountInfo = struct {
     /// Vote account address, as base-58 encoded string
-    vote_pubkey: []const u8,
+    votePubkey: []const u8,
 
     /// The validator identity, as base-58 encoded string
-    node_pubkey: []const u8,
+    nodePubkey: []const u8,
 
     /// The current stake, in lamports, delegated to this vote account
-    activated_stake: u64,
+    activatedStake: u64,
 
     /// An 8-bit integer used as a fraction (commission/MAX_U8) for rewards payout
     commission: u8,
 
     /// Whether this account is staked for the current epoch
-    epoch_vote_account: bool,
+    epochVoteAccount: bool,
 
     /// Latest history of earned credits for up to `MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY` epochs
     ///   each tuple is (Epoch, credits, prev_credits)
-    epoch_credits: []struct { Epoch, u64, u64 },
+    epochCredits: []struct { Epoch, u64, u64 },
 
     /// Most recent slot voted on by this vote account (0 if no votes exist)
-    last_vote: u64,
+    lastVote: u64,
 
     /// Current root slot for this vote account (0 if no root slot exists)
-    root_slot: Slot,
+    rootSlot: Slot,
 };
 
 pub const RpcGetVoteAccountsConfig = struct {
-    vote_pubkey: ?[]const u8 = null, // validator vote address, as a base-58 encoded string
+    votePubkey: ?[]const u8 = null, // validator vote address, as a base-58 encoded string
     commitment: ?CommitmentConfig = null,
-    keep_unstaked_delinquents: ?bool = null,
-    delinquent_slot_distance: ?u64 = null,
+    keepUnstakedDelinquents: ?bool = null,
+    delinquentSlotDistance: ?u64 = null,
 };
 
 pub const RpcSupply = struct {
     total: u64,
     circulating: u64,
-    non_circulating: u64,
-    non_circulating_accounts: [][]const u8,
+    nonCirculating: u64,
+    nonCirculatingAccounts: [][]const u8,
 };
 
 pub const RpcSupplyConfig = struct {
     commitment: ?CommitmentConfig = null,
-    exclude_non_circulating_accounts_list: bool,
+    excludeNonCirculatingAccountsList: bool,
 };
 
 pub const RpcAccountBalance = struct {
@@ -946,7 +1013,7 @@ pub const RpcLargestAccountsConfig = struct {
 
 pub const RpcBlockCommitment = struct {
     commitment: ?BlockCommitmentArray = null,
-    total_stake: u64,
+    totalStake: u64,
 };
 
 pub const MAX_LOCKOUT_HISTORY: usize = 31;
@@ -956,38 +1023,38 @@ pub const BlockCommitmentArray = [MAX_LOCKOUT_HISTORY + 1]u64;
 pub const FeeRateGovernor = struct {
     // The current cost of a signature  This amount may increase/decrease over time based on
     // cluster processing load.
-    lamports_per_signature: u64,
+    lamportsPerSignature: u64,
 
     // The target cost of a signature when the cluster is operating around target_signatures_per_slot
     // signatures
-    target_lamports_per_signature: u64,
+    targetLamportsPerSignature: u64,
 
     // Used to estimate the desired processing capacity of the cluster.  As the signatures for
     // recent slots are fewer/greater than this value, lamports_per_signature will decrease/increase
     // for the next slot.  A value of 0 disables lamports_per_signature fee adjustments
-    target_signatures_per_slot: u64,
+    targetSignaturesPerSlot: u64,
 
-    min_lamports_per_signature: u64,
-    max_lamports_per_signature: u64,
+    minLamportsPerSignature: u64,
+    maxLamportsPerSignature: u64,
 
     // What portion of collected fees are to be destroyed, as a fraction of std::u8::MAX
-    burn_percent: u8,
+    burnPercent: u8,
 };
 
 pub const RpcFees = struct {
     blockhash: []const u8,
-    fee_calculator: FeeCalculator,
-    last_valid_slot: Slot,
-    last_valid_block_height: u64,
+    feeCalculator: FeeCalculator,
+    lastValidSlot: Slot,
+    lastValidBlockHeight: u64,
 };
 
 pub const RpcBlockhashFeeCalculator = struct {
     blockhash: []const u8,
-    fee_calculator: FeeCalculator,
+    feeCalculator: FeeCalculator,
 };
 
 pub const RpcFeeCalculdator = struct {
-    fee_calculator: FeeCalculator,
+    feeCalculator: FeeCalculator,
 };
 
 pub const FeeCalculator = struct {
@@ -995,21 +1062,21 @@ pub const FeeCalculator = struct {
     ///
     /// This amount may increase/decrease over time based on cluster processing
     /// load.
-    lamports_per_signature: u64,
+    lamportsPerSignature: u64,
 };
 
 pub const RpcContextConfig = struct {
     commitment: ?CommitmentConfig = null,
-    min_context_slot: ?Slot = null,
+    minContextSlot: ?Slot = null,
 };
 
 pub const EpochSchedule = struct {
     /// The maximum number of slots in each epoch.
-    slots_per_epoch: u64,
+    slotsPerEpoch: u64,
 
     /// A number of slots before beginning of an epoch to calculate
     /// a leader schedule for that epoch.
-    leader_schedule_slot_offset: u64,
+    leaderScheduleSlotOffset: u64,
 
     /// Whether epochs start short and grow.
     warmup: bool,
@@ -1017,12 +1084,12 @@ pub const EpochSchedule = struct {
     /// The first epoch after the warmup period.
     ///
     /// Basically: `log2(slots_per_epoch) - log2(MINIMUM_SLOTS_PER_EPOCH)`.
-    first_normal_epoch: Epoch,
+    firstNormalEpoch: Epoch,
 
     /// The first slot after the warmup period.
     ///
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
-    first_normal_slot: Slot,
+    firstNormalSlot: Slot,
 };
 
 pub const RpcInflationRate = struct {
@@ -1037,15 +1104,15 @@ pub const RpcInflationGovernor = struct {
     terminal: f64,
     taper: f64,
     foundation: f64,
-    foundation_term: f64,
+    foundationTerm: f64,
 };
 
 pub const RpcInflationReward = struct {
     epoch: Epoch,
-    effective_slot: Slot,
+    effectiveSlot: Slot,
     amount: u64, // lamports
-    post_balance: u64, // lamports
-    commission: ?u8, // Vote account commission when the reward was credited
+    postBalance: u64, // lamports
+    commission: ?u8 = null, // Vote account commission when the reward was credited
 };
 
 pub const RpcKeyedAccount = struct {
@@ -1061,7 +1128,7 @@ pub fn OptionalContext(comptime T: type) type {
 }
 
 pub const AccountFilter = union(enum(u8)) {
-    data_size: u64,
+    dataSize: u64,
     memcmp: MemCmp,
     TokenAccountState,
 };
@@ -1070,15 +1137,15 @@ pub const MemCmp = struct {};
 
 pub const UiAccount = struct {
     lamports: u64,
-    data: UiAccountData,
+    data: []const u8, // TODO: UiAccountData,
     owner: []const u8,
     executable: bool,
-    rent_epoch: Epoch,
-    space: ?u64,
+    rentEpoch: Epoch,
+    space: ?u64 = null,
 };
 
 pub const UiAccountData = union(enum(u8)) {
-    legacy_binary: []const u8, // Legacy. Retained for RPC backwards compatibility
+    legacyBinary: []const u8, // Legacy. Retained for RPC backwards compatibility
     json: UiParsedAccount,
     binary: struct { []const u8, UiAccountEncoding },
 };
@@ -1148,14 +1215,14 @@ pub const CommitmentLevel = enum {
 
 pub const RpcAccountInfoConfig = struct {
     encoding: ?UiAccountEncoding = null,
-    data_slice: ?UiDataSliceConfig = null,
+    dataSlice: ?UiDataSliceConfig = null,
     commitment: ?CommitmentConfig = null,
-    min_context_slot: ?Slot = null,
+    minContextSlot: ?Slot = null,
 };
 
 pub const RpcResponseContext = struct {
     slot: Slot,
-    api_version: []const u8,
+    apiVersion: []const u8,
 };
 
 pub fn RpcResponse(comptime T: type) type {

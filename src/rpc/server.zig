@@ -48,6 +48,8 @@ pub const JsonRpcServer = struct {
         server.dispatcher(dispatcher);
 
         var router = server.router();
+        router.get("/", getHandler);
+        router.options("/", optionsHandler);
         router.post("/", rpcHandler);
 
         return Self{
@@ -98,198 +100,31 @@ fn rpcHandler(ctx: ReqCtx, req: *httpz.Request, response: *httpz.Response) !void
     }
 }
 
+fn optionsHandler(ctx: ReqCtx, req: *httpz.Request, response: *httpz.Response) !void {
+    _ = ctx;
+    var allowed_origin = if (req.headers.get("Origin")) |v| v else "*";
+    response.header("access-control-allow-origin", allowed_origin);
+    response.header("access-control-allow-methods", "POST, GET, OPTIONS");
+    response.header("access-control-max-age", "86400");
+    response.header("connection", "Close");
+    response.header("cache-control", "no-cache");
+    response.status = 200;
+    try response.write();
+}
+
+fn getHandler(ctx: ReqCtx, req: *httpz.Request, response: *httpz.Response) !void {
+    _ = ctx;
+    _ = req;
+    response.status = 200;
+    try response.writer().writeAll("Used HTTP Method is not allowed. POST or OPTIONS is required");
+    try response.write();
+}
+
 inline fn methodCall(allocator: std.mem.Allocator, processor: *RpcRequestProcessor, request: *t.JsonRpcRequest, response: *httpz.Response) !void {
-    if (strEquals(request.method, "getAccountInfo")) {
-        return RpcFunc(RpcRequestProcessor.getAccountInfo).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBalance")) {
-        return RpcFunc(RpcRequestProcessor.getBalance).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlock")) {
-        return RpcFunc(RpcRequestProcessor.getBlock).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlockCommitment")) {
-        return RpcFunc(RpcRequestProcessor.getBlockCommitment).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlockHeight")) {
-        return RpcFunc(RpcRequestProcessor.getBlockHeight).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlockProduction")) {
-        return RpcFunc(RpcRequestProcessor.getBlockProduction).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlocks")) {
-        return RpcFunc(RpcRequestProcessor.getBlocks).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlocksWithLimit")) {
-        return RpcFunc(RpcRequestProcessor.getBlocksWithLimit).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getBlockTime")) {
-        return RpcFunc(RpcRequestProcessor.getBlockTime).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getClusterNodes")) {
-        return RpcFunc(RpcRequestProcessor.getClusterNodes).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getConfirmedBlock")) {
-        return RpcFunc(RpcRequestProcessor.getConfirmedBlock).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getConfirmedBlocks")) {
-        return RpcFunc(RpcRequestProcessor.getConfirmedBlocks).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getConfirmedBlocksWithLimit")) {
-        return RpcFunc(RpcRequestProcessor.getConfirmedBlocksWithLimit).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getConfirmedSignaturesForAddress2")) {
-        return RpcFunc(RpcRequestProcessor.getConfirmedSignaturesForAddress2).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getConfirmedTransaction")) {
-        return RpcFunc(RpcRequestProcessor.getConfirmedTransaction).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getEpochInfo")) {
-        return RpcFunc(RpcRequestProcessor.getEpochInfo).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getEpochSchedule")) {
-        return RpcFunc(RpcRequestProcessor.getEpochSchedule).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getFeeCalculatorForBlockhash")) {
-        return RpcFunc(RpcRequestProcessor.getFeeCalculatorForBlockhash).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getFeeForMessage")) {
-        return RpcFunc(RpcRequestProcessor.getFeeForMessage).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getFeeRateGovernor")) {
-        return RpcFunc(RpcRequestProcessor.getFeeRateGovernor).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getFees")) {
-        return RpcFunc(RpcRequestProcessor.getFees).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getFirstAvailableBlock")) {
-        return RpcFunc(RpcRequestProcessor.getFirstAvailableBlock).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getGenesisHash")) {
-        return RpcFunc(RpcRequestProcessor.getGenesisHash).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getHealth")) {
-        return RpcFunc(RpcRequestProcessor.getHealth).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getHighestSnapshotSlot")) {
-        return RpcFunc(RpcRequestProcessor.getHighestSnapshotSlot).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getIdentity")) {
-        return RpcFunc(RpcRequestProcessor.getIdentity).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getInflationGovernor")) {
-        return RpcFunc(RpcRequestProcessor.getInflationGovernor).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getInflationRate")) {
-        return RpcFunc(RpcRequestProcessor.getInflationRate).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getInflationReward")) {
-        return RpcFunc(RpcRequestProcessor.getInflationReward).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getLargestAccounts")) {
-        return RpcFunc(RpcRequestProcessor.getLargestAccounts).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getLatestBlockhash")) {
-        return RpcFunc(RpcRequestProcessor.getLatestBlockhash).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getLeaderSchedule")) {
-        return RpcFunc(RpcRequestProcessor.getLeaderSchedule).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getMaxRetransmitSlot")) {
-        return RpcFunc(RpcRequestProcessor.getMaxRetransmitSlot).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getMaxShredInsertSlot")) {
-        return RpcFunc(RpcRequestProcessor.getMaxShredInsertSlot).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getMinimumBalanceForRentExemption")) {
-        return RpcFunc(RpcRequestProcessor.getMinimumBalanceForRentExemption).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getMultipleAccounts")) {
-        return RpcFunc(RpcRequestProcessor.getMultipleAccounts).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getProgramAccounts")) {
-        return RpcFunc(RpcRequestProcessor.getProgramAccounts).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getRecentBlockhash")) {
-        return RpcFunc(RpcRequestProcessor.getRecentBlockhash).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getRecentPerformanceSamples")) {
-        return RpcFunc(RpcRequestProcessor.getRecentPerformanceSamples).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getRecentPrioritizationFees")) {
-        return RpcFunc(RpcRequestProcessor.getRecentPrioritizationFees).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSignaturesForAddress")) {
-        return RpcFunc(RpcRequestProcessor.getSignaturesForAddress).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSignatureStatuses")) {
-        return RpcFunc(RpcRequestProcessor.getSignatureStatuses).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSlot")) {
-        return RpcFunc(RpcRequestProcessor.getSlot).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSlotLeader")) {
-        return RpcFunc(RpcRequestProcessor.getSlotLeader).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSlotLeaders")) {
-        return RpcFunc(RpcRequestProcessor.getSlotLeaders).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSnapshotSlot")) {
-        return RpcFunc(RpcRequestProcessor.getSnapshotSlot).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getStakeActivation")) {
-        return RpcFunc(RpcRequestProcessor.getStakeActivation).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getStakeMinimumDelegation")) {
-        return RpcFunc(RpcRequestProcessor.getStakeMinimumDelegation).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getSupply")) {
-        return RpcFunc(RpcRequestProcessor.getSupply).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTokenAccountBalance")) {
-        return RpcFunc(RpcRequestProcessor.getTokenAccountBalance).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTokenAccountsByDelegate")) {
-        return RpcFunc(RpcRequestProcessor.getTokenAccountsByDelegate).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTokenAccountsByOwner")) {
-        return RpcFunc(RpcRequestProcessor.getTokenAccountsByOwner).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTokenLargestAccounts")) {
-        return RpcFunc(RpcRequestProcessor.getTokenLargestAccounts).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTokenSupply")) {
-        return RpcFunc(RpcRequestProcessor.getTokenSupply).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTotalSupply")) {
-        return RpcFunc(RpcRequestProcessor.getTotalSupply).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTransaction")) {
-        return RpcFunc(RpcRequestProcessor.getTransaction).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getTransactionCount")) {
-        return RpcFunc(RpcRequestProcessor.getTransactionCount).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getVersion")) {
-        return RpcFunc(RpcRequestProcessor.getVersion).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "getVoteAccounts")) {
-        return RpcFunc(RpcRequestProcessor.getVoteAccounts).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "isBlockhashValid")) {
-        return RpcFunc(RpcRequestProcessor.isBlockhashValid).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "minimumLedgerSlot")) {
-        return RpcFunc(RpcRequestProcessor.minimumLedgerSlot).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "requestAirdrop")) {
-        return RpcFunc(RpcRequestProcessor.requestAirdrop).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "sendTransaction")) {
-        return RpcFunc(RpcRequestProcessor.sendTransaction).call(allocator, processor, request, response);
-    }
-    if (strEquals(request.method, "simulateTransaction")) {
-        return RpcFunc(RpcRequestProcessor.simulateTransaction).call(allocator, processor, request, response);
+    inline for (@typeInfo(t.RpcServiceImpl(RpcRequestProcessor, t.Result)).Struct.fields) |field| {
+        if (strEquals(request.method, field.name)) {
+            return RpcFunc(@field(RpcRequestProcessor, field.name)).call(allocator, processor, request, response);
+        }
     }
 
     return respondJsonRpcError(
@@ -317,8 +152,20 @@ pub fn RpcFunc(comptime func: anytype) type {
             }
 
             const Args = std.meta.ArgsTuple(@TypeOf(func));
-
             var args: Args = undefined;
+
+            // first two func args are *Self and std.mem.Allocator so we don't count those
+            const args_len = args.len - 2;
+
+            if (request.params.array.items.len > args_len) {
+                return respondJsonRpcError(
+                    request.id,
+                    response,
+                    t.jrpc_error_code_invalid_params,
+                    std.fmt.allocPrint(allocator, "Invalid params, expected {any} params, got: {any} ", .{ args_len, request.params.array.items.len }) catch unreachable,
+                );
+            }
+
             args[0] = processor;
             args[1] = allocator;
             inline for (std.meta.fields(Args)[2..], 2.., 0..) |field, argIndex, valueIndex| {
@@ -358,14 +205,14 @@ pub fn RpcFunc(comptime func: anytype) type {
                 }
             }
 
-            return respondWithJsonRpcResponse(@call(.auto, func, args), request, response);
+            return respondWithJsonRpcResponse(allocator, @call(.auto, func, args), request, response);
         }
     };
 
     return S;
 }
 
-inline fn respondWithJsonRpcResponse(result: anytype, request: *t.JsonRpcRequest, response: *httpz.Response) !void {
+inline fn respondWithJsonRpcResponse(allocator: std.mem.Allocator, result: anytype, request: *t.JsonRpcRequest, response: *httpz.Response) !void {
     switch (result) {
         .Ok => |v| {
             var success_response: t.JsonRpcResponse(@TypeOf(result.Ok)) = .{
@@ -384,7 +231,7 @@ inline fn respondWithJsonRpcResponse(result: anytype, request: *t.JsonRpcRequest
             var error_response: t.JsonRpcResponse(u0) = .{
                 .id = request.id,
                 .jsonrpc = "2.0",
-                .@"error" = err.toErrorObject(),
+                .@"error" = err.toErrorObject(allocator),
                 .result = null,
             };
 
@@ -397,10 +244,12 @@ inline fn respondWithJsonRpcResponse(result: anytype, request: *t.JsonRpcRequest
 }
 
 inline fn respondJsonRpcError(request_id: t.Id, response: *httpz.Response, code: i32, message: []const u8) !void {
+    var error_object = t.ErrorObject.init(code, message);
+
     var error_response: t.JsonRpcResponse(u0) = .{
         .id = request_id,
         .jsonrpc = "2.0",
-        .@"error" = t.ErrorObject.init(code, message),
+        .@"error" = error_object,
         .result = null,
     };
 

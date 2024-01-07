@@ -105,14 +105,14 @@ pub const RpcRequestProcessor = struct {
 
         for (contact_infos.items) |contact_info| {
             rpc_contact_infos.appendAssumeCapacity(t.RpcContactInfo{
-                .feature_set = null,
+                .featureSet = null,
                 .gossip = contact_info.gossip,
                 .pubkey = contact_info.id,
                 .pubsub = contact_info.rpc_pubsub,
                 .rpc = contact_info.rpc,
-                .shred_version = contact_info.shred_version,
+                .shredVersion = contact_info.shred_version,
                 .tpu = contact_info.tpu,
-                .tpu_quic = contact_info.tpu_forwards, // TODO: correct value
+                .tpuQuic = contact_info.tpu_forwards, // TODO: correct value
                 .version = null, // TODO: populate
             });
         }
@@ -535,8 +535,8 @@ pub const RpcRequestProcessor = struct {
 
         return .{
             .Ok = t.RpcVersionInfo{
-                .solana_core = "",
-                .feature_set = 0,
+                .@"solana-core" = "",
+                .@"feature-set" = 0,
             },
         };
     }
@@ -597,7 +597,7 @@ pub const RpcRequestProcessor = struct {
 
 // Statically dispatched, compile-time generics :)
 comptime {
-    const check: t.RpcServiceImpl(RpcRequestProcessor) = .{
+    const check: t.RpcServiceImpl(RpcRequestProcessor, t.Result) = .{
         .getAccountInfo = RpcRequestProcessor.getAccountInfo,
         .getBalance = RpcRequestProcessor.getBalance,
         .getBlock = RpcRequestProcessor.getBlock,

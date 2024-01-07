@@ -90,12 +90,18 @@ pub const Client = struct {
 
         const JrpcRequest = jsonrpc.Request(Params);
 
-        var out = try std.json.stringifyAlloc(self.allocator, JrpcRequest{
-            .jsonrpc = "2.0",
-            .id = id,
-            .method = method,
-            .params = params,
-        }, .{ .emit_null_optional_fields = false });
+        var out = try std.json.stringifyAlloc(
+            self.allocator,
+            JrpcRequest{
+                .jsonrpc = "2.0",
+                .id = id,
+                .method = method,
+                .params = params,
+            },
+            .{
+                .emit_null_optional_fields = false,
+            },
+        );
         defer self.allocator.free(out);
 
         logger.debug("request body: {s}", .{out});

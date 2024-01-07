@@ -80,6 +80,7 @@ pub const net = struct {
 };
 
 pub const rpc = struct {
+    pub usingnamespace @import("rpc/client.zig");
     pub usingnamespace @import("rpc/processor.zig");
     pub usingnamespace @import("rpc/server.zig");
     pub usingnamespace @import("rpc/types.zig");
