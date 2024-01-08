@@ -241,7 +241,7 @@ pub const AccountFileInfo = struct {
     id: usize,
     length: usize, // amount of bytes used
 
-    pub fn sanitize(self: *const AccountFileInfo, file_size: usize) !void {
+    pub fn validate(self: *const AccountFileInfo, file_size: usize) !void {
         if (file_size == 0) {
             return error.FileSizeTooSmall;
         } else if (file_size > @as(usize, MAXIMUM_APPEND_VEC_FILE_SIZE)) {
@@ -830,13 +830,22 @@ pub const SnapshotPaths = struct {
             .incremental_snapshot = maybe_latest_incremental_snapshot,
         };
     }
+
+    pub fn deinit(self: *SnapshotPaths, allocator: std.mem.Allocator) void {
+        allocator.free(self.full_snapshot.path);
+        if (self.incremental_snapshot) |incremental_snapshot| {
+            allocator.free(incremental_snapshot.path);
+        }
+    }
 };
 
 pub const Snapshots = struct {
     full: SnapshotFields,
     incremental: ?SnapshotFields,
+    paths: SnapshotPaths,
+    was_collapsed: bool = false, // used for deinit()
 
-    pub fn readFromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: *const SnapshotPaths) !Snapshots {
+    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !Snapshots {
         // unpack
         const full_metadata_path = try std.fmt.allocPrint(
             allocator,
@@ -872,6 +881,7 @@ pub const Snapshots = struct {
         return Snapshots{
             .full = full,
             .incremental = incremental,
+            .paths = paths,
         };
     }
 
@@ -885,8 +895,10 @@ pub const Snapshots = struct {
         // nothing to collapse
         if (self.incremental == null)
             return self.full;
+        self.was_collapsed = true;
 
         // collapse bank fields into the
+        // incremental =pushed into=> full
         var snapshot = self.incremental.?; // stack copy
         const full_slot = self.full.bank_fields.slot;
 
@@ -899,6 +911,7 @@ pub const Snapshots = struct {
 
             // only keep slots > full snapshot slot
             if (!(slot > full_slot)) {
+                incremental_entry.value_ptr.deinit();
                 _ = storages_map.remove(slot);
                 continue;
             }
@@ -913,6 +926,24 @@ pub const Snapshots = struct {
         snapshot.accounts_db_fields = self.full.accounts_db_fields;
 
         return snapshot;
+    }
+
+    pub fn deinit(self: *Snapshots, allocator: std.mem.Allocator) void {
+        if (!self.was_collapsed) {
+            self.full.deinit(allocator);
+            if (self.incremental) |inc| {
+                inc.deinit(allocator);
+            }
+        } else {
+            self.full.deinit(allocator);
+            if (self.incremental) |*inc| {
+                inc.accounts_db_fields.file_map.deinit();
+                bincode.free(allocator, inc.bank_fields);
+                bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
+                bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
+            }
+        }
+        self.paths.deinit(allocator);
     }
 };
 

@@ -10,6 +10,8 @@ const Epoch = @import("./time.zig").Epoch;
 const Pubkey = @import("./pubkey.zig").Pubkey;
 
 const AccountFileInfo = @import("./snapshots.zig").AccountFileInfo;
+const AccountIndex = @import("accounts_db.zig").AccountIndex;
+const AccountRef = @import("./accounts_db.zig").AccountRef;
 
 pub const FileId = u32;
 
@@ -21,7 +23,7 @@ pub const AccountInFile = struct {
     data: []u8,
     offset: usize,
     len: usize,
-    hash: *Hash,
+    hash_ptr: *Hash,
 
     pub const Header1 = struct {
         write_version_obsolete: u64,
@@ -36,7 +38,7 @@ pub const AccountInFile = struct {
         executable: bool,
     };
 
-    pub fn sanitize(self: *const @This()) !void {
+    pub fn validate(self: *const @This()) !void {
         // make sure upper bits are zero
         const exec_byte = @as(*u8, @ptrCast(self.executable()));
         const valid_exec = exec_byte.* & ~@as(u8, 1) == 0;
@@ -55,7 +57,6 @@ pub const AccountInFile = struct {
         }
     }
 
-    // pubkey
     pub inline fn pubkey(self: *const @This()) *Pubkey {
         return &self.store_info.pubkey;
     }
@@ -75,13 +76,10 @@ pub const AccountInFile = struct {
     pub inline fn rent_epoch(self: *const @This()) *Epoch {
         return &self.account_info.rent_epoch;
     }
-};
 
-pub const PubkeyAccountRef = struct {
-    pubkey: Pubkey,
-    offset: usize,
-    slot: Slot,
-    file_id: usize,
+    pub inline fn hash(self: *const @This()) *Hash {
+        return self.hash_ptr;
+    }
 };
 
 const u64_size: usize = @sizeOf(u64);
@@ -109,7 +107,7 @@ pub const AccountFile = struct {
         const file_stat = try file.stat();
         const file_size: u64 = @intCast(file_stat.size);
 
-        try accounts_file_info.sanitize(file_size);
+        try accounts_file_info.validate(file_size);
 
         var mmap_ptr = try std.os.mmap(
             null,
@@ -135,13 +133,13 @@ pub const AccountFile = struct {
         self.file.close();
     }
 
-    pub fn sanitize(self: *Self) !void {
+    pub fn validate(self: *Self) !void {
         var offset: usize = 0;
         var n_accounts: usize = 0;
 
         while (true) {
             const account = self.getAccount(offset) catch break;
-            try account.sanitize();
+            try account.validate();
             offset = offset + account.len;
             n_accounts += 1;
         }
@@ -153,17 +151,17 @@ pub const AccountFile = struct {
         self.n_accounts = n_accounts;
     }
 
-    pub fn sanitizeAndGetAccountsRefs(self: *Self, refs: *ArrayList(PubkeyAccountRef)) !void {
+    pub fn validateAndBinAccountRefs(self: *Self, index: *AccountIndex) !void {
         var offset: usize = 0;
         var n_accounts: usize = 0;
 
         while (true) {
             var account = self.getAccount(offset) catch break;
-            try account.sanitize();
+            try account.validate();
 
             const pubkey = account.store_info.pubkey;
 
-            const hash_is_missing = std.mem.eql(u8, &account.hash.data, &Hash.default().data);
+            const hash_is_missing = std.mem.eql(u8, &account.hash().data, &Hash.default().data);
             if (hash_is_missing) {
                 const hash = hashAccount(
                     account.account_info.lamports,
@@ -173,14 +171,19 @@ pub const AccountFile = struct {
                     account.account_info.rent_epoch,
                     &pubkey.data,
                 );
-                account.hash.* = hash;
+                account.hash_ptr.* = hash;
             }
 
-            try refs.append(PubkeyAccountRef{
+            const index_bin = index.getBinFromPubkey(&pubkey);
+            try index_bin.add(AccountRef{
                 .pubkey = pubkey,
-                .offset = offset,
                 .slot = self.slot,
-                .file_id = self.id,
+                .location = .{
+                    .File = .{
+                        .file_id = @as(u32, @intCast(self.id)),
+                        .offset = offset,
+                    },
+                },
             });
 
             offset = offset + account.len;
@@ -195,21 +198,18 @@ pub const AccountFile = struct {
     }
 
     /// get account without parsing data (a lot faster if the data field isnt used anyway)
-    pub fn getAccountFast(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
+    /// (used when computing account hashes for snapshot validation)
+    pub fn getAccountHashAndLamports(self: *const Self, start_offset: usize) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
         var offset = start_offset;
 
-        var store_info = try self.getType(&offset, AccountInFile.Header1);
-        var account_info = try self.getType(&offset, AccountInFile.Header2);
+        offset += @sizeOf(AccountInFile.Header1);
+        var lamports = try self.getType(&offset, u64);
+        offset += @sizeOf(AccountInFile.Header2) - @sizeOf(u64);
         var hash = try self.getType(&offset, Hash);
 
-        return AccountInFile{
-            .store_info = store_info,
-            .account_info = account_info,
+        return .{
             .hash = hash,
-            // these shouldnt be used
-            .data = &[_]u8{},
-            .len = 0,
-            .offset = 0,
+            .lamports = lamports,
         };
     }
 
@@ -226,7 +226,7 @@ pub const AccountFile = struct {
         return AccountInFile{
             .store_info = store_info,
             .account_info = account_info,
-            .hash = hash,
+            .hash_ptr = hash,
             .data = data,
             .len = len,
             .offset = start_offset,
@@ -251,3 +251,23 @@ pub const AccountFile = struct {
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
 };
+
+test "core.accounts_file: verify accounts file" {
+    const path = "test_data/test_account_file";
+    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
+    const file_info = AccountFileInfo{
+        .id = 0,
+        .length = 162224,
+    };
+    var accounts_file = try AccountFile.init(file, file_info, 10);
+    defer accounts_file.deinit();
+
+    try accounts_file.validate();
+
+    const account = try accounts_file.getAccount(0);
+
+    const hash_and_lamports = try accounts_file.getAccountHashAndLamports(0);
+
+    try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports.*);
+    try std.testing.expectEqual(account.hash().*, hash_and_lamports.hash.*);
+}
