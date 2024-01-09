@@ -1270,55 +1270,55 @@ pub const BenchmarkAccountsDB = struct {
         "10k accounts (10 slot per account)",
     };
 
-    // pub fn benchmarkReadAccounts(bench_args: BenchArgs) !u64 {
-    //     const n_accounts = bench_args.n_accounts;
-    //     const slot_list_len = bench_args.slot_list_len;
+    pub fn benchmarkReadAccounts(bench_args: BenchArgs) !u64 {
+        const n_accounts = bench_args.n_accounts;
+        const slot_list_len = bench_args.slot_list_len;
 
-    //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //     var allocator = gpa.allocator();
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var allocator = gpa.allocator();
 
-    //     var logger = Logger{ .noop = {} };
-    //     var accounts_db = try AccountsDB.init(allocator, logger);
-    //     defer accounts_db.deinit();
+        var logger = Logger{ .noop = {} };
+        var accounts_db = try AccountsDB.init(allocator, logger);
+        defer accounts_db.deinit();
 
-    //     var random = std.rand.DefaultPrng.init(19);
-    //     var rng = random.random();
+        var random = std.rand.DefaultPrng.init(19);
+        var rng = random.random();
 
-    //     var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
-    //     defer {
-    //         for (accounts) |account| allocator.free(account.data);
-    //         allocator.free(accounts);
-    //     }
+        var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
+        defer {
+            for (accounts) |account| allocator.free(account.data);
+            allocator.free(accounts);
+        }
 
-    //     var pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    //     defer allocator.free(pubkeys);
+        var pubkeys = try allocator.alloc(Pubkey, n_accounts);
+        defer allocator.free(pubkeys);
 
-    //     var account_index: usize = 0;
-    //     for (0..slot_list_len) |s| {
-    //         for (0..n_accounts) |i| {
-    //             accounts[account_index] = try Account.random(allocator, rng, i);
-    //             account_index += 1;
-    //             if (s == 0) {
-    //                 const pubkey = Pubkey.random(rng);
-    //                 pubkeys[i] = pubkey;
-    //             }
-    //         }
-    //     }
-    //     for (0..(n_accounts * slot_list_len)) |i| {
-    //         const account = accounts[i];
-    //         try accounts_db.putAccount(account, pubkeys[i % n_accounts], 20);
-    //     }
+        var account_index: usize = 0;
+        for (0..slot_list_len) |s| {
+            for (0..n_accounts) |i| {
+                accounts[account_index] = try Account.random(allocator, rng, i);
+                account_index += 1;
+                if (s == 0) {
+                    const pubkey = Pubkey.random(rng);
+                    pubkeys[i] = pubkey;
+                }
+            }
+        }
+        for (0..(n_accounts * slot_list_len)) |i| {
+            const account = accounts[i];
+            try accounts_db.putAccount(account, pubkeys[i % n_accounts], 20);
+        }
 
-    //     var timer = try std.time.Timer.start();
-    //     for (0..n_accounts) |i| {
-    //         const pubkey = &pubkeys[i];
-    //         const account = try accounts_db.getAccount(pubkey);
-    //         std.debug.assert(account.data.len == i);
-    //     }
-    //     const elapsed = timer.read();
+        var timer = try std.time.Timer.start();
+        for (0..n_accounts) |i| {
+            const pubkey = &pubkeys[i];
+            const account = try accounts_db.getAccount(pubkey);
+            std.debug.assert(account.data.len == i);
+        }
+        const elapsed = timer.read();
 
-    //     return elapsed;
-    // }
+        return elapsed;
+    }
 
     pub fn benchmarkWriteAccounts(bench_args: BenchArgs) !u64 {
         const n_accounts = bench_args.n_accounts;
