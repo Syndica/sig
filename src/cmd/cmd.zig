@@ -109,13 +109,13 @@ fn gossip(_: []const []const u8) !void {
 
     // var logger: Logger = .noop;
 
-    const metrics_thread = try spawnMetrics(gpa_allocator);
+    const metrics_thread = try spawnMetrics(gpa_allocator, logger);
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var gossip_address = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, gossip_port);
-    std.debug.print("gossip port: {d}\n", .{gossip_port});
+    logger.infof("gossip port: {d}\n", .{gossip_port});
 
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
@@ -161,8 +161,9 @@ fn gossip(_: []const []const u8) !void {
 /// Initializes the global registry. Returns error if registry was already initialized.
 /// Spawns a thread to serve the metrics over http on the CLI configured port.
 /// Uses same allocator for both registry and http adapter.
-fn spawnMetrics(allocator: std.mem.Allocator) !std.Thread {
+fn spawnMetrics(allocator: std.mem.Allocator, logger: Logger) !std.Thread {
     var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
+    logger.infof("metrics port: {d}\n", .{metrics_port});
     const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
     return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }
