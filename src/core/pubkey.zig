@@ -59,23 +59,10 @@ pub const Pubkey = struct {
     }
 
     /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
-    pub fn random(rng: std.rand.Random, options: struct { skip_encoding: bool = false }) Self {
+    pub fn random(rng: std.rand.Random) Self {
         var bytes: [32]u8 = undefined;
         rng.bytes(&bytes);
-
-        var dest: [44]u8 = .{
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        };
-        if (options.skip_encoding) {
-            return Self{ .data = bytes[0..32].* };
-        }
-        var written = encoder.encode(&bytes, &dest) catch @panic("could not encode pubkey");
-        if (written > 44) {
-            std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
-        }
-        return Self{ .data = bytes[0..32].* };
+        return Self{ .data = bytes };
     }
 
     pub fn default() Self {

@@ -938,7 +938,7 @@ test "gossip.crds_table: insert and get votes" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    id = Pubkey.random(rng, .{});
+    id = Pubkey.random(rng);
     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     crds_value = try CrdsValue.initSigned(CrdsData{
         .Vote = .{ 0, vote },

@@ -1857,7 +1857,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     const peer0 = iter.next().?.*;
     as_lock.unlock();
 
-    var prunes = [_]Pubkey{Pubkey.random(rng.random(), .{})};
+    var prunes = [_]Pubkey{Pubkey.random(rng.random())};
     var prune_data = PruneData{
         .pubkey = peer0,
         .destination = gossip_service.my_pubkey,
@@ -1909,7 +1909,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
         var value = try CrdsValue.randomWithIndex(rng.random(), &kp, 0);
-        value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
+        value.data.LegacyContactInfo.id = Pubkey.random(rng.random());
         crds_values[i] = value;
     }
 
@@ -1976,7 +1976,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
         count += 1;
         for (0..5) |_| {
             var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
-            value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
+            value.data.LegacyContactInfo.id = Pubkey.random(rng.random());
             try crds_table.insert(value, getWallclockMs());
 
             // make sure well get a response from the request
@@ -2058,12 +2058,12 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     );
     defer gossip_service.deinit();
 
-    var push_from = Pubkey.random(rng.random(), .{});
+    var push_from = Pubkey.random(rng.random());
     var values = ArrayList(CrdsValue).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
         var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
-        value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
+        value.data.LegacyContactInfo.id = Pubkey.random(rng.random());
         try values.append(value);
     }
 
@@ -2510,10 +2510,10 @@ pub const BenchmarkGossipServiceGeneral = struct {
     pub const arg_names = [_][]const u8{
         "1k_msgs",
         "5k_msgs",
-        "10k_msg_iters",
+        "10k_msgs",
     };
 
-    pub fn benchmarkGossipServiceProcessMessages(num_message_iterations: usize) !void {
+    pub fn benchmarkGossipServiceProcessMessages(num_message_iterations: usize) !usize {
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -2524,9 +2524,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
         contact_info.shred_version = 19;
         contact_info.gossip = address;
 
-        // var logger = Logger.init(allocator, .debug);
-        // defer logger.deinit();
-        // logger.spawn();
         var logger: Logger = .noop;
 
         // process incoming packets/messsages
@@ -2569,6 +2566,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var sender_keypair = try KeyPair.create(null);
 
         var msg_sent: usize = 0;
+        var timer = try std.time.Timer.start();
 
         while (msg_sent < num_message_iterations) {
             var packet_batch = try ArrayList(Packet).initCapacity(allocator, 10);
@@ -2614,11 +2612,14 @@ pub const BenchmarkGossipServiceGeneral = struct {
                 break;
             }
         }
+        const elapsed = timer.read();
 
         exit.store(true, std.atomic.Ordering.Unordered);
         packet_handle.join();
 
         sender_exit.store(true, std.atomic.Ordering.Unordered);
         outgoing_handle.join();
+
+        return elapsed;
     }
 };

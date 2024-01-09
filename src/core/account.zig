@@ -7,6 +7,19 @@ pub const Account = struct {
     owner: Pubkey,
     executable: bool,
     rent_epoch: Epoch,
+
+    pub fn random(allocator: std.mem.Allocator, rng: std.rand.Random, data_len: usize) !Account {
+        var data = try allocator.alloc(u8, data_len);
+        rng.bytes(data);
+
+        return .{
+            .lamports = rng.int(u64),
+            .data = data,
+            .owner = Pubkey.random(rng),
+            .executable = rng.boolean(),
+            .rent_epoch = rng.int(Epoch),
+        };
+    }
 };
 
 const std = @import("std");

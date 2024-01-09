@@ -146,7 +146,7 @@ pub const PruneData = struct {
             .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
-            .destination = Pubkey.random(rng, .{}),
+            .destination = Pubkey.random(rng),
             .wallclock = crds.getWallclockMs(),
         };
         try self.sign(keypair);
@@ -186,7 +186,7 @@ pub const PruneData = struct {
 
 test "gossip.protocol: push message serialization is predictable" {
     var rng = DefaultPrng.init(crds.getWallclockMs());
-    var pubkey = Pubkey.random(rng.random(), .{});
+    var pubkey = Pubkey.random(rng.random());
     var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
     defer values.deinit();
 

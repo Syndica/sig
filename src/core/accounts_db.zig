@@ -224,14 +224,14 @@ pub const AccountsDB = struct {
         self.logger.infof("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        // preallocate per bin
+        // ensureTotalCapacity per bin
         var total_accounts: usize = 0;
         for (0..n_bins) |i| {
             var bin_n_accounts: usize = 0;
             for (thread_dbs.items) |*t_index| {
                 bin_n_accounts += t_index.index.bins[i].len();
             }
-            try self.index.bins[i].preallocate(bin_n_accounts);
+            try self.index.bins[i].ensureTotalCapacity(bin_n_accounts);
             total_accounts += bin_n_accounts;
         }
         self.logger.infof("found {d} accounts\n", .{total_accounts});
@@ -285,7 +285,7 @@ pub const AccountsDB = struct {
 
         const thread_filenames = file_names[start_index..end_index];
 
-        // preallocate the memory across the bins
+        // ensureTotalCapacity the memory across the bins
         const n_refs_per_bin = 2_000; // TODO: tune (this has a large impact on performance)
         for (thread_index.bins) |*index_bin| {
             index_bin.* = try AccountIndexBin.initCapacity(allocator, n_refs_per_bin);
@@ -367,6 +367,7 @@ pub const AccountsDB = struct {
         for (bin_start_index..bin_end_index, 1..) |bin_index, count| {
             const index_bin = index.getBin(bin_index);
             const index_bin_refs = &index_bin.account_refs;
+
             // combine
             for (thread_dbs.items) |*t_index| {
                 const thread_bin = t_index.index.getBin(bin_index);
@@ -586,7 +587,7 @@ pub const AccountsDB = struct {
         total_lamports[thread_index] = local_total_lamports;
     }
 
-    /// writes a new account to storage and updates the index to point to it
+    /// writes a new account to storage and updates the index
     pub fn putAccount(
         self: *Self,
         account: Account,
@@ -607,7 +608,47 @@ pub const AccountsDB = struct {
         };
         const bin = self.index.getBinFromPubkey(&pubkey);
         try bin.add(account_ref);
-        bin.sort();
+    }
+
+    /// writes a batch of accounts to storage and updates the index
+    pub fn putAccountBatch(
+        self: *Self,
+        accounts: []Account,
+        pubkeys: []Pubkey,
+        slot: Slot,
+    ) !void {
+        std.debug.assert(accounts.len == pubkeys.len);
+
+        // store account
+        const cache_index_start = self.storage.cache.items.len;
+        try self.storage.cache.appendSlice(accounts);
+
+        // prealloc (memory alloc bottleneck?) -- MAIN MEMORY BOTTLENECK
+        const n_bins = self.index.numberOfBins();
+        var bin_counts = try self.allocator.alloc(usize, n_bins);
+        @memset(bin_counts, 0);
+        defer self.allocator.free(bin_counts);
+        for (pubkeys) |*pubkey| {
+            const bin_index = self.index.getBinIndex(pubkey);
+            bin_counts[bin_index] += 1;
+        }
+        for (0..n_bins) |bin_index| {
+            const bin_len = self.index.bins[bin_index].len();
+            try self.index.bins[bin_index].ensureTotalCapacity(bin_counts[bin_index] + bin_len);
+        }
+
+        // update index
+        for (0..accounts.len) |i| {
+            const account_ref = AccountRef{
+                .pubkey = pubkeys[i],
+                .slot = slot,
+                .location = .{
+                    .Cache = .{ .index = cache_index_start + i },
+                },
+            };
+            const bin = self.index.getBinFromPubkey(&pubkeys[i]);
+            bin.addAssumeCapacity(account_ref);
+        }
     }
 
     pub fn getSlotHistory(self: *const Self) !sysvars.SlotHistory {
@@ -868,12 +909,16 @@ pub const AccountIndexBin = struct {
         self.account_refs.deinit();
     }
 
-    pub fn preallocate(self: *AccountIndexBin, n_accounts: usize) !void {
-        try self.account_refs.ensureTotalCapacity(n_accounts);
+    pub fn ensureTotalCapacity(self: *AccountIndexBin, size: usize) !void {
+        try self.account_refs.ensureTotalCapacity(size);
     }
 
     pub fn add(self: *AccountIndexBin, account_ref: AccountRef) !void {
         try self.account_refs.append(account_ref);
+    }
+
+    pub fn addAssumeCapacity(self: *AccountIndexBin, account_ref: AccountRef) void {
+        self.account_refs.appendAssumeCapacity(account_ref);
     }
 
     pub fn len(self: *const AccountIndexBin) usize {
@@ -933,11 +978,21 @@ pub const AccountIndex = struct {
         };
     }
 
+    pub fn ensureBinCapacity(self: *Self, size: usize) !void {
+        for (self.bins) |*bin| {
+            try bin.ensureTotalCapacity(size);
+        }
+    }
+
     pub fn deinit(self: *Self) void {
         for (self.bins) |*bin| {
             bin.deinit();
         }
         self.allocator.free(self.bins);
+    }
+
+    pub fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
+        return self.calculator.binIndex(pubkey);
     }
 
     pub fn getBin(self: *const Self, index: usize) *AccountIndexBin {
@@ -1003,8 +1058,10 @@ pub fn main() !void {
 
     var full_timer = try std.time.Timer.start();
     var timer = try std.time.Timer.start();
+
     std.debug.print("reading snapshots...\n", .{});
-    var snapshots = try Snapshots.fromPaths(allocator, snapshot_dir, &snapshot_paths);
+    var snapshots = try Snapshots.fromPaths(allocator, snapshot_dir, snapshot_paths);
+    defer snapshots.deinit(allocator);
     std.debug.print("read snapshots in {s}\n", .{std.fmt.fmtDuration(timer.read())});
     const full_snapshot = snapshots.full;
 
@@ -1187,3 +1244,148 @@ test "core.accounts_db: load other sysvars" {
     // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
     // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
 }
+
+pub const BenchmarkAccountsDB = struct {
+    pub const min_iterations = 1;
+    pub const max_iterations = 2;
+
+    pub const BenchArgs = struct {
+        n_accounts: usize,
+        slot_list_len: usize,
+    };
+
+    pub const args = [_]BenchArgs{
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+        },
+        BenchArgs{
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+        },
+    };
+
+    pub const arg_names = [_][]const u8{
+        "100k accounts (1 slot per account)",
+        "10k accounts (10 slot per account)",
+    };
+
+    // pub fn benchmarkReadAccounts(bench_args: BenchArgs) !u64 {
+    //     const n_accounts = bench_args.n_accounts;
+    //     const slot_list_len = bench_args.slot_list_len;
+
+    //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    //     var allocator = gpa.allocator();
+
+    //     var logger = Logger{ .noop = {} };
+    //     var accounts_db = try AccountsDB.init(allocator, logger);
+    //     defer accounts_db.deinit();
+
+    //     var random = std.rand.DefaultPrng.init(19);
+    //     var rng = random.random();
+
+    //     var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
+    //     defer {
+    //         for (accounts) |account| allocator.free(account.data);
+    //         allocator.free(accounts);
+    //     }
+
+    //     var pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    //     defer allocator.free(pubkeys);
+
+    //     var account_index: usize = 0;
+    //     for (0..slot_list_len) |s| {
+    //         for (0..n_accounts) |i| {
+    //             accounts[account_index] = try Account.random(allocator, rng, i);
+    //             account_index += 1;
+    //             if (s == 0) {
+    //                 const pubkey = Pubkey.random(rng);
+    //                 pubkeys[i] = pubkey;
+    //             }
+    //         }
+    //     }
+    //     for (0..(n_accounts * slot_list_len)) |i| {
+    //         const account = accounts[i];
+    //         try accounts_db.putAccount(account, pubkeys[i % n_accounts], 20);
+    //     }
+
+    //     var timer = try std.time.Timer.start();
+    //     for (0..n_accounts) |i| {
+    //         const pubkey = &pubkeys[i];
+    //         const account = try accounts_db.getAccount(pubkey);
+    //         std.debug.assert(account.data.len == i);
+    //     }
+    //     const elapsed = timer.read();
+
+    //     return elapsed;
+    // }
+
+    pub fn benchmarkWriteAccounts(bench_args: BenchArgs) !u64 {
+        const n_accounts = bench_args.n_accounts;
+        const slot_list_len = bench_args.slot_list_len;
+
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var allocator = gpa.allocator();
+
+        var logger = Logger{ .noop = {} };
+        var accounts_db = try AccountsDB.init(allocator, logger);
+        defer accounts_db.deinit();
+
+        var random = std.rand.DefaultPrng.init(19);
+        var rng = random.random();
+
+        var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
+        defer {
+            for (accounts) |account| allocator.free(account.data);
+            allocator.free(accounts);
+        }
+
+        var pubkeys = try allocator.alloc(Pubkey, n_accounts * slot_list_len);
+        defer allocator.free(pubkeys);
+
+        var account_index: usize = 0;
+        for (0..slot_list_len) |s| {
+            for (0..n_accounts) |i| {
+                accounts[account_index] = try Account.random(allocator, rng, i);
+                if (s == 0) {
+                    const pubkey = Pubkey.random(rng);
+                    pubkeys[account_index] = pubkey;
+                } else {
+                    pubkeys[account_index] = pubkeys[account_index % n_accounts];
+                }
+                account_index += 1;
+            }
+        }
+
+        // // prealloc (memory alloc bottleneck?) -- MAIN MEMORY BOTTLENECK
+        // const n_bins = accounts_db.index.numberOfBins();
+        // var bin_counts = try allocator.alloc(usize, n_bins);
+        // @memset(bin_counts, 0);
+        // defer allocator.free(bin_counts);
+        // for (0..pubkeys.len) |i| {
+        //     const bin_index = accounts_db.index.getBinIndex(&pubkeys[i]);
+        //     bin_counts[bin_index] += 1;
+        // }
+        // for (0..n_bins) |bin_index| {
+        //     const bin_len = accounts_db.index.bins[bin_index].len();
+        //     try accounts_db.index.bins[bin_index].ensureTotalCapacity(bin_counts[bin_index] + bin_len);
+        // }
+
+        var timer = try std.time.Timer.start();
+        var index: usize = 0;
+        for (0..slot_list_len) |s| {
+            const start_index = index;
+            const end_index = index + n_accounts;
+
+            try accounts_db.putAccountBatch(
+                accounts[start_index..end_index],
+                pubkeys[start_index..end_index],
+                @as(u64, @intCast(s)),
+            );
+            index = end_index;
+        }
+        const elapsed = timer.read();
+
+        return elapsed;
+    }
+};

@@ -251,7 +251,7 @@ test "gossip.ping_pong: PingCache works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var node = PubkeyAndSocketAddr{ Pubkey.random(rng, .{}), SocketAddr.UNSPECIFIED };
+    var node = PubkeyAndSocketAddr{ Pubkey.random(rng), SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 

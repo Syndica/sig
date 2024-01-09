@@ -1332,8 +1332,8 @@ test "pubkey randome works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var pubkey = Pubkey.random(rng, .{});
-    var pubkey_2 = Pubkey.random(rng, .{});
+    var pubkey = Pubkey.random(rng);
+    var pubkey_2 = Pubkey.random(rng);
     try testing.expect(!pubkey_2.equals(&pubkey));
 }
 

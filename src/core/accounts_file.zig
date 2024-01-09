@@ -89,7 +89,7 @@ pub inline fn alignToU64(addr: usize) usize {
 
 pub const AccountFile = struct {
     // file contents
-    mmap_ptr: []align(std.mem.page_size) u8,
+    mmap_slice: []align(std.mem.page_size) u8,
     id: usize,
     slot: Slot,
     // number of bytes used
@@ -109,7 +109,7 @@ pub const AccountFile = struct {
 
         try accounts_file_info.validate(file_size);
 
-        var mmap_ptr = try std.os.mmap(
+        var mmap_slice = try std.os.mmap(
             null,
             file_size,
             std.os.PROT.READ | std.os.PROT.WRITE,
@@ -119,7 +119,7 @@ pub const AccountFile = struct {
         );
 
         return Self{
-            .mmap_ptr = mmap_ptr,
+            .mmap_slice = mmap_slice,
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
             .file_size = file_size,
@@ -129,7 +129,7 @@ pub const AccountFile = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        std.os.munmap(self.mmap_ptr);
+        std.os.munmap(self.mmap_slice);
         self.file.close();
     }
 
@@ -243,7 +243,7 @@ pub const AccountFile = struct {
             return error.EOF;
         }
         start_index_ptr.* = alignToU64(end_index);
-        return @ptrCast(self.mmap_ptr[start_index..end_index]);
+        return @ptrCast(self.mmap_slice[start_index..end_index]);
     }
 
     pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
