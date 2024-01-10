@@ -124,13 +124,11 @@ pub const AccountsDB = struct {
     pub const LoadingThreadAccountsDB = struct {
         index: AccountIndex,
         file_map: std.AutoArrayHashMap(FileId, AccountFile),
-        allocator: std.mem.Allocator,
 
         pub fn init(allocator: std.mem.Allocator, n_bins: usize) !@This() {
             var self = @This(){
                 .index = try AccountIndex.init(allocator, n_bins),
                 .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
-                .allocator = allocator,
             };
             return self;
         }
@@ -279,7 +277,6 @@ pub const AccountsDB = struct {
         end_index: usize,
         thread_id: usize,
     ) !void {
-        const allocator = thread_dbs[thread_id].allocator;
         const thread_index = &thread_dbs[thread_id].index;
         const file_map = &thread_dbs[thread_id].file_map;
 
@@ -288,7 +285,7 @@ pub const AccountsDB = struct {
         // ensureTotalCapacity the memory across the bins
         const n_refs_per_bin = 2_000; // TODO: tune (this has a large impact on performance)
         for (thread_index.bins) |*index_bin| {
-            index_bin.* = try AccountIndexBin.initCapacity(allocator, n_refs_per_bin);
+            index_bin.* = try AccountIndexBin.initCapacity(n_refs_per_bin);
         }
         try file_map.ensureTotalCapacity(thread_filenames.len);
 
@@ -623,7 +620,7 @@ pub const AccountsDB = struct {
         const cache_index_start = self.storage.cache.items.len;
         try self.storage.cache.appendSlice(accounts);
 
-        // prealloc (memory alloc bottleneck?) -- MAIN MEMORY BOTTLENECK
+        // prealloc
         const n_bins = self.index.numberOfBins();
         var bin_counts = try self.allocator.alloc(usize, n_bins);
         @memset(bin_counts, 0);
@@ -632,9 +629,11 @@ pub const AccountsDB = struct {
             const bin_index = self.index.getBinIndex(pubkey);
             bin_counts[bin_index] += 1;
         }
+        // PERF: we use page_allocator in bins because its much faster
+        // than GPA here
         for (0..n_bins) |bin_index| {
-            const bin_len = self.index.bins[bin_index].len();
-            try self.index.bins[bin_index].ensureTotalCapacity(bin_counts[bin_index] + bin_len);
+            const bin = self.index.getBin(bin_index);
+            try bin.ensureTotalCapacity(bin_counts[bin_index] + bin.len());
         }
 
         // update index
@@ -765,8 +764,8 @@ pub const AccountsDB = struct {
 
     /// gets an account given an associated pubkey
     pub fn getAccount(self: *const Self, pubkey: *const Pubkey) !Account {
-        const pubkey_index = self.index.getBinFromPubkey(pubkey);
-        const refs = pubkey_index.getSlotList(pubkey);
+        const bin = self.index.getBinFromPubkey(pubkey);
+        const refs = bin.getSlotList(pubkey);
         if (refs.len == 0) {
             return error.PubkeyNotInIndex;
         }
@@ -899,7 +898,8 @@ pub const PubkeyBinCalculator = struct {
 pub const AccountIndexBin = struct {
     account_refs: std.ArrayList(AccountRef),
 
-    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !AccountIndexBin {
+    pub fn initCapacity(capacity: usize) !AccountIndexBin {
+        var allocator = std.heap.page_allocator;
         return AccountIndexBin{
             .account_refs = try std.ArrayList(AccountRef).initCapacity(allocator, capacity),
         };
@@ -968,7 +968,7 @@ pub const AccountIndex = struct {
         var bins = try allocator.alloc(AccountIndexBin, n_bins);
         for (bins) |*bin| {
             // SAFE: capacity = 0; will never error
-            bin.* = AccountIndexBin.initCapacity(allocator, 0) catch unreachable;
+            bin.* = AccountIndexBin.initCapacity(0) catch unreachable;
         }
 
         return Self{
@@ -991,20 +991,20 @@ pub const AccountIndex = struct {
         self.allocator.free(self.bins);
     }
 
-    pub fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
+    pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
         return self.calculator.binIndex(pubkey);
     }
 
-    pub fn getBin(self: *const Self, index: usize) *AccountIndexBin {
+    pub inline fn getBin(self: *const Self, index: usize) *AccountIndexBin {
         return &self.bins[index];
     }
 
-    pub fn getBinFromPubkey(self: *const Self, pubkey: *const Pubkey) *AccountIndexBin {
+    pub inline fn getBinFromPubkey(self: *const Self, pubkey: *const Pubkey) *AccountIndexBin {
         const bin_index = self.calculator.binIndex(pubkey);
         return &self.bins[bin_index];
     }
 
-    pub fn numberOfBins(self: *const Self) usize {
+    pub inline fn numberOfBins(self: *const Self) usize {
         return self.bins.len;
     }
 };
@@ -1158,7 +1158,8 @@ test "core.accounts_db: write and read an account" {
         snapshots.deinit(allocator);
     }
 
-    const pubkey = Pubkey.default();
+    var rng = std.rand.DefaultPrng.init(0);
+    const pubkey = Pubkey.random(rng.random());
     var data = [_]u8{ 1, 2, 3 };
     var test_account = Account{
         .data = &data,
@@ -1171,6 +1172,7 @@ test "core.accounts_db: write and read an account" {
     // initial account
     try accounts_db.putAccount(test_account, pubkey, 19);
     var account = try accounts_db.getAccount(&pubkey);
+
     try std.testing.expectEqualDeep(test_account, account);
 
     // new account
@@ -1270,55 +1272,55 @@ pub const BenchmarkAccountsDB = struct {
         "10k accounts (10 slot per account)",
     };
 
-    pub fn benchmarkReadAccounts(bench_args: BenchArgs) !u64 {
-        const n_accounts = bench_args.n_accounts;
-        const slot_list_len = bench_args.slot_list_len;
+    // pub fn benchmarkReadAccounts(bench_args: BenchArgs) !u64 {
+    //     const n_accounts = bench_args.n_accounts;
+    //     const slot_list_len = bench_args.slot_list_len;
 
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        var allocator = gpa.allocator();
+    //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    //     var allocator = gpa.allocator();
 
-        var logger = Logger{ .noop = {} };
-        var accounts_db = try AccountsDB.init(allocator, logger);
-        defer accounts_db.deinit();
+    //     var logger = Logger{ .noop = {} };
+    //     var accounts_db = try AccountsDB.init(allocator, logger);
+    //     defer accounts_db.deinit();
 
-        var random = std.rand.DefaultPrng.init(19);
-        var rng = random.random();
+    //     var random = std.rand.DefaultPrng.init(19);
+    //     var rng = random.random();
 
-        var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
-        defer {
-            for (accounts) |account| allocator.free(account.data);
-            allocator.free(accounts);
-        }
+    //     var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
+    //     defer {
+    //         for (accounts) |account| allocator.free(account.data);
+    //         allocator.free(accounts);
+    //     }
 
-        var pubkeys = try allocator.alloc(Pubkey, n_accounts);
-        defer allocator.free(pubkeys);
+    //     var pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    //     defer allocator.free(pubkeys);
 
-        var account_index: usize = 0;
-        for (0..slot_list_len) |s| {
-            for (0..n_accounts) |i| {
-                accounts[account_index] = try Account.random(allocator, rng, i);
-                account_index += 1;
-                if (s == 0) {
-                    const pubkey = Pubkey.random(rng);
-                    pubkeys[i] = pubkey;
-                }
-            }
-        }
-        for (0..(n_accounts * slot_list_len)) |i| {
-            const account = accounts[i];
-            try accounts_db.putAccount(account, pubkeys[i % n_accounts], 20);
-        }
+    //     var account_index: usize = 0;
+    //     for (0..slot_list_len) |s| {
+    //         for (0..n_accounts) |i| {
+    //             accounts[account_index] = try Account.random(allocator, rng, i);
+    //             account_index += 1;
+    //             if (s == 0) {
+    //                 const pubkey = Pubkey.random(rng);
+    //                 pubkeys[i] = pubkey;
+    //             }
+    //         }
+    //     }
+    //     for (0..(n_accounts * slot_list_len)) |i| {
+    //         const account = accounts[i];
+    //         try accounts_db.putAccount(account, pubkeys[i % n_accounts], 20);
+    //     }
 
-        var timer = try std.time.Timer.start();
-        for (0..n_accounts) |i| {
-            const pubkey = &pubkeys[i];
-            const account = try accounts_db.getAccount(pubkey);
-            std.debug.assert(account.data.len == i);
-        }
-        const elapsed = timer.read();
+    //     var timer = try std.time.Timer.start();
+    //     for (0..n_accounts) |i| {
+    //         const pubkey = &pubkeys[i];
+    //         const account = try accounts_db.getAccount(pubkey);
+    //         std.debug.assert(account.data.len == i);
+    //     }
+    //     const elapsed = timer.read();
 
-        return elapsed;
-    }
+    //     return elapsed;
+    // }
 
     pub fn benchmarkWriteAccounts(bench_args: BenchArgs) !u64 {
         const n_accounts = bench_args.n_accounts;
@@ -1356,20 +1358,6 @@ pub const BenchmarkAccountsDB = struct {
                 account_index += 1;
             }
         }
-
-        // // prealloc (memory alloc bottleneck?) -- MAIN MEMORY BOTTLENECK
-        // const n_bins = accounts_db.index.numberOfBins();
-        // var bin_counts = try allocator.alloc(usize, n_bins);
-        // @memset(bin_counts, 0);
-        // defer allocator.free(bin_counts);
-        // for (0..pubkeys.len) |i| {
-        //     const bin_index = accounts_db.index.getBinIndex(&pubkeys[i]);
-        //     bin_counts[bin_index] += 1;
-        // }
-        // for (0..n_bins) |bin_index| {
-        //     const bin_len = accounts_db.index.bins[bin_index].len();
-        //     try accounts_db.index.bins[bin_index].ensureTotalCapacity(bin_counts[bin_index] + bin_len);
-        // }
 
         var timer = try std.time.Timer.start();
         var index: usize = 0;
