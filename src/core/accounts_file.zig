@@ -82,14 +82,14 @@ pub const AccountInFile = struct {
     }
 };
 
-const u64_size: usize = @sizeOf(u64);
 pub inline fn alignToU64(addr: usize) usize {
+    const u64_size: usize = @sizeOf(u64);
     return (addr + (u64_size - 1)) & ~(u64_size - 1);
 }
 
 pub const AccountFile = struct {
     // file contents
-    mmap_slice: []align(std.mem.page_size) u8,
+    memory: []align(std.mem.page_size) u8,
     id: usize,
     slot: Slot,
     // number of bytes used
@@ -109,7 +109,7 @@ pub const AccountFile = struct {
 
         try accounts_file_info.validate(file_size);
 
-        var mmap_slice = try std.os.mmap(
+        var memory = try std.os.mmap(
             null,
             file_size,
             std.os.PROT.READ | std.os.PROT.WRITE,
@@ -119,7 +119,7 @@ pub const AccountFile = struct {
         );
 
         return Self{
-            .mmap_slice = mmap_slice,
+            .memory = memory,
             .length = accounts_file_info.length,
             .id = accounts_file_info.id,
             .file_size = file_size,
@@ -129,7 +129,7 @@ pub const AccountFile = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        std.os.munmap(self.mmap_slice);
+        std.os.munmap(self.memory);
         self.file.close();
     }
 
@@ -203,8 +203,10 @@ pub const AccountFile = struct {
         var offset = start_offset;
 
         offset += @sizeOf(AccountInFile.Header1);
+        offset = alignToU64(offset);
         var lamports = try self.getType(&offset, u64);
         offset += @sizeOf(AccountInFile.Header2) - @sizeOf(u64);
+        offset = alignToU64(offset);
         var hash = try self.getType(&offset, Hash);
 
         return .{
@@ -243,7 +245,7 @@ pub const AccountFile = struct {
             return error.EOF;
         }
         start_index_ptr.* = alignToU64(end_index);
-        return @ptrCast(self.mmap_slice[start_index..end_index]);
+        return @ptrCast(self.memory[start_index..end_index]);
     }
 
     pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
