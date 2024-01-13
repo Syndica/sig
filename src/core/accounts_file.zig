@@ -82,11 +82,6 @@ pub const AccountInFile = struct {
     }
 };
 
-pub inline fn alignToU64(addr: usize) usize {
-    const u64_size: usize = @sizeOf(u64);
-    return (addr + (u64_size - 1)) & ~(u64_size - 1);
-}
-
 pub const AccountFile = struct {
     // file contents
     memory: []align(std.mem.page_size) u8,
@@ -144,7 +139,7 @@ pub const AccountFile = struct {
             n_accounts += 1;
         }
 
-        if (offset != alignToU64(self.length)) {
+        if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
             return error.InvalidAccountFileLength;
         }
 
@@ -175,7 +170,7 @@ pub const AccountFile = struct {
             }
 
             const index_bin = index.getBinFromPubkey(&pubkey);
-            try index_bin.add(AccountRef{
+            try index_bin.getInMemRefs().append(AccountRef{
                 .pubkey = pubkey,
                 .slot = self.slot,
                 .location = .{
@@ -190,7 +185,7 @@ pub const AccountFile = struct {
             n_accounts += 1;
         }
 
-        if (offset != alignToU64(self.length)) {
+        if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
             return error.InvalidAccountFileLength;
         }
 
@@ -203,10 +198,10 @@ pub const AccountFile = struct {
         var offset = start_offset;
 
         offset += @sizeOf(AccountInFile.Header1);
-        offset = alignToU64(offset);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
         var lamports = try self.getType(&offset, u64);
         offset += @sizeOf(AccountInFile.Header2) - @sizeOf(u64);
-        offset = alignToU64(offset);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
         var hash = try self.getType(&offset, Hash);
 
         return .{
@@ -244,7 +239,7 @@ pub const AccountFile = struct {
         if (overflow_flag == 1 or end_index > self.length) {
             return error.EOF;
         }
-        start_index_ptr.* = alignToU64(end_index);
+        start_index_ptr.* = std.mem.alignForward(usize, end_index, @sizeOf(u64));
         return @ptrCast(self.memory[start_index..end_index]);
     }
 
