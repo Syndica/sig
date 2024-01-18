@@ -17,25 +17,44 @@ pub const FileId = u32;
 
 // an account thats stored in an AccountFile
 pub const AccountInFile = struct {
-    store_info: *Header1,
-    account_info: *Header2,
-
-    data: []u8,
-    offset: usize,
-    len: usize,
+    // pointers to mmap contents
+    store_info: *StorageInfo,
+    account_info: *AccountInfo,
     hash_ptr: *Hash,
+    data: []u8,
 
-    pub const Header1 = struct {
+    // other info (used when parsing accounts out)
+    offset: usize = 0,
+    len: usize = 0,
+
+    /// info about the account stored
+    pub const StorageInfo = struct {
         write_version_obsolete: u64,
         data_len: u64,
         pubkey: Pubkey,
     };
 
-    pub const Header2 = struct {
+    /// on-chain account info about the account
+    pub const AccountInfo = struct {
         lamports: u64,
         rent_epoch: Epoch,
         owner: Pubkey,
         executable: bool,
+    };
+
+    pub const STATIC_SIZE: usize = blk: {
+        var size: usize = 0;
+
+        size += @sizeOf(AccountInFile.StorageInfo);
+        size = std.mem.alignForward(usize, size, @sizeOf(u64));
+
+        size += @sizeOf(AccountInFile.AccountInfo);
+        size = std.mem.alignForward(usize, size, @sizeOf(u64));
+
+        size += @sizeOf(Hash);
+        size = std.mem.alignForward(usize, size, @sizeOf(u64));
+
+        break :blk size;
     };
 
     pub fn validate(self: *const @This()) !void {
@@ -133,7 +152,7 @@ pub const AccountFile = struct {
         var n_accounts: usize = 0;
 
         while (true) {
-            const account = self.getAccount(offset) catch break;
+            const account = self.readAccount(offset) catch break;
             try account.validate();
             offset = offset + account.len;
             n_accounts += 1;
@@ -151,7 +170,7 @@ pub const AccountFile = struct {
         var n_accounts: usize = 0;
 
         while (true) {
-            var account = self.getAccount(offset) catch break;
+            var account = self.readAccount(offset) catch break;
             try account.validate();
 
             const pubkey = account.store_info.pubkey;
@@ -170,7 +189,7 @@ pub const AccountFile = struct {
             }
 
             const index_bin = index.getBinFromPubkey(&pubkey);
-            try index_bin.getInMemRefs().append(AccountRef{
+            const account_ref = AccountRef{
                 .pubkey = pubkey,
                 .slot = self.slot,
                 .location = .{
@@ -179,7 +198,13 @@ pub const AccountFile = struct {
                         .offset = offset,
                     },
                 },
-            });
+            };
+
+            if (index.use_disk) {
+                try index_bin.getDiskRefs().?.append(account_ref);
+            } else {
+                try index_bin.getInMemRefs().append(account_ref);
+            }
 
             offset = offset + account.len;
             n_accounts += 1;
@@ -197,10 +222,10 @@ pub const AccountFile = struct {
     pub fn getAccountHashAndLamports(self: *const Self, start_offset: usize) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
         var offset = start_offset;
 
-        offset += @sizeOf(AccountInFile.Header1);
+        offset += @sizeOf(AccountInFile.StorageInfo);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
         var lamports = try self.getType(&offset, u64);
-        offset += @sizeOf(AccountInFile.Header2) - @sizeOf(u64);
+        offset += @sizeOf(AccountInFile.AccountInfo) - @sizeOf(u64);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
         var hash = try self.getType(&offset, Hash);
 
@@ -210,11 +235,11 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn getAccount(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
+    pub fn readAccount(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
         var offset = start_offset;
 
-        var store_info = try self.getType(&offset, AccountInFile.Header1);
-        var account_info = try self.getType(&offset, AccountInFile.Header2);
+        var store_info = try self.getType(&offset, AccountInFile.StorageInfo);
+        var account_info = try self.getType(&offset, AccountInFile.AccountInfo);
         var hash = try self.getType(&offset, Hash);
         var data = try self.getSlice(&offset, store_info.data_len);
 
@@ -261,8 +286,7 @@ test "core.accounts_file: verify accounts file" {
 
     try accounts_file.validate();
 
-    const account = try accounts_file.getAccount(0);
-
+    const account = try accounts_file.readAccount(0);
     const hash_and_lamports = try accounts_file.getAccountHashAndLamports(0);
 
     try std.testing.expectEqual(account.lamports().*, hash_and_lamports.lamports.*);

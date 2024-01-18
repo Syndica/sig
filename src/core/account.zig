@@ -1,5 +1,6 @@
 const Pubkey = @import("pubkey.zig").Pubkey;
 const Epoch = @import("./time.zig").Epoch;
+const AccountInFile = @import("./accounts_file.zig").AccountInFile;
 
 pub const Account = struct {
     lamports: u64,
@@ -20,7 +21,87 @@ pub const Account = struct {
             .rent_epoch = rng.int(Epoch),
         };
     }
+
+    /// gets the snapshot size of the account (when serialized)
+    pub fn getSizeInFile(self: *const Account) usize {
+        return std.mem.alignForward(
+            usize,
+            AccountInFile.STATIC_SIZE + self.data.len,
+            @sizeOf(u64),
+        );
+    }
+
+    /// computes the hash of the account
+    pub fn hash(self: *const Account, pubkey: *const Pubkey) Hash {
+        return hashAccount(
+            self.lamports,
+            self.data,
+            &self.owner.data,
+            self.executable,
+            self.rent_epoch,
+            &pubkey.data,
+        );
+    }
+
+    /// writes account to buf in snapshot format
+    pub fn writeToBuf(self: *const Account, pubkey: *const Pubkey, buf: []u8) !usize {
+        var offset: usize = 0;
+
+        const storage_info = AccountInFile.StorageInfo{
+            .write_version_obsolete = 0,
+            .data_len = self.data.len,
+            .pubkey = pubkey.*,
+        };
+        offset += try writeIntLittleMem(storage_info.write_version_obsolete, buf[offset..]);
+        offset += try writeIntLittleMem(storage_info.data_len, buf[offset..]);
+        @memcpy(buf[offset..(offset + 32)], &storage_info.pubkey.data);
+        offset += 32;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const account_info = AccountInFile.AccountInfo{
+            .lamports = self.lamports,
+            .rent_epoch = self.rent_epoch,
+            .owner = self.owner,
+            .executable = self.executable,
+        };
+        offset += try writeIntLittleMem(account_info.lamports, buf[offset..]);
+        offset += try writeIntLittleMem(account_info.rent_epoch, buf[offset..]);
+        @memcpy(buf[offset..(offset + 32)], &account_info.owner.data);
+        offset += 32;
+
+        offset += try writeIntLittleMem(
+            @as(u8, @intFromBool(account_info.executable)),
+            buf[offset..],
+        );
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        const account_hash = self.hash(pubkey);
+        @memcpy(buf[offset..(offset + 32)], &account_hash.data);
+        offset += 32;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        @memcpy(buf[offset..(offset + self.data.len)], self.data);
+        offset += self.data.len;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        return offset;
+    }
 };
+
+/// helper function for writing to memory
+pub fn writeIntLittleMem(
+    x: anytype,
+    memory: []u8,
+) !usize {
+    const Tx = @TypeOf(x);
+    const x_size: usize = @bitSizeOf(Tx) / 8;
+    std.mem.writeIntLittle(
+        Tx,
+        memory[0..x_size],
+        x,
+    );
+    return x_size;
+}
 
 const std = @import("std");
 const Blake3 = std.crypto.hash.Blake3;

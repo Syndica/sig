@@ -95,14 +95,14 @@ pub fn main() void {}
 //     _ = channel;
 //     _ = owner_filter;
 
-//     // accounts_file.sanitizeAndGetAccountsRefs(&refs) catch {
+//     // accounts_file.sanitizeAndreadAccountsRefs(&refs) catch {
 //     //     std.debug.panic("failed to *sanitize* appendVec {s} ... snapshot likely faulty ... aborting\n", .{filename});
 //     // };
 
 //     // // compute the full size to allocate at once
 //     // var total_fmt_size: u64 = 0;
 //     // for (refs.items) |*ref| {
-//     //     const account = try accounts_file.getAccount(ref.offset);
+//     //     const account = try accounts_file.readAccount(ref.offset);
 //     //     if (owner_filter) |owner| {
 //     //         if (!account.account_info.owner.equals(&owner)) continue;
 //     //     }
@@ -126,7 +126,7 @@ pub fn main() void {}
 //     // var csv_string_offset: usize = 0;
 
 //     // for (refs.items) |*ref| {
-//     //     const account = try accounts_file.getAccount(ref.offset);
+//     //     const account = try accounts_file.readAccount(ref.offset);
 //     //     if (owner_filter) |owner| {
 //     //         if (!account.account_info.owner.equals(&owner)) continue;
 //     //     }

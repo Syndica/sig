@@ -6,4 +6,5 @@ data/
 test_data/version
 test_data/accounts/
 test_data/snapshots/
+test_data/tmp/
 index_storage/
