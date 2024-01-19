@@ -199,12 +199,7 @@ pub const AccountFile = struct {
                     },
                 },
             };
-
-            if (index.use_disk) {
-                try index_bin.getDiskRefs().?.append(account_ref);
-            } else {
-                try index_bin.getInMemRefs().append(account_ref);
-            }
+            try index_bin.getRefs().append(account_ref);
 
             offset = offset + account.len;
             n_accounts += 1;
