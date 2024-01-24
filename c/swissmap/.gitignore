@@ -1,0 +1,5 @@
+.ccls-cache
+hashmap
+lib/hash.o
+lib/hashmap.o
+src/main.o
