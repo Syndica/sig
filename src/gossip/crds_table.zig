@@ -16,6 +16,7 @@ const CrdsData = crds.CrdsData;
 const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
+const EitherContactInfo = crds.EitherContactInfo;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
@@ -78,6 +79,7 @@ pub const CrdsTable = struct {
 
     // special types tracked with their index
     contact_infos: AutoArrayHashSet(usize),
+    legacy_contact_infos: AutoArrayHashSet(usize),
     votes: AutoArrayHashMap(usize, usize),
     epoch_slots: AutoArrayHashMap(usize, usize),
     duplicate_shreds: AutoArrayHashMap(usize, usize),
@@ -107,6 +109,7 @@ pub const CrdsTable = struct {
         return Self{
             .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
+            .legacy_contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
@@ -123,6 +126,7 @@ pub const CrdsTable = struct {
     pub fn deinit(self: *Self) void {
         self.store.deinit();
         self.contact_infos.deinit();
+        self.legacy_contact_infos.deinit();
         self.shred_versions.deinit();
         self.votes.deinit();
         self.epoch_slots.deinit();
@@ -161,8 +165,12 @@ pub const CrdsTable = struct {
         // entry doesnt exist
         if (!result.found_existing) {
             switch (value.data) {
-                .LegacyContactInfo => |*info| {
+                .ContactInfo => |*info| {
                     try self.contact_infos.put(entry_index, {});
+                    try self.shred_versions.put(info.pubkey, info.shred_version);
+                },
+                .LegacyContactInfo => |*info| {
+                    try self.legacy_contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
                 .Vote => {
@@ -386,13 +394,19 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn getAllContactInfos(self: *const Self) error{OutOfMemory}!std.ArrayList(LegacyContactInfo) {
-        const n_contact_infos = self.contact_infos.count();
-        var contact_infos = try std.ArrayList(LegacyContactInfo).initCapacity(self.allocator, n_contact_infos);
-        var contact_indexs = self.contact_infos.keys();
-        for (contact_indexs) |index| {
+    pub fn getAllContactInfos(self: *const Self) error{OutOfMemory}!std.ArrayList(EitherContactInfo) {
+        const n_contact_infos = self.contact_infos.count() + self.legacy_contact_infos.count();
+        var contact_infos = try std.ArrayList(EitherContactInfo).initCapacity(self.allocator, n_contact_infos);
+
+        var new_contact_indexs = self.contact_infos.keys();
+        for (new_contact_indexs) |index| {
             const entry: CrdsVersionedValue = self.store.values()[index];
-            contact_infos.appendAssumeCapacity(entry.value.data.LegacyContactInfo);
+            contact_infos.appendAssumeCapacity(.{ .new = entry.value.data.ContactInfo });
+        }
+        var legacy_contact_indexs = self.legacy_contact_infos.keys();
+        for (legacy_contact_indexs) |index| {
+            const entry: CrdsVersionedValue = self.store.values()[index];
+            contact_infos.appendAssumeCapacity(.{ .legacy = entry.value.data.LegacyContactInfo });
         }
 
         return contact_infos;
@@ -400,13 +414,17 @@ pub const CrdsTable = struct {
 
     pub fn getContactInfos(self: *const Self, buf: []CrdsVersionedValue) []CrdsVersionedValue {
         const store_values = self.store.values();
-        const contact_indexs = self.contact_infos.iterator().keys;
-        const size = @min(self.contact_infos.count(), buf.len);
+        var size: usize = 0;
+        inline for (.{ self.legacy_contact_infos, self.contact_infos }) |infos| {
+            const contact_indexs = infos.iterator().keys;
+            const n_from_current = @min(infos.count(), buf.len - size);
 
-        for (0..size) |i| {
-            const index = contact_indexs[i];
-            const entry = store_values[index];
-            buf[i] = entry;
+            for (0..n_from_current) |i| {
+                const index = contact_indexs[i];
+                const entry = store_values[index];
+                buf[i + size] = entry;
+            }
+            size += n_from_current;
         }
         return buf[0..size];
     }
@@ -469,8 +487,12 @@ pub const CrdsTable = struct {
         self.shards.remove(entry_index, &hash);
 
         switch (versioned_value.value.data) {
-            .LegacyContactInfo => {
+            .ContactInfo => {
                 var did_remove = self.contact_infos.swapRemove(entry_index);
+                std.debug.assert(did_remove);
+            },
+            .LegacyContactInfo => {
+                var did_remove = self.legacy_contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
             },
             .Vote => {
@@ -513,10 +535,15 @@ pub const CrdsTable = struct {
 
             // these also should not fail since there are no allocations - just changing the value
             switch (versioned_value.value.data) {
-                .LegacyContactInfo => {
+                .ContactInfo => {
                     var did_remove = self.contact_infos.swapRemove(table_len);
                     std.debug.assert(did_remove);
                     self.contact_infos.put(entry_index, {}) catch unreachable;
+                },
+                .LegacyContactInfo => {
+                    var did_remove = self.legacy_contact_infos.swapRemove(table_len);
+                    std.debug.assert(did_remove);
+                    self.legacy_contact_infos.put(entry_index, {}) catch unreachable;
                 },
                 .Vote => {
                     self.votes.put(new_index_cursor, entry_index) catch unreachable;

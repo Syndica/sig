@@ -5,7 +5,8 @@ const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Slot = @import("../core/clock.zig").Slot;
-const ContactInfo = @import("node.zig").ContactInfo;
+const node = @import("node.zig");
+const ContactInfo = node.ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -273,6 +274,44 @@ pub const LegacyContactInfo = struct {
     }
 };
 
+pub const EitherContactInfo = union(enum) {
+    new: ContactInfo,
+    legacy: LegacyContactInfo,
+
+    pub fn pubkey(self: *const EitherContactInfo) Pubkey {
+        switch (self.*) {
+            .new => |info| {
+                return info.pubkey;
+            },
+            .legacy => |info| {
+                return info.id;
+            },
+        }
+    }
+
+    pub fn gossipAddr(self: *const EitherContactInfo) ?SocketAddr {
+        switch (self.*) {
+            .new => |info| {
+                return info.getSocket(node.SOCKET_TAG_GOSSIP);
+            },
+            .legacy => |info| {
+                return info.gossip;
+            },
+        }
+    }
+
+    pub fn shredVersion(self: *const EitherContactInfo) u16 {
+        switch (self.*) {
+            .new => |info| {
+                return info.shred_version;
+            },
+            .legacy => |info| {
+                return info.shred_version;
+            },
+        }
+    }
+};
+
 pub fn sanitizeSocket(socket: *const SocketAddr) !void {
     if (socket.port() == 0) {
         return error.InvalidPort;
@@ -452,6 +491,20 @@ pub const CrdsData = union(enum(u32)) {
             // },
             else => {
                 return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
+            },
+        }
+    }
+
+    pub fn eitherContactInfo(self: CrdsData) ?EitherContactInfo {
+        switch (self) {
+            .LegacyContactInfo => |v| {
+                return .{ .legacy = v };
+            },
+            .ContactInfo => |v| {
+                return .{ .new = v };
+            },
+            else => {
+                return null;
             },
         }
     }

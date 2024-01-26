@@ -53,7 +53,7 @@ pub const ActiveSet = struct {
 
     pub fn rotate(
         self: *Self,
-        crds_peers: []crds.LegacyContactInfo,
+        crds_peers: []crds.EitherContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
         var iter = self.pruned_peers.iterator();
@@ -67,11 +67,11 @@ pub const ActiveSet = struct {
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
         var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
+        pull_request.shuffleFirstN(rng.random(), crds.EitherContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            var entry = try self.pruned_peers.getOrPut(crds_peers[i].id);
+            var entry = try self.pruned_peers.getOrPut(crds_peers[i].pubkey());
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
                 var bloom = try Bloom.random(

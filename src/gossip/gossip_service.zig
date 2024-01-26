@@ -28,6 +28,7 @@ const Pong = @import("ping_pong.zig").Pong;
 const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
+const EitherContactInfo = crds.EitherContactInfo;
 const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -723,7 +724,7 @@ pub const GossipService = struct {
         self: *Self,
     ) error{ OutOfMemory, SerializationError, ChannelClosed }!void {
         const now = getWallclockMs();
-        var buf: [NUM_ACTIVE_SET_ENTRIES]LegacyContactInfo = undefined;
+        var buf: [NUM_ACTIVE_SET_ENTRIES]EitherContactInfo = undefined;
         var gossip_peers = self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
         // filter out peers who have responded to pings
@@ -738,7 +739,7 @@ pub const GossipService = struct {
         var valid_gossip_indexs = ping_cache_result.valid_peers;
         defer valid_gossip_indexs.deinit();
 
-        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]LegacyContactInfo = undefined;
+        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]EitherContactInfo = undefined;
         for (0.., valid_gossip_indexs.items) |i, valid_gossip_index| {
             valid_gossip_peers[i] = gossip_peers[valid_gossip_index];
         }
@@ -875,7 +876,7 @@ pub const GossipService = struct {
         bloom_size: usize,
     ) !ArrayList(Packet) {
         // get nodes from crds table
-        var buf: [MAX_NUM_PULL_REQUESTS]LegacyContactInfo = undefined;
+        var buf: [MAX_NUM_PULL_REQUESTS]EitherContactInfo = undefined;
         const now = getWallclockMs();
         var peers = self.getGossipNodes(
             &buf,
@@ -898,7 +899,8 @@ pub const GossipService = struct {
             defer contact_infos.deinit();
 
             for (contact_infos.items) |contact_info| {
-                if (contact_info.gossip.eql(&entrypoint)) {
+                const gossip = contact_info.gossipAddr() orelse continue;
+                if (gossip.eql(&entrypoint)) {
                     // early exit - we already have the peers in our contact info
                     break :blk;
                 }
@@ -972,7 +974,8 @@ pub const GossipService = struct {
                 const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
-                const peer_addr = peer_contact_info.gossip.toEndpoint();
+                // invalid peers were filtered out so this should not be null
+                const peer_addr = peer_contact_info.gossipAddr().?.toEndpoint();
 
                 const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
@@ -1085,10 +1088,10 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var peers = try ArrayList(LegacyContactInfo).initCapacity(self.allocator, pull_requests.items.len);
+            var peers = try ArrayList(EitherContactInfo).initCapacity(self.allocator, pull_requests.items.len);
             defer peers.deinit();
             for (pull_requests.items) |req| {
-                peers.appendAssumeCapacity(req.value.data.LegacyContactInfo);
+                peers.appendAssumeCapacity(req.value.data.eitherContactInfo().?);
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
@@ -1578,12 +1581,12 @@ pub const GossipService = struct {
     pub fn getGossipNodes(
         self: *Self,
         /// the output slice which will be filled with gossip nodes
-        nodes: []LegacyContactInfo,
+        nodes: []EitherContactInfo,
         /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
         comptime MAX_SIZE: usize,
         /// current time (used to filter out nodes that are too old)
         now: u64,
-    ) []LegacyContactInfo {
+    ) []EitherContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
         // * 2 bc we might filter out some
@@ -1606,8 +1609,8 @@ pub const GossipService = struct {
 
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
-            const peer_info = contact_info.value.data.LegacyContactInfo;
-            const peer_gossip_addr = peer_info.gossip;
+            const peer_info = contact_info.value.data.eitherContactInfo().?;
+            const peer_gossip_addr = peer_info.gossipAddr();
 
             // filter inactive nodes
             if (contact_info.timestamp_on_insertion < too_old_ts) {
@@ -1618,11 +1621,12 @@ pub const GossipService = struct {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
-            if (self.my_shred_version != 0 and self.my_shred_version != peer_info.shred_version) {
+            if (self.my_shred_version != 0 and self.my_shred_version != peer_info.shredVersion()) {
                 continue;
             }
             // filter on valid gossip address
-            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
+
+            crds.sanitizeSocket(&(peer_gossip_addr orelse continue)) catch continue;
 
             nodes[node_index] = peer_info;
             node_index += 1;
@@ -1648,6 +1652,7 @@ pub const GossipService = struct {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
@@ -1665,6 +1670,7 @@ pub const GossipService = struct {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
