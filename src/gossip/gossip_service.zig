@@ -93,6 +93,9 @@ pub const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 20; // TODO: this is approx the ru
 pub const MAX_PRUNE_DATA_NODES: usize = 32;
 pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
+// TODO: replace with get_epoch_duration when BankForks is supported
+const DEFAULT_EPOCH_DURATION: u64 = 172800000;
+
 const Config = struct { mode: enum { normal, tests, bench } = .normal };
 
 pub const GossipService = struct {
@@ -1565,7 +1568,13 @@ pub const GossipService = struct {
 
             try crds_table.purged.trim(purged_cutoff_timestamp);
             try crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY);
-            try crds_table.removeOldLabels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+
+            // TODO: condition timeout on stake weight:
+            // - values from nodes with non-zero stake: epoch duration
+            // - values from nodes with zero stake:
+            //   - if all nodes have zero stake: epoch duration
+            //   - if any other nodes have non-zero stake: CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS (15s)
+            try crds_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
         }
 
         const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
