@@ -294,6 +294,56 @@ pub const GossipService = struct {
             self.logger,
         });
         defer self.joinAndExit(&responder_handle);
+
+        { // periodically print crds content summary to stdout
+            const base58 = @import("base58-zig");
+            const base58Encoder = base58.Encoder.init(.{});
+            const verbose = true;
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            const allocator = arena.allocator();
+            const start_time = std.time.timestamp();
+            while (true) {
+                defer _ = arena.reset(.retain_capacity);
+                var crds_table_lock = self.crds_table_rw.read();
+                defer crds_table_lock.unlock();
+                const crds_table: *const CrdsTable = crds_table_lock.get();
+                if (verbose) {
+                    std.debug.print("======== CRDS DUMP START =========\n", .{});
+                    var encoded_hashes = ArrayList([]u8).init(allocator);
+                    var encoder_buf: []u8 = try allocator.alloc(u8, 44 * crds_table.store.count());
+                    var buf_start: usize = 0;
+                    for (crds_table.store.values()) |crds_versioned_value| {
+                        var size = base58Encoder.encode(
+                            &crds_versioned_value.value_hash.data,
+                            encoder_buf[buf_start..],
+                        ) catch unreachable;
+                        try encoded_hashes.append(encoder_buf[buf_start .. buf_start + size]);
+                        buf_start += size;
+                    }
+                    sortSlices(encoded_hashes.items);
+                    for (encoded_hashes.items) |entry| {
+                        std.debug.print("CRDS VALUE HASH: {s}\n", .{entry});
+                    }
+                }
+                const time = std.time.timestamp() - start_time;
+                std.debug.print("{} - CRDS LEN: {}\n", .{ time, crds_table.store.count() });
+                if (verbose) {
+                    std.debug.print("======== CRDS DUMP END =========\n", .{});
+                }
+                std.time.sleep(10_000_000_000);
+            }
+        }
+    }
+
+    fn sortSlices(slices: anytype) void {
+        const InnerSlice = @typeInfo(@TypeOf(slices)).Pointer.child;
+        const InnerType = @typeInfo(InnerSlice).Pointer.child;
+        std.mem.sort(InnerSlice, slices, {}, struct {
+            fn cmp(_: void, lhs: InnerSlice, rhs: InnerSlice) bool {
+                return std.mem.lessThan(InnerType, lhs, rhs);
+            }
+        }.cmp);
     }
 
     const VerifyMessageTask = struct {
