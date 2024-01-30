@@ -1703,10 +1703,14 @@ pub const GossipService = struct {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
         var crds_values_array = ArrayList(CrdsValue).fromOwnedSlice(self.allocator, crds_values);
+        if (self.my_shred_version == 0) {
+            return crds_values_array.items.len;
+        }
         if (crds_table.check_matching_shred_version(from_pubkey, self.my_shred_version)) {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
@@ -1724,6 +1728,7 @@ pub const GossipService = struct {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
