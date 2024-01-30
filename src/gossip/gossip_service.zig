@@ -301,50 +301,39 @@ pub const GossipService = struct {
         { // periodically print crds content summary to stdout
             const base58 = @import("base58-zig");
             const base58Encoder = base58.Encoder.init(.{});
-            const verbose = true;
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
-            defer arena.deinit();
-            const allocator = arena.allocator();
             const start_time = std.time.timestamp();
             while (true) {
-                defer _ = arena.reset(.retain_capacity);
+                var file = try std.fs.cwd().createFile("crds-dump.csv", .{});
+                defer file.close();
+                const writer = file.writer();
                 var crds_table_lock = self.crds_table_rw.read();
                 defer crds_table_lock.unlock();
                 const crds_table: *const CrdsTable = crds_table_lock.get();
-                if (verbose) {
-                    std.debug.print("======== CRDS DUMP START =========\n", .{});
-                    var encoded_hashes = ArrayList([]u8).init(allocator);
-                    var encoder_buf: []u8 = try allocator.alloc(u8, 44 * crds_table.store.count());
-                    var buf_start: usize = 0;
-                    for (crds_table.store.values()) |crds_versioned_value| {
-                        const val: CrdsValue = crds_versioned_value.value;
-                        var size = base58Encoder.encode(
-                            &crds_versioned_value.value_hash.data,
-                            encoder_buf[buf_start..],
-                        ) catch unreachable;
-                        try encoded_hashes.append(encoder_buf[buf_start .. buf_start + size]);
-                        std.debug.print("{s},{s},{s},{}\n", .{
-                            crds_variant_name(&val),
-                            val.id().string(),
-                            encoder_buf[buf_start .. buf_start + size],
-                            val.wallclock(),
-                        });
-                        buf_start += size;
-                    }
-                    sortSlices(encoded_hashes.items);
-                    for (encoded_hashes.items) |entry| {
-                        _ = entry;
-                        // std.debug.print("CRDS VALUE: {s}\n", .{entry});
-                    }
+                var encoder_buf: [44]u8 = undefined;
+                for (crds_table.store.values()) |crds_versioned_value| {
+                    const val: CrdsValue = crds_versioned_value.value;
+                    var size = base58Encoder.encode(
+                        &crds_versioned_value.value_hash.data,
+                        &encoder_buf,
+                    ) catch unreachable;
+                    try writer.print("{s},{s},{s},{}\n", .{
+                        crds_variant_name(&val),
+                        val.id().string(),
+                        encoder_buf[0..size],
+                        val.wallclock(),
+                    });
                 }
                 const time = std.time.timestamp() - start_time;
-                std.debug.print("{} - CRDS LEN: {}\n", .{ time, crds_table.store.count() });
-                if (verbose) {
-                    std.debug.print("======== CRDS DUMP END =========\n", .{});
-                }
+                self.logger.errf("{} - CRDS LEN: {}", .{ time, crds_table.store.count() });
                 std.time.sleep(10_000_000_000);
             }
         }
+    }
+
+    fn createFileWith(path: []const u8, data: []const u8) void {
+        var file = try std.fs.cwd().createFile(path, .{});
+        defer file.close();
+        _ = try file.write(data);
     }
 
     fn sortSlices(slices: anytype) void {
@@ -747,7 +736,9 @@ pub const GossipService = struct {
             }
 
             // trim data
+            self.logger.errf("trimming...", .{});
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
+            self.logger.errf("...trimmed", .{});
 
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
