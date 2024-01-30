@@ -165,53 +165,6 @@ pub const AccountFile = struct {
         self.n_accounts = n_accounts;
     }
 
-    pub fn validateAndBinAccountRefs(self: *Self, index: *AccountIndex) !void {
-        var offset: usize = 0;
-        var n_accounts: usize = 0;
-
-        while (true) {
-            var account = self.readAccount(offset) catch break;
-            try account.validate();
-
-            const pubkey = account.store_info.pubkey;
-
-            const hash_is_missing = std.mem.eql(u8, &account.hash().data, &Hash.default().data);
-            if (hash_is_missing) {
-                const hash = hashAccount(
-                    account.account_info.lamports,
-                    account.data,
-                    &account.account_info.owner.data,
-                    account.account_info.executable,
-                    account.account_info.rent_epoch,
-                    &pubkey.data,
-                );
-                account.hash_ptr.* = hash;
-            }
-
-            const index_bin = index.getBinFromPubkey(&pubkey);
-            const account_ref = AccountRef{
-                .pubkey = pubkey,
-                .slot = self.slot,
-                .location = .{
-                    .File = .{
-                        .file_id = @as(u32, @intCast(self.id)),
-                        .offset = offset,
-                    },
-                },
-            };
-            try index_bin.getRefs().append(account_ref);
-
-            offset = offset + account.len;
-            n_accounts += 1;
-        }
-
-        if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
-            return error.InvalidAccountFileLength;
-        }
-
-        self.n_accounts = n_accounts;
-    }
-
     /// get account without parsing data (a lot faster if the data field isnt used anyway)
     /// (used when computing account hashes for snapshot validation)
     pub fn getAccountHashAndLamports(self: *const Self, start_offset: usize) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
