@@ -314,16 +314,24 @@ pub const GossipService = struct {
                     var encoder_buf: []u8 = try allocator.alloc(u8, 44 * crds_table.store.count());
                     var buf_start: usize = 0;
                     for (crds_table.store.values()) |crds_versioned_value| {
+                        const val: CrdsValue = crds_versioned_value.value;
                         var size = base58Encoder.encode(
                             &crds_versioned_value.value_hash.data,
                             encoder_buf[buf_start..],
                         ) catch unreachable;
                         try encoded_hashes.append(encoder_buf[buf_start .. buf_start + size]);
+                        std.debug.print("{s},{s},{s},{}\n", .{
+                            crds_variant_name(&val),
+                            val.id().string(),
+                            encoder_buf[buf_start .. buf_start + size],
+                            val.wallclock(),
+                        });
                         buf_start += size;
                     }
                     sortSlices(encoded_hashes.items);
                     for (encoded_hashes.items) |entry| {
-                        std.debug.print("CRDS VALUE HASH: {s}\n", .{entry});
+                        _ = entry;
+                        // std.debug.print("CRDS VALUE: {s}\n", .{entry});
                     }
                 }
                 const time = std.time.timestamp() - start_time;
@@ -1727,6 +1735,23 @@ pub const GossipService = struct {
         return crds_values_array.items.len;
     }
 };
+
+fn crds_variant_name(val: *const CrdsValue) []const u8 {
+    return switch (val.data) {
+        .LegacyContactInfo => "LegacyContactInfo",
+        .Vote => "Vote",
+        .LowestSlot => "LowestSlot",
+        .LegacySnapshotHashes => "LegacySnapshotHashes",
+        .AccountsHashes => "AccountsHashes",
+        .EpochSlots => "EpochSlots",
+        .LegacyVersion => "LegacyVersion",
+        .Version => "Version",
+        .NodeInstance => "NodeInstance",
+        .DuplicateShred => "DuplicateShred",
+        .SnapshotHashes => "SnapshotHashes",
+        .ContactInfo => "ContactInfo",
+    };
+}
 
 pub const ChunkType = enum(u8) {
     PushMessage,
