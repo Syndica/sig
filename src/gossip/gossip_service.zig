@@ -123,6 +123,8 @@ pub const GossipService = struct {
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
+    /// This contact info is mutated by the buildMessages thread, so it must
+    /// only be read by that thread, or it needs a synchronization mechanism.
     entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(PingCache),
     logger: Logger,
