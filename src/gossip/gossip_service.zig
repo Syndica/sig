@@ -103,10 +103,12 @@ pub const GossipService = struct {
 
     // note: this contact info should not change
     gossip_socket: UdpSocket,
+    /// This contact info is mutated by the buildMessages thread, so it must
+    /// only be read by that thread, or it needs a synchronization mechanism.
     my_contact_info: LegacyContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
-    my_shred_version: u16,
+    my_shred_version: std.atomic.Atomic(u16),
     exit: *AtomicBool,
 
     // communication between threads
@@ -520,7 +522,7 @@ pub const GossipService = struct {
                                     continue;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
-                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version) {
+                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
                                     continue;
                                 }
@@ -1557,11 +1559,12 @@ pub const GossipService = struct {
     /// if we have no shred version, attempt to get one from an entrypoint.
     /// Returns true if the shred version is set to non-zero
     fn assignDefaultShredVersionFromEntrypoint(self: *Self) bool {
-        if (self.my_shred_version != 0) return true;
+        if (self.my_shred_version.load(.Monotonic) != 0) return true;
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
-                    self.my_shred_version = info.shred_version;
+                    self.my_shred_version.store(info.shred_version, .Monotonic);
+                    self.my_contact_info.shred_version = info.shred_version;
                     return true;
                 }
             }
@@ -1659,7 +1662,8 @@ pub const GossipService = struct {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
-            if (self.my_shred_version != 0 and self.my_shred_version != peer_info.shred_version) {
+            const my_shred_version = self.my_shred_version.load(.Monotonic);
+            if (my_shred_version != 0 and my_shred_version != peer_info.shred_version) {
                 continue;
             }
             // filter on valid gossip address
@@ -1685,10 +1689,11 @@ pub const GossipService = struct {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
         var crds_values_array = ArrayList(CrdsValue).fromOwnedSlice(self.allocator, crds_values);
-        if (self.my_shred_version == 0) {
+        const my_shred_version = self.my_shred_version.load(.Monotonic);
+        if (my_shred_version == 0) {
             return crds_values_array.items.len;
         }
-        if (crds_table.check_matching_shred_version(from_pubkey, self.my_shred_version)) {
+        if (crds_table.check_matching_shred_version(from_pubkey, my_shred_version)) {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
@@ -1699,7 +1704,7 @@ pub const GossipService = struct {
                         // only allow other values with matching shred versions
                         if (!crds_table.check_matching_shred_version(
                             crds_value.id(),
-                            self.my_shred_version,
+                            my_shred_version,
                         )) {
                             _ = crds_values_array.swapRemove(i);
                         }
