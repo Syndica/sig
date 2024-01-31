@@ -25,6 +25,7 @@ const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
@@ -672,6 +673,20 @@ pub const CrdsTable = struct {
         }
 
         return output;
+    }
+
+    pub fn getContactInfoByGossipAddr(
+        self: *const Self,
+        gossip_addr: SocketAddr,
+    ) ?LegacyContactInfo {
+        var contact_indexs = self.contact_infos.keys();
+        for (contact_indexs) |index| {
+            const entry: CrdsVersionedValue = self.store.values()[index];
+            if (entry.value.data.LegacyContactInfo.gossip.eql(&gossip_addr)) {
+                return entry.value.data.LegacyContactInfo;
+            }
+        }
+        return null;
     }
 };
 
