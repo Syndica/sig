@@ -121,7 +121,7 @@ pub const GossipService = struct {
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
-    entrypoints: ArrayList(SocketAddr),
+    entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(PingCache),
     logger: Logger,
     thread_pool: *ThreadPool,
@@ -129,6 +129,8 @@ pub const GossipService = struct {
 
     // used for benchmarking
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
+
+    const Entrypoint = struct { addr: SocketAddr, info: ?LegacyContactInfo = null };
 
     const Self = @This();
 
@@ -176,6 +178,11 @@ pub const GossipService = struct {
 
         var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
 
+        var entrypointList = ArrayList(Entrypoint).init(allocator);
+        if (entrypoints) |eps| {
+            for (eps.items) |ep| try entrypointList.append(.{ .addr = ep });
+        }
+
         return Self{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
@@ -191,7 +198,7 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
-            .entrypoints = entrypoints orelse ArrayList(SocketAddr).init(allocator),
+            .entrypoints = entrypointList,
             .ping_cache_rw = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
@@ -660,6 +667,8 @@ pub const GossipService = struct {
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
         var should_send_pull_requests = true;
+        var entrypoints_identified = false;
+        var shred_version_assigned = false;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const top_of_loop_ts = getWallclockMs();
@@ -690,6 +699,10 @@ pub const GossipService = struct {
 
             // trim data
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
+
+            // initialize cluster data from crds values
+            entrypoints_identified = entrypoints_identified or self.identifyEntrypoints();
+            shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
@@ -890,21 +903,10 @@ pub const GossipService = struct {
         var rng = std.rand.DefaultPrng.init(now);
         var entrypoint_index: i16 = -1;
         if (self.entrypoints.items.len != 0) blk: {
-            var crds_table_lg = self.crds_table_rw.read();
-            defer crds_table_lg.unlock();
-
             var maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
-            const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
-
-            const crds_table: *const CrdsTable = crds_table_lg.get();
-            const contact_infos = try crds_table.getAllContactInfos();
-            defer contact_infos.deinit();
-
-            for (contact_infos.items) |contact_info| {
-                if (contact_info.gossip.eql(&entrypoint)) {
-                    // early exit - we already have the peers in our contact info
-                    break :blk;
-                }
+            if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
+                // early exit - we already have the peer in our contact info
+                break :blk;
             }
             // we dont have them so well add them to the peer list (as default contact info)
             entrypoint_index = @intCast(maybe_entrypoint_index);
@@ -989,14 +991,14 @@ pub const GossipService = struct {
 
         // append entrypoint msgs
         if (should_send_to_entrypoint) {
-            const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+            const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
 
                 var packet = &packet_batch.items[packet_index];
                 var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
                 packet.size = bytes.len;
-                packet.addr = entrypoint_addr.toEndpoint();
+                packet.addr = entrypoint.addr.toEndpoint();
                 packet_index += 1;
             }
         }
@@ -1535,6 +1537,36 @@ pub const GossipService = struct {
 
             try failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
         }
+    }
+
+    /// Attempts to associate each entrypoint address with a contact info.
+    /// Returns true if all entrypoints have been identified
+    fn identifyEntrypoints(self: *Self) bool {
+        var identified_all = true;
+        for (self.entrypoints.items) |*entrypoint| {
+            if (entrypoint.info == null) {
+                var reader = self.crds_table_rw.read();
+                defer reader.unlock();
+                entrypoint.info = reader.get().getContactInfoByGossipAddr(entrypoint.addr);
+            }
+            identified_all = identified_all and entrypoint.info == null;
+        }
+        return identified_all;
+    }
+
+    /// if we have no shred version, attempt to get one from an entrypoint.
+    /// Returns true if the shred version is set to non-zero
+    fn assignDefaultShredVersionFromEntrypoint(self: *Self) bool {
+        if (self.my_shred_version != 0) return true;
+        for (self.entrypoints.items) |entrypoint| {
+            if (entrypoint.info) |info| {
+                if (info.shred_version != 0) {
+                    self.my_shred_version = info.shred_version;
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// drains values from the push queue and inserts them into the crds table.
