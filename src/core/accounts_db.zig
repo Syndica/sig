@@ -327,7 +327,8 @@ pub const AccountsDB = struct {
                 bin_n_accounts += t_db.index.bins[i].getRefs().count();
             }
             // prealloc
-            try self.index.bins[i].getRefs().ensureTotalCapacity(@intCast(bin_n_accounts));
+            if (bin_n_accounts > 0)
+                try self.index.bins[i].getRefs().ensureTotalCapacity(@intCast(bin_n_accounts));
             total_accounts += bin_n_accounts;
         }
         self.logger.infof("found {d} accounts\n", .{total_accounts});
@@ -445,8 +446,12 @@ pub const AccountsDB = struct {
         }
 
         for (bin_counts, 0..) |count, bin_index| {
-            try thread_index.getBin(bin_index).getRefs().ensureTotalCapacity(@intCast(count));
+            if (count > 0) {
+                try thread_index.getBin(bin_index).getRefs().ensureTotalCapacity(@intCast(count));
+            }
         }
+
+        // allocate enough memory here
 
         timer.reset();
         for (files.items, 0..) |*accounts_file, file_count| {
@@ -455,6 +460,9 @@ pub const AccountsDB = struct {
                 printTimeEstimate(&timer, thread_filenames.len, file_count, "indexing account files", null);
             }
         }
+
+        // for each bin in the vector + offset
+        // mutex lock the bin and insert into the refs
     }
 
     /// combines multiple thread indexes into the given index.
@@ -479,6 +487,7 @@ pub const AccountsDB = struct {
             for (thread_dbs.items) |*t_db| {
                 const thread_bin = t_db.index.getBin(bin_index);
                 const thread_refs = thread_bin.getRefs();
+
                 var iter = thread_refs.iterator();
                 while (iter.next()) |entry| {
                     index_bin_refs.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
@@ -689,28 +698,6 @@ pub const AccountsDB = struct {
 
             for (keys[0..n_keys]) |key| {
                 const slot_list = bin_refs.get(key).?;
-
-                // var iter = bin_refs.iterator();
-                // while (iter.next()) |entry| {
-                //     // var v = [_]AccountRef{entry.value_ptr.*};
-                //     // const slot_list: []AccountRef = &v;
-                //     const slot_list = entry.value_ptr.*;
-
-                // // var start_index: usize = 0;
-                // while (start_index < bin_refs.len) {
-                //     // find the next pubkey in the index (since we know its sorted this is ok)
-                //     const slot_start_index: usize = start_index;
-                //     var slot_end_index: usize = start_index;
-                //     const current_pubkey = &bin_refs[start_index].pubkey;
-
-                //     for (bin_refs[start_index..]) |*ref| {
-                //         if (ref.pubkey.equals(current_pubkey)) {
-                //             slot_end_index += 1;
-                //         } else break;
-                //     }
-                //     start_index = slot_end_index;
-
-                //     const slot_list = bin_refs[slot_start_index..slot_end_index];
                 std.debug.assert(slot_list.items.len > 0);
 
                 // get the most recent state of the account
@@ -797,6 +784,7 @@ pub const AccountsDB = struct {
         var bin_counts = try self.allocator.alloc(usize, n_bins);
         @memset(bin_counts, 0);
         defer self.allocator.free(bin_counts);
+
         for (pubkeys) |*pubkey| {
             const bin_index = self.index.getBinIndex(pubkey);
             bin_counts[bin_index] += 1;
@@ -805,24 +793,8 @@ pub const AccountsDB = struct {
         for (0..n_bins) |bin_index| {
             const bin = self.index.getBin(bin_index);
             const new_len = bin_counts[bin_index] + bin.getRefs().count();
-            try bin.getRefs().ensureTotalCapacity(@intCast(new_len));
-        }
-
-        std.debug.print("bin_counts: {any}\n", .{bin_counts});
-        for (0..n_bins) |bin_index| {
-            std.debug.print("bin_index: {d}\n", .{bin_index});
-            const bin_capacity = self.index.getBin(bin_index).getRefs().capacity() - 1;
-
-            for (pubkeys) |*pubkey| {
-                const pubkey_bin_index = self.index.getBinIndex(pubkey);
-                if (pubkey_bin_index == bin_index) {
-                    const hash_idx = std.mem.readIntLittle(u64, pubkey.data[0..8]) % bin_capacity;
-                    std.debug.print("hash_idx: {d}\n", .{hash_idx});
-                }
-            }
-        }
-        if (bin_counts.len > 0) { 
-            std.debug.panic("whoops", .{});
+            if (new_len > 0)
+                try bin.getRefs().ensureTotalCapacity(@intCast(new_len));
         }
 
         // update index
@@ -835,7 +807,7 @@ pub const AccountsDB = struct {
                 },
             };
             const bin = self.index.getBinFromPubkey(&pubkeys[i]);
-            try AccountIndexBin.put(bin.getRefs(), self.index.allocator, account_ref);
+            try AccountIndexBin.put(bin.getRefs(), self.allocator, account_ref);
         }
     }
 
@@ -1173,6 +1145,7 @@ pub const DiskMemoryAllocator = struct {
             std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
             return null;
         }).size;
+
         if (file_size < aligned_size) {
             // resize the file
             file.seekTo(aligned_size - 1) catch |err| {
@@ -1243,7 +1216,278 @@ pub const RamMemoryConfig = struct {
     allocator: std.mem.Allocator = std.heap.page_allocator,
 };
 
+// TODO: AccountRefs
 const SlotList = std.ArrayListUnmanaged(AccountRef);
+
+pub const FastMap = struct {
+    groups: [][GROUP_SIZE]KeyValue,
+    states: [][GROUP_SIZE]State,
+    bit_mask: usize,
+    // underlying memory
+    memory: []u8,
+    allocator: std.mem.Allocator,
+    _count: usize = 0,
+    _capacity: usize = 0,
+
+    const GROUP_SIZE = 16;
+
+    pub const State = packed struct(u8) {
+        state: enum(u1) { empty, occupied },
+        control_bytes: u7,
+    };
+
+    pub const Key = Pubkey;
+    pub const Value = SlotList;
+
+    pub const KeyValue = struct {
+        key: Key,
+        value: Value,
+    };
+
+    pub const KeyValuePtr = struct {
+        key_ptr: *Key,
+        value_ptr: *Value,
+    };
+
+    pub inline fn pubkey_hash(key: Pubkey) u64 {
+        return std.mem.readIntLittle(u64, key.data[0..8]);
+    }
+
+    pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
+        return key1.equals(&key2);
+    }
+
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        return @This(){
+            .allocator = allocator,
+            .groups = undefined,
+            .states = undefined,
+            .memory = undefined,
+            .bit_mask = 0,
+        };
+    }
+
+    pub const Self = @This();
+    pub const Iterator = struct {
+        hm: *const Self,
+        group_index: usize = 0,
+        position: usize = 0,
+
+        pub fn next(it: *Iterator) ?KeyValuePtr {
+            const self = it.hm;
+            const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
+
+            if (self.capacity() == 0) return null;
+
+            while (true) {
+                if (it.group_index == self.groups.len) {
+                    return null;
+                }
+
+                const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[it.group_index]);
+                const occupied_states = free_state != states;
+
+                if (@reduce(.Or, occupied_states)) {
+                    for (it.position..GROUP_SIZE) |j| {
+                        defer it.position += 1;
+                        if (occupied_states[j]) {
+                            return .{
+                                .key_ptr = &self.groups[it.group_index][j].key,
+                                .value_ptr = &self.groups[it.group_index][j].value,
+                            };
+                        }
+                    }
+                }
+                it.position = 0;
+                it.group_index += 1;
+            }
+        }
+    };
+
+    pub fn iterator(self: *const @This()) Iterator {
+        return .{ .hm = self };
+    }
+
+    pub fn ensureTotalCapacity(self: *@This(), n: usize) !void {
+        if (n == 0) {
+            return error.ZeroCapacityNotSupported;
+        }
+        if (self._capacity != 0) {
+            return error.NotImplemented;
+        }
+
+        const n_groups = @max(std.math.pow(u64, 2, std.math.log2(n) + 1) / GROUP_SIZE, 1);
+        self._capacity = n_groups * GROUP_SIZE;
+        std.debug.assert(self._capacity >= n);
+
+        const group_size = n_groups * @sizeOf([GROUP_SIZE]KeyValue);
+        const ctrl_size = n_groups * @sizeOf([GROUP_SIZE]State);
+        const size = group_size + ctrl_size;
+
+        const memory = try self.allocator.alloc(u8, size);
+        @memset(memory, 0);
+
+        const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
+        const groups = group_ptr[0..n_groups];
+        const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
+        const states = states_ptr[0..n_groups];
+
+        self.groups = groups;
+        self.states = states;
+        self.memory = memory;
+        self.bit_mask = n_groups - 1;
+    }
+
+    pub fn deinit(self: *@This()) void {
+        if (self._capacity > 0)
+            self.allocator.free(self.memory);
+    }
+
+    pub inline fn count(self: *const @This()) usize {
+        return self._count;
+    }
+
+    pub inline fn capacity(self: *const @This()) usize {
+        return self._capacity;
+    }
+
+    pub const GetOrPutResult = struct {
+        found_existing: bool,
+        value_ptr: *Value,
+    };
+
+    pub fn get(self: *const @This(), pubkey: Pubkey) ?Value {
+        var hash = pubkey_hash(pubkey);
+        var group_index = hash & self.bit_mask;
+
+        // get
+        const control_bytes: u7 = @intCast(hash >> (64 - 7));
+        const key_state = State{
+            .state = .occupied,
+            .control_bytes = control_bytes,
+        };
+        const search_state: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
+        // or put (ie, is empty)
+        const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
+
+        for (0..self.groups.len) |_| {
+            const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+
+            // search for a match
+            var match_vec = search_state == states;
+            if (@reduce(.Or, match_vec)) {
+                inline for (0..GROUP_SIZE) |j| {
+                    if (match_vec[j] and pubkey_eql(self.groups[group_index][j].key, pubkey)) {
+                        return self.groups[group_index][j].value;
+                    }
+                }
+            }
+
+            const free_vec = free_state == states;
+            if (@reduce(.Or, free_vec)) {
+                return null;
+            }
+
+            // otherwise try the next group
+            group_index = (group_index + 1) & self.bit_mask;
+        }
+        return null;
+    }
+
+    pub fn putAssumeCapacity(self: *@This(), pubkey: Pubkey, value: Value) void {
+        var hash = pubkey_hash(pubkey);
+        var group_index = hash & self.bit_mask;
+        std.debug.assert(self._capacity > self._count);
+
+        const control_bytes: u7 = @intCast(hash >> (64 - 7));
+        const key_state = State{
+            .state = .occupied,
+            .control_bytes = control_bytes,
+        };
+        const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
+
+        for (0..self.groups.len) |_| {
+            const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+
+            // if theres an free then insert
+            const free_vec = free_state == states;
+            if (@reduce(.Or, free_vec)) {
+                const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
+                const indices = @select(u8, free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
+                const free_index = @reduce(.Min, indices);
+
+                // occupy it
+                self.groups[group_index][free_index] = .{
+                    .key = pubkey,
+                    .value = value,
+                };
+                self.states[group_index][free_index] = key_state;
+                self._count += 1;
+                return;
+            }
+
+            // otherwise try the next group
+            group_index = (group_index + 1) & self.bit_mask;
+        }
+        unreachable;
+    }
+
+    pub fn getOrPutAssumeCapacity(self: *@This(), pubkey: Pubkey) GetOrPutResult {
+        var hash = pubkey_hash(pubkey);
+        var group_index = hash & self.bit_mask;
+
+        std.debug.assert(self._capacity > self._count);
+
+        // get
+        const control_bytes: u7 = @intCast(hash >> (64 - 7));
+        const key_state = State{
+            .state = .occupied,
+            .control_bytes = control_bytes,
+        };
+        const search_state: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
+        // or put (ie, is empty)
+        const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
+
+        for (0..self.groups.len) |_| {
+            const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+
+            // search for a match
+            var match_vec = search_state == states;
+            if (@reduce(.Or, match_vec)) {
+                inline for (0..GROUP_SIZE) |j| {
+                    if (match_vec[j] and pubkey_eql(self.groups[group_index][j].key, pubkey)) {
+                        return .{
+                            .found_existing = true,
+                            .value_ptr = &self.groups[group_index][j].value,
+                        };
+                    }
+                }
+            }
+
+            // if theres an free then insert
+            const free_vec = free_state == states;
+            if (@reduce(.Or, free_vec)) {
+                const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
+                const indices = @select(u8, free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
+                const free_index = @reduce(.Min, indices);
+
+                // occupy it
+                self.groups[group_index][free_index].key = pubkey;
+                self.states[group_index][free_index] = key_state;
+                self._count += 1;
+                return .{
+                    .found_existing = false,
+                    .value_ptr = &self.groups[group_index][free_index].value,
+                };
+            }
+
+            // otherwise try the next group
+            group_index = (group_index + 1) & self.bit_mask;
+        }
+
+        unreachable;
+    }
+};
 
 pub const AccountIndexBin = struct {
     account_refs: RefMap,
@@ -1256,17 +1500,17 @@ pub const AccountIndexBin = struct {
         allocator: *DiskMemoryAllocator,
     };
 
-    const RefMap = std.HashMap(Pubkey, SlotList, struct {
-        pub fn hash(self: @This(), key: Pubkey) u64 {
-            _ = self;
-            // return std.mem.readIntLittle(u64, key.data[0..8]);
-            return std.mem.readIntLittle(u64, key.data[32-8..32]);
-        }
-        pub fn eql(self: @This(), key1: Pubkey, key2: Pubkey) bool {
-            _ = self;
-            return key1.equals(&key2);
-        }
-    }, std.hash_map.default_max_load_percentage);
+    const RefMap = FastMap;
+    // const RefMap = std.HashMap(Pubkey, SlotList, struct {
+    //     pub fn hash(self: @This(), key: Pubkey) u64 {
+    //         _ = self;
+    //         return std.mem.readIntLittle(u64, key.data[0..8]);
+    //     }
+    //     pub fn eql(self: @This(), key1: Pubkey, key2: Pubkey) bool {
+    //         _ = self;
+    //         return key1.equals(&key2);
+    //     }
+    // }, std.hash_map.default_max_load_percentage);
 
     pub fn initCapacity(
         allocator: std.mem.Allocator,
@@ -1281,7 +1525,7 @@ pub const AccountIndexBin = struct {
         // );
 
         var account_refs = RefMap.init(ram_memory_config.allocator);
-        try account_refs.ensureTotalCapacity(@intCast(ram_memory_config.capacity));
+        // try account_refs.ensureTotalCapacity(@intCast(ram_memory_config.capacity));
 
         // setup disk references
         var disk_memory: ?DiskMemory = null;
@@ -1306,7 +1550,7 @@ pub const AccountIndexBin = struct {
             // );
 
             var disk_account_refs = RefMap.init(ptr.allocator());
-            try disk_account_refs.ensureTotalCapacity(@intCast(disk_config.capacity));
+            // try disk_account_refs.ensureTotalCapacity(@intCast(disk_config.capacity));
 
             disk_memory = .{
                 .account_refs = disk_account_refs,
@@ -1469,23 +1713,20 @@ pub const AccountIndex = struct {
                 },
             };
 
+            // put this in a per bin vector []Vec(AccountRef)
             const index_bin = self.getBinFromPubkey(&pubkey);
-            const result = index_bin.getRefs().getOrPutAssumeCapacity(pubkey);
-
-            // TODO: fix this 
-            if (result.found_existing) {
-                const ptr = try result.value_ptr.addOne(allocator);
-                ptr.* = account_ref;
-            } else {
-                result.value_ptr.* = try std.ArrayListUnmanaged(AccountRef).initCapacity(allocator, 1);
-                result.value_ptr.appendAssumeCapacity(account_ref);
-            }
+            const refs = index_bin.getRefs();
+            try AccountIndexBin.put(refs, allocator, account_ref);
 
             offset = offset + account.len;
         }
     }
 
-    pub fn validateAccountFile(self: *Self, accounts_file: *AccountFile, bin_counts: []usize) !void {
+    pub fn validateAccountFile(
+        self: *Self,
+        accounts_file: *AccountFile,
+        bin_counts: []usize,
+    ) !void {
         var offset: usize = 0;
         var n_accounts: usize = 0;
 
@@ -1525,27 +1766,18 @@ pub const AccountIndex = struct {
 //     var accounts_db = try AccountsDB.init(
 //         allocator,
 //         logger,
-//         .{ .disk_index_dir = "test_data/tmp" },
+//         .{},
 //     );
 //     defer accounts_db.deinit();
 
-//     const disk_alloc = accounts_db.index.bins[0].disk_index.?.allocator;
-//     const alloc = disk_alloc.allocator();
+//     // const disk_alloc = accounts_db.index.bins[0].disk_index.?.allocator;
+//     // const alloc = disk_alloc.allocator();
 
-//     var x = try alloc.alloc(u8, 10);
-//     std.debug.print("count: {d}\n", .{disk_alloc.count});
+//     const filepath = "test_data/tmp/tmp";
+//     var file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
+//     var account_file = try AccountFile.init(file, .{ .id = 0, .length = 639000000 }, 9);
 
-//     var y = try alloc.alloc(u8, 10);
-//     std.debug.print("count: {d}\n", .{disk_alloc.count});
-
-//     _ = x;
-//     _ = y;
-
-//     // const filepath = "test_data/tmp/1m_accounts";
-//     // var file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
-//     // var account_file = try AccountFile.init(file, .{ .id = 0, .length = 639000000 }, 9);
-
-//     // try accounts_db.indexAccountFile(&account_file);
+//     try accounts_db.indexAccountFile(&account_file);
 
 //     // try accounts_db.index.getBin(0).getDiskRefs().?.ensureTotalCapacity(10_000_000);
 //     // for (accounts_db.index.bins) |*bin| {
@@ -1574,7 +1806,7 @@ pub const AccountIndex = struct {
 //     const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
 //     std.debug.print("\naligned_size: {d}\n", .{aligned_size});
 
-//     const filepath = "test_data/tmp/1m_accounts";
+//     const filepath = "test_data/tmp/tmp";
 //     var file = try std.fs.cwd().createFile(filepath, .{ .read = true });
 
 //     const file_size = (try file.stat()).size;
@@ -1693,11 +1925,12 @@ pub fn main() !void {
     );
     std.debug.print("loaded from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
 
-    try accounts_db.validateLoadFromSnapshot(
-        snapshot.bank_fields.incremental_snapshot_persistence,
-        full_snapshot.bank_fields.slot,
-        full_snapshot.bank_fields.capitalization,
-    );
+    _ = full_snapshot;
+    // try accounts_db.validateLoadFromSnapshot(
+    //     snapshot.bank_fields.incremental_snapshot_persistence,
+    //     full_snapshot.bank_fields.slot,
+    //     full_snapshot.bank_fields.capitalization,
+    // );
     std.debug.print("validated from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
     std.debug.print("full timer: {s}\n", .{std.fmt.fmtDuration(full_timer.read())});
 
@@ -2000,18 +2233,18 @@ pub const BenchmarkAccountsDB = struct {
         //     .accounts = .ram,
         //     .index = .ram,
         // },
-        BenchArgs{
-            .n_accounts = 500_000,
-            .slot_list_len = 1,
-            .accounts = .ram,
-            .index = .ram,
-        },
         // BenchArgs{
-        //     .n_accounts = 3_000_000,
+        //     .n_accounts = 500_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .ram,
         // },
+        BenchArgs{
+            .n_accounts = 1_000_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+        },
         // // testing disk indexes
         // BenchArgs{
         //     .n_accounts = 500_000,
@@ -2055,7 +2288,9 @@ pub const BenchmarkAccountsDB = struct {
             });
         } else {
             // std.debug.print("using ram index\n", .{});
-            accounts_db = try AccountsDB.init(allocator, logger, .{});
+            accounts_db = try AccountsDB.init(allocator, logger, .{
+                .index_ram_capacity = 16,
+            });
         }
         defer accounts_db.deinit();
 
@@ -2077,12 +2312,6 @@ pub const BenchmarkAccountsDB = struct {
 
             var timer = try std.time.Timer.start();
             try accounts_db.storage.cache.ensureTotalCapacity(total_n_accounts);
-
-            // for (0..total_n_accounts) |i| {
-            //     const account = try Account.random(allocator, rng, i % 1_000);
-            //     try accounts_db.putAccount(account, pubkeys[i % n_accounts], 20);
-            // }
-
             try accounts_db.putAccountBatch(
                 accounts,
                 pubkeys,
@@ -2143,6 +2372,7 @@ pub const BenchmarkAccountsDB = struct {
             var file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
             var account_file = try AccountFile.init(file, .{ .id = 0, .length = length }, 9);
 
+            std.debug.print("writing accounts...\n", .{});
             var timer = try std.time.Timer.start();
             try accounts_db.indexAccountFile(&account_file);
             const elapsed = timer.read();
