@@ -320,16 +320,18 @@ pub const GossipService = struct {
                 var crds_table_lock = self.crds_table_rw.read();
                 defer crds_table_lock.unlock();
                 const crds_table: *const CrdsTable = crds_table_lock.get();
-                var encoder_buf: [44]u8 = undefined;
+                var encoder_buf: [50]u8 = undefined;
                 for (crds_table.store.values()) |crds_versioned_value| {
                     const val: CrdsValue = crds_versioned_value.value;
                     var size = base58Encoder.encode(
                         &crds_versioned_value.value_hash.data,
                         &encoder_buf,
                     ) catch unreachable;
+                    const pubkey_str = val.id().string();
+                    const len: usize = if (pubkey_str[43] == 0) 43 else 44;
                     try writer.print("{s},{s},{s},{}\n", .{
                         crds_variant_name(&val),
-                        val.id().string(),
+                        pubkey_str[0..len],
                         encoder_buf[0..size],
                         val.wallclock(),
                     });
