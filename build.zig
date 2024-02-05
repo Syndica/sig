@@ -67,6 +67,10 @@ pub fn build(b: *std.Build) void {
     lib.addModule("getty", getty_mod);
     lib.addModule("httpz", httpz_mod);
 
+    lib.linkLibC();
+    lib.addCSourceFiles(&.{"c/swissmap/lib/hashmap.c"}, &.{ "-g", "-O3" });
+    lib.addIncludePath(.{ .path = "c/swissmap/include" });
+
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
@@ -84,6 +88,10 @@ pub fn build(b: *std.Build) void {
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
     tests.addModule("httpz", httpz_mod);
+
+    tests.linkLibC();
+    tests.addCSourceFiles(&.{"c/swissmap/lib/hashmap.c"}, &.{ "-g", "-O3" });
+    tests.addIncludePath(.{ .path = "c/swissmap/include" });
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run library tests");
@@ -103,6 +111,10 @@ pub fn build(b: *std.Build) void {
     exe.addModule("zig-cli", zig_cli_module);
     exe.addModule("getty", getty_mod);
     exe.addModule("httpz", httpz_mod);
+
+    exe.linkLibC();
+    exe.addCSourceFiles(&.{"c/swissmap/lib/hashmap.c"}, &.{ "-g", "-O3" });
+    exe.addIncludePath(.{ .path = "c/swissmap/include" });
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
