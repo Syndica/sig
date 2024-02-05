@@ -43,11 +43,6 @@ const unpackZstdTarBall = @import("./snapshots.zig").unpackZstdTarBall;
 const Logger = @import("../trace/log.zig").Logger;
 const Level = @import("../trace/level.zig").Level;
 
-// We can import c.hm_map_t here
-// const c = @cImport({
-//     @cInclude("hashmap.h");
-// });
-
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 
