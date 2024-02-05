@@ -172,14 +172,41 @@ pub const AccountFile = struct {
 
         offset += @sizeOf(AccountInFile.StorageInfo);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
         var lamports = try self.getType(&offset, u64);
+
         offset += @sizeOf(AccountInFile.AccountInfo) - @sizeOf(u64);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
         var hash = try self.getType(&offset, Hash);
 
         return .{
             .hash = hash,
             .lamports = lamports,
+        };
+    }
+
+    /// get the account pubkey without parsing data (a lot faster if the data field isnt used anyway)
+    pub fn getAccountPubkey(self: *const Self, start_offset: usize) error{EOF}!struct {
+        pubkey: *Pubkey,
+        account_len: usize,
+    } {
+        var offset = start_offset;
+
+        var storage_info = try self.getType(&offset, AccountInFile.StorageInfo);
+
+        offset += @sizeOf(AccountInFile.AccountInfo);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        offset += @sizeOf(Hash);
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        offset += storage_info.data_len;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        return .{
+            .pubkey = &storage_info.pubkey,
+            .account_len = offset - start_offset,
         };
     }
 

@@ -199,6 +199,7 @@ test "sync.channel: channel works properly" {
 pub const BenchmarkChannel = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 5;
+
     const send_count: usize = 500_000;
 
     pub fn benchmarkChannel() !u64 {

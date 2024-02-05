@@ -146,15 +146,20 @@ pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 3;
     pub const max_iterations = 5;
 
-    pub const args = [_]usize{
-        100_000,
+    pub const BenchmarkArgs = struct {
+        n_packets: usize,
+        name: []const u8 = "",
     };
 
-    pub const arg_names = [_][]const u8{
-        "100k_msgs",
+    pub const args = [_]BenchmarkArgs{
+        BenchmarkArgs{
+            .n_packets = 100_000,
+            .name = "100k_msgs",
+        },
     };
 
-    pub fn benchmarkReadSocket(n_packets: usize) !u64 {
+    pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !u64 {
+        const n_packets = bench_args.n_packets;
         const allocator = std.heap.page_allocator;
 
         var channel = Channel(std.ArrayList(Packet)).init(allocator, n_packets);

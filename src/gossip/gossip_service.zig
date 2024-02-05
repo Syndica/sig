@@ -2501,19 +2501,24 @@ pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
 
-    pub const args = [_]usize{
-        1_000,
-        5_000,
-        10_000,
+    pub const BenchmarkArgs = struct {
+        num_message_iterations: usize,
+        name: []const u8 = "",
     };
 
-    pub const arg_names = [_][]const u8{
-        "1k_msgs",
-        "5k_msgs",
-        "10k_msgs",
-    };
+    pub const args = [_]BenchmarkArgs{ .{
+        .num_message_iterations = 1_000,
+        .name = "1k_msgs",
+    }, .{
+        .num_message_iterations = 5_000,
+        .name = "5k_msgs",
+    }, .{
+        .num_message_iterations = 10_000,
+        .name = "10k_msgs",
+    } };
 
-    pub fn benchmarkGossipServiceProcessMessages(num_message_iterations: usize) !usize {
+    pub fn benchmarkGossipServiceProcessMessages(bench_args: BenchmarkArgs) !usize {
+        const num_message_iterations = bench_args.num_message_iterations;
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
