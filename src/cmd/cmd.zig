@@ -116,7 +116,7 @@ fn gossip(_: []const []const u8) !void {
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var gossip_address = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, gossip_port);
-    logger.infof("gossip port: {d}\n", .{gossip_port});
+    logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
@@ -134,7 +134,17 @@ fn gossip(_: []const []const u8) !void {
             try entrypoints.append(value);
         }
     }
-    std.debug.print("entrypoints: {any}\n", .{entrypoints.items});
+
+    // log entrypoints
+    var entrypoint_string = try gpa_allocator.alloc(u8, 53 * entrypoints.items.len);
+    defer gpa_allocator.free(entrypoint_string);
+    var stream = std.io.fixedBufferStream(entrypoint_string);
+    var writer = stream.writer();
+    for (0.., entrypoints.items) |i, entrypoint| {
+        try entrypoint.toAddress().format("", .{}, writer);
+        if (i != entrypoints.items.len - 1) try writer.writeAll(", ");
+    }
+    logger.infof("entrypoints: {s}", .{entrypoint_string[0..stream.pos]});
 
     // determine our shred version. in the solana-labs client, this approach is only
     // used for validation. normally, shred version comes from the snapshot.
@@ -177,7 +187,7 @@ fn gossip(_: []const []const u8) !void {
 /// Uses same allocator for both registry and http adapter.
 fn spawnMetrics(allocator: std.mem.Allocator, logger: Logger) !std.Thread {
     var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
-    logger.infof("metrics port: {d}\n", .{metrics_port});
+    logger.infof("metrics port: {d}", .{metrics_port});
     const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
     return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }

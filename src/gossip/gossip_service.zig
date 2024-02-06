@@ -785,7 +785,7 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        self.logger.infof("build_messages loop closed\n", .{});
+        self.logger.infof("build_messages loop closed", .{});
     }
 
     pub fn rotateActiveSet(
