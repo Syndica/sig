@@ -735,9 +735,7 @@ pub const GossipService = struct {
             }
 
             // trim data
-            self.logger.errf("trimming...", .{});
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
-            self.logger.errf("...trimmed", .{});
 
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
