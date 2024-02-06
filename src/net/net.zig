@@ -200,7 +200,7 @@ pub const SocketAddr = union(enum(u8)) {
     pub fn toAddress(self: Self) std.net.Address {
         return switch (self) {
             .V4 => |a| std.net.Address.initIp4(a.ip.octets, a.port),
-            .V6 => |a| std.net.Address.initIp6(a.ip.octets, a.port, 0, 0),
+            .V6 => |a| std.net.Address.initIp6(a.ip.octets, a.port, a.flowinfo, a.scope_id),
         };
     }
 
