@@ -295,44 +295,66 @@ pub const GossipService = struct {
         });
         defer self.joinAndExit(&responder_handle);
 
-        { // periodically print crds content summary to stdout
-            const base58 = @import("base58-zig");
-            const base58Encoder = base58.Encoder.init(.{});
-            const start_time = std.time.timestamp();
-            while (true) {
-                var file = try std.fs.cwd().createFile("crds-dump.csv", .{});
-                defer file.close();
-                const writer = file.writer();
-                var crds_table_lock = self.crds_table_rw.read();
-                defer crds_table_lock.unlock();
-                const crds_table: *const CrdsTable = crds_table_lock.get();
-                var encoder_buf: [50]u8 = undefined;
-                for (crds_table.store.values()) |crds_versioned_value| {
-                    const val: CrdsValue = crds_versioned_value.value;
-                    var size = base58Encoder.encode(
-                        &crds_versioned_value.value_hash.data,
-                        &encoder_buf,
-                    ) catch unreachable;
-                    const pubkey_str = val.id().string();
-                    const len: usize = if (pubkey_str[43] == 0) 43 else 44;
-                    try writer.print("{s},{s},{s},{}\n", .{
-                        crds_variant_name(&val),
-                        pubkey_str[0..len],
-                        encoder_buf[0..size],
-                        val.wallclock(),
-                    });
-                }
-                const time = std.time.timestamp() - start_time;
-                self.logger.errf("{} - CRDS LEN: {}", .{ time, crds_table.store.count() });
-                std.time.sleep(10_000_000_000);
-            }
+        try self.runCrdsDumpService();
+    }
+
+    fn runCrdsDumpService(self: *Self) !void {
+        const start_time = std.time.timestamp();
+        const dir = try std.fmt.allocPrint(self.allocator, "crds-dumps/{}", .{start_time});
+        defer self.allocator.free(dir);
+        try std.fs.cwd().makePath(dir);
+        while (true) {
+            if (self.exit.load(.Unordered)) return;
+            try self.dumpCrds(dir, start_time);
+            std.time.sleep(10_000_000_000);
         }
     }
 
-    fn createFileWith(path: []const u8, data: []const u8) void {
-        var file = try std.fs.cwd().createFile(path, .{});
+    fn dumpCrds(self: *Self, dir: []const u8, start_time: i64) !void {
+        const data = blk: {
+            var crds_table_lock = self.crds_table_rw.read();
+            defer crds_table_lock.unlock();
+            const crds_table: *const CrdsTable = crds_table_lock.get();
+
+            // allocate buffer to write records
+            const crds_len = crds_table.store.count();
+            var buf = try self.allocator.alloc(u8, crds_len * 200);
+            errdefer self.allocator.free(buf);
+            var stream = std.io.fixedBufferStream(buf);
+            const writer = stream.writer();
+
+            // write records to string
+            var encoder_buf: [50]u8 = undefined;
+            const base58Encoder = @import("base58-zig").Encoder.init(.{});
+            for (crds_table.store.values()) |crds_versioned_value| {
+                const val: CrdsValue = crds_versioned_value.value;
+                var size = try base58Encoder.encode(
+                    &crds_versioned_value.value_hash.data,
+                    &encoder_buf,
+                );
+                const pubkey_str = val.id().string();
+                const len: usize = if (pubkey_str[43] == 0) 43 else 44;
+                try writer.print("{s},{s},{s},{}\n", .{
+                    crds_variant_name(&val),
+                    pubkey_str[0..len],
+                    encoder_buf[0..size],
+                    val.wallclock(),
+                });
+            }
+            break :blk .{ .buf = buf, .buf_len = stream.pos, .crds_len = crds_len };
+        };
+        defer self.allocator.free(data.buf);
+
+        // create file
+        const now = std.time.timestamp();
+        const filename = try std.fmt.allocPrint(self.allocator, "{s}/crds-dump-{}.csv", .{ dir, now });
+        defer self.allocator.free(filename);
+        var file = try std.fs.cwd().createFile(filename, .{});
         defer file.close();
-        _ = try file.write(data);
+
+        // output results
+        try file.writeAll(data.buf[0..data.buf_len]);
+        self.logger.errf("{} - CRDS LEN: {}", .{ now - start_time, data.crds_len });
     }
 
     fn sortSlices(slices: anytype) void {
