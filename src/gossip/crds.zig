@@ -459,7 +459,7 @@ pub const CrdsData = union(enum(u32)) {
 
     pub fn gossipAddr(self: *const @This()) ?SocketAddr {
         return switch (self.*) {
-            .LegacyContactInfo => |*v| v.gossip,
+            .LegacyContactInfo => |*v| if (v.gossip.isUnspecified()) null else v.gossip,
             .ContactInfo => |*v| v.getSocket(SOCKET_TAG_GOSSIP),
             else => null,
         };

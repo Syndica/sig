@@ -334,7 +334,7 @@ pub const GossipService = struct {
                 );
                 const pubkey_str = val.id().string();
                 const len: usize = if (pubkey_str[43] == 0) 43 else 44;
-                try writer.print("{s},{s},{s},{},\n", .{
+                try writer.print("{s},{s},{s},{},", .{
                     crdsVariantName(&val),
                     pubkey_str[0..len],
                     encoder_buf[0..size],
@@ -347,6 +347,7 @@ pub const GossipService = struct {
                 if (val.data.shredVersion()) |shred| {
                     try writer.print("{}", .{shred});
                 }
+                try writer.writeAll("\n");
             }
             break :blk .{ .buf = buf, .buf_len = stream.pos, .crds_len = crds_len };
         };
