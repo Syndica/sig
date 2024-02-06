@@ -357,7 +357,7 @@ pub const GossipService = struct {
                 if (val.data.gossipAddr()) |addr| {
                     try addr.toAddress().format("", .{}, writer);
                 }
-                writer.writeAll(",");
+                try writer.writeAll(",");
                 if (val.data.shredVersion()) |shred| {
                     try writer.print("{}", .{shred});
                 }
