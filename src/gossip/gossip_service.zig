@@ -751,9 +751,7 @@ pub const GossipService = struct {
             }
 
             // trim data
-            self.logger.errf("trimming...", .{});
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
-            self.logger.errf("...trimmed", .{});
 
             // initialize cluster data from crds values
             entrypoints_identified = entrypoints_identified or self.identifyEntrypoints();
