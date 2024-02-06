@@ -318,7 +318,7 @@ pub const GossipService = struct {
 
             // allocate buffer to write records
             const crds_len = crds_table.store.count();
-            var buf = try self.allocator.alloc(u8, crds_len * 200);
+            var buf = try self.allocator.alloc(u8, (1 + crds_len) * 200);
             errdefer self.allocator.free(buf);
             var stream = std.io.fixedBufferStream(buf);
             const writer = stream.writer();
@@ -334,12 +334,19 @@ pub const GossipService = struct {
                 );
                 const pubkey_str = val.id().string();
                 const len: usize = if (pubkey_str[43] == 0) 43 else 44;
-                try writer.print("{s},{s},{s},{}\n", .{
-                    crds_variant_name(&val),
+                try writer.print("{s},{s},{s},{},\n", .{
+                    crdsVariantName(&val),
                     pubkey_str[0..len],
                     encoder_buf[0..size],
                     val.wallclock(),
                 });
+                if (val.data.gossipAddr()) |addr| {
+                    try addr.toAddress().format("", .{}, writer);
+                }
+                writer.writeAll(",");
+                if (val.data.shredVersion()) |shred| {
+                    try writer.print("{}", .{shred});
+                }
             }
             break :blk .{ .buf = buf, .buf_len = stream.pos, .crds_len = crds_len };
         };
@@ -353,6 +360,7 @@ pub const GossipService = struct {
         defer file.close();
 
         // output results
+        try file.writeAll("message_type,pubkey,hash,wallclock,gossip_addr,shred_version\n");
         try file.writeAll(data.buf[0..data.buf_len]);
         self.logger.errf("{} - CRDS LEN: {}", .{ now - start_time, data.crds_len });
     }
@@ -1749,7 +1757,7 @@ pub const GossipService = struct {
     }
 };
 
-fn crds_variant_name(val: *const CrdsValue) []const u8 {
+fn crdsVariantName(val: *const CrdsValue) []const u8 {
     return switch (val.data) {
         .LegacyContactInfo => "LegacyContactInfo",
         .Vote => "Vote",

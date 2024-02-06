@@ -6,6 +6,7 @@ const Signature = @import("../core/signature.zig").Signature;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Slot = @import("../core/clock.zig").Slot;
 const ContactInfo = @import("node.zig").ContactInfo;
+const SOCKET_TAG_GOSSIP = @import("node.zig").SOCKET_TAG_GOSSIP;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -454,6 +455,22 @@ pub const CrdsData = union(enum(u32)) {
                 return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
             },
         }
+    }
+
+    pub fn gossipAddr(self: *const @This()) ?SocketAddr {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| v.gossip,
+            .ContactInfo => |*v| v.getSocket(SOCKET_TAG_GOSSIP),
+            else => null,
+        };
+    }
+
+    pub fn shredVersion(self: *const @This()) ?u16 {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| v.shred_version,
+            .ContactInfo => |*v| v.shred_version,
+            else => null,
+        };
     }
 };
 
