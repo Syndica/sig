@@ -9,6 +9,7 @@ const Level = @import("../trace/level.zig").Level;
 const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
+const echo = @import("../net/echo.zig");
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const global_registry = @import("../prometheus/registry.zig").global_registry;
@@ -120,7 +121,6 @@ fn gossip(_: []const []const u8) !void {
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.shred_version = 0;
     contact_info.gossip = gossip_address;
 
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
@@ -135,6 +135,20 @@ fn gossip(_: []const []const u8) !void {
         }
     }
     std.debug.print("entrypoints: {any}\n", .{entrypoints.items});
+
+    // determine our shred version. in the solana-labs client, this approach is only
+    // used for validation. normally, shred version comes from the snapshot.
+    contact_info.shred_version = loop: for (entrypoints.items) |entrypoint| {
+        if (echo.requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
+            if (response.shred_version) |shred_version| {
+                logger.infof("shred version: {}", .{shred_version.value});
+                break shred_version.value;
+            }
+        } else |_| {}
+    } else {
+        logger.warn("could not get a shred version from an entrypoint");
+        break :loop 0;
+    };
 
     var exit = std.atomic.Atomic(bool).init(false);
     var gossip_service = try GossipService.init(
