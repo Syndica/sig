@@ -102,6 +102,30 @@ pub const Protocol = union(enum(u32)) {
             .PongMessage => {},
         }
     }
+
+    /// Frees the ephemeral messaging data that is only needed
+    /// for the initial processing of an incoming message.
+    ///
+    /// Does not free the contained crds data that
+    /// needs to be stored in the crds table.
+    pub fn shallowFree(self: *Protocol, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .PullRequest => |*msg| {
+                msg[0].deinit();
+            },
+            .PullResponse => |*msg| {
+                allocator.free(msg[1]);
+            },
+            .PushMessage => |*msg| {
+                allocator.free(msg[1]);
+            },
+            .PruneMessage => |*msg| {
+                allocator.free(msg[1].prunes);
+            },
+            .PingMessage => {},
+            .PongMessage => {},
+        }
+    }
 };
 
 pub fn sanitizeWallclock(wallclock: u64) !void {
