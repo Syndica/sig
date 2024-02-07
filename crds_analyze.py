@@ -99,6 +99,8 @@ def summarize_existence_with_counts(name, accessor):
 
 summarize_existence_with_counts("hash", lambda crds_value: crds_value.hash)
 summarize_existence_with_counts("pubkey", lambda crds_value: crds_value.pubkey)
+pprint(asdict(compare("variant", lambda crds_value: crds_value.variant)))
+print()
 
 print("left time range", min_max(left_vals))
 print("right time range", min_max(right_vals))
