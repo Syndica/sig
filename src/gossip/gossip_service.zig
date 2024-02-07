@@ -491,7 +491,7 @@ pub const GossipService = struct {
             const protocol_messages = maybe_protocol_messages.?;
             defer {
                 for (protocol_messages) |*msg| {
-                    bincode.free(self.allocator, msg.message);
+                    msg.message.shallowFree(self.allocator);
                 }
                 self.verified_incoming_channel.allocator.free(protocol_messages);
             }

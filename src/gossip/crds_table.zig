@@ -433,7 +433,13 @@ pub const CrdsTable = struct {
         return false;
     }
 
-    // ** triming values in the crdstable **
+    /// ** triming values in the crdstable **
+    ///
+    /// This frees the memory for any pointers in the CrdsData.
+    /// Be sure that this CrdsData is not being used anywhere else when calling this.
+    /// TODO: implement a safer approach to avoid dangling pointers, such as:
+    ///  - removal buffer that is populated here and freed later
+    ///  - reference counting for all crds values
     pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
         const now = crds.getWallclockMs();
 
@@ -537,6 +543,7 @@ pub const CrdsTable = struct {
             std.debug.assert(did_remove);
             new_entry_indexs.put(entry_index, {}) catch unreachable;
         }
+        bincode.free(self.allocator, versioned_value.value.data);
     }
 
     pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
