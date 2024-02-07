@@ -8,8 +8,8 @@ import sys
 
 input_filename = sys.argv[1]
 
-xf = input_filename.split(".")
-assert len(xf) == 2 and xf[1] == "csv"
+xf = input_filename.rpartition(".")
+assert xf[2] == "csv"
 output_filename = xf[0] + "-fixed.csv"
 
 fixed_data = None
