@@ -10,6 +10,8 @@ class CrdsValue:
     pubkey: str
     hash: str
     wallclock: int
+    gossip_addr: str
+    shred_version: int
 
 
 @dataclass
