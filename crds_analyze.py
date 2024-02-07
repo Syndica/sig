@@ -1,7 +1,10 @@
 import csv
+import sys
 from dataclasses import asdict, dataclass
 from pprint import pprint
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+
+left_filename, right_filename = sys.argv[1:3]
 
 
 @dataclass
@@ -17,23 +20,28 @@ class CrdsValue:
 @dataclass
 class Comparison:
     name: str
-    sig_only: list
-    rust_only: list
+    left_only: list
+    right_only: list
     shared: list
 
 
-with open("crds-dump-sig.csv") as f:
-    sig_vals = [CrdsValue(*row) for row in csv.reader(f)]
+with open(left_filename) as f:
+    f.readline()
+    left_vals = [CrdsValue(*row) for row in csv.reader(f)]
 
-with open("crds-dump-rust.csv") as f:
-    rust_vals = [CrdsValue(*row) for row in csv.reader(f)]
+with open(right_filename) as f:
+    f.readline()
+    right_vals = [CrdsValue(*row) for row in csv.reader(f)]
 
 
 def compare(name, accessor):
-    sig_items = set(accessor(c) for c in sig_vals)
-    rust_items = set(accessor(c) for c in rust_vals)
+    left_items = set(accessor(c) for c in left_vals)
+    right_items = set(accessor(c) for c in right_vals)
     return Comparison(
-        name, sig_items - rust_items, rust_items - sig_items, rust_items & sig_items
+        name,
+        left_items - right_items,
+        right_items - left_items,
+        right_items & left_items,
     )
 
 
@@ -50,15 +58,51 @@ def count(items, accessor):
     counter = defaultdict(int)
     for item in items:
         counter[accessor(item)] += 1
-    return counter
+    return sorted([(k, v) for (k, v) in counter.items()])
 
 
-pprint(asdict(compare("pubkey", lambda crds_value: crds_value.pubkey)))
-# pprint(asdict(compare("hash", lambda crds_value: crds_value.hash)))
-# pprint(asdict(compare("variant", lambda crds_value: crds_value.variant)))
+def compare_counts(left_vals, right_vals, accessor):
+    left_counts = dict(count(left_vals, accessor))
+    right_counts = dict(count(right_vals, accessor))
+    left_keys = set(left_counts.keys())
+    right_keys = set(right_counts.keys())
+    same = {}
+    diff = {}
+    for key in left_keys & right_keys:
+        if left_counts[key] == right_counts[key]:
+            same[key] = left_counts[key]
+        else:
+            diff[key] = left_counts[key], right_counts[key]
+    for key in left_keys - right_keys:
+        diff[key] = left_counts[key], 0
+    for key in right_keys - left_keys:
+        diff[key] = 0, right_counts[key]
+    return same, diff
 
-print("rst", min_max(rust_vals))
-print("sig", min_max(sig_vals))
 
-print(count(rust_vals, lambda c: c.variant))
-print(count(sig_vals, lambda c: c.variant))
+def summarize_counts(name, left_vals, right_vals, accessor):
+    same, diff = compare_counts(left_vals, right_vals, accessor)
+    print(name + " counts:")
+    pprint(("same:", same))
+    pprint(("diff:", diff))
+    print()
+
+
+def summarize_existence_with_counts(name, accessor):
+    comparison = compare(name, accessor)
+    print(name + ":")
+    print(" - left_only:", len(comparison.left_only))
+    print(" - right_only:", len(comparison.right_only))
+    print(" - shared:", len(comparison.shared))
+    print()
+
+
+summarize_existence_with_counts("hash", lambda crds_value: crds_value.hash)
+summarize_existence_with_counts("pubkey", lambda crds_value: crds_value.pubkey)
+
+print("left time range", min_max(left_vals))
+print("right time range", min_max(right_vals))
+print()
+
+summarize_counts("variant", left_vals, right_vals, lambda c: c.variant)
+summarize_counts("shred_version", left_vals, right_vals, lambda c: c.shred_version)
