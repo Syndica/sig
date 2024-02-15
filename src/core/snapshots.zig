@@ -855,7 +855,6 @@ pub const Snapshots = struct {
         defer allocator.free(full_metadata_path);
 
         std.debug.print("reading full snapshot from {s}\n", .{full_metadata_path});
-
         var full = try SnapshotFields.readFromFilePath(
             allocator,
             full_metadata_path,
@@ -871,7 +870,6 @@ pub const Snapshots = struct {
             defer allocator.free(incremental_metadata_path);
 
             std.debug.print("reading incremental snapshot from {s}\n", .{incremental_metadata_path});
-
             incremental = try SnapshotFields.readFromFilePath(
                 allocator,
                 incremental_metadata_path,
@@ -949,11 +947,25 @@ pub const Snapshots = struct {
 
 /// unpacks a .tar.zstd file into the given directory
 pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_dir: std.fs.Dir) !void {
+    // PERF: change this to mmap file - os.read is slow
     const file = try output_dir.openFile(path, .{});
     defer file.close();
 
+    const file_stat = try file.stat();
+    const file_size: u64 = @intCast(file_stat.size);
+    var memory = try std.os.mmap(
+        null,
+        file_size,
+        std.os.PROT.READ,
+        std.os.MAP.SHARED,
+        file.handle,
+        0,
+    );
+    var ball_contents = std.io.FixedBufferStream([]u8){ .buffer = memory, .pos = 0 };
+
     var timer = try std.time.Timer.start();
-    var stream = std.compress.zstd.decompressStream(allocator, file.reader());
+    var stream = std.compress.zstd.decompressStream(allocator, ball_contents.reader());
+    // var stream = std.compress.zstd.decompressStream(allocator, file.reader());
     try std.tar.pipeToFileSystem(output_dir, stream.reader(), .{ .mode_mode = .ignore });
     std.debug.print("unpacked {s} in {s}\n", .{ path, std.fmt.fmtDuration(timer.read()) });
 }

@@ -1284,35 +1284,35 @@ pub const DiskMemoryAllocator = struct {
 
         var buf: [1024]u8 = undefined;
         const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, self.count }) catch |err| {
-            std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
         self.count += 1;
 
         var file = std.fs.cwd().createFile(filepath, .{ .read = true }) catch |err| {
-            std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
         defer file.close();
 
         const aligned_size = std.mem.alignForward(usize, n, std.mem.page_size);
         const file_size = (file.stat() catch |err| {
-            std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         }).size;
 
         if (file_size < aligned_size) {
             // resize the file
             file.seekTo(aligned_size - 1) catch |err| {
-                std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
                 return null;
             };
             _ = file.write(&[_]u8{1}) catch |err| {
-                std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
                 return null;
             };
             file.seekTo(0) catch |err| {
-                std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
                 return null;
             };
         }
@@ -1325,7 +1325,7 @@ pub const DiskMemoryAllocator = struct {
             file.handle,
             0,
         ) catch |err| {
-            std.debug.print("Disk Memory Allocator: error: {}\n", .{err});
+            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
 
@@ -1569,29 +1569,31 @@ pub fn FastMap(
             var hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
 
-            // get
+            // what we are searching for (get)
             const control_bytes: u7 = @intCast(hash >> (64 - 7));
+            // PERF: this struct is represented by a u8
             const key_state = State{
                 .state = .occupied,
                 .control_bytes = control_bytes,
             };
             const search_state: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
-            // or put (ie, is empty)
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
                 const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
 
-                // search for a match
+                // PERF: SIMD eq check: search for a match
                 var match_vec = search_state == states;
                 if (@reduce(.Or, match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
+                        // PERF: SIMD eq check across pubkeys
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
                             return self.groups[group_index][j].value;
                         }
                     }
                 }
 
+                // PERF: SIMD eq check: if theres a free state, then the key DNE
                 const free_vec = free_state == states;
                 if (@reduce(.Or, free_vec)) {
                     return null;
@@ -1608,7 +1610,9 @@ pub fn FastMap(
             var group_index = hash & self.bit_mask;
             std.debug.assert(self._capacity > self._count);
 
+            // what we are searching for (get)
             const control_bytes: u7 = @intCast(hash >> (64 - 7));
+            // PERF: this struct is represented by a u8
             const key_state = State{
                 .state = .occupied,
                 .control_bytes = control_bytes,
@@ -1647,20 +1651,20 @@ pub fn FastMap(
 
             std.debug.assert(self._capacity > self._count);
 
-            // get
+            // what we are searching for (get)
             const control_bytes: u7 = @intCast(hash >> (64 - 7));
             const key_state = State{
                 .state = .occupied,
                 .control_bytes = control_bytes,
             };
             const search_state: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
-            // or put (ie, is empty)
+            // or looking for an empty space (ie, put)
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
                 const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
 
-                // search for a match
+                // SIMD eq search for a match (get)
                 var match_vec = search_state == states;
                 if (@reduce(.Or, match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
@@ -1673,7 +1677,7 @@ pub fn FastMap(
                     }
                 }
 
-                // if theres an free then insert
+                // if theres an free then insert (put)
                 const free_vec = free_state == states;
                 if (@reduce(.Or, free_vec)) {
                     const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
@@ -1988,128 +1992,356 @@ pub const AccountIndex = struct {
     }
 };
 
-// NOTE: running with `zig build run` or similar will not work due to fd limits
-// you need to build and then run ./zig-out/bin/accounts_db to get around these
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
+const Options = std.tar.Options;
+const Header = std.tar.Header;
 
-    // const snapshot_dir = "test_data/";
-    const snapshot_dir = "../snapshots/";
-    var logger = Logger.init(allocator, Level.debug);
-    logger.spawn();
+fn stripComponents(path: []const u8, count: u32) ![]const u8 {
+    var i: usize = 0;
+    var c = count;
+    while (c > 0) : (c -= 1) {
+        if (std.mem.indexOfScalarPos(u8, path, i, '/')) |pos| {
+            i = pos + 1;
+        } else {
+            return error.TarComponentsOutsideStrippedPrefix;
+        }
+    }
+    return path[i..];
+}
 
-    // this should exist before we start to unpack
-    const genesis_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/genesis.bin",
-        .{snapshot_dir},
-    );
-    defer allocator.free(genesis_path);
+pub const TarEntry = struct {
+    contents: []u8,
+    file_name: []const u8,
+};
 
-    std.fs.cwd().access(genesis_path, .{}) catch {
-        std.debug.print("genesis.bin not found: {s}\n", .{genesis_path});
-        return error.GenesisNotFound;
-    };
+const TarTask = struct {
+    entry: TarEntry,
+    task: Task,
+    dir: std.fs.Dir,
+    done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
 
-    // if this exists, we wont look for a .tar.zstd
-    const accounts_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/accounts/",
-        .{snapshot_dir},
-    );
-    defer allocator.free(accounts_path);
+    pub fn callback(task: *Task) void {
+        var self = @fieldParentPtr(@This(), "task", task);
+        std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
+        defer self.done.store(true, std.atomic.Ordering.Release);
 
-    var snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
-    if (snapshot_paths.incremental_snapshot == null) {
-        std.debug.print("no incremental snapshot found\n", .{});
+        var file = self.dir.createFile(self.entry.file_name, .{ .read = true }) catch |err| {
+            std.debug.print("TarTask error: {}\n", .{err});
+            return;
+        };
+        defer file.close();
+
+        const aligned_file_size = std.mem.alignForward(u64, self.entry.contents.len, std.mem.page_size);
+        file.seekTo(aligned_file_size - 1) catch |err| {
+            std.debug.print("TarTask error: {}\n", .{err});
+            return;
+        };
+        _ = file.write(&[_]u8{1}) catch |err| {
+            std.debug.print("TarTask error: {}\n", .{err});
+            return;
+        };
+        file.seekTo(0) catch |err| {
+            std.debug.print("TarTask error: {}\n", .{err});
+            return;
+        };
+
+        var memory = std.os.mmap(
+            null,
+            self.entry.contents.len,
+            std.os.PROT.WRITE,
+            std.os.MAP.SHARED,
+            file.handle,
+            0,
+        ) catch |err| {
+            std.debug.print("TarTask error: {}\n", .{err});
+            return;
+        };
+        @memcpy(memory, self.entry.contents);
+    }
+};
+
+pub fn pipeToFileSystemV3(
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    tar_contents: []align(std.mem.page_size) u8,
+) !void {
+    const size = tar_contents.len;
+    var pos: usize = 0;
+
+    const n_threads = (try std.Thread.getCpuCount()) * 2;
+    var thread_pool = ThreadPool.init(.{
+        .max_threads = @intCast(n_threads),
+    });
+    std.debug.print("using {d} threads to unpack snapshot\n", .{n_threads});
+    var tasks = try allocator.alloc(TarTask, n_threads);
+    for (tasks) |*t| {
+        t.* = .{ .entry = undefined, .dir = dir, .task = .{ .callback = TarTask.callback } };
+    }
+    var task_i: usize = 0;
+
+    const strip_components: u32 = 0;
+    var file_name_buffer: [255]u8 = undefined;
+    var timer = try std.time.Timer.start();
+    while (true) {
+        printTimeEstimate(&timer, size, pos, "untar", null);
+
+        const header: Header = .{ .bytes = tar_contents[pos..][0..512] };
+        pos += 512;
+
+        const file_size = try header.fileSize();
+        const rounded_file_size = std.mem.alignForward(u64, file_size, 512);
+        const pad_len = rounded_file_size - file_size;
+        const unstripped_file_name = try header.fullFileName(&file_name_buffer);
+
+        switch (header.fileType()) {
+            .directory => {
+                const file_name = try stripComponents(unstripped_file_name, strip_components);
+                if (file_name.len != 0) {
+                    try dir.makePath(file_name);
+                }
+            },
+            .normal => {
+                const end = pos + rounded_file_size - pad_len;
+                if (file_size == 0 and unstripped_file_name.len == 0) return; // tar EOF
+
+                const file_name = try stripComponents(unstripped_file_name, strip_components);
+                if (std.fs.path.dirname(file_name)) |dir_name| {
+                    try dir.makePath(dir_name);
+                }
+
+                const entry = TarEntry{
+                    .contents = tar_contents[pos..end],
+                    .file_name = file_name,
+                };
+
+                // find a free task
+                var task_ptr = &tasks[task_i];
+                while (!task_ptr.done.load(std.atomic.Ordering.Acquire)) {
+                    task_i = (task_i + 1) % n_threads;
+                    task_ptr = &tasks[task_i];
+                }
+                task_ptr.entry = entry;
+                task_ptr.done.store(false, std.atomic.Ordering.Release);
+
+                const batch = Batch.from(&task_ptr.task);
+                thread_pool.schedule(batch);
+
+                pos += rounded_file_size;
+            },
+            .global_extended_header, .extended_header => {
+                pos += rounded_file_size;
+            },
+            .hard_link => return error.TarUnsupportedFileType,
+            .symbolic_link => return error.TarUnsupportedFileType,
+            else => return error.TarUnsupportedFileType,
+        }
     }
 
-    std.fs.cwd().access(accounts_path, .{}) catch {
-        std.debug.print("accounts/ not found ... unpacking snapshots...\n", .{});
-        // if accounts/ doesnt exist then we unpack the found snapshots
-        var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
-        defer snapshot_dir_iter.close();
-
-        try unpackZstdTarBall(
-            allocator,
-            snapshot_paths.full_snapshot.path,
-            snapshot_dir_iter.dir,
-        );
-        if (snapshot_paths.incremental_snapshot) |incremental_snapshot| {
-            try unpackZstdTarBall(
-                allocator,
-                incremental_snapshot.path,
-                snapshot_dir_iter.dir,
-            );
+    // wait for all tasks
+    for (tasks) |*task| {
+        while (!task.done.load(std.atomic.Ordering.Acquire)) {
+            // wait
         }
-    };
-
-    var full_timer = try std.time.Timer.start();
-    var timer = try std.time.Timer.start();
-
-    std.debug.print("reading snapshots...\n", .{});
-    var snapshots = try Snapshots.fromPaths(allocator, snapshot_dir, snapshot_paths);
-    defer snapshots.deinit(allocator);
-    std.debug.print("read snapshots in {s}\n", .{std.fmt.fmtDuration(timer.read())});
-    const full_snapshot = snapshots.full;
-
-    // load and validate
-    std.debug.print("initializing accounts-db...\n", .{});
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
-        .index_ram_capacity = 100_000,
-        // .disk_index_dir = "test_data/tmp",
-    });
-    defer accounts_db.deinit();
-    std.debug.print("initialized in {s}\n", .{std.fmt.fmtDuration(timer.read())});
-    timer.reset();
-
-    const snapshot = try snapshots.collapse();
-    timer.reset();
-
-    std.debug.print("loading from snapshot...\n", .{});
-    try accounts_db.loadFromSnapshot(
-        snapshot.accounts_db_fields,
-        accounts_path,
-    );
-    std.debug.print("loaded from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
-
-    try accounts_db.validateLoadFromSnapshot(
-        snapshot.bank_fields.incremental_snapshot_persistence,
-        full_snapshot.bank_fields.slot,
-        full_snapshot.bank_fields.capitalization,
-    );
-    std.debug.print("validated from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
-    std.debug.print("full timer: {s}\n", .{std.fmt.fmtDuration(full_timer.read())});
-
-    // use the genesis to validate the bank
-    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
-    defer genesis_config.deinit(allocator);
-
-    std.debug.print("validating bank...\n", .{});
-    const bank = Bank.init(&accounts_db, &snapshot.bank_fields);
-    try Bank.validateBankFields(bank.bank_fields, &genesis_config);
-
-    // validate the status cache
-    std.debug.print("validating status cache...\n", .{});
-    const status_cache_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "snapshots/status_cache" },
-    );
-    defer allocator.free(status_cache_path);
-
-    var status_cache = try StatusCache.init(allocator, status_cache_path);
-    defer status_cache.deinit();
-
-    var slot_history = try accounts_db.getSlotHistory();
-    defer slot_history.deinit(accounts_db.allocator);
-
-    const bank_slot = snapshot.bank_fields.slot;
-    try status_cache.validate(allocator, bank_slot, &slot_history);
-
-    std.debug.print("done!\n", .{});
+    }
 }
+
+const zstd = @import("../xstd/compress/zstandard.zig");
+
+pub fn main() !void {
+    // const filepath = "../snapshots/incremental-snapshot-244068316-244090370-Dq47uVRdDA1hVKCNb7RcgUEJ9RrczagQqHzgor85GP48.tar.zst";
+    const filepath = "../snapshots/snapshot-244068316-UxvcYc65ziJ6BmQE3RQccvPYjDpo6aYjz9rxvnjJGA9.tar.zst";
+    var file = try std.fs.cwd().openFile(filepath, .{});
+    defer file.close();
+
+    const file_stat = try file.stat();
+    const file_size: u64 = @intCast(file_stat.size);
+    var memory = try std.os.mmap(
+        null,
+        file_size,
+        std.os.PROT.READ,
+        std.os.MAP.SHARED,
+        file.handle,
+        0,
+    );
+    var fbs = std.io.FixedBufferStream([]u8){ .buffer = memory, .pos = 0 };
+    std.debug.print("full len: {d}\n", .{memory.len});
+
+    var timer = try std.time.Timer.start();
+    // var stream = std.compress.zstd.decompressStream(std.heap.page_allocator, fbs.reader(), memory);
+    var stream = zstd.decompressStream(std.heap.page_allocator, fbs.reader(), memory);
+    // var stream_reader = stream.reader();
+
+    var buf: [512]u8 = undefined;
+    _ = try stream.readParallel(&buf);
+
+    // var buf = [10]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    // while (true) {
+    //     const size = try stream_reader.read(&buf);
+    //     if (size == 0) break;
+    // }
+
+    // const result = try stream_reader.readAllAlloc(std.heap.page_allocator, std.math.maxInt(usize));
+    // std.mem.doNotOptimizeAway(result);
+
+    std.debug.print("{s}\n", .{std.fmt.fmtDuration(timer.read())});
+}
+
+// pub fn main() !void {
+//     const dirpath = "../snapshots/";
+//     const filepath = "../snapshots/snapshot-244068316-UxvcYc65ziJ6BmQE3RQccvPYjDpo6aYjz9rxvnjJGA9.tar";
+//     var file = try std.fs.cwd().openFile(filepath, .{});
+//     var dir = try std.fs.cwd().openDir(dirpath, .{});
+
+//     const file_stat = try file.stat();
+//     const file_size: u64 = @intCast(file_stat.size);
+//     var memory = try std.os.mmap(
+//         null,
+//         file_size,
+//         std.os.PROT.READ,
+//         std.os.MAP.SHARED,
+//         file.handle,
+//         0,
+//     );
+
+//     var timer = try std.time.Timer.start();
+//     try pipeToFileSystemV3(std.heap.page_allocator, dir, memory);
+//     std.debug.print("\n", .{});
+//     std.debug.print("{s}\n", .{std.fmt.fmtDuration(timer.read())});
+// }
+
+// // NOTE: running with `zig build run` or similar will not work due to fd limits
+// // you need to build and then run ./zig-out/bin/accounts_db to get around these
+// pub fn main() !void {
+//     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//     var allocator = gpa.allocator();
+
+//     // const snapshot_dir = "test_data/";
+//     const snapshot_dir = "../snapshots/";
+//     var logger = Logger.init(allocator, Level.debug);
+//     logger.spawn();
+
+//     // this should exist before we start to unpack
+//     const genesis_path = try std.fmt.allocPrint(
+//         allocator,
+//         "{s}/genesis.bin",
+//         .{snapshot_dir},
+//     );
+//     defer allocator.free(genesis_path);
+
+//     std.fs.cwd().access(genesis_path, .{}) catch {
+//         std.debug.print("genesis.bin not found: {s}\n", .{genesis_path});
+//         return error.GenesisNotFound;
+//     };
+
+//     // if this exists, we wont look for a .tar.zstd
+//     const accounts_path = try std.fmt.allocPrint(
+//         allocator,
+//         "{s}/accounts/",
+//         .{snapshot_dir},
+//     );
+//     defer allocator.free(accounts_path);
+
+//     var snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
+//     snapshot_paths.incremental_snapshot = null;
+//     if (snapshot_paths.incremental_snapshot == null) {
+//         std.debug.print("no incremental snapshot found\n", .{});
+//     }
+
+//     var timer = try std.time.Timer.start();
+//     var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
+//     defer snapshot_dir_iter.close();
+
+// try unpackZstdTarBall(
+//     allocator,
+//     snapshot_paths.full_snapshot.path,
+//     snapshot_dir_iter.dir,
+// );
+// std.debug.print("snapshot unpacked in: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+
+// std.fs.cwd().access(accounts_path, .{}) catch {
+//     std.debug.print("accounts/ not found ... unpacking snapshots...\n", .{});
+//     // if accounts/ doesnt exist then we unpack the found snapshots
+//     var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
+//     defer snapshot_dir_iter.close();
+
+//     try unpackZstdTarBall(
+//         allocator,
+//         snapshot_paths.full_snapshot.path,
+//         snapshot_dir_iter.dir,
+//     );
+//     if (snapshot_paths.incremental_snapshot) |incremental_snapshot| {
+//         try unpackZstdTarBall(
+//             allocator,
+//             incremental_snapshot.path,
+//             snapshot_dir_iter.dir,
+//         );
+//     }
+// };
+
+// var full_timer = try std.time.Timer.start();
+// var timer = try std.time.Timer.start();
+
+// std.debug.print("reading snapshots...\n", .{});
+// var snapshots = try Snapshots.fromPaths(allocator, snapshot_dir, snapshot_paths);
+// defer snapshots.deinit(allocator);
+// std.debug.print("read snapshots in {s}\n", .{std.fmt.fmtDuration(timer.read())});
+// const full_snapshot = snapshots.full;
+
+// // load and validate
+// std.debug.print("initializing accounts-db...\n", .{});
+// var accounts_db = try AccountsDB.init(allocator, logger, .{
+//     .index_ram_capacity = 100_000,
+//     // .disk_index_dir = "test_data/tmp",
+// });
+// defer accounts_db.deinit();
+// std.debug.print("initialized in {s}\n", .{std.fmt.fmtDuration(timer.read())});
+// timer.reset();
+
+// const snapshot = try snapshots.collapse();
+// timer.reset();
+
+// std.debug.print("loading from snapshot...\n", .{});
+// try accounts_db.loadFromSnapshot(
+//     snapshot.accounts_db_fields,
+//     accounts_path,
+// );
+// std.debug.print("loaded from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
+
+// try accounts_db.validateLoadFromSnapshot(
+//     snapshot.bank_fields.incremental_snapshot_persistence,
+//     full_snapshot.bank_fields.slot,
+//     full_snapshot.bank_fields.capitalization,
+// );
+// std.debug.print("validated from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
+// std.debug.print("full timer: {s}\n", .{std.fmt.fmtDuration(full_timer.read())});
+
+// // use the genesis to validate the bank
+// const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+// defer genesis_config.deinit(allocator);
+
+// std.debug.print("validating bank...\n", .{});
+// const bank = Bank.init(&accounts_db, &snapshot.bank_fields);
+// try Bank.validateBankFields(bank.bank_fields, &genesis_config);
+
+// // validate the status cache
+// std.debug.print("validating status cache...\n", .{});
+// const status_cache_path = try std.fmt.allocPrint(
+//     allocator,
+//     "{s}/{s}",
+//     .{ snapshot_dir, "snapshots/status_cache" },
+// );
+// defer allocator.free(status_cache_path);
+
+// var status_cache = try StatusCache.init(allocator, status_cache_path);
+// defer status_cache.deinit();
+
+// var slot_history = try accounts_db.getSlotHistory();
+// defer slot_history.deinit(accounts_db.allocator);
+
+// const bank_slot = snapshot.bank_fields.slot;
+// try status_cache.validate(allocator, bank_slot, &slot_history);
+
+// std.debug.print("done!\n", .{});
+// }
 
 fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, Snapshots } {
     std.debug.assert(builtin.is_test); // should only be used in tests
@@ -2572,60 +2804,4 @@ pub const BenchmarkAccountsDB = struct {
 
         return elapsed;
     }
-
-    // // TODO: fix
-    // pub fn writeAccounts(bench_args: BenchArgs) !u64 {
-    //     const n_accounts = bench_args.n_accounts;
-    //     const slot_list_len = bench_args.slot_list_len;
-
-    //     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    //     var allocator = gpa.allocator();
-
-    //     var logger = Logger{ .noop = {} };
-    //     var accounts_db = try AccountsDB.init(allocator, logger, .{});
-    //     defer accounts_db.deinit();
-
-    //     var random = std.rand.DefaultPrng.init(19);
-    //     var rng = random.random();
-
-    //     var accounts = try allocator.alloc(Account, n_accounts * slot_list_len);
-    //     defer {
-    //         for (accounts) |account| allocator.free(account.data);
-    //         allocator.free(accounts);
-    //     }
-
-    //     var pubkeys = try allocator.alloc(Pubkey, n_accounts * slot_list_len);
-    //     defer allocator.free(pubkeys);
-
-    //     var account_index: usize = 0;
-    //     for (0..slot_list_len) |s| {
-    //         for (0..n_accounts) |i| {
-    //             accounts[account_index] = try Account.random(allocator, rng, i);
-    //             if (s == 0) {
-    //                 const pubkey = Pubkey.random(rng);
-    //                 pubkeys[account_index] = pubkey;
-    //             } else {
-    //                 pubkeys[account_index] = pubkeys[account_index % n_accounts];
-    //             }
-    //             account_index += 1;
-    //         }
-    //     }
-
-    //     var timer = try std.time.Timer.start();
-    //     var index: usize = 0;
-    //     for (0..slot_list_len) |s| {
-    //         const start_index = index;
-    //         const end_index = index + n_accounts;
-
-    //         try accounts_db.putAccountBatch(
-    //             accounts[start_index..end_index],
-    //             pubkeys[start_index..end_index],
-    //             @as(u64, @intCast(s)),
-    //         );
-    //         index = end_index;
-    //     }
-    //     const elapsed = timer.read();
-
-    //     return elapsed;
-    // }
 };
