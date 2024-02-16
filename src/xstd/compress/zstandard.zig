@@ -154,13 +154,17 @@ pub const Decompressor = struct {
     allocator: Allocator,
     source_buf: []u8,
     pos: usize = 0,
+    n_threads: usize = 1, // default single threaded
+
+    const ReaderError = error{EndOfStream};
+    pub const Reader = std.io.Reader(*Self, ReaderError, read);
 
     const options: DecompressStreamOptions = .{};
 
-    fn readFrameContext(reader: anytype) !?decompress.FrameContext {
-        switch (try decompress.decodeFrameHeader(reader)) {
+    fn readFrameContext(r: anytype) !?decompress.FrameContext {
+        switch (try decompress.decodeFrameHeader(r)) {
             .skippable => |header| {
-                try reader.skipBytes(header.frame_size, .{});
+                try r.skipBytes(header.frame_size, .{});
                 return null;
             },
             .zstandard => |header| {
@@ -176,9 +180,51 @@ pub const Decompressor = struct {
         }
     }
 
-    pub fn read(self: *Self) ![]u8 {
+    pub const ZstdInfo = struct { n_frames: usize, total_output_size: usize };
+
+    /// need to collect
+    /// the number of frames (how many parallel works we need)
+    /// the total output size decompressed (so we know how much memory to allocate)
+    pub fn getInfo(source_buf: []u8) !ZstdInfo {
+        var fbs = std.io.FixedBufferStream([]u8){ .buffer = source_buf, .pos = 0 };
+        var source_reader = fbs.reader();
+        var total_n_frames: usize = 0;
+
+        const initial_count = source_buf.len;
+        var total_output_memory: usize = 0;
+        counting_loop: while (true) {
+            // read the frame context (can parallelize this)
+            var frame_context: ?decompress.FrameContext = null;
+            while (frame_context == null) {
+                frame_context = readFrameContext(source_reader) catch |err| switch (err) {
+                    error.DictionaryIdFlagUnsupported => return error.DictionaryIdFlagUnsupported,
+                    error.EndOfStream => if (source_reader.context.pos == initial_count) {
+                        break :counting_loop;
+                    } else {
+                        return error.MalformedFrame;
+                    },
+                    else => return error.MalformedFrame,
+                } orelse continue;
+            }
+            total_n_frames += 1;
+            total_output_memory += frame_context.?.window_size;
+        }
+
+        return .{ .n_frames = total_n_frames, .total_output_size = total_output_memory };
+    }
+
+    pub fn reader(self: *Self) Reader {
+        return .{ .context = self };
+    }
+
+    pub fn read(self: *Self, output_buf: []u8) ReaderError!usize {
+        // TODO: make these errors better
+        return read_(self, output_buf) catch ReaderError.EndOfStream;
+    }
+
+    pub fn read_(self: *Self, output_buf: []u8) !usize {
         // count number of blocks
-        var fbs = std.io.FixedBufferStream([]u8){ .buffer = self.source_buf, .pos = 0 };
+        var fbs = std.io.FixedBufferStream([]u8){ .buffer = self.source_buf, .pos = self.pos };
         var source_reader = fbs.reader();
 
         // mainnet: 101_384 (for incremental) 1_532_423 (for full)
@@ -196,13 +242,12 @@ pub const Decompressor = struct {
             var frame_context: ?decompress.FrameContext = null;
             while (frame_context == null) {
                 frame_context = readFrameContext(source_reader) catch |err| switch (err) {
-                    error.DictionaryIdFlagUnsupported => return error.DictionaryIdFlagUnsupported,
                     error.EndOfStream => if (source_reader.context.pos == initial_count) {
                         break :counting_loop;
                     } else {
                         return error.MalformedFrame;
                     },
-                    else => return error.MalformedFrame,
+                    else => return err,
                 } orelse continue;
             }
             total_n_frames += 1;
@@ -248,16 +293,16 @@ pub const Decompressor = struct {
             std.debug.assert(frame_read_len <= frame_alloc_size);
         }
 
-        const N_THREADS: usize = @min(2, total_n_frames);
+        const n_threads_bounded: usize = @min(self.n_threads, total_n_frames);
         var thread_pool = ThreadPool.init(.{
-            .max_threads = @intCast(N_THREADS),
+            .max_threads = @intCast(n_threads_bounded),
         });
         defer {
             thread_pool.shutdown();
             thread_pool.deinit();
         }
 
-        var tasks = try self.allocator.alloc(ZstdTask, N_THREADS);
+        var tasks = try self.allocator.alloc(ZstdTask, n_threads_bounded);
         defer {
             for (tasks) |*task| {
                 task.deinit();
@@ -278,10 +323,7 @@ pub const Decompressor = struct {
         // reset the reader
         fbs.pos = 0;
 
-        var output = try self.allocator.alloc(u8, total_output_memory);
-        errdefer self.allocator.free(output);
         var output_pos: usize = 0;
-
         var frame_index: usize = 0;
         var timer = try std.time.Timer.start();
         decompression_loop: while (true) {
@@ -304,12 +346,20 @@ pub const Decompressor = struct {
             while (!task_ptr.done.load(std.atomic.Ordering.Acquire)) {
                 // TODO: fix this while the order is still correct
             }
-            task_i = (task_i + 1) % N_THREADS;
+            task_i = (task_i + 1) % n_threads_bounded;
 
             // copy output to buffer
             if (task_ptr.block_context) |*block_context| {
+                const len = block_context.buffer.len();
+                if (output_pos + len > output_buf.len) {
+                    block_context.deinit();
+                    task_ptr.block_context = null;
+                    // done
+                    break :decompression_loop;
+                }
+
                 while (block_context.buffer.read()) |x| {
-                    output[output_pos] = x;
+                    output_buf[output_pos] = x;
                     output_pos += 1;
                 }
                 block_context.deinit();
@@ -345,14 +395,21 @@ pub const Decompressor = struct {
         // wait for all tasks (still need them ordered)
         for (0..tasks.len) |_| {
             var task = &tasks[task_i];
-            defer task_i = (task_i + 1) % N_THREADS;
+            defer task_i = (task_i + 1) % n_threads_bounded;
             while (!task.done.load(std.atomic.Ordering.Acquire)) {
                 // wait
             }
 
             if (task.block_context) |*block_context| {
+                const len = block_context.buffer.len();
+                if (output_pos + len > output_buf.len) {
+                    block_context.deinit();
+                    task.block_context = null;
+                    continue;
+                }
+
                 while (block_context.buffer.read()) |x| {
-                    output[output_pos] = x;
+                    output_buf[output_pos] = x;
                     output_pos += 1;
                 }
                 block_context.deinit();
@@ -360,16 +417,7 @@ pub const Decompressor = struct {
             }
         }
 
-        if (!self.allocator.resize(output, output_pos)) {
-            var new_output = try self.allocator.alloc(u8, output_pos);
-            @memcpy(output, output[0..output_pos]);
-            self.allocator.free(output);
-            output = new_output;
-        } else {
-            output.len = output_pos;
-        }
-
-        return output;
+        return output_pos;
     }
 };
 
@@ -391,14 +439,19 @@ test "xstd.compress.zstandard: test decompression" {
 
     const allocator = std.testing.allocator;
 
-    var d = Decompressor{ .allocator = allocator, .source_buf = memory };
-    const result = try d.read();
-    defer allocator.free(result);
-
     var fbs = std.io.fixedBufferStream(memory);
     var stream = std.compress.zstd.decompressStream(allocator, fbs.reader());
     var std_result = try stream.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(std_result);
 
-    try std.testing.expectEqualSlices(u8, std_result, result);
+    var d = Decompressor{ .allocator = allocator, .source_buf = memory };
+    var reader = d.reader();
+
+    var output_buf = try allocator.alloc(u8, std_result.len);
+    defer allocator.free(output_buf);
+
+    const i = try reader.read(output_buf[0..1024]);
+    _ = try reader.read(output_buf[i..]);
+
+    try std.testing.expectEqualSlices(u8, std_result, output_buf);
 }
