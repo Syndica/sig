@@ -948,7 +948,7 @@ pub const Snapshots = struct {
 /// unpacks a .tar.zstd file into the given directory
 pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_dir: std.fs.Dir) !void {
     // PERF: change this to mmap file - os.read is slow
-    const file = try output_dir.openFile(path, .{});
+    const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
     const file_stat = try file.stat();

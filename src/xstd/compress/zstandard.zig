@@ -24,6 +24,7 @@ pub const BlockContext = struct {
     offset_fse_buffer: []types.compressed_block.Table.Fse,
     literals_buffer: []u8,
     sequence_buffer: []u8,
+    // TODO: shouldnt need a ring buffer here (just a slice should do)
     buffer: RingBuffer,
     decode_state: decompress.block.DecodeState,
     frame_context: decompress.FrameContext,
@@ -94,6 +95,7 @@ const ZstdTask = struct {
     source_buf: []u8,
     options: DecompressStreamOptions,
     block_context: ?BlockContext = null,
+    start_index: usize = 0,
     done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
 
     pub fn deinit(self: *ZstdTask) void {
@@ -156,9 +158,6 @@ pub const Decompressor = struct {
     pos: usize = 0,
     n_threads: usize = 1, // default single threaded
 
-    const ReaderError = error{EndOfStream};
-    pub const Reader = std.io.Reader(*Self, ReaderError, read);
-
     const options: DecompressStreamOptions = .{};
 
     fn readFrameContext(r: anytype) !?decompress.FrameContext {
@@ -180,25 +179,30 @@ pub const Decompressor = struct {
         }
     }
 
-    pub const ZstdInfo = struct { n_frames: usize, total_output_size: usize };
+    pub const ZstdInfo = struct {
+        n_frames: usize,
+        total_output_size: usize,
+        min_buffer_size: usize,
+    };
 
     /// need to collect
     /// the number of frames (how many parallel works we need)
     /// the total output size decompressed (so we know how much memory to allocate)
     pub fn getInfo(source_buf: []u8) !ZstdInfo {
         var fbs = std.io.FixedBufferStream([]u8){ .buffer = source_buf, .pos = 0 };
-        var source_reader = fbs.reader();
-        var total_n_frames: usize = 0;
+        var reader = fbs.reader();
 
-        const initial_count = source_buf.len;
+        var total_n_frames: usize = 0;
+        var min_buffer_size: usize = 0;
         var total_output_memory: usize = 0;
+
         counting_loop: while (true) {
             // read the frame context (can parallelize this)
             var frame_context: ?decompress.FrameContext = null;
             while (frame_context == null) {
-                frame_context = readFrameContext(source_reader) catch |err| switch (err) {
+                frame_context = readFrameContext(reader) catch |err| switch (err) {
                     error.DictionaryIdFlagUnsupported => return error.DictionaryIdFlagUnsupported,
-                    error.EndOfStream => if (source_reader.context.pos == initial_count) {
+                    error.EndOfStream => if (reader.context.pos == source_buf.len) {
                         break :counting_loop;
                     } else {
                         return error.MalformedFrame;
@@ -208,24 +212,54 @@ pub const Decompressor = struct {
             }
             total_n_frames += 1;
             total_output_memory += frame_context.?.window_size;
+            min_buffer_size = @max(min_buffer_size, frame_context.?.window_size);
+
+            while (true) {
+                const header_bytes = reader.readBytesNoEof(3) catch
+                    return error.MalformedFrame;
+
+                const block_header = decompress.block.decodeBlockHeader(&header_bytes);
+                const block_size = block_header.block_size;
+                if (block_size == 0) continue;
+
+                var read_size: usize = switch (block_header.block_type) {
+                    .raw => block_size,
+                    .rle => 1,
+                    .compressed => block_size,
+                    .reserved => {
+                        return error.MalformedBlock;
+                    },
+                };
+                reader.skipBytes(read_size, .{}) catch {
+                    return error.MalformedFrame;
+                };
+                if (block_header.last_block) {
+                    if (frame_context.?.has_checksum) {
+                        reader.skipBytes(4, .{}) catch {
+                            return error.MalformedFrame;
+                        };
+                    }
+                    break;
+                }
+            }
         }
 
-        return .{ .n_frames = total_n_frames, .total_output_size = total_output_memory };
+        return .{
+            .n_frames = total_n_frames,
+            .total_output_size = total_output_memory,
+            .min_buffer_size = min_buffer_size,
+        };
     }
 
-    pub fn reader(self: *Self) Reader {
-        return .{ .context = self };
-    }
+    pub fn read(self: *Self, output: *MuxRingBuffer) !usize {
+        // TODO: support anytype output and add comptime to ensure fcns exist
+        if (self.pos == self.source_buf.len) {
+            return 0;
+        }
 
-    pub fn read(self: *Self, output_buf: []u8) ReaderError!usize {
-        // TODO: make these errors better
-        return read_(self, output_buf) catch ReaderError.EndOfStream;
-    }
-
-    pub fn read_(self: *Self, output_buf: []u8) !usize {
         // count number of blocks
         var fbs = std.io.FixedBufferStream([]u8){ .buffer = self.source_buf, .pos = self.pos };
-        var source_reader = fbs.reader();
+        var reader = fbs.reader();
 
         // mainnet: 101_384 (for incremental) 1_532_423 (for full)
         var total_n_blocks: usize = 0;
@@ -241,8 +275,8 @@ pub const Decompressor = struct {
             // read the frame context (can parallelize this)
             var frame_context: ?decompress.FrameContext = null;
             while (frame_context == null) {
-                frame_context = readFrameContext(source_reader) catch |err| switch (err) {
-                    error.EndOfStream => if (source_reader.context.pos == initial_count) {
+                frame_context = readFrameContext(reader) catch |err| switch (err) {
+                    error.EndOfStream => if (reader.context.pos == initial_count) {
                         break :counting_loop;
                     } else {
                         return error.MalformedFrame;
@@ -256,7 +290,7 @@ pub const Decompressor = struct {
             // read the corresponding blocks
             var frame_read_len: usize = 0;
             while (true) {
-                const header_bytes = source_reader.readBytesNoEof(3) catch
+                const header_bytes = reader.readBytesNoEof(3) catch
                     return error.MalformedFrame;
 
                 const block_header = decompress.block.decodeBlockHeader(&header_bytes);
@@ -273,14 +307,14 @@ pub const Decompressor = struct {
                 };
                 frame_read_len += read_size + 3;
 
-                source_reader.skipBytes(read_size, .{}) catch {
+                reader.skipBytes(read_size, .{}) catch {
                     return error.MalformedFrame;
                 };
                 total_n_blocks += 1;
 
                 if (block_header.last_block) {
                     if (frame_context.?.has_checksum) {
-                        source_reader.skipBytes(4, .{}) catch {
+                        reader.skipBytes(4, .{}) catch {
                             return error.MalformedFrame;
                         };
                     }
@@ -288,10 +322,8 @@ pub const Decompressor = struct {
                 }
             }
             try frame_read_lens.append(frame_read_len);
-
-            const frame_alloc_size = frame_context.?.window_size;
-            std.debug.assert(frame_read_len <= frame_alloc_size);
         }
+        std.debug.print("n_frames: {}\n", .{total_n_frames});
 
         const n_threads_bounded: usize = @min(self.n_threads, total_n_frames);
         var thread_pool = ThreadPool.init(.{
@@ -323,6 +355,7 @@ pub const Decompressor = struct {
         // reset the reader
         fbs.pos = 0;
 
+        var last_valid_pos: ?usize = null;
         var output_pos: usize = 0;
         var frame_index: usize = 0;
         var timer = try std.time.Timer.start();
@@ -330,9 +363,9 @@ pub const Decompressor = struct {
             // read the frame context
             var frame_context: ?decompress.FrameContext = null;
             while (frame_context == null) {
-                frame_context = readFrameContext(source_reader) catch |err| switch (err) {
+                frame_context = readFrameContext(reader) catch |err| switch (err) {
                     error.DictionaryIdFlagUnsupported => return error.DictionaryIdFlagUnsupported,
-                    error.EndOfStream => if (source_reader.context.pos == initial_count) {
+                    error.EndOfStream => if (reader.context.pos == initial_count) {
                         break :decompression_loop;
                     } else {
                         return error.MalformedFrame;
@@ -351,17 +384,25 @@ pub const Decompressor = struct {
             // copy output to buffer
             if (task_ptr.block_context) |*block_context| {
                 const len = block_context.buffer.len();
-                if (output_pos + len > output_buf.len) {
+                // TODO: support mid block decompression
+                if (output_pos + len > output.freeSpace()) {
                     block_context.deinit();
                     task_ptr.block_context = null;
-                    // done
+                    last_valid_pos = task_ptr.start_index; // restart from here on the next run
                     break :decompression_loop;
                 }
 
-                while (block_context.buffer.read()) |x| {
-                    output_buf[output_pos] = x;
-                    output_pos += 1;
+                // TODO: pulling out the RingBuffer should make this a lot faster
+                {
+                    output.mux.lock();
+                    defer output.mux.unlock();
+
+                    while (block_context.buffer.read()) |x| {
+                        output.inner.writeAssumeCapacity(x);
+                        output_pos += 1;
+                    }
                 }
+
                 block_context.deinit();
                 task_ptr.block_context = null;
             }
@@ -372,9 +413,11 @@ pub const Decompressor = struct {
                 options.window_size_max,
             );
 
-            const start_index = source_reader.context.pos;
+            const start_index = reader.context.pos;
             const end_index = start_index + frame_read_lens.items[frame_index];
-            defer source_reader.context.pos = end_index;
+            task_ptr.start_index = start_index;
+            defer reader.context.pos = end_index;
+
             task_ptr.source_buf = self.source_buf[start_index..end_index];
 
             task_ptr.done.store(false, std.atomic.Ordering.Release);
@@ -393,6 +436,8 @@ pub const Decompressor = struct {
         }
 
         // wait for all tasks (still need them ordered)
+        var ran_out_of_memory = last_valid_pos != null;
+
         for (0..tasks.len) |_| {
             var task = &tasks[task_i];
             defer task_i = (task_i + 1) % n_threads_bounded;
@@ -401,23 +446,74 @@ pub const Decompressor = struct {
             }
 
             if (task.block_context) |*block_context| {
-                const len = block_context.buffer.len();
-                if (output_pos + len > output_buf.len) {
+                if (ran_out_of_memory) {
                     block_context.deinit();
                     task.block_context = null;
                     continue;
+                } else {
+                    const len = block_context.buffer.len();
+                    if (output_pos + len > output.freeSpace()) {
+                        block_context.deinit();
+                        task.block_context = null;
+
+                        last_valid_pos = task.start_index;
+                        ran_out_of_memory = true;
+                        continue;
+                    }
                 }
 
-                while (block_context.buffer.read()) |x| {
-                    output_buf[output_pos] = x;
-                    output_pos += 1;
+                {
+                    output.mux.lock();
+                    defer output.mux.unlock();
+
+                    while (block_context.buffer.read()) |x| {
+                        output.inner.writeAssumeCapacity(x);
+                        output_pos += 1;
+                    }
                 }
                 block_context.deinit();
                 task.block_context = null;
             }
         }
 
+        if (last_valid_pos) |pos| {
+            self.pos = pos;
+        } else {
+            self.pos = reader.context.pos;
+        }
+
         return output_pos;
+    }
+};
+
+pub const MuxRingBuffer = struct {
+    inner: std.RingBuffer,
+    allocator: std.mem.Allocator,
+    is_done: bool = false,
+    mux: std.Thread.Mutex = .{},
+
+    pub fn init(allocator: std.mem.Allocator, inner_capacity: usize) !@This() {
+        return @This(){
+            .inner = try std.RingBuffer.init(allocator, inner_capacity),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.inner.deinit(self.allocator);
+    }
+
+    pub fn capacity(self: *@This()) usize {
+        return self.inner.data.len;
+    }
+
+    /// amount of space to write to
+    pub fn freeSpace(self: *@This()) usize {
+        self.mux.lock();
+        defer self.mux.unlock();
+
+        const free = self.inner.data.len - self.inner.len();
+        return free;
     }
 };
 
@@ -444,14 +540,15 @@ test "xstd.compress.zstandard: test decompression" {
     var std_result = try stream.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(std_result);
 
-    var d = Decompressor{ .allocator = allocator, .source_buf = memory };
-    var reader = d.reader();
+    var d = Decompressor{ .allocator = allocator, .source_buf = memory, .n_threads = 1 };
+    var buf = try allocator.create(MuxRingBuffer);
+    buf.* = try MuxRingBuffer.init(allocator, std_result.len);
+    defer {
+        buf.deinit();
+        allocator.destroy(buf);
+    }
 
-    var output_buf = try allocator.alloc(u8, std_result.len);
-    defer allocator.free(output_buf);
+    _ = try d.read(buf);
 
-    const i = try reader.read(output_buf[0..1024]);
-    _ = try reader.read(output_buf[i..]);
-
-    try std.testing.expectEqualSlices(u8, std_result, output_buf);
+    try std.testing.expectEqualSlices(u8, std_result, buf.inner.data);
 }
