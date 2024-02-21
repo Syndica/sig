@@ -706,7 +706,7 @@ pub const GossipService = struct {
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
 
             // initialize cluster data from crds values
-            entrypoints_identified = entrypoints_identified or self.identifyEntrypoints();
+            entrypoints_identified = entrypoints_identified or self.populateEntrypointsFromCrdsTable();
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
@@ -1546,7 +1546,7 @@ pub const GossipService = struct {
 
     /// Attempts to associate each entrypoint address with a contact info.
     /// Returns true if all entrypoints have been identified
-    fn identifyEntrypoints(self: *Self) bool {
+    fn populateEntrypointsFromCrdsTable(self: *Self) bool {
         var identified_all = true;
         var reader: ?RwMux(CrdsTable).RLockGuard = null;
         defer if (reader) |*r| r.unlock();
