@@ -182,10 +182,11 @@ pub const GossipService = struct {
 
         var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
 
-        var entrypointList = ArrayList(Entrypoint).init(allocator);
-        if (entrypoints) |eps| {
-            for (eps.items) |ep| try entrypointList.append(.{ .addr = ep });
-        }
+        const entrypoint_list = if (entrypoints) |eps| blk: {
+            var list = try ArrayList(Entrypoint).initCapacity(allocator, eps.items.len);
+            for (eps.items) |ep| try list.append(.{ .addr = ep });
+            break :blk list;
+        } else ArrayList(Entrypoint).init(allocator);
 
         return Self{
             .my_contact_info = my_contact_info,
@@ -202,7 +203,7 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
-            .entrypoints = entrypointList,
+            .entrypoints = entrypoint_list,
             .ping_cache_rw = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
