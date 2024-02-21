@@ -1548,11 +1548,12 @@ pub const GossipService = struct {
     /// Returns true if all entrypoints have been identified
     fn identifyEntrypoints(self: *Self) bool {
         var identified_all = true;
+        var reader: ?RwMux(CrdsTable).RLockGuard = null;
+        defer if (reader) |*r| r.unlock();
         for (self.entrypoints.items) |*entrypoint| {
             if (entrypoint.info == null) {
-                var reader = self.crds_table_rw.read();
-                defer reader.unlock();
-                entrypoint.info = reader.get().getContactInfoByGossipAddr(entrypoint.addr);
+                reader = reader orelse self.crds_table_rw.read();
+                entrypoint.info = reader.?.get().getContactInfoByGossipAddr(entrypoint.addr);
             }
             identified_all = identified_all and entrypoint.info == null;
         }
