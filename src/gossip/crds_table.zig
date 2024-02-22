@@ -437,6 +437,13 @@ pub const CrdsTable = struct {
     ///
     /// This frees the memory for any pointers in the CrdsData.
     /// Be sure that this CrdsData is not being used anywhere else when calling this.
+    ///
+    /// This method is not safe because neither CrdsTable nor CrdsValue
+    /// provide any guarantees that the CrdsValue being removed is not
+    /// also being accessed somewhere else in the code after this is called.
+    /// Since this frees the CrdsValue, any accesses of the CrdsValue
+    /// after this function is called will result in a segfault.
+    ///
     /// TODO: implement a safer approach to avoid dangling pointers, such as:
     ///  - removal buffer that is populated here and freed later
     ///  - reference counting for all crds values

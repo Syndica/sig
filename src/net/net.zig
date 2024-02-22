@@ -205,7 +205,7 @@ pub const SocketAddr = union(enum(u8)) {
     }
 
     /// returns:
-    /// - array: the string, plus some extra bytes at the end 
+    /// - array: the string, plus some extra bytes at the end
     /// - integer: length of the string within the array
     pub fn toString(self: Self) struct { [53]u8, usize } {
         var buf: [53]u8 = undefined;

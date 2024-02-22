@@ -492,6 +492,31 @@ pub const GossipService = struct {
             const protocol_messages = maybe_protocol_messages.?;
             defer {
                 for (protocol_messages) |*msg| {
+                    // Important: this uses shallowFree instead of bincode.free
+                    //
+                    // The message contains some messaging metadata plus a
+                    // payload of a CrdsValue. The metadata won't be needed
+                    // after this iteration is complete. The payload will be
+                    // needed since it is stored in the CrdsTable.
+                    //
+                    // bincode.free would free the entire message including the
+                    // payload. This would lead to a segfault if the data is
+                    // accessed from the CrdsTable later.
+                    //
+                    // Not freeing at all would lead to a memory leak of any
+                    // allocations in the metadata.
+                    //
+                    // The compromise is a "shallow" free that only frees the
+                    // messaging metadata. CrdsValue ownership will be
+                    // transferred to CrdsTable. The CrdsTable implementation
+                    // becomes responsible for freeing any CrdsValues when
+                    // needed.
+                    //
+                    // TODO: this approach is not ideal because it is difficult
+                    // to maintain. Another approach such as reference counting
+                    // would be safer. For more info, see:
+                    // - CrdsTable.remove
+                    // - https://github.com/Syndica/sig/pull/69
                     msg.message.shallowFree(self.allocator);
                 }
                 self.verified_incoming_channel.allocator.free(protocol_messages);
