@@ -151,7 +151,11 @@ fn gossip(_: []const []const u8) !void {
     contact_info.shred_version = loop: for (entrypoints.items) |entrypoint| {
         if (echo.requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
             if (response.shred_version) |shred_version| {
-                logger.infof("shred version: {}", .{shred_version.value});
+                var addr_str = entrypoint.toString();
+                logger.infof(
+                    "shred version: {} - from entrypoint ip echo: {s}",
+                    .{ shred_version.value, addr_str[0][0..addr_str[1]] },
+                );
                 break shred_version.value;
             }
         } else |_| {}

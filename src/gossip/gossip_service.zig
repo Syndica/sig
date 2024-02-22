@@ -1567,6 +1567,11 @@ pub const GossipService = struct {
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
                 if (info.shred_version != 0) {
+                    var addr_str = entrypoint.addr.toString();
+                    self.logger.infof(
+                        "shred version: {} - from entrypoint contact info: {s}",
+                        .{ info.shred_version, addr_str[0][0..addr_str[1]] },
+                    );
                     self.my_shred_version.store(info.shred_version, .Monotonic);
                     self.my_contact_info.shred_version = info.shred_version;
                     return true;

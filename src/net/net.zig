@@ -204,6 +204,16 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
+    /// returns:
+    /// - array: the string, plus some extra bytes at the end 
+    /// - integer: length of the string within the array
+    pub fn toString(self: Self) struct { [53]u8, usize } {
+        var buf: [53]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        self.toAddress().format("", .{}, stream.writer()) catch unreachable;
+        return .{ buf, stream.pos };
+    }
+
     pub fn isUnspecified(self: *const Self) bool {
         switch (self.*) {
             .V4 => |addr| {
