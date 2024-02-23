@@ -182,11 +182,11 @@ pub const GossipService = struct {
 
         var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
 
-        const entrypoint_list = if (entrypoints) |eps| blk: {
-            var list = try ArrayList(Entrypoint).initCapacity(allocator, eps.items.len);
-            for (eps.items) |ep| try list.append(.{ .addr = ep });
-            break :blk list;
-        } else ArrayList(Entrypoint).init(allocator);
+        var entrypoint_list = ArrayList(Entrypoint).init(allocator);
+        if (entrypoints) |eps| {
+            try entrypoint_list.ensureTotalCapacityPrecise(eps.items.len);
+            for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
+        }
 
         return Self{
             .my_contact_info = my_contact_info,
