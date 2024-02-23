@@ -69,6 +69,7 @@ pub const ContactInfo = struct {
     pub fn deinit(self: Self) void {
         self.addrs.deinit();
         self.sockets.deinit();
+        self.extensions.deinit();
     }
 
     pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !Self {

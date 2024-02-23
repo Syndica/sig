@@ -17,6 +17,9 @@ const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
+const node = @import("./node.zig");
+const ContactInfo = node.ContactInfo;
+
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
@@ -162,6 +165,10 @@ pub const CrdsTable = struct {
         // entry doesnt exist
         if (!result.found_existing) {
             switch (value.data) {
+                .ContactInfo => |*info| {
+                    try self.contact_infos.put(entry_index, {});
+                    try self.shred_versions.put(info.pubkey, info.shred_version);
+                },
                 .LegacyContactInfo => |*info| {
                     try self.contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
@@ -387,13 +394,14 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn getAllContactInfos(self: *const Self) error{OutOfMemory}!std.ArrayList(LegacyContactInfo) {
+    /// See doc for CrdsData.asContactInfo for explanation about why an arena is needed.
+    pub fn getAllContactInfos(self: *const Self, arena: *std.heap.ArenaAllocator) !std.ArrayList(ContactInfo) {
         const n_contact_infos = self.contact_infos.count();
-        var contact_infos = try std.ArrayList(LegacyContactInfo).initCapacity(self.allocator, n_contact_infos);
-        var contact_indexs = self.contact_infos.keys();
-        for (contact_indexs) |index| {
-            const entry: CrdsVersionedValue = self.store.values()[index];
-            contact_infos.appendAssumeCapacity(entry.value.data.LegacyContactInfo);
+        var contact_infos = try std.ArrayList(ContactInfo).initCapacity(self.allocator, n_contact_infos);
+        for (self.contact_infos.keys()) |index| {
+            const crds_data: CrdsData = self.store.values()[index].value.data;
+            const contact_info = try crds_data.asContactInfo(arena);
+            contact_infos.appendAssumeCapacity(contact_info);
         }
 
         return contact_infos;
@@ -483,6 +491,10 @@ pub const CrdsTable = struct {
         self.shards.remove(entry_index, &hash);
 
         switch (versioned_value.value.data) {
+            .ContactInfo => {
+                var did_remove = self.contact_infos.swapRemove(entry_index);
+                std.debug.assert(did_remove);
+            },
             .LegacyContactInfo => {
                 var did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
@@ -527,6 +539,11 @@ pub const CrdsTable = struct {
 
             // these also should not fail since there are no allocations - just changing the value
             switch (versioned_value.value.data) {
+                .ContactInfo => {
+                    var did_remove = self.contact_infos.swapRemove(table_len);
+                    std.debug.assert(did_remove);
+                    self.contact_infos.put(entry_index, {}) catch unreachable;
+                },
                 .LegacyContactInfo => {
                     var did_remove = self.contact_infos.swapRemove(table_len);
                     std.debug.assert(did_remove);
@@ -692,12 +709,18 @@ pub const CrdsTable = struct {
     pub fn getContactInfoByGossipAddr(
         self: *const Self,
         gossip_addr: SocketAddr,
-    ) ?LegacyContactInfo {
+    ) !?ContactInfo {
         var contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
             const entry: CrdsVersionedValue = self.store.values()[index];
-            if (entry.value.data.LegacyContactInfo.gossip.eql(&gossip_addr)) {
-                return entry.value.data.LegacyContactInfo;
+            switch (entry.value.data) {
+                .ContactInfo => |ci| if (ci.getSocket(node.SOCKET_TAG_GOSSIP)) |addr| {
+                    if (addr.eql(&gossip_addr)) return ci;
+                },
+                .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {
+                    return try lci.toContactInfo(self.allocator);
+                },
+                else => continue,
             }
         }
         return null;
@@ -727,11 +750,11 @@ pub const HashTimeQueue = struct {
     }
 
     pub fn insert(self: *Self, v: Hash, now: u64) error{OutOfMemory}!void {
-        var node = HashAndTime{
+        var hat = HashAndTime{
             .hash = v,
             .timestamp = now,
         };
-        try self.queue.append(node);
+        try self.queue.append(hat);
     }
 
     pub fn trim(self: *Self, oldest_timestamp: u64) error{OutOfMemory}!void {
@@ -1004,8 +1027,11 @@ test "gossip.crds_table: insert and get contact_info" {
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
 
-    var nodes_array = try crds_table.getAllContactInfos();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var nodes_array = try crds_table.getAllContactInfos(&arena);
     defer nodes_array.deinit();
+
     try std.testing.expect(nodes_array.items.len == 1);
 
     // test re-insertion
