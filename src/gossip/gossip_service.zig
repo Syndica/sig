@@ -1571,14 +1571,15 @@ pub const GossipService = struct {
 
     /// Attempts to associate each entrypoint address with a contact info.
     /// Returns true if all entrypoints have been identified
+    ///
+    /// Acquires the crds table lock regardless of whether the crds table is used.
     fn populateEntrypointsFromCrdsTable(self: *Self) bool {
         var identified_all = true;
-        var reader: ?RwMux(CrdsTable).RLockGuard = null;
-        defer if (reader) |*r| r.unlock();
+        var reader = self.crds_table_rw.read();
+        defer reader.unlock();
         for (self.entrypoints.items) |*entrypoint| {
             if (entrypoint.info == null) {
-                reader = reader orelse self.crds_table_rw.read();
-                entrypoint.info = reader.?.get().getContactInfoByGossipAddr(entrypoint.addr);
+                entrypoint.info = reader.get().getContactInfoByGossipAddr(entrypoint.addr);
             }
             identified_all = identified_all and entrypoint.info == null;
         }
