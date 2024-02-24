@@ -19,6 +19,9 @@ const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArr
 pub const sysvars = @import("./sysvars.zig");
 const readDirectory = @import("../utils/directory.zig").readDirectory;
 
+const ZstdReader = @import("../zstd/reader.zig").Reader;
+const parallelUntarToFileSystem = @import("../utils/tar.zig").parallelUntarToFileSystem;
+
 pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 
 pub const StakeHistoryEntry = struct {
@@ -946,8 +949,14 @@ pub const Snapshots = struct {
 };
 
 /// unpacks a .tar.zstd file into the given directory
-pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_dir: std.fs.Dir) !void {
-    // PERF: change this to mmap file - os.read is slow
+pub fn parallelUnpackZstdTarBall(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    output_dir: std.fs.Dir,
+    n_threads: usize,
+    full_snapshot: bool,
+) !void {
+    std.debug.print("unpacking {s}\n", .{path});
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
@@ -961,12 +970,16 @@ pub fn unpackZstdTarBall(allocator: std.mem.Allocator, path: []const u8, output_
         file.handle,
         0,
     );
-    var ball_contents = std.io.FixedBufferStream([]u8){ .buffer = memory, .pos = 0 };
-
     var timer = try std.time.Timer.start();
-    var stream = std.compress.zstd.decompressStream(allocator, ball_contents.reader());
-    // var stream = std.compress.zstd.decompressStream(allocator, file.reader());
-    try std.tar.pipeToFileSystem(output_dir, stream.reader(), .{ .mode_mode = .ignore });
+    var tar_stream = try ZstdReader.init(memory);
+    const n_files_estimate: usize = if (full_snapshot) 400_000 else 100_000;
+    try parallelUntarToFileSystem(
+        allocator,
+        output_dir,
+        tar_stream.reader(),
+        n_threads,
+        n_files_estimate,
+    );
     std.debug.print("unpacked {s} in {s}\n", .{ path, std.fmt.fmtDuration(timer.read()) });
 }
 
