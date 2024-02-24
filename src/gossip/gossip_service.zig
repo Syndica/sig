@@ -1604,7 +1604,7 @@ pub const GossipService = struct {
 
         for (self.entrypoints.items) |*entrypoint| {
             if (entrypoint.info == null) {
-                entrypoint.info = crds_table.getContactInfoByGossipAddr(entrypoint.addr);
+                entrypoint.info = try crds_table.getContactInfoByGossipAddr(entrypoint.addr);
             }
             identified_all = identified_all and entrypoint.info != null;
         }
@@ -1690,42 +1690,35 @@ pub const GossipService = struct {
     ) ![]ContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
+        // filter only valid gossip addresses
+        const GOSSIP_ACTIVE_TIMEOUT = 60 * std.time.ms_per_s;
+        const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
+
         // * 2 bc we might filter out some
-        var buf: [MAX_SIZE * 2]crds.CrdsVersionedValue = undefined;
+        var buf: [MAX_SIZE * 2]node.ContactInfo = undefined;
         const contact_infos = blk: {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
 
             var crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.getContactInfos(&buf);
+            break :blk crds_table.getContactInfos(&buf, too_old_ts);
         };
 
         if (contact_infos.len == 0) {
             return nodes[0..0];
         }
 
-        // filter only valid gossip addresses
-        const GOSSIP_ACTIVE_TIMEOUT = 60 * std.time.ms_per_s;
-        const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
-
         var node_index: usize = 0;
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena.deinit();
         for (contact_infos) |contact_info| {
-            const peer_info = try contact_info.value.data.asContactInfo(&arena);
-            const peer_gossip_addr = peer_info.getSocket(node.SOCKET_TAG_GOSSIP);
+            const peer_gossip_addr = contact_info.getSocket(node.SOCKET_TAG_GOSSIP);
 
-            // filter inactive nodes
-            if (contact_info.timestamp_on_insertion < too_old_ts) {
-                continue;
-            }
             // filter self
-            if (contact_info.value.id().equals(&self.my_pubkey)) {
+            if (contact_info.pubkey.equals(&self.my_pubkey)) {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
             const my_shred_version = self.my_shred_version.load(.Monotonic);
-            if (my_shred_version != 0 and my_shred_version != peer_info.shred_version) {
+            if (my_shred_version != 0 and my_shred_version != contact_info.shred_version) {
                 continue;
             }
             // filter on valid gossip address
@@ -1733,7 +1726,7 @@ pub const GossipService = struct {
                 crds.sanitizeSocket(&addr) catch continue;
             } else continue;
 
-            nodes[node_index] = peer_info;
+            nodes[node_index] = contact_info;
             node_index += 1;
 
             if (node_index == nodes.len) {
@@ -2548,12 +2541,12 @@ test "gossip.gossip_service: process contact_info push packet" {
     try verified_channel.send(ping_msg);
 
     // correct insertion into table
-    var buf2: [100]crds.CrdsVersionedValue = undefined;
+    var buf2: [100]node.ContactInfo = undefined;
     std.time.sleep(std.time.ns_per_s);
 
     {
         var lg = gossip_service.crds_table_rw.read();
-        var res = lg.get().getContactInfos(&buf2);
+        var res = lg.get().getContactInfos(&buf2, 0);
         try std.testing.expect(res.len == 1);
         lg.unlock();
     }

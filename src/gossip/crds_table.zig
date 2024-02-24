@@ -87,6 +87,10 @@ pub const CrdsTable = struct {
     duplicate_shreds: AutoArrayHashMap(usize, usize),
     shred_versions: AutoHashMap(Pubkey, u16),
 
+    /// Stores a converted ContactInfo for every LegacyContactInfo in the store.
+    /// This reduces compute and memory allocations vs converting when needed.
+    converted_contact_infos: AutoArrayHashMap(Pubkey, ContactInfo),
+
     // tracking for cursor to index
     entries: AutoArrayHashMap(u64, usize),
 
@@ -115,6 +119,7 @@ pub const CrdsTable = struct {
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
             .epoch_slots = AutoArrayHashMap(usize, usize).init(allocator),
             .duplicate_shreds = AutoArrayHashMap(usize, usize).init(allocator),
+            .converted_contact_infos = AutoArrayHashMap(Pubkey, ContactInfo).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
             .shards = try CrdsShards.init(allocator),
@@ -140,6 +145,12 @@ pub const CrdsTable = struct {
             entry.value_ptr.deinit();
         }
         self.pubkey_to_values.deinit();
+
+        var citer = self.converted_contact_infos.iterator();
+        while (citer.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.converted_contact_infos.deinit();
     }
 
     pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
@@ -172,6 +183,8 @@ pub const CrdsTable = struct {
                 .LegacyContactInfo => |*info| {
                     try self.contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
+                    const contact_info = try info.toContactInfo(self.allocator);
+                    try self.converted_contact_infos.put(info.id, contact_info);
                 },
                 .Vote => {
                     try self.votes.put(self.cursor, entry_index);
@@ -209,6 +222,9 @@ pub const CrdsTable = struct {
             switch (value.data) {
                 .LegacyContactInfo => |*info| {
                     try self.shred_versions.put(info.id, info.shred_version);
+                    const contact_info = try info.toContactInfo(self.allocator);
+                    var old_info = try self.converted_contact_infos.fetchPut(info.id, contact_info);
+                    old_info.?.value.deinit();
                 },
                 .Vote => {
                     var did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
@@ -394,20 +410,11 @@ pub const CrdsTable = struct {
         );
     }
 
-    /// See doc for CrdsData.asContactInfo for explanation about why an arena is needed.
-    pub fn getAllContactInfos(self: *const Self, arena: *std.heap.ArenaAllocator) !std.ArrayList(ContactInfo) {
-        const n_contact_infos = self.contact_infos.count();
-        var contact_infos = try std.ArrayList(ContactInfo).initCapacity(self.allocator, n_contact_infos);
-        for (self.contact_infos.keys()) |index| {
-            const crds_data: CrdsData = self.store.values()[index].value.data;
-            const contact_info = try crds_data.asContactInfo(arena);
-            contact_infos.appendAssumeCapacity(contact_info);
-        }
-
-        return contact_infos;
-    }
-
-    pub fn getContactInfos(self: *const Self, buf: []CrdsVersionedValue) []CrdsVersionedValue {
+    pub fn getContactInfos(
+        self: *const Self,
+        buf: []ContactInfo,
+        minimum_insertion_timestamp: u64,
+    ) []ContactInfo {
         const store_values = self.store.values();
         const contact_indexs = self.contact_infos.iterator().keys;
         const size = @min(self.contact_infos.count(), buf.len);
@@ -415,7 +422,14 @@ pub const CrdsTable = struct {
         for (0..size) |i| {
             const index = contact_indexs[i];
             const entry = store_values[index];
-            buf[i] = entry;
+            if (entry.timestamp_on_insertion >= minimum_insertion_timestamp) {
+                const contact_info = switch (entry.value.data) {
+                    .LegacyContactInfo => |lci| self.converted_contact_infos.get(lci.id) orelse unreachable,
+                    .ContactInfo => |ci| ci,
+                    else => unreachable,
+                };
+                buf[i] = contact_info;
+            }
         }
         return buf[0..size];
     }
@@ -495,9 +509,11 @@ pub const CrdsTable = struct {
                 var did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
             },
-            .LegacyContactInfo => {
+            .LegacyContactInfo => |lci| {
                 var did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
+                var contact_info = self.converted_contact_infos.fetchSwapRemove(lci.id).?.value;
+                contact_info.deinit();
             },
             .Vote => {
                 var did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
@@ -1022,17 +1038,10 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0);
 
     // test retrieval
-    var buf: [100]CrdsVersionedValue = undefined;
-    var nodes = crds_table.getContactInfos(&buf);
+    var buf: [100]ContactInfo = undefined;
+    var nodes = crds_table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.id.equals(&id));
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var nodes_array = try crds_table.getAllContactInfos(&arena);
-    defer nodes_array.deinit();
-
-    try std.testing.expect(nodes_array.items.len == 1);
+    try std.testing.expect(nodes[0].pubkey.equals(&id));
 
     // test re-insertion
     const result = crds_table.insert(crds_value, 0);
@@ -1044,7 +1053,7 @@ test "gossip.crds_table: insert and get contact_info" {
     try crds_table.insert(crds_value, 0);
 
     // check retrieval
-    nodes = crds_table.getContactInfos(&buf);
+    nodes = crds_table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].value.data.LegacyContactInfo.wallclock == v);
+    try std.testing.expect(nodes[0].wallclock == v);
 }

@@ -490,21 +490,6 @@ pub const CrdsData = union(enum(u32)) {
             },
         }
     }
-
-    /// You are certain this is either LegacyContactInfo or ContactInfo,
-    /// and you want it converted to ContactInfo.
-    /// 
-    /// This specifically requires an arena because there is no way to know
-    /// if the returned item needs to be freed, or if it is owned by the
-    /// CrdsTable. You should not deinit the ContactInfo. Instead, deinit
-    /// the arena when you are done with the ContactInfo
-    pub fn asContactInfo(self: *const @This(), arena: *std.heap.ArenaAllocator) !ContactInfo {
-        return switch (self.*) {
-            .LegacyContactInfo => |lci| try lci.toContactInfo(arena.allocator()),
-            .ContactInfo => |ci| ci,
-            else => error.NotContactInfo,
-        };
-    }
 };
 
 pub const Vote = struct {
