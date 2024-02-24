@@ -722,7 +722,7 @@ pub const CrdsTable = struct {
         return output;
     }
 
-    pub fn getContactInfoByGossipAddr(
+    pub fn getOwnedContactInfoByGossipAddr(
         self: *const Self,
         gossip_addr: SocketAddr,
     ) !?ContactInfo {
@@ -731,7 +731,7 @@ pub const CrdsTable = struct {
             const entry: CrdsVersionedValue = self.store.values()[index];
             switch (entry.value.data) {
                 .ContactInfo => |ci| if (ci.getSocket(node.SOCKET_TAG_GOSSIP)) |addr| {
-                    if (addr.eql(&gossip_addr)) return ci;
+                    if (addr.eql(&gossip_addr)) return try ci.clone();
                 },
                 .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {
                     return try lci.toContactInfo(self.allocator);

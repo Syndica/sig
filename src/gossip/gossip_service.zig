@@ -1604,7 +1604,7 @@ pub const GossipService = struct {
 
         for (self.entrypoints.items) |*entrypoint| {
             if (entrypoint.info == null) {
-                entrypoint.info = try crds_table.getContactInfoByGossipAddr(entrypoint.addr);
+                entrypoint.info = try crds_table.getOwnedContactInfoByGossipAddr(entrypoint.addr);
             }
             identified_all = identified_all and entrypoint.info != null;
         }

@@ -208,6 +208,20 @@ pub const ContactInfo = struct {
             }
         }
     }
+
+    pub fn clone(self: *const Self) error{OutOfMemory}!Self {
+        return .{
+            .pubkey = self.pubkey,
+            .wallclock = self.wallclock,
+            .outset = self.outset,
+            .shred_version = self.shred_version,
+            .version = self.version,
+            .addrs = try self.addrs.clone(),
+            .sockets = try self.sockets.clone(),
+            .extensions = try self.extensions.clone(),
+            .cache = self.cache,
+        };
+    }
 };
 
 /// This exists for future proofing to allow easier additions to ContactInfo.
