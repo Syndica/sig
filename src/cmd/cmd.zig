@@ -164,7 +164,7 @@ fn gossip(_: []const []const u8) !void {
 fn spawnMetrics(allocator: std.mem.Allocator, logger: Logger) !std.Thread {
     var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
     logger.infof("metrics port: {d}\n", .{metrics_port});
-    const registry = globalRegistry(allocator);
+    const registry = globalRegistry();
     return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }
 

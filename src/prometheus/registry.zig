@@ -29,12 +29,11 @@ pub const GetMetricError = error{
 /// Global registry singleton for convenience.
 ///
 /// The registry is initialized the first time this is called
-/// and reused for future calls. The passed allocator is only
-/// used if the registry needs to be initialized.
-pub fn globalRegistry(allocator: ?std.mem.Allocator) *Registry(.{}) {
+/// and reused for future calls.
+pub fn globalRegistry() *Registry(.{}) {
     return global_registry_owned.getOrInit(
         Registry(.{}).init,
-        .{allocator orelse gpa.allocator()},
+        .{gpa.allocator()},
     );
 }
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
