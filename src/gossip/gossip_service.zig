@@ -29,6 +29,8 @@ const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const CrdsValue = crds.CrdsValue;
+const node = @import("node.zig");
+const ContactInfo = node.ContactInfo;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -105,7 +107,7 @@ pub const GossipService = struct {
     gossip_socket: UdpSocket,
     /// This contact info is mutated by the buildMessages thread, so it must
     /// only be read by that thread, or it needs a synchronization mechanism.
-    my_contact_info: LegacyContactInfo,
+    my_contact_info: ContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
     my_shred_version: std.atomic.Atomic(u16),
@@ -140,12 +142,12 @@ pub const GossipService = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        my_contact_info: LegacyContactInfo,
+        my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         entrypoints: ?ArrayList(SocketAddr),
         exit: *AtomicBool,
         logger: Logger,
-    ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
+    ) error{ GossipAddrUnspecified, OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_incoming_channel = PacketBatchChannel.init(allocator, 10000);
         var packet_outgoing_channel = PacketBatchChannel.init(allocator, 10000);
         var verified_incoming_channel = ProtocolChannel.init(allocator, 10000);
@@ -172,7 +174,7 @@ pub const GossipService = struct {
         var active_set = ActiveSet.init(allocator);
 
         // bind the socket
-        const gossip_address = my_contact_info.gossip;
+        const gossip_address = my_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse return error.GossipAddrUnspecified;
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
         gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT) catch return error.SocketSetTimeoutFailed; // 1 second
@@ -180,7 +182,7 @@ pub const GossipService = struct {
         var failed_pull_hashes = HashTimeQueue.init(allocator);
         var push_msg_q = ArrayList(CrdsValue).init(allocator);
 
-        var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
+        var echo_server = echo.Server.init(allocator, gossip_address.port(), logger, exit);
 
         var entrypoint_list = ArrayList(Entrypoint).init(allocator);
         if (entrypoints) |eps| {
@@ -555,6 +557,17 @@ pub const GossipService = struct {
                                     continue;
                                 }
                             },
+                            .ContactInfo => |*data| {
+                                if (data.pubkey.equals(&self.my_pubkey)) {
+                                    // talking to myself == ignore
+                                    continue;
+                                }
+                                // Allow spy nodes with shred-verion == 0 to pull from other nodes.
+                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
+                                    // non-matching shred version
+                                    continue;
+                                }
+                            },
                             // only contact info supported
                             else => continue,
                         }
@@ -738,8 +751,11 @@ pub const GossipService = struct {
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
-                var my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
-                    .LegacyContactInfo = self.my_contact_info,
+                const my_legacy_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                    .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
+                }, &self.my_keypair);
+                const my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                    .ContactInfo = self.my_contact_info,
                 }, &self.my_keypair);
 
                 // push contact info
@@ -749,6 +765,7 @@ pub const GossipService = struct {
                     var push_msg_queue: *ArrayList(CrdsValue) = push_msg_queue_lock.mut();
 
                     try push_msg_queue.append(my_contact_info_value);
+                    try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
                 self.rotateActiveSet() catch @panic("out of memory");
@@ -998,7 +1015,8 @@ pub const GossipService = struct {
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
         const my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
-            .LegacyContactInfo = self.my_contact_info,
+            // TODO: ensure consistency labs/anza client (will need to be upgraded at some point)
+            .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
         }, &self.my_keypair);
 
         if (num_peers != 0) {
@@ -1688,7 +1706,7 @@ pub const GossipService = struct {
 
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
-            const peer_info = contact_info.value.data.LegacyContactInfo;
+            const peer_info = contact_info.value.data.asLegacyContactInfo();
             const peer_gossip_addr = peer_info.gossip;
 
             // filter inactive nodes
@@ -2614,9 +2632,9 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var endpoint = address.toEndpoint();
 
         var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
-        var contact_info = LegacyContactInfo.default(pubkey);
+        var contact_info = try LegacyContactInfo.default(pubkey).toContactInfo(allocator);
         contact_info.shred_version = 19;
-        contact_info.gossip = address;
+        try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, address);
 
         // var logger = Logger.init(allocator, .debug);
         // defer logger.deinit();

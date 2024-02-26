@@ -14,6 +14,9 @@ const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const global_registry = @import("../prometheus/registry.zig").global_registry;
 const Registry = @import("../prometheus/registry.zig").Registry;
+const node = @import("../gossip/node.zig");
+const ContactInfo = node.ContactInfo;
+const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -120,8 +123,8 @@ fn gossip(_: []const []const u8) !void {
 
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = gossip_address;
+    var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
+    try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, gossip_address);
 
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     defer entrypoints.deinit();

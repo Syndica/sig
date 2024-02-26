@@ -15,6 +15,7 @@ const Logger = @import("../trace/log.zig").Logger;
 const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
+const node = @import("node.zig");
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
@@ -278,9 +279,9 @@ pub fn main() !void {
     var fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
 
     var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
-    var fuzz_contact_info = LegacyContactInfo.default(fuzz_pubkey);
+    var fuzz_contact_info = try LegacyContactInfo.default(fuzz_pubkey).toContactInfo(allocator);
     fuzz_contact_info.shred_version = 19;
-    fuzz_contact_info.gossip = fuzz_address;
+    try fuzz_contact_info.setSocket(node.SOCKET_TAG_GOSSIP, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(

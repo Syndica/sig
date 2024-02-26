@@ -166,6 +166,10 @@ pub const CrdsTable = struct {
                     try self.contact_infos.put(entry_index, {});
                     try self.shred_versions.put(info.id, info.shred_version);
                 },
+                .ContactInfo => |*info| {
+                    try self.contact_infos.put(entry_index, {});
+                    try self.shred_versions.put(info.pubkey, info.shred_version);
+                },
                 .Vote => {
                     try self.votes.put(self.cursor, entry_index);
                 },
@@ -393,7 +397,7 @@ pub const CrdsTable = struct {
         var contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
             const entry: CrdsVersionedValue = self.store.values()[index];
-            contact_infos.appendAssumeCapacity(entry.value.data.LegacyContactInfo);
+            contact_infos.appendAssumeCapacity(entry.value.data.asLegacyContactInfo());
         }
 
         return contact_infos;
@@ -487,6 +491,10 @@ pub const CrdsTable = struct {
                 var did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
             },
+            .ContactInfo => {
+                var did_remove = self.contact_infos.swapRemove(entry_index);
+                std.debug.assert(did_remove);
+            },
             .Vote => {
                 var did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
                 std.debug.assert(did_remove);
@@ -528,6 +536,11 @@ pub const CrdsTable = struct {
             // these also should not fail since there are no allocations - just changing the value
             switch (versioned_value.value.data) {
                 .LegacyContactInfo => {
+                    var did_remove = self.contact_infos.swapRemove(table_len);
+                    std.debug.assert(did_remove);
+                    self.contact_infos.put(entry_index, {}) catch unreachable;
+                },
+                .ContactInfo => {
                     var did_remove = self.contact_infos.swapRemove(table_len);
                     std.debug.assert(did_remove);
                     self.contact_infos.put(entry_index, {}) catch unreachable;
@@ -696,8 +709,9 @@ pub const CrdsTable = struct {
         var contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
             const entry: CrdsVersionedValue = self.store.values()[index];
-            if (entry.value.data.LegacyContactInfo.gossip.eql(&gossip_addr)) {
-                return entry.value.data.LegacyContactInfo;
+            const info = entry.value.data.asLegacyContactInfo();
+            if (info.gossip.eql(&gossip_addr)) {
+                return info;
             }
         }
         return null;
