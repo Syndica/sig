@@ -29,8 +29,7 @@ pub const GetMetricError = error{
 /// Global registry singleton for convenience.
 ///
 /// The registry is initialized the first time this is called
-/// and reused for future calls. The passed allocator is only
-/// used if the registry needs to be initialized.
+/// and reused for future calls.
 pub fn globalRegistry() *Registry(.{}) {
     return global_registry_owned.getOrInit(
         Registry(.{}).init,
