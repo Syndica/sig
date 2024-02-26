@@ -37,7 +37,7 @@ const Bank = @import("./bank.zig").Bank;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
 
 const SnapshotPaths = @import("./snapshots.zig").SnapshotPaths;
-const Snapshots = @import("./snapshots.zig").Snapshots;
+const AllSnapshotFields = @import("./snapshots.zig").AllSnapshotFields;
 const unpackZstdTarBall = @import("./snapshots.zig").unpackZstdTarBall;
 
 const Logger = @import("../trace/log.zig").Logger;
@@ -307,7 +307,7 @@ pub const AccountsDB = struct {
             }
         }
 
-        self.logger.infof("reading and binning accounts...\n", .{});
+        self.logger.infof("reading and binning accounts...", .{});
         var handles = try spawnThreadTasks(
             self.allocator,
             parseAndBinAccountFiles,
@@ -845,6 +845,8 @@ pub const AccountsDB = struct {
         try self.storage.file_map.put(@as(u32, @intCast(account_file.id)), account_file.*);
 
         // allocate enough memory here
+        var timer = try std.time.Timer.start();
+
         var total_accounts: usize = 0;
         for (bin_counts, 0..) |count, bin_index| {
             if (count > 0) {
@@ -853,6 +855,8 @@ pub const AccountsDB = struct {
                 total_accounts += count;
             }
         }
+        std.debug.print("bin counting: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
 
         var pubkey_counts = try PubkeyCountMap.initCapacity(self.allocator, total_accounts);
         defer pubkey_counts.deinit();
@@ -876,6 +880,8 @@ pub const AccountsDB = struct {
             }
             offset = offset + result.account_len;
         }
+        std.debug.print("pubkey counting: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
 
         const account_references_size = total_accounts * @sizeOf(AccountRef);
         var account_refs_memory = try self.allocator.alloc(u8, account_references_size);
@@ -919,6 +925,8 @@ pub const AccountsDB = struct {
             );
             offset = offset + account.len;
         }
+        std.debug.print("putting: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        timer.reset();
     }
 
     /// writes a batch of accounts to storage and updates the index
@@ -1253,13 +1261,13 @@ pub const DiskMemoryAllocator = struct {
             std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
-        self.count += 1;
 
         var file = std.fs.cwd().createFile(filepath, .{ .read = true }) catch |err| {
             std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
         defer file.close();
+        self.count += 1;
 
         const aligned_size = std.mem.alignForward(usize, n, std.mem.page_size);
         const file_size = (file.stat() catch |err| {
@@ -1358,7 +1366,8 @@ pub fn FastMap(
 ) type {
     return struct {
         groups: [][GROUP_SIZE]KeyValue,
-        states: [][GROUP_SIZE]State,
+        // states: [][GROUP_SIZE]State,
+        states: []@Vector(GROUP_SIZE, u8),
         bit_mask: usize,
         // underlying memory
         memory: []u8,
@@ -1421,7 +1430,8 @@ pub fn FastMap(
 
                 const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
-                const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
+                // const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
+                const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 self._capacity = n_groups * GROUP_SIZE;
@@ -1443,7 +1453,8 @@ pub fn FastMap(
 
                 const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
-                const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
+                const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
+                // const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 var new_self = Self{
@@ -1492,7 +1503,8 @@ pub fn FastMap(
                         return null;
                     }
 
-                    const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[it.group_index]);
+                    // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[it.group_index]);
+                    const states = self.states[it.group_index];
                     const occupied_states = free_state != states;
 
                     if (@reduce(.Or, occupied_states)) {
@@ -1546,7 +1558,8 @@ pub fn FastMap(
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+                // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+                const states = self.states[group_index];
 
                 // PERF: SIMD eq check: search for a match
                 var match_vec = search_state == states;
@@ -1586,7 +1599,8 @@ pub fn FastMap(
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+                // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+                const states = self.states[group_index];
 
                 // if theres an free then insert
                 const free_vec = free_state == states;
@@ -1600,7 +1614,7 @@ pub fn FastMap(
                         .key = key,
                         .value = value,
                     };
-                    self.states[group_index][free_index] = key_state;
+                    self.states[group_index][free_index] = @bitCast(key_state);
                     self._count += 1;
                     return;
                 }
@@ -1628,7 +1642,8 @@ pub fn FastMap(
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
+                // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]); // 1)
+                const states = self.states[group_index];
 
                 // SIMD eq search for a match (get)
                 var match_vec = search_state == states;
@@ -1651,8 +1666,8 @@ pub fn FastMap(
                     const free_index = @reduce(.Min, indices);
 
                     // occupy it
-                    self.groups[group_index][free_index].key = key;
-                    self.states[group_index][free_index] = key_state;
+                    self.groups[group_index][free_index].key = key; // 2)
+                    self.states[group_index][free_index] = @bitCast(key_state);
                     self._count += 1;
                     return .{
                         .found_existing = false,
@@ -1969,9 +1984,11 @@ pub fn main() !void {
 
     const n_threads_snapshot_unpack = 20;
     const disk_index_dir: ?[]const u8 = "test_data/tmp";
+    // const disk_index_dir: ?[]const u8 = null;
     const index_ram_capacity = 100_000;
-    // const snapshot_dir = "../snapshots/";
-    const snapshot_dir = "test_data/";
+    const force_unpack_snapshot = false;
+    const snapshot_dir = "../snapshots/";
+    // const snapshot_dir = "test_data/";
 
     var logger = Logger.init(allocator, Level.debug);
     logger.spawn();
@@ -1997,13 +2014,19 @@ pub fn main() !void {
     );
     defer allocator.free(accounts_path);
 
+    var accounts_path_exists = true;
+    std.fs.cwd().access(accounts_path, .{}) catch {
+        accounts_path_exists = false;
+    };
+    const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
+
     var snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
     if (snapshot_paths.incremental_snapshot == null) {
         std.debug.print("no incremental snapshot found\n", .{});
     }
 
-    std.fs.cwd().access(accounts_path, .{}) catch {
-        std.debug.print("accounts/ not found ... unpacking snapshots...\n", .{});
+    if (should_unpack_snapshot) {
+        std.debug.print("unpacking snapshots...\n", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
         var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
         defer snapshot_dir_iter.close();
@@ -2026,20 +2049,20 @@ pub fn main() !void {
                 false,
             );
         }
-    };
+    }
 
     var full_timer = try std.time.Timer.start();
     var timer = try std.time.Timer.start();
 
     std.debug.print("reading snapshots...\n", .{});
-    var snapshots = try Snapshots.fromPaths(allocator, snapshot_dir, snapshot_paths);
+    var snapshots = try AllSnapshotFields.fromPaths(allocator, snapshot_dir, snapshot_paths);
     defer snapshots.deinit(allocator);
     std.debug.print("read snapshots in {s}\n", .{std.fmt.fmtDuration(timer.read())});
     const full_snapshot = snapshots.full;
 
     // load and validate
     std.debug.print("initializing accounts-db...\n", .{});
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var accounts_db = try AccountsDB.init(allocator, logger, AccountsDBConfig{
         .index_ram_capacity = index_ram_capacity,
         .disk_index_dir = disk_index_dir,
     });
@@ -2095,7 +2118,7 @@ pub fn main() !void {
     std.debug.print("done!\n", .{});
 }
 
-fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, Snapshots } {
+fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
     var allocator = std.testing.allocator;
@@ -2117,7 +2140,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, Snapshots } {
     };
 
     var snapshot_paths = try SnapshotPaths.find(allocator, dir_path);
-    var snapshots = try Snapshots.fromPaths(allocator, dir_path, snapshot_paths);
+    var snapshots = try AllSnapshotFields.fromPaths(allocator, dir_path, snapshot_paths);
 
     var disk_dir: ?[]const u8 = null;
     var disk_capacity: usize = 0;
@@ -2153,7 +2176,7 @@ test "core.accounts_db: write and read an account" {
 
     var result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
-    var snapshots: Snapshots = result[1];
+    var snapshots: AllSnapshotFields = result[1];
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -2258,7 +2281,7 @@ test "core.accounts_db: load and validate from test snapshot using disk index" {
 
     var result = try loadTestAccountsDB(true);
     var accounts_db: AccountsDB = result[0];
-    var snapshots: Snapshots = result[1];
+    var snapshots: AllSnapshotFields = result[1];
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -2276,7 +2299,7 @@ test "core.accounts_db: load and validate from test snapshot" {
 
     var result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
-    var snapshots: Snapshots = result[1];
+    var snapshots: AllSnapshotFields = result[1];
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -2294,7 +2317,7 @@ test "core.accounts_db: load clock sysvar" {
 
     var result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
-    var snapshots: Snapshots = result[1];
+    var snapshots: AllSnapshotFields = result[1];
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -2317,7 +2340,7 @@ test "core.accounts_db: load other sysvars" {
 
     var result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
-    var snapshots: Snapshots = result[1];
+    var snapshots: AllSnapshotFields = result[1];
     defer {
         accounts_db.deinit();
         snapshots.deinit(allocator);
@@ -2355,15 +2378,15 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        // test accounts in ram
-        BenchArgs{
-            .n_accounts = 500_000,
-            .slot_list_len = 1,
-            .accounts = .disk,
-            .index = .disk,
-            .n_accounts_multiple = 2, // 1M
-            .name = "10k accounts (10_slots - ram index)",
-        },
+        // // test accounts in ram
+        // BenchArgs{
+        //     .n_accounts = 500_000,
+        //     .slot_list_len = 1,
+        //     .accounts = .disk,
+        //     .index = .disk,
+        //     .n_accounts_multiple = 2, // 1M
+        //     .name = "10k accounts (10_slots - ram index)",
+        // },
         // BenchArgs{
         //     .n_accounts = 100_000,
         //     .slot_list_len = 1,
@@ -2371,14 +2394,15 @@ pub const BenchmarkAccountsDB = struct {
         //     .index = .ram,
         //     .name = "100k accounts (1_slot - ram index)",
         // },
-        // // tests large number of accounts on disk
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "500k accounts (1_slot - ram index)",
-        // },
+        // tests large number of accounts on disk
+        BenchArgs{
+            // .n_accounts = 500_000,
+            .n_accounts = 1_000_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "500k accounts (1_slot - ram index)",
+        },
         // BenchArgs{
         //     .n_accounts = 1_000_000,
         //     .slot_list_len = 1,
@@ -2474,7 +2498,7 @@ pub const BenchmarkAccountsDB = struct {
             defer account_files.deinit();
 
             // defer {
-            //     for (slot_list_filenames.items) |filepath|
+            //     for (slot_list_filenames.items) |filepath| {
             //         std.fs.cwd().deleteFile(filepath) catch {
             //             std.debug.print("failed to delete file: {s}\n", .{filepath});
             //         };

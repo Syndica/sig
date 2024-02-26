@@ -9,6 +9,14 @@ pub fn printTimeEstimate(
     other_info: ?[]const u8,
 ) void {
     if (i == 0 or total == 0) return;
+    if (i > total) { 
+        std.debug.print("{s}: {d}/{d} (?%) (time left: ...)\r", .{
+            name,
+            i,
+            total,
+        });
+        return;
+    }
 
     const p_done = i * 100 / total;
     const left = total - i;

@@ -79,6 +79,7 @@ pub fn build(b: *std.Build) void {
     zstd_lib.installHeader(ZSTD_C_PATH ++ "/zstd.h", "zstd.h");
     zstd_lib.installHeader(ZSTD_C_PATH ++ "/zstd_errors.h", "zstd_errors.h");
 
+    // TODO: make sure we compile with -03
     const config_header = b.addConfigHeader(
         .{
             .style = .{ .autoconf = .{ .path = "src/zstd/c/config.h.in" } },

@@ -809,7 +809,7 @@ pub const SnapshotPaths = struct {
         }
         var latest_full_snapshot = maybe_latest_full_snapshot orelse return error.NoFullSnapshotFound;
         // clone the name so we can deinit the full array
-        latest_full_snapshot.path = try allocator.dupe(u8, latest_full_snapshot.path);
+        latest_full_snapshot.path = try snapshot_dir_iter.dir.realpathAlloc(allocator, latest_full_snapshot.path);
 
         count = 0;
         var maybe_latest_incremental_snapshot: ?IncrementalSnapshotPath = null;
@@ -825,7 +825,7 @@ pub const SnapshotPaths = struct {
             count += 1;
         }
         if (maybe_latest_incremental_snapshot) |*latest_incremental_snapshot| {
-            latest_incremental_snapshot.path = try allocator.dupe(u8, latest_incremental_snapshot.path);
+            latest_incremental_snapshot.path = try snapshot_dir_iter.dir.realpathAlloc(allocator, latest_incremental_snapshot.path);
         }
 
         return .{
@@ -842,13 +842,13 @@ pub const SnapshotPaths = struct {
     }
 };
 
-pub const Snapshots = struct {
+pub const AllSnapshotFields = struct {
     full: SnapshotFields,
     incremental: ?SnapshotFields,
     paths: SnapshotPaths,
     was_collapsed: bool = false, // used for deinit()
 
-    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !Snapshots {
+    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !@This() {
         // unpack
         const full_metadata_path = try std.fmt.allocPrint(
             allocator,
@@ -879,7 +879,7 @@ pub const Snapshots = struct {
             );
         }
 
-        return Snapshots{
+        return .{
             .full = full,
             .incremental = incremental,
             .paths = paths,
@@ -892,7 +892,7 @@ pub const Snapshots = struct {
     /// this will 1) modify the incremental snapshot account map
     /// and 2) the returned snapshot heap fields will still point to the incremental snapshot
     /// (so be sure not to deinit it while still using the returned snapshot)
-    pub fn collapse(self: *Snapshots) !SnapshotFields {
+    pub fn collapse(self: *AllSnapshotFields) !SnapshotFields {
         // nothing to collapse
         if (self.incremental == null)
             return self.full;
@@ -929,7 +929,7 @@ pub const Snapshots = struct {
         return snapshot;
     }
 
-    pub fn deinit(self: *Snapshots, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *AllSnapshotFields, allocator: std.mem.Allocator) void {
         if (!self.was_collapsed) {
             self.full.deinit(allocator);
             if (self.incremental) |inc| {
@@ -972,7 +972,7 @@ pub fn parallelUnpackZstdTarBall(
     );
     var timer = try std.time.Timer.start();
     var tar_stream = try ZstdReader.init(memory);
-    const n_files_estimate: usize = if (full_snapshot) 400_000 else 100_000;
+    const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
     try parallelUntarToFileSystem(
         allocator,
         output_dir,
