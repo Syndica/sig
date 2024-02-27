@@ -653,11 +653,13 @@ pub const CrdsTable = struct {
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
-            const label = CrdsValueLabel{ .LegacyContactInfo = pubkey.* };
-            if (self.crds_table.get(label)) |*contact_info| {
-                const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
-                if (value_timestamp > self.cutoff_timestamp) {
-                    return;
+            const labels = .{ CrdsValueLabel{ .LegacyContactInfo = pubkey.* }, CrdsValueLabel{ .ContactInfo = pubkey.* } };
+            inline for (labels) |label| {
+                if (self.crds_table.get(label)) |*contact_info| {
+                    const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
+                    if (value_timestamp > self.cutoff_timestamp) {
+                        return;
+                    }
                 }
             }
 
