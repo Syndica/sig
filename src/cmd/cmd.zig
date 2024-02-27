@@ -12,7 +12,7 @@ const SocketAddr = @import("../net/net.zig").SocketAddr;
 const echo = @import("../net/echo.zig");
 const GossipService = @import("../gossip/gossip_service.zig").GossipService;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
-const global_registry = @import("../prometheus/registry.zig").global_registry;
+const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
 const Registry = @import("../prometheus/registry.zig").Registry;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -192,7 +192,7 @@ fn gossip(_: []const []const u8) !void {
 fn spawnMetrics(allocator: std.mem.Allocator, logger: Logger) !std.Thread {
     var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
     logger.infof("metrics port: {d}", .{metrics_port});
-    const registry = try global_registry.initialize(Registry(.{}).init, .{allocator});
+    const registry = globalRegistry();
     return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
 }
 
