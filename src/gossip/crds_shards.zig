@@ -9,7 +9,6 @@ const CrdsValue = crds.CrdsValue;
 const CrdsData = crds.CrdsData;
 const CrdsVersionedValue = crds.CrdsVersionedValue;
 const CrdsValueLabel = crds.CrdsValueLabel;
-const LegacyContactInfo = crds.LegacyContactInfo;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;

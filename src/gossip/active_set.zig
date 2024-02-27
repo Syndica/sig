@@ -110,10 +110,8 @@ pub const ActiveSet = struct {
         var iter = self.pruned_peers.iterator();
         while (iter.next()) |entry| {
             // lookup peer contact info
-            const peer_info = crds_table.get(crds.CrdsValueLabel{
-                .LegacyContactInfo = entry.key_ptr.*,
-            }) orelse continue; // peer pubkey could have been removed from the crds table
-            const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
+            const peer_info = crds_table.getContactInfo(entry.key_ptr.*) orelse continue;
+            const peer_gossip_addr = peer_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
 
             crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 

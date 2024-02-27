@@ -220,6 +220,9 @@ pub const CrdsTable = struct {
             const old_entry = result.value_ptr.*;
 
             switch (value.data) {
+                .ContactInfo => |*info| {
+                    try self.shred_versions.put(info.pubkey, info.shred_version);
+                },
                 .LegacyContactInfo => |*info| {
                     try self.shred_versions.put(info.id, info.shred_version);
                     const contact_info = try info.toContactInfo(self.allocator);
@@ -326,17 +329,23 @@ pub const CrdsTable = struct {
     }
 
     pub fn updateRecordTimestamp(self: *Self, pubkey: Pubkey, now: u64) void {
-        const contact_info_label = CrdsValueLabel{
-            .LegacyContactInfo = pubkey,
+        var updated_contact_info = false;
+        const labels = .{
+            CrdsValueLabel{ .ContactInfo = pubkey },
+            CrdsValueLabel{ .LegacyContactInfo = pubkey },
         };
-
         // It suffices to only overwrite the origin's timestamp since that is
-        // used when purging old values. If the origin does not exist in the
+        // used when purging old values.
+        inline for (labels) |contact_info_label| {
+            if (self.store.getEntry(contact_info_label)) |entry| {
+                entry.value_ptr.timestamp_on_insertion = now;
+                updated_contact_info = true;
+            }
+        }
+        if (updated_contact_info) return;
+        // If the origin does not exist in the
         // table, fallback to exhaustive update on all associated records.
-        if (self.store.getEntry(contact_info_label)) |entry| {
-            const value = entry.value_ptr;
-            value.timestamp_on_insertion = now;
-        } else if (self.pubkey_to_values.getEntry(pubkey)) |entry| {
+        if (self.pubkey_to_values.getEntry(pubkey)) |entry| {
             const pubkey_indexs = entry.value_ptr;
             for (pubkey_indexs.keys()) |index| {
                 const value = &self.store.values()[index];
@@ -348,6 +357,18 @@ pub const CrdsTable = struct {
     // ** getter functions **
     pub fn get(self: *const Self, label: CrdsValueLabel) ?CrdsVersionedValue {
         return self.store.get(label);
+    }
+
+    /// Since a node may be represented with ContactInfo or LegacyContactInfo,
+    /// this function checks for both, and efficiently returns the data as
+    /// ContactInfo, regardless of how it was received.
+    pub fn getContactInfo(self: *const Self, pubkey: Pubkey) ?ContactInfo {
+        const label = CrdsValueLabel{ .ContactInfo = pubkey };
+        if (self.store.get(label)) |v| {
+            return v.value.data.ContactInfo;
+        } else {
+            return self.converted_contact_infos.get(pubkey);
+        }
     }
 
     pub fn genericGetWithCursor(hashmap: anytype, store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue), buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {

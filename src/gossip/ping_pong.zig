@@ -7,7 +7,6 @@ const CrdsValue = crds.CrdsValue;
 const CrdsData = crds.CrdsData;
 const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
-const LegacyContactInfo = crds.LegacyContactInfo;
 
 const node = @import("node.zig");
 const ContactInfo = node.ContactInfo;

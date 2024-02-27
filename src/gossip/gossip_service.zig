@@ -1139,13 +1139,22 @@ pub const GossipService = struct {
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
             var peers = try ArrayList(ContactInfo).initCapacity(self.allocator, pull_requests.items.len);
-            defer {
-                for (peers.items) |p| p.deinit();
-                peers.deinit();
-            }
-            for (pull_requests.items) |req| {
-                const contact_info = try req.value.data.LegacyContactInfo.toContactInfo(self.allocator);
-                peers.appendAssumeCapacity(contact_info);
+            defer peers.deinit();
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            {
+                var crds_table_lock = self.crds_table_rw.read();
+                defer crds_table_lock.unlock();
+                var crds_table: *const CrdsTable = crds_table_lock.get();
+                for (pull_requests.items) |req| {
+                    const contact_info = switch (req.value.data) {
+                        .ContactInfo => |ci| ci,
+                        .LegacyContactInfo => |legacy| crds_table.getContactInfo(legacy.id) orelse
+                            try legacy.toContactInfo(arena.allocator()),
+                        else => return error.PullRequestWithoutContactInfo,
+                    };
+                    peers.appendAssumeCapacity(contact_info);
+                }
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
@@ -1382,11 +1391,11 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             const crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = prune_destination }) orelse {
+            break :blk crds_table.getContactInfo(prune_destination) orelse {
                 return error.CantFindContactInfo;
             };
         };
-        const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
+        const from_gossip_addr = from_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse return error.InvalidGossipAddress;
         crds.sanitizeSocket(&from_gossip_addr) catch return error.InvalidGossipAddress;
         const from_gossip_endpoint = from_gossip_addr.toEndpoint();
 
@@ -1482,11 +1491,11 @@ pub const GossipService = struct {
                 }
 
                 // lookup contact info
-                const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_message.from_pubkey.* }) orelse {
+                const from_contact_info = crds_table.getContactInfo(push_message.from_pubkey.*) orelse {
                     // unable to find contact info
                     continue;
                 };
-                const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
+                const from_gossip_addr = from_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
                 crds.sanitizeSocket(&from_gossip_addr) catch {
                     // invalid gossip socket
                     continue;
