@@ -235,7 +235,8 @@ pub const GossipService = struct {
     pub fn deinit(self: *Self) void {
         self.echo_server.deinit();
         self.gossip_socket.close();
-
+        self.my_contact_info.deinit();
+        
         {
             var buff_lock = self.packet_incoming_channel.buffer.lock();
             var buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
@@ -1870,9 +1871,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1925,9 +1924,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1998,9 +1995,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2059,9 +2054,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2133,7 +2126,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     defer pull_requests.deinit();
     try pull_requests.append(GossipService.PullRequestMessage{
         .filter = filter,
-        .from_endpoint = contact_info.gossip.toEndpoint(),
+        .from_endpoint = (contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse unreachable).toEndpoint(),
         .value = crds_value,
     });
 
@@ -2152,9 +2145,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2241,9 +2232,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2285,9 +2274,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2357,9 +2344,7 @@ test "gossip.gossip_service: test packet verification" {
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(id);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(id);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2489,9 +2474,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2588,7 +2571,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
 
     var gossip_service = try GossipService.init(
         std.testing.allocator,
-        contact_info,
+        try contact_info.toContactInfo(std.testing.allocator),
         my_keypair,
         null,
         &exit,
@@ -2605,6 +2588,12 @@ test "gossip.gossip_service: init, exit, and deinit" {
     exit.store(true, std.atomic.Ordering.Unordered);
     handle.join();
     gossip_service.deinit();
+}
+
+fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
+    var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
+    try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
+    return contact_info;
 }
 
 const fuzz = @import("./fuzz.zig");
