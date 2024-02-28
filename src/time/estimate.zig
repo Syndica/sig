@@ -17,6 +17,16 @@ pub fn printTimeEstimate(
         });
         return;
     }
+    defer { 
+        if (i == total) { 
+            std.debug.print("{s}: {d}/{d} (100%) (total time: {s})\n", .{
+                name,
+                i,
+                total,
+                std.fmt.fmtDuration(timer.read()),
+            });
+        }
+    }
 
     const p_done = i * 100 / total;
     const left = total - i;

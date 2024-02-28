@@ -132,6 +132,9 @@ pub const AccountFile = struct {
             0,
         );
 
+        // PERF TODO: get this to work
+        // try std.os.madvise(memory, file_size, std.os.MADV.SEQUENTIAL);
+
         return Self{
             .memory = memory,
             .length = accounts_file_info.length,

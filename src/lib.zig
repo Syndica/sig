@@ -92,7 +92,3 @@ pub const prometheus = struct {
     pub usingnamespace @import("prometheus/metric.zig");
     pub usingnamespace @import("prometheus/registry.zig");
 };
-
-pub const xstd = struct {
-    pub usingnamespace @import("xstd/compress/zstandard.zig");
-};
