@@ -123,9 +123,15 @@ pub fn parallelUntarToFileSystem(
                 if (file_name.len != 0) {
                     try dir.makePath(file_name);
                 }
+                allocator.free(header_buf);
+                allocator.free(file_name_buf);
             },
             .normal => {
-                if (file_size == 0 and unstripped_file_name.len == 0) break :loop; // tar EOF
+                if (file_size == 0 and unstripped_file_name.len == 0) {
+                    allocator.free(header_buf);
+                    allocator.free(file_name_buf);
+                    break :loop; // tar EOF
+                }
 
                 const file_name = try stripComponents(unstripped_file_name, strip_components);
                 if (std.fs.path.dirname(file_name)) |dir_name| {
@@ -137,13 +143,13 @@ pub fn parallelUntarToFileSystem(
                 }
                 file_count += 1;
 
-                var buf = try allocator.alloc(u8, file_size);
-                _ = try reader.readAtLeast(buf, file_size);
+                var contents = try allocator.alloc(u8, file_size);
+                _ = try reader.readAtLeast(contents, file_size);
 
                 try reader.skipBytes(pad_len, .{});
 
                 const entry = TarEntry{
-                    .contents = buf,
+                    .contents = contents,
                     .file_name = file_name,
                     .filename_buf = file_name_buf,
                     .header_buf = header_buf,
@@ -157,8 +163,9 @@ pub fn parallelUntarToFileSystem(
                 }
                 if (task_ptr.has_run) {
                     allocator.free(task_ptr.entry.filename_buf);
-                    allocator.free(task_ptr.entry.contents);
                     allocator.free(task_ptr.entry.header_buf);
+                    allocator.free(task_ptr.entry.contents);
+                    task_ptr.has_run = false;
                 }
 
                 task_ptr.entry = entry;
@@ -169,6 +176,8 @@ pub fn parallelUntarToFileSystem(
             },
             .global_extended_header, .extended_header => {
                 try reader.skipBytes(rounded_file_size, .{});
+                allocator.free(header_buf);
+                allocator.free(file_name_buf);
             },
             .hard_link => return error.TarUnsupportedFileType,
             .symbolic_link => return error.TarUnsupportedFileType,

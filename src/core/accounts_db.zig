@@ -2132,14 +2132,14 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
         // unpack both snapshots to get the acccount files
         try parallelUnpackZstdTarBall(
             allocator,
-            "snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
+            "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
             dir,
             1,
             true,
         );
         try parallelUnpackZstdTarBall(
             allocator,
-            "incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
+            "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
             dir,
             1,
             true,

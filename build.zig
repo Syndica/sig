@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     lib.addModule("getty", getty_mod);
     lib.addModule("httpz", httpz_mod);
 
-    // ZSTD 
+    // ZSTD
     const ZSTD_C_PATH = "src/zstd/c/lib";
     const zstd_lib = b.addStaticLibrary(.{
         .name = "zstd",
