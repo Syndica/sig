@@ -69,6 +69,7 @@ pub const ContactInfo = struct {
     pub fn deinit(self: Self) void {
         self.addrs.deinit();
         self.sockets.deinit();
+        self.extensions.deinit();
     }
 
     pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !Self {
@@ -206,6 +207,20 @@ pub const ContactInfo = struct {
                 socket.index -= 1;
             }
         }
+    }
+
+    pub fn clone(self: *const Self) error{OutOfMemory}!Self {
+        return .{
+            .pubkey = self.pubkey,
+            .wallclock = self.wallclock,
+            .outset = self.outset,
+            .shred_version = self.shred_version,
+            .version = self.version,
+            .addrs = try self.addrs.clone(),
+            .sockets = try self.sockets.clone(),
+            .extensions = try self.extensions.clone(),
+            .cache = self.cache,
+        };
     }
 };
 

@@ -6,6 +6,7 @@ const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
 const crds = @import("../gossip/crds.zig");
+const node = @import("../gossip/node.zig");
 const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -53,7 +54,7 @@ pub const ActiveSet = struct {
 
     pub fn rotate(
         self: *Self,
-        crds_peers: []crds.LegacyContactInfo,
+        crds_peers: []node.ContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
         var iter = self.pruned_peers.iterator();
@@ -67,11 +68,11 @@ pub const ActiveSet = struct {
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
         var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        pull_request.shuffleFirstN(rng.random(), crds.LegacyContactInfo, crds_peers, size);
+        pull_request.shuffleFirstN(rng.random(), node.ContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            var entry = try self.pruned_peers.getOrPut(crds_peers[i].id);
+            var entry = try self.pruned_peers.getOrPut(crds_peers[i].pubkey);
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
                 var bloom = try Bloom.random(
@@ -109,10 +110,8 @@ pub const ActiveSet = struct {
         var iter = self.pruned_peers.iterator();
         while (iter.next()) |entry| {
             // lookup peer contact info
-            const peer_info = crds_table.get(crds.CrdsValueLabel{
-                .LegacyContactInfo = entry.key_ptr.*,
-            }) orelse continue; // peer pubkey could have been removed from the crds table
-            const peer_gossip_addr = peer_info.value.data.LegacyContactInfo.gossip;
+            const peer_info = crds_table.getContactInfo(entry.key_ptr.*) orelse continue;
+            const peer_gossip_addr = peer_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
 
             crds.sanitizeSocket(&peer_gossip_addr) catch continue;
 
@@ -143,12 +142,15 @@ test "gossip.active_set: init/deinit" {
 
     // insert some contacts
     var rng = std.rand.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(crds.LegacyContactInfo).initCapacity(alloc, 10);
-    defer gossip_peers.deinit();
+    var gossip_peers = try std.ArrayList(node.ContactInfo).initCapacity(alloc, 10);
+    defer {
+        for (gossip_peers.items) |p| p.deinit();
+        gossip_peers.deinit();
+    }
 
     for (0..CRDS_GOSSIP_PUSH_FANOUT) |_| {
         var data = crds.LegacyContactInfo.random(rng.random());
-        try gossip_peers.append(data);
+        try gossip_peers.append(try data.toContactInfo(alloc));
 
         var keypair = try KeyPair.create(null);
         var value = try CrdsValue.initSigned(crds.CrdsData{
@@ -183,12 +185,14 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     var alloc = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(crds.LegacyContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.ArrayList(node.ContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
-    var data = crds.LegacyContactInfo.random(rng.random());
-    var dupe = crds.LegacyContactInfo.random(rng.random());
-    dupe.id = data.id;
+    var data = try crds.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    var dupe = try crds.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    defer data.deinit();
+    defer dupe.deinit();
+    dupe.pubkey = data.pubkey;
     try gossip_peers.append(data);
     try gossip_peers.append(dupe);
 
