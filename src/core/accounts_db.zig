@@ -1266,7 +1266,7 @@ pub const DiskMemoryAllocator = struct {
         };
 
         var file = std.fs.cwd().createFile(filepath, .{ .read = true }) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
+            std.debug.print("Disk Memory Allocator error: {} filepath: {s}\n", .{ err, filepath });
             return null;
         };
         defer file.close();
@@ -2153,6 +2153,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     var disk_capacity: usize = 0;
     if (use_disk) {
         disk_dir = "test_data/tmp";
+        try std.fs.cwd().makePath(disk_dir.?);
         disk_capacity = 1000;
     }
 
@@ -2215,7 +2216,9 @@ test "core.accounts_db: write and read an account" {
 }
 
 test "core.accounts_db: tests disk allocator on hashmaps" {
-    var allocator = try DiskMemoryAllocator.init("test_data/tmp/tests");
+    var allocator = try DiskMemoryAllocator.init("test_data/tmp");
+    defer allocator.deinit(null);
+
     var refs = std.AutoHashMap(Pubkey, AccountRef).init(allocator.allocator());
     try refs.ensureTotalCapacity(100);
 
@@ -2234,7 +2237,8 @@ test "core.accounts_db: tests disk allocator on hashmaps" {
 }
 
 test "core.accounts_db: tests disk allocator" {
-    var allocator = try DiskMemoryAllocator.init("test_data/tmp/tests");
+    var allocator = try DiskMemoryAllocator.init("test_data/tmp");
+
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
         allocator.allocator(),
         1,
@@ -2266,20 +2270,20 @@ test "core.accounts_db: tests disk allocator" {
     try std.testing.expectEqualDeep(disk_account_refs.items[1], ref2);
 
     // these should exist
-    try std.fs.cwd().access("test_data/tmp/tests_0", .{});
-    try std.fs.cwd().access("test_data/tmp/tests_1", .{});
+    try std.fs.cwd().access("test_data/tmp_0", .{});
+    try std.fs.cwd().access("test_data/tmp_1", .{});
 
     // this should delete them
     allocator.deinit(null);
 
     // these should no longer exist
     var did_error = false;
-    std.fs.cwd().access("test_data/tmp/tests_0", .{}) catch {
+    std.fs.cwd().access("test_data/tmp_0", .{}) catch {
         did_error = true;
     };
     try std.testing.expect(did_error);
     did_error = false;
-    std.fs.cwd().access("test_data/tmp/tests_1", .{}) catch {
+    std.fs.cwd().access("test_data/tmp_1", .{}) catch {
         did_error = true;
     };
     try std.testing.expect(did_error);
