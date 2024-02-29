@@ -25,6 +25,7 @@ const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
@@ -432,7 +433,20 @@ pub const CrdsTable = struct {
         return false;
     }
 
-    // ** triming values in the crdstable **
+    /// ** triming values in the crdstable **
+    ///
+    /// This frees the memory for any pointers in the CrdsData.
+    /// Be sure that this CrdsData is not being used anywhere else when calling this.
+    ///
+    /// This method is not safe because neither CrdsTable nor CrdsValue
+    /// provide any guarantees that the CrdsValue being removed is not
+    /// also being accessed somewhere else in the code after this is called.
+    /// Since this frees the CrdsValue, any accesses of the CrdsValue
+    /// after this function is called will result in a segfault.
+    ///
+    /// TODO: implement a safer approach to avoid dangling pointers, such as:
+    ///  - removal buffer that is populated here and freed later
+    ///  - reference counting for all crds values
     pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
         const now = crds.getWallclockMs();
 
@@ -536,6 +550,7 @@ pub const CrdsTable = struct {
             std.debug.assert(did_remove);
             new_entry_indexs.put(entry_index, {}) catch unreachable;
         }
+        bincode.free(self.allocator, versioned_value.value.data);
     }
 
     pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
@@ -672,6 +687,20 @@ pub const CrdsTable = struct {
         }
 
         return output;
+    }
+
+    pub fn getContactInfoByGossipAddr(
+        self: *const Self,
+        gossip_addr: SocketAddr,
+    ) ?LegacyContactInfo {
+        var contact_indexs = self.contact_infos.keys();
+        for (contact_indexs) |index| {
+            const entry: CrdsVersionedValue = self.store.values()[index];
+            if (entry.value.data.LegacyContactInfo.gossip.eql(&gossip_addr)) {
+                return entry.value.data.LegacyContactInfo;
+            }
+        }
+        return null;
     }
 };
 

@@ -93,6 +93,9 @@ pub const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 20; // TODO: this is approx the ru
 pub const MAX_PRUNE_DATA_NODES: usize = 32;
 pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
+// TODO: replace with get_epoch_duration when BankForks is supported
+const DEFAULT_EPOCH_DURATION: u64 = 172800000;
+
 const Config = struct { mode: enum { normal, tests, bench } = .normal };
 
 pub const GossipService = struct {
@@ -100,10 +103,12 @@ pub const GossipService = struct {
 
     // note: this contact info should not change
     gossip_socket: UdpSocket,
+    /// This contact info is mutated by the buildMessages thread, so it must
+    /// only be read by that thread, or it needs a synchronization mechanism.
     my_contact_info: LegacyContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
-    my_shred_version: u16,
+    my_shred_version: std.atomic.Atomic(u16),
     exit: *AtomicBool,
 
     // communication between threads
@@ -118,7 +123,9 @@ pub const GossipService = struct {
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
-    entrypoints: ArrayList(SocketAddr),
+    /// This contact info is mutated by the buildMessages thread, so it must
+    /// only be read by that thread, or it needs a synchronization mechanism.
+    entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(PingCache),
     logger: Logger,
     thread_pool: *ThreadPool,
@@ -126,6 +133,8 @@ pub const GossipService = struct {
 
     // used for benchmarking
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
+
+    const Entrypoint = struct { addr: SocketAddr, info: ?LegacyContactInfo = null };
 
     const Self = @This();
 
@@ -173,11 +182,17 @@ pub const GossipService = struct {
 
         var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
 
+        var entrypoint_list = ArrayList(Entrypoint).init(allocator);
+        if (entrypoints) |eps| {
+            try entrypoint_list.ensureTotalCapacityPrecise(eps.items.len);
+            for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
+        }
+
         return Self{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
             .my_pubkey = my_pubkey,
-            .my_shred_version = my_shred_version,
+            .my_shred_version = std.atomic.Atomic(u16).init(my_shred_version),
             .gossip_socket = gossip_socket,
             .exit = exit,
             .packet_incoming_channel = packet_incoming_channel,
@@ -188,7 +203,7 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
-            .entrypoints = entrypoints orelse ArrayList(SocketAddr).init(allocator),
+            .entrypoints = entrypoint_list,
             .ping_cache_rw = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
@@ -477,7 +492,32 @@ pub const GossipService = struct {
             const protocol_messages = maybe_protocol_messages.?;
             defer {
                 for (protocol_messages) |*msg| {
-                    bincode.free(self.allocator, msg.message);
+                    // Important: this uses shallowFree instead of bincode.free
+                    //
+                    // The message contains some messaging metadata plus a
+                    // payload of a CrdsValue. The metadata won't be needed
+                    // after this iteration is complete. The payload will be
+                    // needed since it is stored in the CrdsTable.
+                    //
+                    // bincode.free would free the entire message including the
+                    // payload. This would lead to a segfault if the data is
+                    // accessed from the CrdsTable later.
+                    //
+                    // Not freeing at all would lead to a memory leak of any
+                    // allocations in the metadata.
+                    //
+                    // The compromise is a "shallow" free that only frees the
+                    // messaging metadata. CrdsValue ownership will be
+                    // transferred to CrdsTable. The CrdsTable implementation
+                    // becomes responsible for freeing any CrdsValues when
+                    // needed.
+                    //
+                    // TODO: this approach is not ideal because it is difficult
+                    // to maintain. Another approach such as reference counting
+                    // would be safer. For more info, see:
+                    // - CrdsTable.remove
+                    // - https://github.com/Syndica/sig/pull/69
+                    msg.message.shallowFree(self.allocator);
                 }
                 self.verified_incoming_channel.allocator.free(protocol_messages);
             }
@@ -510,7 +550,7 @@ pub const GossipService = struct {
                                     continue;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
-                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version) {
+                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
                                     continue;
                                 }
@@ -657,6 +697,8 @@ pub const GossipService = struct {
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
         var should_send_pull_requests = true;
+        var entrypoints_identified = false;
+        var shred_version_assigned = false;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const top_of_loop_ts = getWallclockMs();
@@ -688,6 +730,10 @@ pub const GossipService = struct {
             // trim data
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
 
+            // initialize cluster data from crds values
+            entrypoints_identified = entrypoints_identified or self.populateEntrypointsFromCrdsTable();
+            shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
+
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
                 // update wallclock and sign
@@ -716,7 +762,7 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        self.logger.infof("build_messages loop closed\n", .{});
+        self.logger.infof("build_messages loop closed", .{});
     }
 
     pub fn rotateActiveSet(
@@ -887,21 +933,10 @@ pub const GossipService = struct {
         var rng = std.rand.DefaultPrng.init(now);
         var entrypoint_index: i16 = -1;
         if (self.entrypoints.items.len != 0) blk: {
-            var crds_table_lg = self.crds_table_rw.read();
-            defer crds_table_lg.unlock();
-
             var maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
-            const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
-
-            const crds_table: *const CrdsTable = crds_table_lg.get();
-            const contact_infos = try crds_table.getAllContactInfos();
-            defer contact_infos.deinit();
-
-            for (contact_infos.items) |contact_info| {
-                if (contact_info.gossip.eql(&entrypoint)) {
-                    // early exit - we already have the peers in our contact info
-                    break :blk;
-                }
+            if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
+                // early exit - we already have the peer in our contact info
+                break :blk;
             }
             // we dont have them so well add them to the peer list (as default contact info)
             entrypoint_index = @intCast(maybe_entrypoint_index);
@@ -986,14 +1021,14 @@ pub const GossipService = struct {
 
         // append entrypoint msgs
         if (should_send_to_entrypoint) {
-            const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+            const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
 
                 var packet = &packet_batch.items[packet_index];
                 var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
                 packet.size = bytes.len;
-                packet.addr = entrypoint_addr.toEndpoint();
+                packet.addr = entrypoint.addr.toEndpoint();
                 packet_index += 1;
             }
         }
@@ -1515,7 +1550,13 @@ pub const GossipService = struct {
 
             try crds_table.purged.trim(purged_cutoff_timestamp);
             try crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY);
-            try crds_table.removeOldLabels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+
+            // TODO: condition timeout on stake weight:
+            // - values from nodes with non-zero stake: epoch duration
+            // - values from nodes with zero stake:
+            //   - if all nodes have zero stake: epoch duration
+            //   - if any other nodes have non-zero stake: CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS (15s)
+            try crds_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
         }
 
         const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
@@ -1526,6 +1567,47 @@ pub const GossipService = struct {
 
             try failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
         }
+    }
+
+    /// Attempts to associate each entrypoint address with a contact info.
+    /// Returns true if all entrypoints have been identified
+    ///
+    /// Acquires the crds table lock regardless of whether the crds table is used.
+    fn populateEntrypointsFromCrdsTable(self: *Self) bool {
+        var identified_all = true;
+
+        var crds_table_lock = self.crds_table_rw.read();
+        defer crds_table_lock.unlock();
+        var crds_table: *const CrdsTable = crds_table_lock.get();
+
+        for (self.entrypoints.items) |*entrypoint| {
+            if (entrypoint.info == null) {
+                entrypoint.info = crds_table.getContactInfoByGossipAddr(entrypoint.addr);
+            }
+            identified_all = identified_all and entrypoint.info != null;
+        }
+        return identified_all;
+    }
+
+    /// if we have no shred version, attempt to get one from an entrypoint.
+    /// Returns true if the shred version is set to non-zero
+    fn assignDefaultShredVersionFromEntrypoint(self: *Self) bool {
+        if (self.my_shred_version.load(.Monotonic) != 0) return true;
+        for (self.entrypoints.items) |entrypoint| {
+            if (entrypoint.info) |info| {
+                if (info.shred_version != 0) {
+                    var addr_str = entrypoint.addr.toString();
+                    self.logger.infof(
+                        "shred version: {} - from entrypoint contact info: {s}",
+                        .{ info.shred_version, addr_str[0][0..addr_str[1]] },
+                    );
+                    self.my_shred_version.store(info.shred_version, .Monotonic);
+                    self.my_contact_info.shred_version = info.shred_version;
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// drains values from the push queue and inserts them into the crds table.
@@ -1618,7 +1700,8 @@ pub const GossipService = struct {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
-            if (self.my_shred_version != 0 and self.my_shred_version != peer_info.shred_version) {
+            const my_shred_version = self.my_shred_version.load(.Monotonic);
+            if (my_shred_version != 0 and my_shred_version != peer_info.shred_version) {
                 continue;
             }
             // filter on valid gossip address
@@ -1644,17 +1727,22 @@ pub const GossipService = struct {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
         var crds_values_array = ArrayList(CrdsValue).fromOwnedSlice(self.allocator, crds_values);
-        if (crds_table.check_matching_shred_version(from_pubkey, self.my_shred_version)) {
+        const my_shred_version = self.my_shred_version.load(.Monotonic);
+        if (my_shred_version == 0) {
+            return crds_values_array.items.len;
+        }
+        if (crds_table.check_matching_shred_version(from_pubkey, my_shred_version)) {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
                         // only allow other values with matching shred versions
                         if (!crds_table.check_matching_shred_version(
                             crds_value.id(),
-                            self.my_shred_version,
+                            my_shred_version,
                         )) {
                             _ = crds_values_array.swapRemove(i);
                         }
@@ -1665,6 +1753,7 @@ pub const GossipService = struct {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
