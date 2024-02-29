@@ -132,7 +132,7 @@ pub fn parallelUntarToFileSystem(
                     try dir.makePath(dir_name);
                 }
 
-                if (n_files_estimate) |n_files| { 
+                if (n_files_estimate) |n_files| {
                     printTimeEstimate(&timer, n_files, file_count, "untar_files", null);
                 }
                 file_count += 1;
