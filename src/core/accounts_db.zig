@@ -1987,8 +1987,8 @@ pub fn main() !void {
     // const disk_index_dir: ?[]const u8 = null;
     const index_ram_capacity = 100_000;
     const force_unpack_snapshot = false;
-    const snapshot_dir = "../snapshots/";
-    // const snapshot_dir = "test_data/";
+    // const snapshot_dir = "../snapshots/";
+    const snapshot_dir = "test_data/";
 
     var logger = Logger.init(allocator, Level.debug);
     logger.spawn();
