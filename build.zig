@@ -139,6 +139,7 @@ pub fn build(b: *std.Build) void {
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
     tests.addModule("httpz", httpz_mod);
+    tests.linkLibrary(zstd_lib);
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run library tests");

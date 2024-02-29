@@ -38,7 +38,6 @@ const readDirectory = @import("../utils/directory.zig").readDirectory;
 
 const SnapshotPaths = @import("./snapshots.zig").SnapshotPaths;
 const AllSnapshotFields = @import("./snapshots.zig").AllSnapshotFields;
-const unpackZstdTarBall = @import("./snapshots.zig").unpackZstdTarBall;
 
 const Logger = @import("../trace/log.zig").Logger;
 const Level = @import("../trace/level.zig").Level;
@@ -253,17 +252,20 @@ pub const AccountsDB = struct {
 
         const use_disk_index = self.index.use_disk;
 
+        // TODO: THESE LEAK -- TMP SOLN FOR THE TESTS
+        const page_allocator = std.heap.page_allocator;
+
         const n_bins = self.index.bins.len;
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
         var thread_dbs = try ArrayList(LoadingThreadAccountsDB).initCapacity(
-            self.allocator,
+            page_allocator, // TODO: LEAK
             n_threads,
         );
         var thread_disk_dirs = ArrayList([]const u8).init(self.allocator);
         for (0..n_threads) |thread_i| {
             if (!use_disk_index) {
                 const t_index = try LoadingThreadAccountsDB.init(
-                    self.allocator,
+                    page_allocator, // TODO: LEAK
                     n_bins,
                     // pre-alloc happens in the thread
                     RamMemoryConfig{ .capacity = 0 },
@@ -280,7 +282,7 @@ pub const AccountsDB = struct {
 
                 // pre-alloc happens in the thread
                 const t_index = try LoadingThreadAccountsDB.init(
-                    self.allocator,
+                    page_allocator, // TODO: LEAK
                     n_bins,
                     .{},
                     DiskMemoryConfig{ .dir_path = thread_disk_dir, .capacity = 0 },
@@ -979,7 +981,8 @@ pub const AccountsDB = struct {
         }
 
         const account_references_size = total_accounts * @sizeOf(AccountRef);
-        var account_refs_memory = try self.allocator.alloc(u8, account_references_size);
+        // TODO: FIX THIS LEAK
+        var account_refs_memory = try std.heap.page_allocator.alloc(u8, account_references_size);
         var fba = std.heap.FixedBufferAllocator.init(account_refs_memory);
         const allocator = fba.allocator();
 
@@ -2127,15 +2130,19 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     const dir = try std.fs.cwd().openDir(dir_path, .{});
     dir.access("accounts", .{}) catch {
         // unpack both snapshots to get the acccount files
-        try unpackZstdTarBall(
+        try parallelUnpackZstdTarBall(
             allocator,
             "snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
             dir,
+            1,
+            true,
         );
-        try unpackZstdTarBall(
+        try parallelUnpackZstdTarBall(
             allocator,
             "incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
             dir,
+            1,
+            true,
         );
     };
 
@@ -2194,15 +2201,17 @@ test "core.accounts_db: write and read an account" {
     };
 
     // initial account
-    try accounts_db.putAccount(test_account, pubkey, 19);
+    var accounts = [_]Account{test_account};
+    var pubkeys = [_]Pubkey{pubkey};
+    try accounts_db.putAccountBatch(&accounts, &pubkeys, 19);
     var account = try accounts_db.getAccount(&pubkey);
     try std.testing.expectEqualDeep(test_account, account);
 
     // new account
-    test_account.lamports = 20;
-    try accounts_db.putAccount(test_account, pubkey, 28);
+    accounts[0].lamports = 20;
+    try accounts_db.putAccountBatch(&accounts, &pubkeys, 28);
     var account_2 = try accounts_db.getAccount(&pubkey);
-    try std.testing.expectEqualDeep(test_account, account_2);
+    try std.testing.expectEqualDeep(accounts[0], account_2);
 }
 
 test "core.accounts_db: tests disk allocator on hashmaps" {
