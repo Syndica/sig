@@ -137,9 +137,10 @@ pub const AccountsDB = struct {
     storage: AccountStorage,
     // maps a pubkey to the account location
     index: AccountIndex,
-    fields: AccountsDbFields = undefined,
+
     logger: Logger,
     config: AccountsDBConfig,
+    fields: AccountsDbFields = undefined,
 
     const Self = @This();
 
@@ -181,7 +182,7 @@ pub const AccountsDB = struct {
 
     pub fn deinit(self: *Self) void {
         self.storage.deinit();
-        self.index.deinit();
+        self.index.deinit(true);
         self.logger.deinit();
     }
 
@@ -189,9 +190,6 @@ pub const AccountsDB = struct {
     pub const LoadingThreadAccountsDB = struct {
         index: AccountIndex,
         file_map: std.AutoArrayHashMap(FileId, AccountFile),
-        pubkey_counts: PubkeyCountMap = undefined,
-        account_refs_memory: []u8 = undefined,
-        n_accounts: usize = 0,
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -207,11 +205,9 @@ pub const AccountsDB = struct {
         }
 
         pub fn deinit(self: *@This()) void {
-            std.heap.page_allocator.free(self.account_refs_memory);
-            self.index.allocator.free(self.pubkey_counts);
             self.file_map.deinit();
-            self.index.deinit();
-            self.pubkey_counts.deinit();
+            // underlying ref memory will be tracked in main index
+            self.index.deinit(false);
         }
     };
 
@@ -224,6 +220,8 @@ pub const AccountsDB = struct {
         accounts_path: []const u8,
     ) !void {
         self.fields = fields;
+
+        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
 
         // start the indexing
         var timer = std.time.Timer.start() catch unreachable;
@@ -248,25 +246,22 @@ pub const AccountsDB = struct {
                 n_account_files += 1;
             }
         }
-        self.logger.infof("found {d} account files\n", .{n_account_files});
+        self.logger.infof("found {d} account files", .{n_account_files});
         std.debug.assert(n_account_files > 0);
 
         const use_disk_index = self.index.use_disk;
 
-        // TODO: THESE LEAK -- TMP SOLN FOR THE TESTS
         const page_allocator = std.heap.page_allocator;
-
         const n_bins = self.index.bins.len;
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
         var thread_dbs = try ArrayList(LoadingThreadAccountsDB).initCapacity(
-            page_allocator, // TODO: LEAK
+            self.allocator,
             n_threads,
         );
         var thread_disk_dirs = ArrayList([]const u8).init(self.allocator);
         for (0..n_threads) |thread_i| {
             if (!use_disk_index) {
                 const t_index = try LoadingThreadAccountsDB.init(
-                    page_allocator, // TODO: LEAK
+                    page_allocator,
                     n_bins,
                     // pre-alloc happens in the thread
                     RamMemoryConfig{ .capacity = 0 },
@@ -283,7 +278,7 @@ pub const AccountsDB = struct {
 
                 // pre-alloc happens in the thread
                 const t_index = try LoadingThreadAccountsDB.init(
-                    page_allocator, // TODO: LEAK
+                    page_allocator,
                     n_bins,
                     .{},
                     DiskMemoryConfig{ .dir_path = thread_disk_dir, .capacity = 0 },
@@ -294,10 +289,10 @@ pub const AccountsDB = struct {
         defer {
             // all thread specific values will be copied to the main allocator
             // so we can deinit them here
-            // for (thread_dbs.items) |*ti| {
-            //     ti.deinit();
-            // }
-            // thread_dbs.deinit();
+            for (thread_dbs.items) |*ti| {
+                ti.deinit();
+            }
+            thread_dbs.deinit();
 
             if (use_disk_index) {
                 for (thread_disk_dirs.items) |thread_disk_dir| {
@@ -329,8 +324,8 @@ pub const AccountsDB = struct {
         }
         handles.deinit();
 
-        self.logger.infof("\n", .{});
-        self.logger.infof("total time: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("", .{});
+        self.logger.infof("total time: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
         var total_accounts: usize = 0;
@@ -346,10 +341,10 @@ pub const AccountsDB = struct {
             }
             total_accounts += bin_n_accounts;
         }
-        self.logger.infof("found {d} accounts\n", .{total_accounts});
+        self.logger.infof("found {d} accounts", .{total_accounts});
         timer.reset();
 
-        self.logger.infof("combining thread accounts...\n", .{});
+        self.logger.infof("combining thread accounts...", .{});
         handles = try spawnThreadTasks(
             self.allocator,
             combineThreadIndexes,
@@ -361,6 +356,29 @@ pub const AccountsDB = struct {
             n_threads,
         );
 
+        // push underlying memory to index
+        const index_allocator = self.index.allocator;
+        var head = try index_allocator.create(RefMemoryLinkedList);
+        head.* = .{
+            .memory = thread_dbs.items[0].index.memory_linked_list.?.memory,
+        };
+        var curr = head;
+        for (1..n_threads) |i| {
+            // sometimes not all threads are spawned
+            if (thread_dbs.items[i].index.memory_linked_list) |memory_linked_list| {
+                var ref = try index_allocator.create(RefMemoryLinkedList);
+                ref.* = .{
+                    .memory = memory_linked_list.memory,
+                };
+                curr.next_ptr = ref;
+                curr = ref;
+            } else {
+                break;
+            }
+        }
+        self.index.memory_linked_list = head;
+
+        // combine file maps
         for (thread_dbs.items) |*task| {
             var iter = task.file_map.iterator();
             while (iter.next()) |entry| {
@@ -373,8 +391,8 @@ pub const AccountsDB = struct {
         }
         handles.deinit();
 
-        self.logger.debugf("\n", .{});
-        self.logger.debugf("combining thread indexes took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debugf("", .{});
+        self.logger.debugf("combining thread indexes took: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
     }
 
@@ -408,10 +426,13 @@ pub const AccountsDB = struct {
         @memset(bin_counts, 0);
 
         const ref_allocator = thread_index.getBin(0).getRefs().allocator;
-        // TODO: be able to re-use this backing memory (whats free/occupied?)
         // NOTE: this constant has a large impact on performance (best to overestimate)
         var n_accounts_est = thread_filenames.len * 2_000;
-        var refs = try ArrayList(AccountRef).initCapacity(ref_allocator, n_accounts_est);
+        thread_index.memory_linked_list = try thread_index.allocator.create(RefMemoryLinkedList);
+        thread_index.memory_linked_list.?.* = .{
+            .memory = try ArrayList(AccountRef).initCapacity(ref_allocator, n_accounts_est),
+        };
+        const refs_ptr = &thread_index.memory_linked_list.?.memory;
 
         var timer = try std.time.Timer.start();
         // NOTE: might need to be longer depending on abs path length
@@ -448,7 +469,7 @@ pub const AccountsDB = struct {
             };
 
             // validate and count here for prealloc
-            thread_index.validateAccountFile(&accounts_file, bin_counts, &refs) catch |err| {
+            thread_index.validateAccountFile(&accounts_file, bin_counts, refs_ptr) catch |err| {
                 std.debug.panic("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
             };
             files.appendAssumeCapacity(accounts_file);
@@ -462,7 +483,7 @@ pub const AccountsDB = struct {
         }
 
         // free extra memory
-        refs.shrinkAndFree(refs.items.len);
+        refs_ptr.shrinkAndFree(refs_ptr.items.len);
 
         // allocate enough memory for the bins
         var total_accounts: usize = 0;
@@ -472,7 +493,6 @@ pub const AccountsDB = struct {
                 total_accounts += count;
             }
         }
-        thread_db.n_accounts = total_accounts;
         std.debug.print("n_accounts vs estimated: {d} vs {d}\n", .{ total_accounts, n_accounts_est });
 
         // TODO: PERF: can probs be faster if you sort the pubkeys first, and then you know
@@ -480,26 +500,10 @@ pub const AccountsDB = struct {
 
         timer.reset();
         // compute how many account_references for each pubkey
-        for (refs.items, 0..) |*ref, ref_count| {
-            const bin = thread_index.getBinFromPubkey(&ref.pubkey);
-            var result = bin.getRefs().getOrPutAssumeCapacity(ref.pubkey); // 1)
-            if (result.found_existing) {
-                // traverse until you find the end
-                var curr: *AccountRef = result.value_ptr.*;
-                while (true) {
-                    if (curr.next_ptr == null) { // 2)
-                        curr.next_ptr = ref;
-                        break;
-                    } else {
-                        curr = curr.next_ptr.?;
-                    }
-                }
-            } else {
-                result.value_ptr.* = ref;
-            }
-
-            if (ref_count % 500_000 == 0 or (refs.items.len - ref_count) < 50_000) {
-                printTimeEstimate(&timer, refs.items.len, ref_count, "generating index", null);
+        for (refs_ptr.items, 0..) |*ref, ref_count| {
+            thread_index.indexRef(ref);
+            if (ref_count % 500_000 == 0 or (refs_ptr.items.len - ref_count) < 50_000) {
+                printTimeEstimate(&timer, refs_ptr.items.len, ref_count, "generating index", null);
             }
         }
     }
@@ -517,11 +521,6 @@ pub const AccountsDB = struct {
         _ = thread_id;
         const total_bins = bin_end_index - bin_start_index;
         var timer = try std.time.Timer.start();
-
-        var total_accounts: usize = 0;
-        for (thread_dbs.items) |*t_db| {
-            total_accounts += t_db.n_accounts;
-        }
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, count| {
             const index_bin = index.getBin(bin_index);
@@ -544,23 +543,8 @@ pub const AccountsDB = struct {
 
                 // insert all of the thread entries into the main index
                 while (iter.next()) |thread_entry| {
-                    const pubkey = thread_entry.key_ptr.*;
-
-                    const result = index_bin_refs.getOrPutAssumeCapacity(pubkey);
-                    if (result.found_existing) {
-                        // traverse until you find the end
-                        var curr: *AccountRef = result.value_ptr.*;
-                        while (true) {
-                            if (curr.next_ptr == null) { // 2)
-                                curr.next_ptr = thread_entry.value_ptr.*;
-                                break;
-                            } else {
-                                curr = curr.next_ptr.?;
-                            }
-                        }
-                    } else {
-                        result.value_ptr.* = thread_entry.value_ptr.*;
-                    }
+                    const thread_ref_ptr = thread_entry.value_ptr.*;
+                    index.indexRef(thread_ref_ptr);
                 }
             }
             printTimeEstimate(&timer, total_bins, count, "combining thread indexes", null);
@@ -618,15 +602,15 @@ pub const AccountsDB = struct {
         }
         handles.deinit();
 
-        self.logger.debugf("\n", .{});
-        self.logger.debugf("took: {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debugf("", .{});
+        self.logger.debugf("took: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
-        self.logger.infof("computing the merkle root over accounts...\n", .{});
+        self.logger.infof("computing the merkle root over accounts...", .{});
         var hash_tree = NestedHashTree{ .hashes = hashes };
         const accounts_hash = try hash_tree.computeMerkleRoot(MERKLE_FANOUT);
 
-        self.logger.debugf("took {s}\n", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debugf("took {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
         var total_lamports: u64 = 0;
@@ -653,7 +637,7 @@ pub const AccountsDB = struct {
         const expected_accounts_hash = self.fields.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
-        self.logger.infof("validating the full snapshot\n", .{});
+        self.logger.infof("validating the full snapshot", .{});
         const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
             .FullAccountHash = .{
                 .max_slot = full_snapshot_slot,
@@ -684,7 +668,7 @@ pub const AccountsDB = struct {
 
         // validate the incremental snapshot
         if (incremental_snapshot_persistence == null) return;
-        self.logger.infof("validating the incremental snapshot\n", .{});
+        self.logger.infof("validating the incremental snapshot", .{});
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
 
@@ -823,8 +807,7 @@ pub const AccountsDB = struct {
         }
 
         // update index
-        // TODO: this leaks
-        var refs = try ArrayList(AccountRef).initCapacity(std.heap.page_allocator, accounts.len);
+        var refs = try ArrayList(AccountRef).initCapacity(self.allocator, accounts.len);
         for (0..accounts.len) |i| {
             const account_ref = AccountRef{
                 .pubkey = pubkeys[i],
@@ -834,25 +817,9 @@ pub const AccountsDB = struct {
                 },
             };
             refs.appendAssumeCapacity(account_ref);
-
-            const ref_ptr = &refs.items[i];
-            const bin = self.index.getBinFromPubkey(&account_ref.pubkey);
-            var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey); // 1)
-            if (result.found_existing) {
-                // traverse until you find the end
-                var curr: *AccountRef = result.value_ptr.*;
-                while (true) {
-                    if (curr.next_ptr == null) { // 2)
-                        curr.next_ptr = ref_ptr;
-                        break;
-                    } else {
-                        curr = curr.next_ptr.?;
-                    }
-                }
-            } else {
-                result.value_ptr.* = ref_ptr;
-            }
+            self.index.indexRef(&refs.items[i]);
         }
+        try self.index.addMemoryBlock(refs);
     }
 
     inline fn lessThanIf(
@@ -998,24 +965,21 @@ pub const AccountsDB = struct {
         );
     }
 
-    pub fn indexAccountFile(
+    pub fn putAccountFile(
         self: *Self,
         account_file: *AccountFile,
+        n_accounts: usize,
     ) !void {
         var bin_counts = try self.allocator.alloc(usize, self.index.numberOfBins());
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        const ref_allocator = std.heap.page_allocator; // TODO: fix LEAK
-        var n_accounts_est: usize = 2_000;
-        var refs = try ArrayList(AccountRef).initCapacity(ref_allocator, n_accounts_est);
-
+        var refs = try ArrayList(AccountRef).initCapacity(self.allocator, n_accounts);
         try self.index.validateAccountFile(account_file, bin_counts, &refs);
         try self.storage.file_map.put(@as(u32, @intCast(account_file.id)), account_file.*);
+        try self.index.addMemoryBlock(refs);
 
         // allocate enough memory here
-        var timer = try std.time.Timer.start();
-
         var total_accounts: usize = 0;
         for (bin_counts, 0..) |count, bin_index| {
             if (count > 0) {
@@ -1024,34 +988,22 @@ pub const AccountsDB = struct {
                 total_accounts += count;
             }
         }
-        std.debug.print("bin counting: {s}\n", .{std.fmt.fmtDuration(timer.read())});
-        timer.reset();
 
         // compute how many account_references for each pubkey
-        for (refs.items, 0..) |*ref, ref_count| {
+        for (refs.items) |*ref| {
             const bin = self.index.getBinFromPubkey(&ref.pubkey);
             var result = bin.getRefs().getOrPutAssumeCapacity(ref.pubkey); // 1)
             if (result.found_existing) {
                 // traverse until you find the end
                 var curr: *AccountRef = result.value_ptr.*;
-                while (true) {
-                    if (curr.next_ptr == null) { // 2)
-                        curr.next_ptr = ref;
-                        break;
-                    } else {
-                        curr = curr.next_ptr.?;
-                    }
+                while (curr.next_ptr) |next| {
+                    curr = next;
                 }
+                curr.next_ptr = ref;
             } else {
                 result.value_ptr.* = ref;
             }
-
-            if (ref_count % 500_000 == 0 or (refs.items.len - ref_count) < 50_000) {
-                printTimeEstimate(&timer, refs.items.len, ref_count, "generating index", null);
-            }
         }
-        std.debug.print("putting: {s}\n", .{std.fmt.fmtDuration(timer.read())});
-        timer.reset();
     }
 };
 
@@ -1261,19 +1213,6 @@ pub const RamMemoryConfig = struct {
     allocator: std.mem.Allocator = std.heap.page_allocator,
 };
 
-// TODO: AccountRefs
-const SlotList = std.ArrayListUnmanaged(AccountRef);
-
-pub inline fn pubkey_hash(key: Pubkey) u64 {
-    return std.mem.readIntLittle(u64, key.data[0..8]);
-}
-
-pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
-    return key1.equals(&key2);
-}
-
-const IndexMap = FastMap(Pubkey, SlotList, pubkey_hash, pubkey_eql);
-
 pub fn FastMap(
     comptime Key: type,
     comptime Value: type,
@@ -1282,7 +1221,6 @@ pub fn FastMap(
 ) type {
     return struct {
         groups: [][GROUP_SIZE]KeyValue,
-        // states: [][GROUP_SIZE]State,
         states: []@Vector(GROUP_SIZE, u8),
         bit_mask: usize,
         // underlying memory
@@ -1346,7 +1284,6 @@ pub fn FastMap(
 
                 const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
-                // const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
                 const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
@@ -1370,7 +1307,6 @@ pub fn FastMap(
                 const group_ptr: [*][GROUP_SIZE]KeyValue = @alignCast(@ptrCast(memory.ptr));
                 const groups = group_ptr[0..n_groups];
                 const states_ptr: [*]@Vector(GROUP_SIZE, u8) = @alignCast(@ptrCast(memory.ptr + group_size));
-                // const states_ptr: [*][GROUP_SIZE]State = @alignCast(@ptrCast(memory.ptr + group_size));
                 const states = states_ptr[0..n_groups];
 
                 var new_self = Self{
@@ -1419,7 +1355,6 @@ pub fn FastMap(
                         return null;
                     }
 
-                    // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[it.group_index]);
                     const states = self.states[it.group_index];
                     const occupied_states = free_state != states;
 
@@ -1474,7 +1409,6 @@ pub fn FastMap(
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
                 const states = self.states[group_index];
 
                 // PERF: SIMD eq check: search for a match
@@ -1515,7 +1449,6 @@ pub fn FastMap(
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]);
                 const states = self.states[group_index];
 
                 // if theres an free then insert
@@ -1558,7 +1491,6 @@ pub fn FastMap(
             const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                // const states: @Vector(GROUP_SIZE, u8) = @bitCast(self.states[group_index]); // 1)
                 const states = self.states[group_index];
 
                 // SIMD eq search for a match (get)
@@ -1597,6 +1529,14 @@ pub fn FastMap(
             unreachable;
         }
     };
+}
+
+pub inline fn pubkey_hash(key: Pubkey) u64 {
+    return std.mem.readIntLittle(u64, key.data[0..8]);
+}
+
+pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
+    return key1.equals(&key2);
 }
 
 pub const AccountIndexBin = struct {
@@ -1684,12 +1624,20 @@ pub const AccountIndexBin = struct {
     }
 };
 
+// TODO: be able to re-use this backing memory (whats free/occupied?)
+// will likely just need a quick simd bitvec
+pub const RefMemoryLinkedList = struct {
+    memory: ArrayList(AccountRef),
+    next_ptr: ?*RefMemoryLinkedList = null,
+};
+
 /// stores the mapping from Pubkey to the account location (AccountRef)
 pub const AccountIndex = struct {
     bins: []AccountIndexBin,
     calculator: PubkeyBinCalculator,
     allocator: std.mem.Allocator,
     use_disk: bool,
+    memory_linked_list: ?*RefMemoryLinkedList = null,
 
     const Self = @This();
 
@@ -1722,11 +1670,36 @@ pub const AccountIndex = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, free_memory: bool) void {
         for (self.bins) |*bin| {
             bin.deinit();
         }
         self.allocator.free(self.bins);
+
+        var maybe_curr = self.memory_linked_list;
+        while (maybe_curr) |curr| {
+            if (free_memory) {
+                curr.memory.deinit();
+            }
+            maybe_curr = curr.next_ptr;
+            self.allocator.destroy(curr);
+        }
+    }
+
+    pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !void {
+        var node = try self.allocator.create(RefMemoryLinkedList);
+        node.* = .{
+            .memory = refs,
+        };
+        if (self.memory_linked_list == null) {
+            self.memory_linked_list = node;
+        } else {
+            var tail = self.memory_linked_list.?;
+            while (tail.next_ptr) |ptr| {
+                tail = ptr;
+            }
+            tail.next_ptr = node;
+        }
     }
 
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
@@ -1749,30 +1722,23 @@ pub const AccountIndex = struct {
         return self.bins.len;
     }
 
-    pub fn putWithCounts(
-        self: *Self,
-        allocator: std.mem.Allocator,
-        pubkey: Pubkey,
-        account_ref: AccountRef,
-        counts: *const PubkeyCountMap,
-    ) !void {
-        const bin = self.getBinFromPubkey(&pubkey);
-        const result = bin.getRefs().getOrPutAssumeCapacity(pubkey);
-        const count = counts.get(pubkey) orelse return error.PubkeyNotFoundInCounts;
-        if (!result.found_existing) {
-            result.value_ptr.* = try SlotList.initCapacity(allocator, count);
-        } else {
-            const capacity = result.value_ptr.capacity;
-            // note: count should include the current len
-            if (capacity < count) {
-                // need to realloc the list
-                // dont bother freeing (fixbuffer doesnt handle frees well)
-                var new_list = try SlotList.initCapacity(allocator, count);
-                new_list.appendSliceAssumeCapacity(result.value_ptr.items);
-                result.value_ptr.* = new_list;
+    pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
+        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+        if (result.found_existing) {
+            // traverse until you find the end
+            var curr: *AccountRef = result.value_ptr.*;
+            while (true) {
+                if (curr.next_ptr == null) { // 2)
+                    curr.next_ptr = account_ref;
+                    break;
+                } else {
+                    curr = curr.next_ptr.?;
+                }
             }
+        } else {
+            result.value_ptr.* = account_ref;
         }
-        result.value_ptr.appendAssumeCapacity(account_ref);
     }
 
     /// indexes and accounts file by parsing out the accounts.
@@ -2276,37 +2242,43 @@ pub const BenchmarkAccountsDB = struct {
 
     pub const args = [_]BenchArgs{
         // // test accounts in ram
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .n_accounts_multiple = 2, // 1M
-        //     .name = "10k accounts (10_slots - ram index)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .ram,
-        //     .index = .ram,
-        //     .name = "100k accounts (1_slot - ram index)",
-        // },
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .ram,
+            .index = .ram,
+            .name = "100k accounts (1_slot - ram index)",
+        },
+        BenchArgs{
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+            .accounts = .ram,
+            .index = .ram,
+            .name = "10k accounts (10_slots - ram index)",
+        },
+
         // tests large number of accounts on disk
         BenchArgs{
-            // .n_accounts = 500_000,
-            .n_accounts = 1_000_000,
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "10k accounts (10_slots - disk index)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
             .slot_list_len = 1,
             .accounts = .disk,
             .index = .ram,
-            .name = "500k accounts (1_slot - ram index)",
+            .name = "500k accounts (1_slot - disk index)",
         },
-        // BenchArgs{
-        //     .n_accounts = 1_000_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "1m accounts (1_slot - ram index)",
-        // },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 3,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "500k accounts (3_slot - disk index)",
+        },
 
         // // testing disk indexes
         // BenchArgs{
@@ -2449,7 +2421,7 @@ pub const BenchmarkAccountsDB = struct {
                 var file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
                 var account_file = try AccountFile.init(file, .{ .id = s, .length = length }, s);
                 if (s < bench_args.n_accounts_multiple) {
-                    try accounts_db.indexAccountFile(&account_file);
+                    try accounts_db.putAccountFile(&account_file, n_accounts);
                 } else {
                     slot_list_filenames.appendAssumeCapacity(filepath);
                     account_files.appendAssumeCapacity(account_file);
@@ -2458,7 +2430,7 @@ pub const BenchmarkAccountsDB = struct {
 
             var timer = try std.time.Timer.start();
             for (account_files.items) |*account_file| {
-                try accounts_db.indexAccountFile(account_file);
+                try accounts_db.putAccountFile(account_file, n_accounts);
             }
             const elapsed = timer.read();
 
