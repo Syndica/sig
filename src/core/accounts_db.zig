@@ -1554,24 +1554,26 @@ pub const AccountIndexBin = struct {
     pub fn initCapacity(
         allocator: std.mem.Allocator,
         ram_memory_config: RamMemoryConfig,
-        maybe_disk_config: ?DiskMemoryConfig,
+        maybe_disk_memory_config: ?DiskMemoryConfig,
         bin_index: usize,
     ) !AccountIndexBin {
-        // setup in-mem references
+        // setup ram references
         var account_refs = RefMap.init(ram_memory_config.allocator);
-        // TODO: ensure capacity
+        if (ram_memory_config.capacity > 0) {
+            try account_refs.ensureTotalCapacity(ram_memory_config.capacity);
+        }
 
         // setup disk references
         var disk_memory: ?DiskMemory = null;
-        if (maybe_disk_config) |*disk_config| {
-            std.fs.cwd().access(disk_config.dir_path, .{}) catch {
-                try std.fs.cwd().makeDir(disk_config.dir_path);
+        if (maybe_disk_memory_config) |*disk_memory_config| {
+            std.fs.cwd().access(disk_memory_config.dir_path, .{}) catch {
+                try std.fs.cwd().makeDir(disk_memory_config.dir_path);
             };
 
             const disk_filepath = try std.fmt.allocPrint(
                 allocator,
                 "{s}/bin{d}_index_data",
-                .{ disk_config.dir_path, bin_index },
+                .{ disk_memory_config.dir_path, bin_index },
             );
 
             // need to store on heap so `ptr.allocator()` is always correct
@@ -1579,7 +1581,9 @@ pub const AccountIndexBin = struct {
             ptr.* = try DiskMemoryAllocator.init(disk_filepath);
 
             var disk_account_refs = RefMap.init(ptr.allocator());
-            // TODO: ensure capacity
+            if (disk_memory_config.capacity > 0) {
+                try account_refs.ensureTotalCapacity(disk_memory_config.capacity);
+            }
 
             disk_memory = .{
                 .account_refs = disk_account_refs,
