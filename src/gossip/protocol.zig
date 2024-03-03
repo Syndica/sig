@@ -102,6 +102,30 @@ pub const Protocol = union(enum(u32)) {
             .PongMessage => {},
         }
     }
+
+    /// Frees the ephemeral messaging data that is only needed
+    /// for the initial processing of an incoming message.
+    ///
+    /// Does not free the contained crds data that
+    /// needs to be stored in the crds table.
+    pub fn shallowFree(self: *Protocol, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .PullRequest => |*msg| {
+                msg[0].deinit();
+            },
+            .PullResponse => |*msg| {
+                allocator.free(msg[1]);
+            },
+            .PushMessage => |*msg| {
+                allocator.free(msg[1]);
+            },
+            .PruneMessage => |*msg| {
+                allocator.free(msg[1].prunes);
+            },
+            .PingMessage => {},
+            .PongMessage => {},
+        }
+    }
 };
 
 pub fn sanitizeWallclock(wallclock: u64) !void {
@@ -359,4 +383,33 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
     var pushmsg = Protocol{ .PushMessage = .{ id, &values } };
     var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
     try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);
+}
+
+test "gossip.protocol: Protocol.PullRequest.ContactInfo signature is valid" {
+    var contact_info_pull_response_packet_from_mainnet = [_]u8{
+        1,   0,   0,   0,   9,   116, 228, 64,  179, 73,  145, 220, 74,  55,  179, 56,  86,  218,
+        47,  62,  172, 162, 127, 102, 37,  146, 103, 117, 255, 245, 248, 212, 101, 163, 188, 231,
+        1,   0,   0,   0,   0,   0,   0,   0,   191, 176, 3,   19,  120, 201, 21,  227, 94,  146,
+        60,  127, 111, 181, 147, 150, 68,  234, 8,   131, 192, 30,  108, 150, 121, 5,   134, 220,
+        252, 71,  136, 63,  192, 193, 133, 15,  13,  156, 242, 62,  160, 222, 146, 240, 206, 85,
+        123, 212, 13,  187, 138, 37,  135, 174, 74,  94,  36,  86,  43,  124, 18,  119, 152, 12,
+        11,  0,   0,   0,   168, 36,  147, 159, 43,  110, 51,  177, 21,  191, 96,  206, 25,  12,
+        133, 238, 147, 223, 2,   133, 105, 29,  83,  234, 44,  111, 123, 246, 244, 15,  167, 219,
+        185, 175, 235, 255, 204, 49,  220, 224, 176, 3,   13,  13,  6,   0,   242, 150, 1,   17,
+        9,   0,   0,   0,   0,   22,  194, 36,  85,  0,   1,   0,   0,   0,   0,   34,  221, 220,
+        125, 12,  0,   0,   192, 62,  10,  0,   1,   11,  0,   1,   5,   0,   1,   6,   0,   1,
+        9,   0,   1,   4,   0,   3,   8,   0,   1,   7,   0,   1,   1,   0,   1,   2,   0,   248,
+        6,   3,   0,   1,   0,
+    };
+
+    var protocol_message = try bincode.readFromSlice(
+        std.testing.allocator,
+        Protocol,
+        &contact_info_pull_response_packet_from_mainnet,
+        bincode.Params.standard,
+    );
+    defer bincode.free(std.testing.allocator, protocol_message);
+
+    try protocol_message.sanitize();
+    try protocol_message.verifySignature();
 }

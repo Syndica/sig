@@ -27,6 +27,8 @@ const Pong = @import("ping_pong.zig").Pong;
 const bincode = @import("../bincode/bincode.zig");
 const crds = @import("../gossip/crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
+const node = @import("./node.zig");
+const ContactInfo = node.ContactInfo;
 const CrdsValue = crds.CrdsValue;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -91,6 +93,9 @@ pub const MAX_NUM_CRDS_VALUES_PULL_RESPONSE = 20; // TODO: this is approx the ru
 pub const MAX_PRUNE_DATA_NODES: usize = 32;
 pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 
+// TODO: replace with get_epoch_duration when BankForks is supported
+const DEFAULT_EPOCH_DURATION: u64 = 172800000;
+
 const Config = struct { mode: enum { normal, tests, bench } = .normal };
 
 pub const GossipService = struct {
@@ -98,10 +103,12 @@ pub const GossipService = struct {
 
     // note: this contact info should not change
     gossip_socket: UdpSocket,
-    my_contact_info: LegacyContactInfo,
+    /// This contact info is mutated by the buildMessages thread, so it must
+    /// only be read by that thread, or it needs a synchronization mechanism.
+    my_contact_info: ContactInfo,
     my_keypair: KeyPair,
     my_pubkey: Pubkey,
-    my_shred_version: u16,
+    my_shred_version: std.atomic.Atomic(u16),
     exit: *AtomicBool,
 
     // communication between threads
@@ -116,7 +123,9 @@ pub const GossipService = struct {
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
-    entrypoints: ArrayList(SocketAddr),
+    /// This contact info is mutated by the buildMessages thread, so it must
+    /// only be read by that thread, or it needs a synchronization mechanism.
+    entrypoints: ArrayList(Entrypoint),
     ping_cache_rw: RwMux(PingCache),
     logger: Logger,
     thread_pool: *ThreadPool,
@@ -125,16 +134,18 @@ pub const GossipService = struct {
     // used for benchmarking
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
 
+    const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
+
     const Self = @This();
 
     pub fn init(
         allocator: std.mem.Allocator,
-        my_contact_info: LegacyContactInfo,
+        my_contact_info: ContactInfo,
         my_keypair: KeyPair,
         entrypoints: ?ArrayList(SocketAddr),
         exit: *AtomicBool,
         logger: Logger,
-    ) error{ OutOfMemory, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
+    ) error{ OutOfMemory, GossipAddrUnspecified, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_incoming_channel = PacketBatchChannel.init(allocator, 10000);
         var packet_outgoing_channel = PacketBatchChannel.init(allocator, 10000);
         var verified_incoming_channel = ProtocolChannel.init(allocator, 10000);
@@ -161,7 +172,7 @@ pub const GossipService = struct {
         var active_set = ActiveSet.init(allocator);
 
         // bind the socket
-        const gossip_address = my_contact_info.gossip;
+        const gossip_address = my_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse return error.GossipAddrUnspecified;
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
         gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT) catch return error.SocketSetTimeoutFailed; // 1 second
@@ -169,13 +180,19 @@ pub const GossipService = struct {
         var failed_pull_hashes = HashTimeQueue.init(allocator);
         var push_msg_q = ArrayList(CrdsValue).init(allocator);
 
-        var echo_server = echo.Server.init(allocator, my_contact_info.gossip.port(), logger, exit);
+        var echo_server = echo.Server.init(allocator, gossip_address.port(), logger, exit);
+
+        var entrypoint_list = ArrayList(Entrypoint).init(allocator);
+        if (entrypoints) |eps| {
+            try entrypoint_list.ensureTotalCapacityPrecise(eps.items.len);
+            for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
+        }
 
         return Self{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
             .my_pubkey = my_pubkey,
-            .my_shred_version = my_shred_version,
+            .my_shred_version = std.atomic.Atomic(u16).init(my_shred_version),
             .gossip_socket = gossip_socket,
             .exit = exit,
             .packet_incoming_channel = packet_incoming_channel,
@@ -186,7 +203,7 @@ pub const GossipService = struct {
             .push_msg_queue_mux = Mux(ArrayList(CrdsValue)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
-            .entrypoints = entrypoints orelse ArrayList(SocketAddr).init(allocator),
+            .entrypoints = entrypoint_list,
             .ping_cache_rw = RwMux(PingCache).init(
                 try PingCache.init(
                     allocator,
@@ -214,6 +231,7 @@ pub const GossipService = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.my_contact_info.deinit();
         self.echo_server.deinit();
         self.gossip_socket.close();
 
@@ -324,8 +342,11 @@ pub const GossipService = struct {
                 return;
             };
 
-            protocol_message.verifySignature() catch {
-                self.logger.errf("gossip: packet_verify: failed to verify signature", .{});
+            protocol_message.verifySignature() catch |e| {
+                self.logger.errf(
+                    "gossip: packet_verify: failed to verify signature: {} from {}",
+                    .{ e, self.packet.addr },
+                );
                 bincode.free(self.allocator, protocol_message);
                 return;
             };
@@ -472,7 +493,32 @@ pub const GossipService = struct {
             const protocol_messages = maybe_protocol_messages.?;
             defer {
                 for (protocol_messages) |*msg| {
-                    bincode.free(self.allocator, msg.message);
+                    // Important: this uses shallowFree instead of bincode.free
+                    //
+                    // The message contains some messaging metadata plus a
+                    // payload of a CrdsValue. The metadata won't be needed
+                    // after this iteration is complete. The payload will be
+                    // needed since it is stored in the CrdsTable.
+                    //
+                    // bincode.free would free the entire message including the
+                    // payload. This would lead to a segfault if the data is
+                    // accessed from the CrdsTable later.
+                    //
+                    // Not freeing at all would lead to a memory leak of any
+                    // allocations in the metadata.
+                    //
+                    // The compromise is a "shallow" free that only frees the
+                    // messaging metadata. CrdsValue ownership will be
+                    // transferred to CrdsTable. The CrdsTable implementation
+                    // becomes responsible for freeing any CrdsValues when
+                    // needed.
+                    //
+                    // TODO: this approach is not ideal because it is difficult
+                    // to maintain. Another approach such as reference counting
+                    // would be safer. For more info, see:
+                    // - CrdsTable.remove
+                    // - https://github.com/Syndica/sig/pull/69
+                    msg.message.shallowFree(self.allocator);
                 }
                 self.verified_incoming_channel.allocator.free(protocol_messages);
             }
@@ -499,13 +545,24 @@ pub const GossipService = struct {
                     .PullRequest => |*pull| {
                         const value: CrdsValue = pull[1];
                         switch (value.data) {
+                            .ContactInfo => |*data| {
+                                if (data.pubkey.equals(&self.my_pubkey)) {
+                                    // talking to myself == ignore
+                                    continue;
+                                }
+                                // Allow spy nodes with shred-verion == 0 to pull from other nodes.
+                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
+                                    // non-matching shred version
+                                    continue;
+                                }
+                            },
                             .LegacyContactInfo => |*data| {
                                 if (data.id.equals(&self.my_pubkey)) {
                                     // talking to myself == ignore
                                     continue;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
-                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version) {
+                                if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
                                     continue;
                                 }
@@ -652,6 +709,8 @@ pub const GossipService = struct {
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
         var should_send_pull_requests = true;
+        var entrypoints_identified = false;
+        var shred_version_assigned = false;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const top_of_loop_ts = getWallclockMs();
@@ -683,12 +742,19 @@ pub const GossipService = struct {
             // trim data
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
 
+            // initialize cluster data from crds values
+            entrypoints_identified = entrypoints_identified or try self.populateEntrypointsFromCrdsTable();
+            shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
+
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
                 var my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
-                    .LegacyContactInfo = self.my_contact_info,
+                    .ContactInfo = self.my_contact_info,
+                }, &self.my_keypair);
+                var my_legacy_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                    .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
                 }, &self.my_keypair);
 
                 // push contact info
@@ -698,6 +764,7 @@ pub const GossipService = struct {
                     var push_msg_queue: *ArrayList(CrdsValue) = push_msg_queue_lock.mut();
 
                     try push_msg_queue.append(my_contact_info_value);
+                    try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
                 self.rotateActiveSet() catch @panic("out of memory");
@@ -711,15 +778,15 @@ pub const GossipService = struct {
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
-        self.logger.infof("build_messages loop closed\n", .{});
+        self.logger.infof("build_messages loop closed", .{});
     }
 
     pub fn rotateActiveSet(
         self: *Self,
-    ) error{ OutOfMemory, SerializationError, ChannelClosed }!void {
+    ) !void {
         const now = getWallclockMs();
-        var buf: [NUM_ACTIVE_SET_ENTRIES]LegacyContactInfo = undefined;
-        var gossip_peers = self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
+        var buf: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
+        var gossip_peers = try self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
         // filter out peers who have responded to pings
         var ping_cache_result = blk: {
@@ -733,7 +800,7 @@ pub const GossipService = struct {
         var valid_gossip_indexs = ping_cache_result.valid_peers;
         defer valid_gossip_indexs.deinit();
 
-        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]LegacyContactInfo = undefined;
+        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
         for (0.., valid_gossip_indexs.items) |i, valid_gossip_index| {
             valid_gossip_peers[i] = gossip_peers[valid_gossip_index];
         }
@@ -870,9 +937,9 @@ pub const GossipService = struct {
         bloom_size: usize,
     ) !ArrayList(Packet) {
         // get nodes from crds table
-        var buf: [MAX_NUM_PULL_REQUESTS]LegacyContactInfo = undefined;
+        var buf: [MAX_NUM_PULL_REQUESTS]ContactInfo = undefined;
         const now = getWallclockMs();
-        var peers = self.getGossipNodes(
+        var peers = try self.getGossipNodes(
             &buf,
             MAX_NUM_PULL_REQUESTS,
             now,
@@ -882,21 +949,10 @@ pub const GossipService = struct {
         var rng = std.rand.DefaultPrng.init(now);
         var entrypoint_index: i16 = -1;
         if (self.entrypoints.items.len != 0) blk: {
-            var crds_table_lg = self.crds_table_rw.read();
-            defer crds_table_lg.unlock();
-
             var maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
-            const entrypoint = self.entrypoints.items[maybe_entrypoint_index];
-
-            const crds_table: *const CrdsTable = crds_table_lg.get();
-            const contact_infos = try crds_table.getAllContactInfos();
-            defer contact_infos.deinit();
-
-            for (contact_infos.items) |contact_info| {
-                if (contact_info.gossip.eql(&entrypoint)) {
-                    // early exit - we already have the peers in our contact info
-                    break :blk;
-                }
+            if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
+                // early exit - we already have the peer in our contact info
+                break :blk;
             }
             // we dont have them so well add them to the peer list (as default contact info)
             entrypoint_index = @intCast(maybe_entrypoint_index);
@@ -958,7 +1014,7 @@ pub const GossipService = struct {
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
         const my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
-            .LegacyContactInfo = self.my_contact_info,
+            .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
         }, &self.my_keypair);
 
         if (num_peers != 0) {
@@ -967,28 +1023,28 @@ pub const GossipService = struct {
                 const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
-                const peer_addr = peer_contact_info.gossip.toEndpoint();
+                if (peer_contact_info.getSocket(node.SOCKET_TAG_GOSSIP)) |gossip_addr| {
+                    const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
-                const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
-
-                var packet = &packet_batch.items[packet_index];
-                var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
-                packet.size = bytes.len;
-                packet.addr = peer_addr;
-                packet_index += 1;
+                    var packet = &packet_batch.items[packet_index];
+                    var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
+                    packet.size = bytes.len;
+                    packet.addr = gossip_addr.toEndpoint();
+                    packet_index += 1;
+                }
             }
         }
 
         // append entrypoint msgs
         if (should_send_to_entrypoint) {
-            const entrypoint_addr = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
+            const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
                 const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
 
                 var packet = &packet_batch.items[packet_index];
                 var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
                 packet.size = bytes.len;
-                packet.addr = entrypoint_addr.toEndpoint();
+                packet.addr = entrypoint.addr.toEndpoint();
                 packet_index += 1;
             }
         }
@@ -1080,10 +1136,23 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var peers = try ArrayList(LegacyContactInfo).initCapacity(self.allocator, pull_requests.items.len);
+            var peers = try ArrayList(ContactInfo).initCapacity(self.allocator, pull_requests.items.len);
             defer peers.deinit();
-            for (pull_requests.items) |req| {
-                peers.appendAssumeCapacity(req.value.data.LegacyContactInfo);
+            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer arena.deinit();
+            {
+                var crds_table_lock = self.crds_table_rw.read();
+                defer crds_table_lock.unlock();
+                var crds_table: *const CrdsTable = crds_table_lock.get();
+                for (pull_requests.items) |req| {
+                    const contact_info = switch (req.value.data) {
+                        .ContactInfo => |ci| ci,
+                        .LegacyContactInfo => |legacy| crds_table.getContactInfo(legacy.id) orelse
+                            try legacy.toContactInfo(arena.allocator()),
+                        else => return error.PullRequestWithoutContactInfo,
+                    };
+                    peers.appendAssumeCapacity(contact_info);
+                }
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
@@ -1320,11 +1389,11 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             const crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = prune_destination }) orelse {
+            break :blk crds_table.getContactInfo(prune_destination) orelse {
                 return error.CantFindContactInfo;
             };
         };
-        const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
+        const from_gossip_addr = from_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse return error.InvalidGossipAddress;
         crds.sanitizeSocket(&from_gossip_addr) catch return error.InvalidGossipAddress;
         const from_gossip_endpoint = from_gossip_addr.toEndpoint();
 
@@ -1420,11 +1489,11 @@ pub const GossipService = struct {
                 }
 
                 // lookup contact info
-                const from_contact_info = crds_table.get(crds.CrdsValueLabel{ .LegacyContactInfo = push_message.from_pubkey.* }) orelse {
+                const from_contact_info = crds_table.getContactInfo(push_message.from_pubkey.*) orelse {
                     // unable to find contact info
                     continue;
                 };
-                const from_gossip_addr = from_contact_info.value.data.LegacyContactInfo.gossip;
+                const from_gossip_addr = from_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
                 crds.sanitizeSocket(&from_gossip_addr) catch {
                     // invalid gossip socket
                     continue;
@@ -1510,7 +1579,13 @@ pub const GossipService = struct {
 
             try crds_table.purged.trim(purged_cutoff_timestamp);
             try crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY);
-            try crds_table.removeOldLabels(now, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS);
+
+            // TODO: condition timeout on stake weight:
+            // - values from nodes with non-zero stake: epoch duration
+            // - values from nodes with zero stake:
+            //   - if all nodes have zero stake: epoch duration
+            //   - if any other nodes have non-zero stake: CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS (15s)
+            try crds_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
         }
 
         const failed_insert_cutoff_timestamp = now -| FAILED_INSERTS_RETENTION_MS;
@@ -1521,6 +1596,47 @@ pub const GossipService = struct {
 
             try failed_pull_hashes.trim(failed_insert_cutoff_timestamp);
         }
+    }
+
+    /// Attempts to associate each entrypoint address with a contact info.
+    /// Returns true if all entrypoints have been identified
+    ///
+    /// Acquires the crds table lock regardless of whether the crds table is used.
+    fn populateEntrypointsFromCrdsTable(self: *Self) !bool {
+        var identified_all = true;
+
+        var crds_table_lock = self.crds_table_rw.read();
+        defer crds_table_lock.unlock();
+        var crds_table: *const CrdsTable = crds_table_lock.get();
+
+        for (self.entrypoints.items) |*entrypoint| {
+            if (entrypoint.info == null) {
+                entrypoint.info = try crds_table.getOwnedContactInfoByGossipAddr(entrypoint.addr);
+            }
+            identified_all = identified_all and entrypoint.info != null;
+        }
+        return identified_all;
+    }
+
+    /// if we have no shred version, attempt to get one from an entrypoint.
+    /// Returns true if the shred version is set to non-zero
+    fn assignDefaultShredVersionFromEntrypoint(self: *Self) bool {
+        if (self.my_shred_version.load(.Monotonic) != 0) return true;
+        for (self.entrypoints.items) |entrypoint| {
+            if (entrypoint.info) |info| {
+                if (info.shred_version != 0) {
+                    var addr_str = entrypoint.addr.toString();
+                    self.logger.infof(
+                        "shred version: {} - from entrypoint contact info: {s}",
+                        .{ info.shred_version, addr_str[0][0..addr_str[1]] },
+                    );
+                    self.my_shred_version.store(info.shred_version, .Monotonic);
+                    self.my_contact_info.shred_version = info.shred_version;
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /// drains values from the push queue and inserts them into the crds table.
@@ -1573,53 +1689,51 @@ pub const GossipService = struct {
     pub fn getGossipNodes(
         self: *Self,
         /// the output slice which will be filled with gossip nodes
-        nodes: []LegacyContactInfo,
+        nodes: []ContactInfo,
         /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
         comptime MAX_SIZE: usize,
         /// current time (used to filter out nodes that are too old)
         now: u64,
-    ) []LegacyContactInfo {
+    ) ![]ContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
+        // filter only valid gossip addresses
+        const GOSSIP_ACTIVE_TIMEOUT = 60 * std.time.ms_per_s;
+        const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
+
         // * 2 bc we might filter out some
-        var buf: [MAX_SIZE * 2]crds.CrdsVersionedValue = undefined;
+        var buf: [MAX_SIZE * 2]node.ContactInfo = undefined;
         const contact_infos = blk: {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
 
             var crds_table: *const CrdsTable = crds_table_lock.get();
-            break :blk crds_table.getContactInfos(&buf);
+            break :blk crds_table.getContactInfos(&buf, too_old_ts);
         };
 
         if (contact_infos.len == 0) {
             return nodes[0..0];
         }
 
-        // filter only valid gossip addresses
-        const GOSSIP_ACTIVE_TIMEOUT = 60 * std.time.ms_per_s;
-        const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
-
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
-            const peer_info = contact_info.value.data.LegacyContactInfo;
-            const peer_gossip_addr = peer_info.gossip;
+            const peer_gossip_addr = contact_info.getSocket(node.SOCKET_TAG_GOSSIP);
 
-            // filter inactive nodes
-            if (contact_info.timestamp_on_insertion < too_old_ts) {
-                continue;
-            }
             // filter self
-            if (contact_info.value.id().equals(&self.my_pubkey)) {
+            if (contact_info.pubkey.equals(&self.my_pubkey)) {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
-            if (self.my_shred_version != 0 and self.my_shred_version != peer_info.shred_version) {
+            const my_shred_version = self.my_shred_version.load(.Monotonic);
+            if (my_shred_version != 0 and my_shred_version != contact_info.shred_version) {
                 continue;
             }
             // filter on valid gossip address
-            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
+            if (peer_gossip_addr) |addr| {
+                crds.sanitizeSocket(&addr) catch continue;
+            } else continue;
 
-            nodes[node_index] = peer_info;
+            nodes[node_index] = contact_info;
             node_index += 1;
 
             if (node_index == nodes.len) {
@@ -1639,17 +1753,22 @@ pub const GossipService = struct {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
         var crds_values_array = ArrayList(CrdsValue).fromOwnedSlice(self.allocator, crds_values);
-        if (crds_table.check_matching_shred_version(from_pubkey, self.my_shred_version)) {
+        const my_shred_version = self.my_shred_version.load(.Monotonic);
+        if (my_shred_version == 0) {
+            return crds_values_array.items.len;
+        }
+        if (crds_table.check_matching_shred_version(from_pubkey, my_shred_version)) {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
                         // only allow other values with matching shred versions
                         if (!crds_table.check_matching_shred_version(
                             crds_value.id(),
-                            self.my_shred_version,
+                            my_shred_version,
                         )) {
                             _ = crds_values_array.swapRemove(i);
                         }
@@ -1660,6 +1779,7 @@ pub const GossipService = struct {
             for (crds_values, 0..) |*crds_value, i| {
                 switch (crds_value.data) {
                     // always allow contact info + node instance to update shred versions
+                    .ContactInfo => {},
                     .LegacyContactInfo => {},
                     .NodeInstance => {},
                     else => {
@@ -1758,9 +1878,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1813,9 +1931,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1833,13 +1949,16 @@ test "gossip.gossip_service: tests handle_prune_messages" {
 
     // add some peers
     var lg = gossip_service.crds_table_rw.write();
-    var peers = ArrayList(LegacyContactInfo).init(allocator);
-    defer peers.deinit();
+    var peers = ArrayList(ContactInfo).init(allocator);
+    defer {
+        for (peers.items) |p| p.deinit();
+        peers.deinit();
+    }
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
         var value = try CrdsValue.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
-        try peers.append(value.data.LegacyContactInfo);
+        try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
     }
     lg.unlock();
 
@@ -1886,9 +2005,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -1947,9 +2064,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2021,7 +2136,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     defer pull_requests.deinit();
     try pull_requests.append(GossipService.PullRequestMessage{
         .filter = filter,
-        .from_endpoint = contact_info.gossip.toEndpoint(),
+        .from_endpoint = (contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse unreachable).toEndpoint(),
         .value = crds_value,
     });
 
@@ -2040,9 +2155,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2129,9 +2242,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2173,9 +2284,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2192,14 +2301,17 @@ test "gossip.gossip_service: test build_push_messages" {
     defer gossip_service.deinit();
 
     // add some peers
-    var peers = ArrayList(LegacyContactInfo).init(allocator);
-    defer peers.deinit();
+    var peers = ArrayList(ContactInfo).init(allocator);
+    defer {
+        for (peers.items) |p| p.deinit();
+        peers.deinit();
+    }
     var lg = gossip_service.crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
         var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
-        try peers.append(value.data.LegacyContactInfo);
+        try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
     }
     lg.unlock();
 
@@ -2245,9 +2357,7 @@ test "gossip.gossip_service: test packet verification" {
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(id);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(id);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2377,9 +2487,7 @@ test "gossip.gossip_service: process contact_info push packet" {
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
-
-    var contact_info = LegacyContactInfo.default(my_pubkey);
-    contact_info.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
+    const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2440,12 +2548,12 @@ test "gossip.gossip_service: process contact_info push packet" {
     try verified_channel.send(ping_msg);
 
     // correct insertion into table
-    var buf2: [100]crds.CrdsVersionedValue = undefined;
+    var buf2: [100]node.ContactInfo = undefined;
     std.time.sleep(std.time.ns_per_s);
 
     {
         var lg = gossip_service.crds_table_rw.read();
-        var res = lg.get().getContactInfos(&buf2);
+        var res = lg.get().getContactInfos(&buf2, 0);
         try std.testing.expect(res.len == 1);
         lg.unlock();
     }
@@ -2467,8 +2575,8 @@ test "gossip.gossip_service: init, exit, and deinit" {
     var gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     var my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
-    var contact_info = LegacyContactInfo.random(rng.random());
-    contact_info.gossip = gossip_address;
+    var contact_info = try LegacyContactInfo.random(rng.random()).toContactInfo(std.testing.allocator);
+    try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, gossip_address);
     var exit = AtomicBool.init(false);
     var logger = Logger.init(std.testing.allocator, .debug);
     defer logger.deinit();
@@ -2525,9 +2633,8 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var endpoint = address.toEndpoint();
 
         var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
-        var contact_info = LegacyContactInfo.default(pubkey);
-        contact_info.shred_version = 19;
-        contact_info.gossip = address;
+        var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
+        try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, address);
 
         var logger: Logger = .noop;
 
@@ -2628,3 +2735,9 @@ pub const BenchmarkGossipServiceGeneral = struct {
         return elapsed;
     }
 };
+
+fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
+    var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
+    try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
+    return contact_info;
+}

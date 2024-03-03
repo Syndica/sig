@@ -7,8 +7,9 @@ const CrdsValue = crds.CrdsValue;
 const CrdsData = crds.CrdsData;
 const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
-const LegacyContactInfo = crds.LegacyContactInfo;
-const ContactInfo = @import("node.zig").ContactInfo;
+
+const node = @import("node.zig");
+const ContactInfo = node.ContactInfo;
 
 const pull_import = @import("pull_request.zig");
 const CrdsFilter = pull_import.CrdsFilter;
@@ -215,20 +216,20 @@ pub const PingCache = struct {
         self: *Self,
         allocator: std.mem.Allocator,
         our_keypair: KeyPair,
-        peers: []LegacyContactInfo,
+        peers: []ContactInfo,
     ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
         var now = std.time.Instant.now() catch @panic("time not supported by OS!");
         var valid_peers = std.ArrayList(usize).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (!peer.gossip.isUnspecified()) {
-                var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, &our_keypair);
+            if (peer.getSocket(node.SOCKET_TAG_GOSSIP)) |gossip_addr| {
+                var result = self.check(now, PubkeyAndSocketAddr{ peer.pubkey, gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
                 }
                 if (result.maybe_ping) |ping| {
-                    try pings.append(.{ .ping = ping, .socket = peer.gossip });
+                    try pings.append(.{ .ping = ping, .socket = gossip_addr });
                 }
             }
         }
@@ -251,23 +252,23 @@ test "gossip.ping_pong: PingCache works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var node = PubkeyAndSocketAddr{ Pubkey.random(rng), SocketAddr.UNSPECIFIED };
+    var the_node = PubkeyAndSocketAddr{ Pubkey.random(rng), SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
     var ping = ping_cache.maybePing(
         now1,
-        node,
+        the_node,
         &our_kp,
     );
 
     var now2 = try std.time.Instant.now();
 
-    var resp = ping_cache.check(now2, node, &our_kp);
+    var resp = ping_cache.check(now2, the_node, &our_kp);
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
-    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
+    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]ContactInfo{});
     defer result.valid_peers.deinit();
     defer result.pings.deinit();
 

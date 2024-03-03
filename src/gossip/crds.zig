@@ -5,7 +5,8 @@ const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Slot = @import("../core/time.zig").Slot;
-const ContactInfo = @import("node.zig").ContactInfo;
+const node = @import("./node.zig");
+const ContactInfo = node.ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -269,6 +270,40 @@ pub const LegacyContactInfo = struct {
             .serve_repair = SocketAddr.random(rng),
             .wallclock = getWallclockMs(),
             .shred_version = rng.int(u16),
+        };
+    }
+
+    /// call ContactInfo.deinit to free
+    pub fn toContactInfo(self: *const LegacyContactInfo, allocator: std.mem.Allocator) !ContactInfo {
+        var ci = ContactInfo.init(allocator, self.id, self.wallclock, self.shred_version);
+        try ci.setSocket(node.SOCKET_TAG_GOSSIP, self.gossip);
+        try ci.setSocket(node.SOCKET_TAG_TVU, self.tvu);
+        try ci.setSocket(node.SOCKET_TAG_TVU_FORWARDS, self.tvu_forwards);
+        try ci.setSocket(node.SOCKET_TAG_REPAIR, self.repair);
+        try ci.setSocket(node.SOCKET_TAG_TPU, self.tpu);
+        try ci.setSocket(node.SOCKET_TAG_TPU_FORWARDS, self.tpu_forwards);
+        try ci.setSocket(node.SOCKET_TAG_TPU_VOTE, self.tpu_vote);
+        try ci.setSocket(node.SOCKET_TAG_RPC, self.rpc);
+        try ci.setSocket(node.SOCKET_TAG_RPC_PUBSUB, self.rpc_pubsub);
+        try ci.setSocket(node.SOCKET_TAG_SERVE_REPAIR, self.serve_repair);
+        return ci;
+    }
+
+    pub fn fromContactInfo(ci: *const ContactInfo) LegacyContactInfo {
+        return .{
+            .id = ci.pubkey,
+            .gossip = ci.getSocket(node.SOCKET_TAG_GOSSIP) orelse SocketAddr.UNSPECIFIED,
+            .tvu = ci.getSocket(node.SOCKET_TAG_TVU) orelse SocketAddr.UNSPECIFIED,
+            .tvu_forwards = ci.getSocket(node.SOCKET_TAG_TVU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .repair = ci.getSocket(node.SOCKET_TAG_REPAIR) orelse SocketAddr.UNSPECIFIED,
+            .tpu = ci.getSocket(node.SOCKET_TAG_TPU) orelse SocketAddr.UNSPECIFIED,
+            .tpu_forwards = ci.getSocket(node.SOCKET_TAG_TPU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .tpu_vote = ci.getSocket(node.SOCKET_TAG_TPU_VOTE) orelse SocketAddr.UNSPECIFIED,
+            .rpc = ci.getSocket(node.SOCKET_TAG_RPC) orelse SocketAddr.UNSPECIFIED,
+            .rpc_pubsub = ci.getSocket(node.SOCKET_TAG_RPC_PUBSUB) orelse SocketAddr.UNSPECIFIED,
+            .serve_repair = ci.getSocket(node.SOCKET_TAG_SERVE_REPAIR) orelse SocketAddr.UNSPECIFIED,
+            .wallclock = ci.wallclock,
+            .shred_version = ci.shred_version,
         };
     }
 };
@@ -965,4 +1000,17 @@ test "gossip.crds: random crds data" {
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }
+}
+
+test "gossip.crds: LegacyContactInfo <-> ContactInfo roundtrip" {
+    var seed: u64 = @intCast(std.time.milliTimestamp());
+    var rand = std.rand.DefaultPrng.init(seed);
+    const rng = rand.random();
+
+    const start = LegacyContactInfo.random(rng);
+    const ci = try start.toContactInfo(std.testing.allocator);
+    defer ci.deinit();
+    const end = LegacyContactInfo.fromContactInfo(&ci);
+
+    try std.testing.expect(std.meta.eql(start, end));
 }

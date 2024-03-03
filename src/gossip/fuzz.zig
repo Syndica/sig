@@ -13,6 +13,8 @@ const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_S
 const Logger = @import("../trace/log.zig").Logger;
 const crds = @import("crds.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
+const node = @import("../gossip/node.zig");
+const ContactInfo = node.ContactInfo;
 const AtomicBool = std.atomic.Atomic(bool);
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -277,9 +279,8 @@ pub fn main() !void {
     var fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
 
     var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
-    var fuzz_contact_info = LegacyContactInfo.default(fuzz_pubkey);
-    fuzz_contact_info.shred_version = 19;
-    fuzz_contact_info.gossip = fuzz_address;
+    var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
+    try fuzz_contact_info.setSocket(node.SOCKET_TAG_GOSSIP, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(
