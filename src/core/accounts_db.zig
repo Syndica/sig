@@ -218,10 +218,9 @@ pub const AccountsDB = struct {
         fields: AccountsDbFields,
         // where the account files are
         accounts_path: []const u8,
+        n_threads: u32,
     ) !void {
         self.fields = fields;
-
-        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount()));
 
         // start the indexing
         var timer = std.time.Timer.start() catch unreachable;
@@ -501,7 +500,7 @@ pub const AccountsDB = struct {
         timer.reset();
         // compute how many account_references for each pubkey
         for (refs_ptr.items, 0..) |*ref, ref_count| {
-            thread_index.indexRef(ref);
+            thread_index.indexRefIfNotDuplicate(ref);
             if (ref_count % 500_000 == 0 or (refs_ptr.items.len - ref_count) < 50_000) {
                 printTimeEstimate(&timer, refs_ptr.items.len, ref_count, "generating index", null);
             }
@@ -1726,6 +1725,32 @@ pub const AccountIndex = struct {
         return self.bins.len;
     }
 
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot)
+    pub fn indexRefIfNotDuplicate(self: *Self, account_ref: *AccountRef) void {
+        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey);
+        if (result.found_existing) {
+            // traverse until you find the end
+            var curr: *AccountRef = result.value_ptr.*;
+            while (true) {
+                if (curr.slot == account_ref.slot) {
+                    // found a duplicate => dont do the insertion
+                    break;
+                } else if (curr.next_ptr == null) {
+                    // end of the list => insert it here
+                    curr.next_ptr = account_ref;
+                    break;
+                } else {
+                    // keep traversing
+                    curr = curr.next_ptr.?;
+                }
+            }
+        } else {
+            result.value_ptr.* = account_ref;
+        }
+    }
+
+    /// adds a reference to the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
         const bin = self.getBinFromPubkey(&account_ref.pubkey);
         var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey); // 1)
@@ -1839,13 +1864,14 @@ pub fn main() !void {
     // NOTE: running with `zig build run` or similar will not work due to fd limits
     // you need to build and then run ./zig-out/bin/accounts_db to get around these
 
+    const n_threads_snapshot_load = @as(u32, @truncate(try std.Thread.getCpuCount()));
     const n_threads_snapshot_unpack = 20;
     const disk_index_dir: ?[]const u8 = "test_data/tmp";
     // const disk_index_dir: ?[]const u8 = null;
     const index_ram_capacity = 100_000;
     const force_unpack_snapshot = false;
-    // const snapshot_dir = "../snapshots/";
-    const snapshot_dir = "test_data/";
+    const snapshot_dir = "../snapshots/";
+    // const snapshot_dir = "test_data/";
 
     var logger = Logger.init(allocator, Level.debug);
     logger.spawn();
@@ -1934,6 +1960,7 @@ pub fn main() !void {
     try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
         accounts_path,
+        n_threads_snapshot_load,
     );
     std.debug.print("loaded from snapshot in {s}\n", .{std.fmt.fmtDuration(timer.read())});
 
@@ -2025,6 +2052,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
         accounts_path,
+        1,
     );
 
     return .{
