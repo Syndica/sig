@@ -30,6 +30,23 @@ pub const CrdsVersionedValue = struct {
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
+
+    pub fn overwrites(new_value: *const @This(), old_value: *const @This()) bool {
+        // labels must match
+        std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
+
+        const new_ts = new_value.value.wallclock();
+        const old_ts = old_value.value.wallclock();
+
+        // TODO: improve the return type here
+        if (new_ts > old_ts) {
+            return true;
+        } else if (new_ts < old_ts) {
+            return false;
+        } else {
+            return old_value.value_hash.cmp(&new_value.value_hash) == .lt;
+        }
+    }
 };
 
 pub const CrdsValue = struct {

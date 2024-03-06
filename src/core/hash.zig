@@ -3,11 +3,7 @@ const Sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
 pub const HASH_SIZE: usize = 32;
 
-pub const CompareResult = enum {
-    Greater,
-    Less,
-    Equal,
-};
+const CompareOperator = std.math.CompareOperator;
 
 pub const Hash = struct {
     data: [HASH_SIZE]u8,
@@ -39,15 +35,15 @@ pub const Hash = struct {
         return hash;
     }
 
-    pub fn cmp(a: *const Self, b: *const Self) CompareResult {
+    pub fn cmp(a: *const Self, b: *const Self) CompareOperator {
         for (0..HASH_SIZE) |i| {
             if (a.data[i] > b.data[i]) {
-                return CompareResult.Greater;
+                return .gt;
             } else if (a.data[i] < b.data[i]) {
-                return CompareResult.Less;
+                return .lt;
             }
         }
-        return CompareResult.Equal;
+        return .eq;
     }
 
     pub fn extend_and_hash(

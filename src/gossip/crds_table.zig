@@ -6,7 +6,6 @@ const bincode = @import("../bincode/bincode.zig");
 
 const _hash = @import("../core/hash.zig");
 const Hash = _hash.Hash;
-const CompareResult = _hash.CompareResult;
 
 const CrdsShards = @import("./crds_shards.zig").CrdsShards;
 
@@ -216,7 +215,7 @@ pub const CrdsTable = struct {
             self.cursor += 1;
 
             // should overwrite existing entry
-        } else if (crdsOverwrites(&versioned_value, result.value_ptr)) {
+        } else if (versioned_value.overwrites(result.value_ptr)) {
             const old_entry = result.value_ptr.*;
 
             switch (value.data) {
@@ -270,7 +269,7 @@ pub const CrdsTable = struct {
         } else {
             const old_entry = result.value_ptr.*;
 
-            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != CompareResult.Equal) {
+            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
                 return CrdsError.OldValue;
@@ -825,23 +824,6 @@ pub const HashTimeQueue = struct {
         return hashes;
     }
 };
-
-pub fn crdsOverwrites(new_value: *const CrdsVersionedValue, old_value: *const CrdsVersionedValue) bool {
-    // labels must match
-    std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
-
-    const new_ts = new_value.value.wallclock();
-    const old_ts = old_value.value.wallclock();
-
-    // TODO: improve the return type here
-    if (new_ts > old_ts) {
-        return true;
-    } else if (new_ts < old_ts) {
-        return false;
-    } else {
-        return old_value.value_hash.cmp(&new_value.value_hash) == CompareResult.Less;
-    }
-}
 
 test "gossip.crds_table: remove old values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
