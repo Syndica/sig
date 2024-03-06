@@ -19,7 +19,6 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 const LruCache = @import("../common/lru.zig").LruCache;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
-const bincode = @import("../bincode/bincode.zig");
 const Instant = std.time.Instant;
 const assert = std.debug.assert;
 
