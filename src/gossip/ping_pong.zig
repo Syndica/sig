@@ -97,10 +97,10 @@ pub const Pong = struct {
 };
 
 /// `PubkeyAndSocketAddr` is a 2 element tuple: `.{ Pubkey, SocketAddr }`
-pub const PubkeyAndSocketAddr = struct { Pubkey, SocketAddr };
-pub fn newPubkeyAndSocketAddr(pubkey: Pubkey, socket_addr: SocketAddr) PubkeyAndSocketAddr {
-    return .{ pubkey, socket_addr };
-}
+pub const PubkeyAndSocketAddr = struct {
+    pubkey: Pubkey,
+    socket_addr: SocketAddr,
+};
 
 /// Maintains records of remote nodes which have returned a valid response to a
 /// ping message, and on-the-fly ping messages pending a pong response from the
@@ -148,11 +148,9 @@ pub const PingCache = struct {
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
-        var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
+        var peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
-            const pubkey: Pubkey = pubkey_and_addr[0];
-            const addr: SocketAddr = pubkey_and_addr[1];
-            if (pubkey.equals(&pong.from) and addr.eql(&socket)) {
+            if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
                 _ = self.pings.pop(peer_and_addr);
                 _ = self.pongs.put(peer_and_addr, now);
                 _ = self.pending_cache.pop(pong.hash);
@@ -224,7 +222,7 @@ pub const PingCache = struct {
 
         for (peers, 0..) |*peer, i| {
             if (peer.getSocket(node.SOCKET_TAG_GOSSIP)) |gossip_addr| {
-                var result = self.check(now, PubkeyAndSocketAddr{ peer.pubkey, gossip_addr }, &our_keypair);
+                var result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
                 }
@@ -239,7 +237,10 @@ pub const PingCache = struct {
 
     // only used in tests
     pub fn _setPong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
-        _ = self.pongs.put(newPubkeyAndSocketAddr(peer, socket_addr), std.time.Instant.now() catch unreachable);
+        _ = self.pongs.put(PubkeyAndSocketAddr{
+            .pubkey = peer,
+            .socket_addr = socket_addr,
+        }, std.time.Instant.now() catch unreachable);
     }
 };
 pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
@@ -252,7 +253,7 @@ test "gossip.ping_pong: PingCache works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var the_node = PubkeyAndSocketAddr{ Pubkey.random(rng, .{}), SocketAddr.UNSPECIFIED };
+    var the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng, .{}), .socket_addr = SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
