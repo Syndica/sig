@@ -8,16 +8,12 @@ const Tuple = std.meta.Tuple;
 const crds = @import("../gossip/crds.zig");
 const node = @import("../gossip/node.zig");
 const CrdsValue = crds.CrdsValue;
-
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
-
 const _crds_table = @import("../gossip/crds_table.zig");
 const CrdsTable = _crds_table.CrdsTable;
-
 const pull_request = @import("../gossip/pull_request.zig");
-
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
@@ -131,11 +127,10 @@ pub const ActiveSet = struct {
     }
 };
 
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-
 test "gossip.active_set: init/deinit" {
     var alloc = std.testing.allocator;
 
+    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
     var crds_table = try CrdsTable.init(alloc, &tp);
     defer crds_table.deinit();

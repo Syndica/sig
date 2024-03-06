@@ -23,8 +23,6 @@ const testing = std.testing;
 const Ping = @import("./ping_pong.zig").Ping;
 const Pong = @import("./ping_pong.zig").Pong;
 
-const logger = std.log.scoped(.protocol);
-
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Gossip GossipMessagemessages
