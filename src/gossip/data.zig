@@ -11,7 +11,7 @@ const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const sanitize_wallclock = @import("./message.zig").sanitizeWallclock;
+const sanitizeWallclock = @import("./message.zig").sanitizeWallclock;
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
 /// returns current timestamp in milliseconds
@@ -25,8 +25,8 @@ pub const MAX_SLOT: u64 = 1_000_000_000_000_000;
 pub const MAX_SLOT_PER_ENTRY: usize = 2048 * 8;
 pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
-pub const CrdsVersionedValue = struct {
-    value: CrdsValue,
+pub const GossipValue = struct {
+    value: GossipDataWithSignature,
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
@@ -49,20 +49,20 @@ pub const CrdsVersionedValue = struct {
     }
 };
 
-pub const CrdsValue = struct {
+pub const GossipDataWithSignature = struct {
     signature: Signature,
-    data: CrdsData,
+    data: GossipData,
 
     const Self = @This();
 
-    pub fn init(data: CrdsData) Self {
+    pub fn init(data: GossipData) Self {
         return Self{
             .signature = Signature{},
             .data = data,
         };
     }
 
-    pub fn initSigned(data: CrdsData, keypair: *const KeyPair) !Self {
+    pub fn initSigned(data: GossipData, keypair: *const KeyPair) !Self {
         var self = Self{
             .signature = Signature{},
             .data = data,
@@ -73,12 +73,12 @@ pub const CrdsValue = struct {
 
     /// only used in tests
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
-        return try Self.initSigned(CrdsData.random(rng), keypair);
+        return try initSigned(GossipData.random(rng), keypair);
     }
 
     /// only used in tests
     pub fn randomWithIndex(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
-        return try Self.initSigned(CrdsData.randomFromIndex(rng, index), keypair);
+        return try initSigned(GossipData.randomFromIndex(rng, index), keypair);
     }
 
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {
@@ -178,43 +178,43 @@ pub const CrdsValue = struct {
         };
     }
 
-    pub fn label(self: *const Self) CrdsValueLabel {
+    pub fn label(self: *const Self) GossipKey {
         return switch (self.data) {
             .LegacyContactInfo => {
-                return CrdsValueLabel{ .LegacyContactInfo = self.id() };
+                return .{ .LegacyContactInfo = self.id() };
             },
             .Vote => |*v| {
-                return CrdsValueLabel{ .Vote = .{ v[0], self.id() } };
+                return .{ .Vote = .{ v[0], self.id() } };
             },
             .LowestSlot => {
-                return CrdsValueLabel{ .LowestSlot = self.id() };
+                return .{ .LowestSlot = self.id() };
             },
             .LegacySnapshotHashes => {
-                return CrdsValueLabel{ .LegacySnapshotHashes = self.id() };
+                return .{ .LegacySnapshotHashes = self.id() };
             },
             .AccountsHashes => {
-                return CrdsValueLabel{ .AccountsHashes = self.id() };
+                return .{ .AccountsHashes = self.id() };
             },
             .EpochSlots => |*v| {
-                return CrdsValueLabel{ .EpochSlots = .{ v[0], self.id() } };
+                return .{ .EpochSlots = .{ v[0], self.id() } };
             },
             .LegacyVersion => {
-                return CrdsValueLabel{ .LegacyVersion = self.id() };
+                return .{ .LegacyVersion = self.id() };
             },
             .Version => {
-                return CrdsValueLabel{ .Version = self.id() };
+                return .{ .Version = self.id() };
             },
             .NodeInstance => {
-                return CrdsValueLabel{ .NodeInstance = self.id() };
+                return .{ .NodeInstance = self.id() };
             },
             .DuplicateShred => |*v| {
-                return CrdsValueLabel{ .DuplicateShred = .{ v[0], self.id() } };
+                return .{ .DuplicateShred = .{ v[0], self.id() } };
             },
             .SnapshotHashes => {
-                return CrdsValueLabel{ .SnapshotHashes = self.id() };
+                return .{ .SnapshotHashes = self.id() };
             },
             .ContactInfo => {
-                return CrdsValueLabel{ .ContactInfo = self.id() };
+                return .{ .ContactInfo = self.id() };
             },
         };
     }
@@ -248,7 +248,7 @@ pub const LegacyContactInfo = struct {
     shred_version: u16,
 
     pub fn sanitize(self: *const LegacyContactInfo) !void {
-        try sanitize_wallclock(self.wallclock);
+        try sanitizeWallclock(self.wallclock);
     }
 
     pub fn default(id: Pubkey) LegacyContactInfo {
@@ -325,19 +325,7 @@ pub const LegacyContactInfo = struct {
     }
 };
 
-pub fn sanitizeSocket(socket: *const SocketAddr) !void {
-    if (socket.port() == 0) {
-        return error.InvalidPort;
-    }
-    if (socket.isUnspecified()) {
-        return error.UnspecifiedAddress;
-    }
-    if (socket.isMulticast()) {
-        return error.MulticastAddress;
-    }
-}
-
-pub const CrdsValueLabel = union(enum) {
+pub const GossipKey = union(enum) {
     LegacyContactInfo: Pubkey,
     Vote: struct { u8, Pubkey },
     LowestSlot: Pubkey,
@@ -352,7 +340,7 @@ pub const CrdsValueLabel = union(enum) {
     ContactInfo: Pubkey,
 };
 
-pub const CrdsData = union(enum(u32)) {
+pub const GossipData = union(enum(u32)) {
     LegacyContactInfo: LegacyContactInfo,
     Vote: struct { u8, Vote },
     LowestSlot: struct { u8, LowestSlot },
@@ -366,7 +354,7 @@ pub const CrdsData = union(enum(u32)) {
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
 
-    pub fn sanitize(self: *const CrdsData) !void {
+    pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
             .LegacyContactInfo => |*v| {
                 try v.sanitize();
@@ -421,7 +409,7 @@ pub const CrdsData = union(enum(u32)) {
     }
 
     // only used in tests
-    pub fn setId(self: *CrdsData, id: Pubkey) void {
+    pub fn setId(self: *GossipData, id: Pubkey) void {
         switch (self.*) {
             .LegacyContactInfo => |*v| {
                 v.id = id;
@@ -462,48 +450,48 @@ pub const CrdsData = union(enum(u32)) {
         }
     }
 
-    pub fn random(rng: std.rand.Random) CrdsData {
+    pub fn random(rng: std.rand.Random) GossipData {
         const v = rng.intRangeAtMost(u16, 0, 10);
-        return CrdsData.randomFromIndex(rng, v);
+        return GossipData.randomFromIndex(rng, v);
     }
 
-    pub fn randomFromIndex(rng: std.rand.Random, index: usize) CrdsData {
+    pub fn randomFromIndex(rng: std.rand.Random, index: usize) GossipData {
         switch (index) {
             0 => {
-                return CrdsData{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
+                return .{ .LegacyContactInfo = LegacyContactInfo.random(rng) };
             },
             1 => {
-                return CrdsData{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.random(rng) } };
+                return .{ .Vote = .{ rng.intRangeAtMost(u8, 0, MAX_VOTES - 1), Vote.random(rng) } };
             },
             2 => {
-                return CrdsData{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.random(rng) } };
+                return .{ .EpochSlots = .{ rng.intRangeAtMost(u8, 0, MAX_EPOCH_SLOTS - 1), EpochSlots.random(rng) } };
             },
             3 => {
-                return CrdsData{ .LowestSlot = .{ 0, LowestSlot.random(rng) } };
+                return .{ .LowestSlot = .{ 0, LowestSlot.random(rng) } };
             },
             4 => {
-                return CrdsData{ .LegacySnapshotHashes = LegacySnapshotHashes.random(rng) };
+                return .{ .LegacySnapshotHashes = LegacySnapshotHashes.random(rng) };
             },
             5 => {
-                return CrdsData{ .AccountsHashes = AccountsHashes.random(rng) };
+                return .{ .AccountsHashes = AccountsHashes.random(rng) };
             },
             6 => {
-                return CrdsData{ .LegacyVersion = LegacyVersion.random(rng) };
+                return .{ .LegacyVersion = LegacyVersion.random(rng) };
             },
             7 => {
-                return CrdsData{ .Version = Version.random(rng) };
+                return .{ .Version = Version.random(rng) };
             },
             8 => {
-                return CrdsData{ .NodeInstance = NodeInstance.random(rng) };
+                return .{ .NodeInstance = NodeInstance.random(rng) };
             },
             9 => {
-                return CrdsData{ .SnapshotHashes = SnapshotHashes.random(rng) };
+                return .{ .SnapshotHashes = SnapshotHashes.random(rng) };
             },
             // 10 => {
-            //     return CrdsData { .ContactInfo = ContactInfo.random(rng) };
+            //     return GossipData { .ContactInfo = ContactInfo.random(rng) };
             // },
             else => {
-                return CrdsData{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
+                return .{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
             },
         }
     }
@@ -527,7 +515,7 @@ pub const Vote = struct {
     }
 
     pub fn sanitize(self: *const Vote) !void {
-        try sanitize_wallclock(self.wallclock);
+        try sanitizeWallclock(self.wallclock);
         try self.transaction.sanitize();
     }
 };
@@ -541,7 +529,7 @@ pub const LowestSlot = struct {
     wallclock: u64,
 
     pub fn sanitize(value: *const LowestSlot) !void {
-        try sanitize_wallclock(value.wallclock);
+        try sanitizeWallclock(value.wallclock);
         if (value.lowest >= MAX_SLOT) {
             return error.ValueOutOfBounds;
         }
@@ -599,7 +587,7 @@ pub const AccountsHashes = struct {
     }
 
     pub fn sanitize(value: *const AccountsHashes) !void {
-        try sanitize_wallclock(value.wallclock);
+        try sanitizeWallclock(value.wallclock);
         for (value.hashes) |*snapshot_hash| {
             const slot = snapshot_hash[0];
             if (slot >= MAX_SLOT) {
@@ -624,7 +612,7 @@ pub const EpochSlots = struct {
     }
 
     pub fn sanitize(value: *const EpochSlots) !void {
-        try sanitize_wallclock(value.wallclock);
+        try sanitizeWallclock(value.wallclock);
         for (value.slots) |slot| {
             try slot.sanitize();
         }
@@ -865,7 +853,7 @@ pub const DuplicateShred = struct {
     }
 
     pub fn sanitize(value: *const DuplicateShred) !void {
-        try sanitize_wallclock(value.wallclock);
+        try sanitizeWallclock(value.wallclock);
         if (value.chunk_index >= value.num_chunks) {
             return error.ValueOutOfBounds;
         }
@@ -896,22 +884,22 @@ test "gossip.crds: test sig verify duplicateShreds" {
     var data = DuplicateShred.random(rng.random());
     data.from = pubkey;
 
-    var value = try CrdsValue.initSigned(CrdsData{ .DuplicateShred = .{ 0, data } }, &keypair);
+    var value = try GossipDataWithSignature.initSigned(GossipData{ .DuplicateShred = .{ 0, data } }, &keypair);
 
     try std.testing.expect(try value.verify(pubkey));
 }
 
-test "gossip.crds: test sanitize CrdsData" {
+test "gossip.crds: test sanitize GossipData" {
     var rng = std.rand.DefaultPrng.init(0);
     var rand = rng.random();
 
     for (0..4) |i| {
-        const data = CrdsData.randomFromIndex(rand, i);
+        const data = GossipData.randomFromIndex(rand, i);
         data.sanitize() catch {};
     }
 }
 
-test "gossip.crds: test CrdsValue label() and id() methods" {
+test "gossip.crds: test GossipDataWithSignature label() and id() methods" {
     var kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -920,7 +908,7 @@ test "gossip.crds: test CrdsValue label() and id() methods" {
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
 
-    var crds_value = try CrdsValue.initSigned(CrdsData{
+    var crds_value = try GossipDataWithSignature.initSigned(GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
@@ -975,7 +963,7 @@ test "gossip.crds: crds data serialization matches rust" {
     legacy_contact_info.gossip = gossip_addr;
     legacy_contact_info.wallclock = 0;
 
-    var crds_data = CrdsData{
+    var crds_data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
@@ -1013,7 +1001,7 @@ test "gossip.crds: random crds data" {
         _ = result;
     }
     {
-        const data = CrdsData.random(rng);
+        const data = GossipData.random(rng);
         const result = try bincode.writeToSlice(&buf, data, bincode.Params.standard);
         _ = result;
     }

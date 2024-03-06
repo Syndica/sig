@@ -5,19 +5,19 @@ const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
 const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
-const crds = @import("../gossip/crds.zig");
+const crds = @import("../gossip/data.zig");
 const node = @import("../gossip/node.zig");
-const CrdsValue = crds.CrdsValue;
+const GossipDataWithSignature = crds.GossipDataWithSignature;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
-const _crds_table = @import("../gossip/crds_table.zig");
-const CrdsTable = _crds_table.CrdsTable;
+const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
+const _crds_table = @import("../gossip/table.zig");
+const GossipTable = _crds_table.GossipTable;
 const pull_request = @import("../gossip/pull_request.zig");
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
-pub const CRDS_GOSSIP_PUSH_FANOUT: usize = 6;
+pub const GOSSIP_PUSH_FANOUT: usize = 6;
 
 const MIN_NUM_BLOOM_ITEMS: usize = 512;
 const BLOOM_FALSE_RATE: f64 = 0.1;
@@ -30,10 +30,11 @@ pub const ActiveSet = struct {
 
     const Self = @This();
 
-    pub fn init(
-        allocator: std.mem.Allocator,
-    ) Self {
-        return Self{ .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator), .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator),
+            .allocator = allocator,
+        };
     }
 
     pub fn deinit(self: *Self) void {
@@ -90,16 +91,16 @@ pub const ActiveSet = struct {
         }
     }
 
-    /// get a set of CRDS_GOSSIP_PUSH_FANOUT peers to send push messages to
+    /// get a set of GOSSIP_PUSH_FANOUT peers to send push messages to
     /// while accounting for peers that have been pruned from
     /// the given origin Pubkey
     pub fn getFanoutPeers(
         self: *const Self,
         allocator: std.mem.Allocator,
         origin: Pubkey,
-        crds_table: *const CrdsTable,
+        crds_table: *const GossipTable,
     ) error{OutOfMemory}!std.ArrayList(EndPoint) {
-        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, CRDS_GOSSIP_PUSH_FANOUT);
+        var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, GOSSIP_PUSH_FANOUT);
         errdefer active_set_endpoints.deinit();
 
         // change to while loop
@@ -109,7 +110,7 @@ pub const ActiveSet = struct {
             const peer_info = crds_table.getContactInfo(entry.key_ptr.*) orelse continue;
             const peer_gossip_addr = peer_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
 
-            crds.sanitizeSocket(&peer_gossip_addr) catch continue;
+            peer_gossip_addr.sanitize() catch continue;
 
             // check if peer has been pruned
             const origin_bytes = origin.data;
@@ -118,7 +119,7 @@ pub const ActiveSet = struct {
             }
 
             active_set_endpoints.appendAssumeCapacity(peer_gossip_addr.toEndpoint());
-            if (active_set_endpoints.items.len == CRDS_GOSSIP_PUSH_FANOUT) {
+            if (active_set_endpoints.items.len == GOSSIP_PUSH_FANOUT) {
                 break;
             }
         }
@@ -132,7 +133,7 @@ test "gossip.active_set: init/deinit" {
 
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(alloc, &tp);
+    var crds_table = try GossipTable.init(alloc, &tp);
     defer crds_table.deinit();
 
     // insert some contacts
@@ -143,12 +144,12 @@ test "gossip.active_set: init/deinit" {
         gossip_peers.deinit();
     }
 
-    for (0..CRDS_GOSSIP_PUSH_FANOUT) |_| {
+    for (0..GOSSIP_PUSH_FANOUT) |_| {
         var data = crds.LegacyContactInfo.random(rng.random());
         try gossip_peers.append(try data.toContactInfo(alloc));
 
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.initSigned(crds.CrdsData{
+        var value = try GossipDataWithSignature.initSigned(crds.GossipData{
             .LegacyContactInfo = data,
         }, &keypair);
         try crds_table.insert(value, getWallclockMs());
@@ -158,7 +159,7 @@ test "gossip.active_set: init/deinit" {
     defer active_set.deinit();
     try active_set.rotate(gossip_peers.items);
 
-    try std.testing.expect(active_set.len() == CRDS_GOSSIP_PUSH_FANOUT);
+    try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
     const origin = Pubkey.random(rng.random(), .{});
 

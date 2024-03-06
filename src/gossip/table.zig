@@ -7,13 +7,13 @@ const bincode = @import("../bincode/bincode.zig");
 const _hash = @import("../core/hash.zig");
 const Hash = _hash.Hash;
 
-const CrdsShards = @import("./crds_shards.zig").CrdsShards;
+const GossipShards = @import("./shards.zig").GossipShards;
 
-const crds = @import("./crds.zig");
-const CrdsValue = crds.CrdsValue;
-const CrdsData = crds.CrdsData;
-const CrdsVersionedValue = crds.CrdsVersionedValue;
-const CrdsValueLabel = crds.CrdsValueLabel;
+const crds = @import("./data.zig");
+const GossipDataWithSignature = crds.GossipDataWithSignature;
+const GossipData = crds.GossipData;
+const GossipValue = crds.GossipValue;
+const GossipKey = crds.GossipKey;
 const LegacyContactInfo = crds.LegacyContactInfo;
 
 const node = @import("./node.zig");
@@ -76,8 +76,8 @@ pub const InsertResults = struct {
 /// retrieve new values inserted in the store.
 /// insertion of values is all based on the CRDSLabel type -- when duplicates
 /// are found, the entry with the largest wallclock time (newest) is stored.
-pub const CrdsTable = struct {
-    store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue),
+pub const GossipTable = struct {
+    store: AutoArrayHashMap(GossipKey, GossipValue),
 
     // special types tracked with their index
     contact_infos: AutoArrayHashSet(usize),
@@ -97,7 +97,7 @@ pub const CrdsTable = struct {
     pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
 
     // used to build pull responses efficiently
-    shards: CrdsShards,
+    shards: GossipShards,
 
     // used when sending pull requests
     purged: HashTimeQueue,
@@ -112,7 +112,7 @@ pub const CrdsTable = struct {
 
     pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool) !Self {
         return Self{
-            .store = AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue).init(allocator),
+            .store = AutoArrayHashMap(GossipKey, GossipValue).init(allocator),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
@@ -121,7 +121,7 @@ pub const CrdsTable = struct {
             .converted_contact_infos = AutoArrayHashMap(Pubkey, ContactInfo).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
-            .shards = try CrdsShards.init(allocator),
+            .shards = try GossipShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
             .thread_pool = thread_pool,
@@ -152,15 +152,15 @@ pub const CrdsTable = struct {
         self.converted_contact_infos.deinit();
     }
 
-    pub fn insert(self: *Self, value: CrdsValue, now: u64) !void {
+    pub fn insert(self: *Self, value: GossipDataWithSignature, now: u64) !void {
         if (self.store.count() >= MAX_CRDS_VALUES) {
-            return error.CrdsTableFull;
+            return error.GossipTableFull;
         }
 
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
-        const versioned_value = CrdsVersionedValue{
+        const versioned_value = GossipValue{
             .value = value,
             .value_hash = value_hash,
             .timestamp_on_insertion = now,
@@ -282,7 +282,7 @@ pub const CrdsTable = struct {
 
     pub fn insertValues(
         self: *Self,
-        values: []crds.CrdsValue,
+        values: []crds.GossipDataWithSignature,
         timeout: u64,
         comptime record_inserts: bool,
         comptime record_timeouts: bool,
@@ -330,8 +330,8 @@ pub const CrdsTable = struct {
     pub fn updateRecordTimestamp(self: *Self, pubkey: Pubkey, now: u64) void {
         var updated_contact_info = false;
         const labels = .{
-            CrdsValueLabel{ .ContactInfo = pubkey },
-            CrdsValueLabel{ .LegacyContactInfo = pubkey },
+            GossipKey{ .ContactInfo = pubkey },
+            GossipKey{ .LegacyContactInfo = pubkey },
         };
         // It suffices to only overwrite the origin's timestamp since that is
         // used when purging old values.
@@ -354,7 +354,7 @@ pub const CrdsTable = struct {
     }
 
     // ** getter functions **
-    pub fn get(self: *const Self, label: CrdsValueLabel) ?CrdsVersionedValue {
+    pub fn get(self: *const Self, label: GossipKey) ?GossipValue {
         return self.store.get(label);
     }
 
@@ -362,7 +362,7 @@ pub const CrdsTable = struct {
     /// this function checks for both, and efficiently returns the data as
     /// ContactInfo, regardless of how it was received.
     pub fn getContactInfo(self: *const Self, pubkey: Pubkey) ?ContactInfo {
-        const label = CrdsValueLabel{ .ContactInfo = pubkey };
+        const label = GossipKey{ .ContactInfo = pubkey };
         if (self.store.get(label)) |v| {
             return v.value.data.ContactInfo;
         } else {
@@ -370,7 +370,7 @@ pub const CrdsTable = struct {
         }
     }
 
-    pub fn genericGetWithCursor(hashmap: anytype, store: AutoArrayHashMap(CrdsValueLabel, CrdsVersionedValue), buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {
+    pub fn genericGetWithCursor(hashmap: anytype, store: AutoArrayHashMap(GossipKey, GossipValue), buf: []GossipValue, caller_cursor: *usize) []GossipValue {
         const cursor_indexs = hashmap.keys();
         const store_values = store.values();
 
@@ -394,8 +394,8 @@ pub const CrdsTable = struct {
         return buf[0..index];
     }
 
-    pub fn getEntriesWithCursor(self: *const Self, buf: []CrdsVersionedValue, caller_cursor: *usize) []CrdsVersionedValue {
-        return CrdsTable.genericGetWithCursor(
+    pub fn getEntriesWithCursor(self: *const Self, buf: []GossipValue, caller_cursor: *usize) []GossipValue {
+        return GossipTable.genericGetWithCursor(
             self.entries,
             self.store,
             buf,
@@ -403,8 +403,8 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn getVotesWithCursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        return CrdsTable.genericGetWithCursor(
+    pub fn getVotesWithCursor(self: *Self, buf: []GossipValue, caller_cursor: *usize) ![]GossipValue {
+        return GossipTable.genericGetWithCursor(
             self.votes,
             self.store,
             buf,
@@ -412,8 +412,8 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn getEpochSlotsWithCursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        return CrdsTable.genericGetWithCursor(
+    pub fn getEpochSlotsWithCursor(self: *Self, buf: []GossipValue, caller_cursor: *usize) ![]GossipValue {
+        return GossipTable.genericGetWithCursor(
             self.epoch_slots,
             self.store,
             buf,
@@ -421,8 +421,8 @@ pub const CrdsTable = struct {
         );
     }
 
-    pub fn getDuplicateShredsWithCursor(self: *Self, buf: []CrdsVersionedValue, caller_cursor: *usize) ![]CrdsVersionedValue {
-        return CrdsTable.genericGetWithCursor(
+    pub fn getDuplicateShredsWithCursor(self: *Self, buf: []GossipValue, caller_cursor: *usize) ![]GossipValue {
+        return GossipTable.genericGetWithCursor(
             self.duplicate_shreds,
             self.store,
             buf,
@@ -475,21 +475,21 @@ pub const CrdsTable = struct {
         return false;
     }
 
-    /// ** triming values in the crdstable **
+    /// ** triming values in the GossipTable **
     ///
-    /// This frees the memory for any pointers in the CrdsData.
-    /// Be sure that this CrdsData is not being used anywhere else when calling this.
+    /// This frees the memory for any pointers in the GossipData.
+    /// Be sure that this GossipData is not being used anywhere else when calling this.
     ///
-    /// This method is not safe because neither CrdsTable nor CrdsValue
-    /// provide any guarantees that the CrdsValue being removed is not
+    /// This method is not safe because neither GossipTable nor GossipDataWithSignature
+    /// provide any guarantees that the GossipDataWithSignature being removed is not
     /// also being accessed somewhere else in the code after this is called.
-    /// Since this frees the CrdsValue, any accesses of the CrdsValue
+    /// Since this frees the GossipDataWithSignature, any accesses of the GossipDataWithSignature
     /// after this function is called will result in a segfault.
     ///
     /// TODO: implement a safer approach to avoid dangling pointers, such as:
     ///  - removal buffer that is populated here and freed later
     ///  - reference counting for all crds values
-    pub fn remove(self: *Self, label: CrdsValueLabel) error{ LabelNotFound, OutOfMemory }!void {
+    pub fn remove(self: *Self, label: GossipKey) error{ LabelNotFound, OutOfMemory }!void {
         const now = crds.getWallclockMs();
 
         const maybe_entry = self.store.getEntry(label);
@@ -618,7 +618,7 @@ pub const CrdsTable = struct {
         const labels = self.store.keys();
 
         // allocate here so SwapRemove doesnt mess with us
-        var labels_to_remove = std.ArrayList(CrdsValueLabel).init(self.allocator);
+        var labels_to_remove = std.ArrayList(GossipKey).init(self.allocator);
         defer labels_to_remove.deinit();
 
         for (drop_pubkeys) |pubkey| {
@@ -652,9 +652,9 @@ pub const CrdsTable = struct {
     const GetOldLabelsTask = struct {
         // context
         key: Pubkey,
-        crds_table: *const CrdsTable,
+        crds_table: *const GossipTable,
         cutoff_timestamp: u64,
-        old_labels: std.ArrayList(CrdsValueLabel),
+        old_labels: std.ArrayList(GossipKey),
 
         // standard
         task: Task = .{ .callback = callback },
@@ -673,7 +673,7 @@ pub const CrdsTable = struct {
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
-            const labels = .{ CrdsValueLabel{ .LegacyContactInfo = pubkey.* }, CrdsValueLabel{ .ContactInfo = pubkey.* } };
+            const labels = .{ GossipKey{ .LegacyContactInfo = pubkey.* }, GossipKey{ .ContactInfo = pubkey.* } };
             inline for (labels) |label| {
                 if (self.crds_table.get(label)) |*contact_info| {
                     const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
@@ -701,7 +701,7 @@ pub const CrdsTable = struct {
         self: *Self,
         now: u64,
         timeout: u64,
-    ) error{OutOfMemory}!std.ArrayList(CrdsValueLabel) {
+    ) error{OutOfMemory}!std.ArrayList(GossipKey) {
         const cutoff_timestamp = now -| timeout;
         const n_pubkeys = self.pubkey_to_values.count();
 
@@ -713,7 +713,7 @@ pub const CrdsTable = struct {
 
         // run this loop in parallel
         for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..) |key, i| {
-            var old_labels = std.ArrayList(CrdsValueLabel).init(self.allocator);
+            var old_labels = std.ArrayList(GossipKey).init(self.allocator);
             tasks[i] = GetOldLabelsTask{
                 .key = key,
                 .crds_table = self,
@@ -736,7 +736,7 @@ pub const CrdsTable = struct {
         }
 
         // move labels to one big array
-        var output = try std.ArrayList(CrdsValueLabel).initCapacity(self.allocator, output_length);
+        var output = try std.ArrayList(GossipKey).initCapacity(self.allocator, output_length);
         for (tasks) |*task| {
             output.appendSliceAssumeCapacity(task.old_labels.items);
         }
@@ -750,7 +750,7 @@ pub const CrdsTable = struct {
     ) !?ContactInfo {
         var contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
-            const entry: CrdsVersionedValue = self.store.values()[index];
+            const entry: GossipValue = self.store.values()[index];
             switch (entry.value.data) {
                 .ContactInfo => |ci| if (ci.getSocket(node.SOCKET_TAG_GOSSIP)) |addr| {
                     if (addr.eql(&gossip_addr)) return try ci.clone();
@@ -832,11 +832,11 @@ test "gossip.crds_table: remove old values" {
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     for (0..5) |_| {
-        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), &keypair);
+        const value = try GossipDataWithSignature.initSigned(GossipData.random(rng.random()), &keypair);
         // TS = 100
         try crds_table.insert(value, 100);
     }
@@ -860,10 +860,10 @@ test "gossip.crds_table: insert and remove value" {
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
-    const value = try CrdsValue.initSigned(CrdsData.randomFromIndex(rng.random(), 0), &keypair);
+    const value = try GossipDataWithSignature.initSigned(GossipData.randomFromIndex(rng.random(), 0), &keypair);
     try crds_table.insert(value, 100);
 
     const label = value.label();
@@ -877,17 +877,17 @@ test "gossip.crds_table: trim pruned values" {
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
 
-    var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
+    var values = std.ArrayList(GossipDataWithSignature).init(std.testing.allocator);
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
-        const value = try CrdsValue.initSigned(CrdsData.random(rng.random()), &keypair);
+        const value = try GossipDataWithSignature.initSigned(GossipData.random(rng.random()), &keypair);
         try crds_table.insert(value, 100);
         try values.append(value);
     }
@@ -935,26 +935,26 @@ test "gossip.HashTimeQueue: trim pruned values" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    var data = CrdsData{
+    var data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.random(rng),
     };
-    var value = try CrdsValue.initSigned(data, &keypair);
+    var value = try GossipDataWithSignature.initSigned(data, &keypair);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // timestamp = 100
     try crds_table.insert(value, 100);
 
     // should lead to prev being pruned
-    var new_data = CrdsData{
+    var new_data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.random(rng),
     };
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
-    value = try CrdsValue.initSigned(new_data, &keypair);
+    value = try GossipDataWithSignature.initSigned(new_data, &keypair);
     try crds_table.insert(value, 120);
 
     try std.testing.expectEqual(crds_table.purged.len(), 1);
@@ -971,10 +971,10 @@ test "gossip.crds_table: insert and get" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    var value = try CrdsValue.random(rng, &keypair);
+    var value = try GossipDataWithSignature.random(rng, &keypair);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     try crds_table.insert(value, 0);
@@ -991,17 +991,17 @@ test "gossip.crds_table: insert and get votes" {
     var id = Pubkey.fromPublicKey(&pk, true);
 
     var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    var crds_value = try CrdsValue.initSigned(CrdsData{
+    var crds_value = try GossipDataWithSignature.initSigned(GossipData{
         .Vote = .{ 0, vote },
     }, &kp);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
     try crds_table.insert(crds_value, 0);
 
     var cursor: usize = 0;
-    var buf: [100]CrdsVersionedValue = undefined;
+    var buf: [100]GossipValue = undefined;
     var votes = try crds_table.getVotesWithCursor(&buf, &cursor);
 
     try std.testing.expect(votes.len == 1);
@@ -1013,7 +1013,7 @@ test "gossip.crds_table: insert and get votes" {
     const rng = rand.random();
     id = Pubkey.random(rng, .{});
     vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    crds_value = try CrdsValue.initSigned(CrdsData{
+    crds_value = try GossipDataWithSignature.initSigned(GossipData{
         .Vote = .{ 0, vote },
     }, &kp);
     try crds_table.insert(crds_value, 1);
@@ -1031,12 +1031,12 @@ test "gossip.crds_table: insert and get contact_info" {
     var id = Pubkey.fromPublicKey(&kp.public_key, true);
 
     var legacy_contact_info = crds.LegacyContactInfo.default(id);
-    var crds_value = try CrdsValue.initSigned(CrdsData{
+    var crds_value = try GossipDataWithSignature.initSigned(GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // test insertion

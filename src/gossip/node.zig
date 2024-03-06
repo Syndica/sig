@@ -14,7 +14,7 @@ const IpAddr = @import("../net/net.zig").IpAddr;
 const gossip = @import("sig").gossip;
 const ArrayList = std.ArrayList;
 const testing = std.testing;
-const NodeInstance = @import("crds.zig").NodeInstance;
+const NodeInstance = @import("data.zig").NodeInstance;
 
 const Socket = network.Socket;
 const UdpSocket = network.Socket;

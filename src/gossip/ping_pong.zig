@@ -2,9 +2,9 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
-const crds = @import("crds.zig");
-const CrdsValue = crds.CrdsValue;
-const CrdsData = crds.CrdsData;
+const crds = @import("data.zig");
+const GossipDataWithSignature = crds.GossipDataWithSignature;
+const GossipData = crds.GossipData;
 const Version = crds.Version;
 const LegacyVersion2 = crds.LegacyVersion2;
 
@@ -12,7 +12,7 @@ const node = @import("node.zig");
 const ContactInfo = node.ContactInfo;
 
 const pull_import = @import("pull_request.zig");
-const CrdsFilter = pull_import.CrdsFilter;
+const GossipFilter = pull_import.GossipFilter;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;

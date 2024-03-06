@@ -25,18 +25,18 @@ const RwMux = @import("../sync/mux.zig").RwMux;
 const Ping = @import("ping_pong.zig").Ping;
 const Pong = @import("ping_pong.zig").Pong;
 const bincode = @import("../bincode/bincode.zig");
-const crds = @import("../gossip/crds.zig");
+const crds = @import("../gossip/data.zig");
 const LegacyContactInfo = crds.LegacyContactInfo;
 const node = @import("./node.zig");
 const ContactInfo = node.ContactInfo;
-const CrdsValue = crds.CrdsValue;
+const GossipDataWithSignature = crds.GossipDataWithSignature;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
+const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
 
-const _crds_table = @import("../gossip/crds_table.zig");
-const CrdsTable = _crds_table.CrdsTable;
+const _crds_table = @import("../gossip/table.zig");
+const GossipTable = _crds_table.GossipTable;
 const CrdsError = _crds_table.CrdsError;
 const HashTimeQueue = _crds_table.HashTimeQueue;
 const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
@@ -46,7 +46,7 @@ const Logger = @import("../trace/log.zig").Logger;
 const Entry = @import("../trace/entry.zig").Entry;
 
 const pull_request = @import("../gossip/pull_request.zig");
-const CrdsFilter = pull_request.CrdsFilter;
+const GossipFilter = pull_request.GossipFilter;
 const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 
 const pull_response = @import("../gossip/pull_response.zig");
@@ -54,7 +54,7 @@ const ActiveSet = @import("../gossip/active_set.zig").ActiveSet;
 
 const Hash = @import("../core/hash.zig").Hash;
 
-const socket_utils = @import("socket_utils.zig");
+const socket_utils = @import("../net/socket_utils.zig");
 
 const Channel = @import("../sync/channel.zig").Channel;
 
@@ -115,10 +115,10 @@ pub const GossipService = struct {
     packet_outgoing_channel: *PacketBatchChannel,
     verified_incoming_channel: *GossipMessageChannel,
 
-    crds_table_rw: RwMux(CrdsTable),
+    crds_table_rw: RwMux(GossipTable),
     // push message things
     active_set_rw: RwMux(ActiveSet),
-    push_msg_queue_mux: Mux(ArrayList(CrdsValue)),
+    push_msg_queue_mux: Mux(ArrayList(GossipDataWithSignature)),
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
@@ -163,9 +163,9 @@ pub const GossipService = struct {
         });
         logger.debugf("using n_threads in gossip: {}", .{n_threads});
 
-        var crds_table = try CrdsTable.init(allocator, thread_pool);
+        var crds_table = try GossipTable.init(allocator, thread_pool);
         errdefer crds_table.deinit();
-        var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+        var crds_table_rw = RwMux(GossipTable).init(crds_table);
         var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
         var my_shred_version = my_contact_info.shred_version;
         var active_set = ActiveSet.init(allocator);
@@ -177,7 +177,7 @@ pub const GossipService = struct {
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT) catch return error.SocketSetTimeoutFailed; // 1 second
 
         var failed_pull_hashes = HashTimeQueue.init(allocator);
-        var push_msg_q = ArrayList(CrdsValue).init(allocator);
+        var push_msg_q = ArrayList(GossipDataWithSignature).init(allocator);
 
         var echo_server = echo.Server.init(allocator, gossip_address.port(), logger, exit);
 
@@ -199,7 +199,7 @@ pub const GossipService = struct {
             .verified_incoming_channel = verified_incoming_channel,
             .crds_table_rw = crds_table_rw,
             .allocator = allocator,
-            .push_msg_queue_mux = Mux(ArrayList(CrdsValue)).init(push_msg_q),
+            .push_msg_queue_mux = Mux(ArrayList(GossipDataWithSignature)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
             .entrypoints = entrypoint_list,
@@ -425,8 +425,8 @@ pub const GossipService = struct {
 
     // structs used in process_messages loop
     pub const PullRequestMessage = struct {
-        filter: CrdsFilter,
-        value: CrdsValue,
+        filter: GossipFilter,
+        value: GossipDataWithSignature,
         from_endpoint: EndPoint,
     };
 
@@ -441,13 +441,13 @@ pub const GossipService = struct {
     };
 
     pub const PushMessage = struct {
-        crds_values: []CrdsValue,
+        crds_values: []GossipDataWithSignature,
         from_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
     };
 
     pub const PullResponseMessage = struct {
-        crds_values: []CrdsValue,
+        crds_values: []GossipDataWithSignature,
         from_pubkey: *Pubkey,
     };
 
@@ -495,27 +495,27 @@ pub const GossipService = struct {
                     // Important: this uses shallowFree instead of bincode.free
                     //
                     // The message contains some messaging metadata plus a
-                    // payload of a CrdsValue. The metadata won't be needed
+                    // payload of a GossipDataWithSignature. The metadata won't be needed
                     // after this iteration is complete. The payload will be
-                    // needed since it is stored in the CrdsTable.
+                    // needed since it is stored in the GossipTable.
                     //
                     // bincode.free would free the entire message including the
                     // payload. This would lead to a segfault if the data is
-                    // accessed from the CrdsTable later.
+                    // accessed from the GossipTable later.
                     //
                     // Not freeing at all would lead to a memory leak of any
                     // allocations in the metadata.
                     //
                     // The compromise is a "shallow" free that only frees the
-                    // messaging metadata. CrdsValue ownership will be
-                    // transferred to CrdsTable. The CrdsTable implementation
-                    // becomes responsible for freeing any CrdsValues when
+                    // messaging metadata. GossipDataWithSignature ownership will be
+                    // transferred to GossipTable. The GossipTable implementation
+                    // becomes responsible for freeing any GossipDataWithSignatures when
                     // needed.
                     //
                     // TODO: this approach is not ideal because it is difficult
                     // to maintain. Another approach such as reference counting
                     // would be safer. For more info, see:
-                    // - CrdsTable.remove
+                    // - GossipTable.remove
                     // - https://github.com/Syndica/sig/pull/69
                     msg.message.shallowFree(self.allocator);
                 }
@@ -542,7 +542,7 @@ pub const GossipService = struct {
                         });
                     },
                     .PullRequest => |*pull| {
-                        const value: CrdsValue = pull[1];
+                        const value: GossipDataWithSignature = pull[1];
                         switch (value.data) {
                             .ContactInfo => |*data| {
                                 if (data.pubkey.equals(&self.my_pubkey)) {
@@ -680,7 +680,7 @@ pub const GossipService = struct {
             {
                 var crds_table_lock = self.crds_table_rw.write();
                 defer crds_table_lock.unlock();
-                var crds_table: *CrdsTable = crds_table_lock.mut();
+                var crds_table: *GossipTable = crds_table_lock.mut();
 
                 var x_timer = std.time.Timer.start() catch unreachable;
                 crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY) catch |err| {
@@ -728,7 +728,7 @@ pub const GossipService = struct {
             should_send_pull_requests = !should_send_pull_requests;
 
             // new push msgs
-            self.drainPushQueueToCrdsTable(getWallclockMs());
+            self.drainPushQueueToGossipTable(getWallclockMs());
             var maybe_push_packets = self.buildPushMessages(&push_cursor) catch |e| blk: {
                 self.logger.errf("failed to generate push messages: {any}", .{e});
                 break :blk null;
@@ -742,17 +742,17 @@ pub const GossipService = struct {
             self.trimMemory(getWallclockMs()) catch @panic("out of memory");
 
             // initialize cluster data from crds values
-            entrypoints_identified = entrypoints_identified or try self.populateEntrypointsFromCrdsTable();
+            entrypoints_identified = entrypoints_identified or try self.populateEntrypointsFromGossipTable();
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
             if (top_of_loop_ts - last_push_ts > CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 2) {
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
-                var my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                var my_contact_info_value = try crds.GossipDataWithSignature.initSigned(crds.GossipData{
                     .ContactInfo = self.my_contact_info,
                 }, &self.my_keypair);
-                var my_legacy_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+                var my_legacy_contact_info_value = try crds.GossipDataWithSignature.initSigned(crds.GossipData{
                     .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
                 }, &self.my_keypair);
 
@@ -760,7 +760,7 @@ pub const GossipService = struct {
                 {
                     var push_msg_queue_lock = self.push_msg_queue_mux.lock();
                     defer push_msg_queue_lock.unlock();
-                    var push_msg_queue: *ArrayList(CrdsValue) = push_msg_queue_lock.mut();
+                    var push_msg_queue: *ArrayList(GossipDataWithSignature) = push_msg_queue_lock.mut();
 
                     try push_msg_queue.append(my_contact_info_value);
                     try push_msg_queue.append(my_legacy_contact_info_value);
@@ -820,13 +820,13 @@ pub const GossipService = struct {
     /// active set and serialized into packets.
     fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(ArrayList(Packet)) {
         // TODO: find a better static value?
-        var buf: [512]crds.CrdsVersionedValue = undefined;
+        var buf: [512]crds.GossipValue = undefined;
 
         var crds_entries = blk: {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
 
-            const crds_table: *const CrdsTable = crds_table_lock.get();
+            const crds_table: *const GossipTable = crds_table_lock.get();
             break :blk crds_table.getEntriesWithCursor(&buf, push_cursor);
         };
 
@@ -843,7 +843,7 @@ pub const GossipService = struct {
         // find new values in crds table
         // TODO: benchmark different approach of HashMapping(origin, value) first
         // then deriving the active set per origin in a batch
-        var push_messages = std.AutoHashMap(EndPoint, ArrayList(CrdsValue)).init(self.allocator);
+        var push_messages = std.AutoHashMap(EndPoint, ArrayList(GossipDataWithSignature)).init(self.allocator);
         defer {
             var push_iter = push_messages.iterator();
             while (push_iter.next()) |push_entry| {
@@ -883,7 +883,7 @@ pub const GossipService = struct {
                 var active_set_peers = blk: {
                     var crds_table_lock = self.crds_table_rw.read();
                     defer crds_table_lock.unlock();
-                    const crds_table: *const CrdsTable = crds_table_lock.get();
+                    const crds_table: *const GossipTable = crds_table_lock.get();
 
                     break :blk try active_set.getFanoutPeers(self.allocator, origin, crds_table);
                 };
@@ -894,7 +894,7 @@ pub const GossipService = struct {
                     if (maybe_peer_entry) |peer_entry| {
                         try peer_entry.value_ptr.append(value);
                     } else {
-                        var peer_entry = try ArrayList(CrdsValue).initCapacity(self.allocator, 1);
+                        var peer_entry = try ArrayList(GossipDataWithSignature).initCapacity(self.allocator, 1);
                         peer_entry.appendAssumeCapacity(value);
                         try push_messages.put(peer, peer_entry);
                     }
@@ -910,11 +910,11 @@ pub const GossipService = struct {
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
-            const crds_values: *const ArrayList(CrdsValue) = push_entry.value_ptr;
+            const crds_values: *const ArrayList(GossipDataWithSignature) = push_entry.value_ptr;
             const to_endpoint: *const EndPoint = push_entry.key_ptr;
 
             // send the values as a pull response
-            var packets = try crdsValuesToPackets(
+            var packets = try GossipDataWithSignaturesToPackets(
                 self.allocator,
                 &self.my_pubkey,
                 crds_values.items,
@@ -992,14 +992,14 @@ pub const GossipService = struct {
         defer failed_pull_hashes_array.deinit();
 
         // build crds filters
-        var filters = try pull_request.buildCrdsFilters(
+        var filters = try pull_request.buildGossipFilters(
             self.allocator,
             &self.crds_table_rw,
             &failed_pull_hashes_array,
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
         );
-        defer pull_request.deinitCrdsFilters(&filters);
+        defer pull_request.deinitGossipFilters(&filters);
 
         // build packet responses
         var n_packets: usize = 0;
@@ -1012,7 +1012,7 @@ pub const GossipService = struct {
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
-        const my_contact_info_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+        const my_contact_info_value = try crds.GossipDataWithSignature.initSigned(crds.GossipData{
             .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
         }, &self.my_keypair);
 
@@ -1055,9 +1055,9 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
-        filter: *CrdsFilter,
-        value: *CrdsValue,
-        crds_table: *const CrdsTable,
+        filter: *GossipFilter,
+        value: *GossipDataWithSignature,
+        crds_table: *const GossipTable,
         output: ArrayList(Packet),
         output_limit: *std.atomic.Atomic(i64),
 
@@ -1077,14 +1077,14 @@ pub const GossipService = struct {
                 return;
             }
 
-            const response_crds_values = pull_response.filterCrdsValues(
+            const response_crds_values = pull_response.filterGossipDataWithSignatures(
                 self.allocator,
                 self.crds_table,
                 self.filter,
                 crds.getWallclockMs(),
                 @as(usize, @max(output_limit, 0)),
             ) catch {
-                // std.debug.print("filterCrdsValues failed\n", .{});
+                // std.debug.print("filterGossipDataWithSignatures failed\n", .{});
                 return;
             };
             defer response_crds_values.deinit();
@@ -1094,7 +1094,7 @@ pub const GossipService = struct {
                 std.atomic.Ordering.Release,
             );
 
-            const packets = crdsValuesToPackets(
+            const packets = GossipDataWithSignaturesToPackets(
                 self.allocator,
                 self.my_pubkey,
                 response_crds_values.items,
@@ -1121,7 +1121,7 @@ pub const GossipService = struct {
         {
             var crds_table_lock = self.crds_table_rw.write();
             defer crds_table_lock.unlock();
-            var crds_table: *CrdsTable = crds_table_lock.mut();
+            var crds_table: *GossipTable = crds_table_lock.mut();
 
             for (pull_requests.items) |*req| {
                 const caller = req.value.id();
@@ -1142,7 +1142,7 @@ pub const GossipService = struct {
             {
                 var crds_table_lock = self.crds_table_rw.read();
                 defer crds_table_lock.unlock();
-                var crds_table: *const CrdsTable = crds_table_lock.get();
+                var crds_table: *const GossipTable = crds_table_lock.get();
                 for (pull_requests.items) |req| {
                     const contact_info = switch (req.value.data) {
                         .ContactInfo => |ci| ci,
@@ -1177,7 +1177,7 @@ pub const GossipService = struct {
 
         {
             var crds_table_lock = self.crds_table_rw.read();
-            const crds_table: *const CrdsTable = crds_table_lock.get();
+            const crds_table: *const GossipTable = crds_table_lock.get();
             defer crds_table_lock.unlock();
 
             var output_limit = std.atomic.Atomic(i64).init(MAX_NUM_CRDS_VALUES_PULL_RESPONSE);
@@ -1284,16 +1284,16 @@ pub const GossipService = struct {
         }
 
         const now = getWallclockMs();
-        var failed_insert_ptrs = ArrayList(*CrdsValue).init(self.allocator);
+        var failed_insert_ptrs = ArrayList(*GossipDataWithSignature).init(self.allocator);
         defer failed_insert_ptrs.deinit();
 
         {
             var crds_table_lock = self.crds_table_rw.write();
-            var crds_table: *CrdsTable = crds_table_lock.mut();
+            var crds_table: *GossipTable = crds_table_lock.mut();
             defer crds_table_lock.unlock();
 
             for (pull_response_messages.items) |*pull_message| {
-                const valid_len = self.filterCrdsValuesBasedOnShredVersion(
+                const valid_len = self.filterGossipDataWithSignaturesBasedOnShredVersion(
                     crds_table,
                     pull_message.crds_values,
                     pull_message.from_pubkey.*,
@@ -1387,7 +1387,7 @@ pub const GossipService = struct {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
 
-            const crds_table: *const CrdsTable = crds_table_lock.get();
+            const crds_table: *const GossipTable = crds_table_lock.get();
             break :blk crds_table.getContactInfo(prune_destination) orelse {
                 return error.CantFindContactInfo;
             };
@@ -1460,8 +1460,8 @@ pub const GossipService = struct {
             defer crds_table_lock.unlock();
 
             for (batch_push_messages.items) |*push_message| {
-                var crds_table: *CrdsTable = crds_table_lock.mut();
-                const valid_len = self.filterCrdsValuesBasedOnShredVersion(
+                var crds_table: *GossipTable = crds_table_lock.mut();
+                const valid_len = self.filterGossipDataWithSignaturesBasedOnShredVersion(
                     crds_table,
                     push_message.crds_values,
                     push_message.from_pubkey.*,
@@ -1493,7 +1493,7 @@ pub const GossipService = struct {
                     continue;
                 };
                 const from_gossip_addr = from_contact_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
-                crds.sanitizeSocket(&from_gossip_addr) catch {
+                from_gossip_addr.sanitize() catch {
                     // invalid gossip socket
                     continue;
                 };
@@ -1574,7 +1574,7 @@ pub const GossipService = struct {
         {
             var crds_table_lock = self.crds_table_rw.write();
             defer crds_table_lock.unlock();
-            var crds_table: *CrdsTable = crds_table_lock.mut();
+            var crds_table: *GossipTable = crds_table_lock.mut();
 
             try crds_table.purged.trim(purged_cutoff_timestamp);
             try crds_table.attemptTrim(CRDS_UNIQUE_PUBKEY_CAPACITY);
@@ -1601,12 +1601,12 @@ pub const GossipService = struct {
     /// Returns true if all entrypoints have been identified
     ///
     /// Acquires the crds table lock regardless of whether the crds table is used.
-    fn populateEntrypointsFromCrdsTable(self: *Self) !bool {
+    fn populateEntrypointsFromGossipTable(self: *Self) !bool {
         var identified_all = true;
 
         var crds_table_lock = self.crds_table_rw.read();
         defer crds_table_lock.unlock();
-        var crds_table: *const CrdsTable = crds_table_lock.get();
+        var crds_table: *const GossipTable = crds_table_lock.get();
 
         for (self.entrypoints.items) |*entrypoint| {
             if (entrypoint.info == null) {
@@ -1640,18 +1640,18 @@ pub const GossipService = struct {
 
     /// drains values from the push queue and inserts them into the crds table.
     /// when inserting values in the crds table, any errors are ignored.
-    fn drainPushQueueToCrdsTable(
+    fn drainPushQueueToGossipTable(
         self: *Self,
         /// the current time to insert the values with
         now: u64,
     ) void {
         var push_msg_queue_lock = self.push_msg_queue_mux.lock();
         defer push_msg_queue_lock.unlock();
-        var push_msg_queue: *ArrayList(CrdsValue) = push_msg_queue_lock.mut();
+        var push_msg_queue: *ArrayList(GossipDataWithSignature) = push_msg_queue_lock.mut();
 
         var crds_table_lock = self.crds_table_rw.write();
         defer crds_table_lock.unlock();
-        var crds_table: *CrdsTable = crds_table_lock.mut();
+        var crds_table: *GossipTable = crds_table_lock.mut();
 
         while (push_msg_queue.popOrNull()) |crds_value| {
             crds_table.insert(crds_value, now) catch {};
@@ -1706,7 +1706,7 @@ pub const GossipService = struct {
             var crds_table_lock = self.crds_table_rw.read();
             defer crds_table_lock.unlock();
 
-            var crds_table: *const CrdsTable = crds_table_lock.get();
+            var crds_table: *const GossipTable = crds_table_lock.get();
             break :blk crds_table.getContactInfos(&buf, too_old_ts);
         };
 
@@ -1729,7 +1729,7 @@ pub const GossipService = struct {
             }
             // filter on valid gossip address
             if (peer_gossip_addr) |addr| {
-                crds.sanitizeSocket(&addr) catch continue;
+                addr.sanitize() catch continue;
             } else continue;
 
             nodes[node_index] = contact_info;
@@ -1743,15 +1743,15 @@ pub const GossipService = struct {
         return nodes[0..node_index];
     }
 
-    pub fn filterCrdsValuesBasedOnShredVersion(
+    pub fn filterGossipDataWithSignaturesBasedOnShredVersion(
         self: *Self,
-        crds_table: *const CrdsTable,
-        crds_values: []CrdsValue,
+        crds_table: *const GossipTable,
+        crds_values: []GossipDataWithSignature,
         from_pubkey: Pubkey,
     ) usize {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
-        var crds_values_array = ArrayList(CrdsValue).fromOwnedSlice(self.allocator, crds_values);
+        var crds_values_array = ArrayList(GossipDataWithSignature).fromOwnedSlice(self.allocator, crds_values);
         const my_shred_version = self.my_shred_version.load(.Monotonic);
         if (my_shred_version == 0) {
             return crds_values_array.items.len;
@@ -1797,10 +1797,10 @@ pub const ChunkType = enum(u8) {
     PullResponse,
 };
 
-pub fn crdsValuesToPackets(
+pub fn GossipDataWithSignaturesToPackets(
     allocator: std.mem.Allocator,
     my_pubkey: *const Pubkey,
-    crds_values: []CrdsValue,
+    crds_values: []GossipDataWithSignature,
     to_endpoint: *const EndPoint,
     chunk_type: ChunkType,
 ) error{ OutOfMemory, SerializationError }!ArrayList(Packet) {
@@ -1840,7 +1840,7 @@ pub fn crdsValuesToPackets(
 
 pub fn chunkValuesIntoPacketIndexs(
     allocator: std.mem.Allocator,
-    crds_values: []CrdsValue,
+    crds_values: []GossipDataWithSignature,
     max_chunk_bytes: usize,
 ) error{ OutOfMemory, SerializationError }!ArrayList(usize) {
     var packet_indexs = try ArrayList(usize).initCapacity(allocator, 1);
@@ -1906,7 +1906,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
 
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try CrdsValue.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
         try lg.mut().insert(value, getWallclockMs());
@@ -1955,7 +1955,7 @@ test "gossip.gossip_service: tests handle_prune_messages" {
     }
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try CrdsValue.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
         try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
     }
@@ -2021,10 +2021,10 @@ test "gossip.gossip_service: tests handle_pull_response" {
     defer gossip_service.deinit();
 
     // get random values
-    var crds_values: [5]CrdsValue = undefined;
+    var crds_values: [5]GossipDataWithSignature = undefined;
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
-        var value = try CrdsValue.randomWithIndex(rng.random(), &kp, 0);
+        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         crds_values[i] = value;
     }
@@ -2041,7 +2041,7 @@ test "gossip.gossip_service: tests handle_pull_response" {
 
     // make sure values are inserted
     var crds_table_lock = gossip_service.crds_table_rw.read();
-    var crds_table: *const CrdsTable = crds_table_lock.get();
+    var crds_table: *const GossipTable = crds_table_lock.get();
     for (crds_values) |value| {
         _ = crds_table.get(value.label()).?;
     }
@@ -2081,7 +2081,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
 
     // insert random values
     var crds_table_lock = gossip_service.crds_table_rw.write();
-    var crds_table: *CrdsTable = crds_table_lock.mut();
+    var crds_table: *GossipTable = crds_table_lock.mut();
     const N_FILTER_BITS = 1;
 
     var done = false;
@@ -2089,7 +2089,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     while (!done) {
         count += 1;
         for (0..5) |_| {
-            var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
+            var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &my_keypair, 0);
             value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
             try crds_table.insert(value, getWallclockMs());
 
@@ -2115,9 +2115,9 @@ test "gossip.gossip_service: tests handle_pull_request" {
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
     var rando_pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key, true);
 
-    var ci_data = crds.CrdsData.randomFromIndex(rng.random(), 0);
+    var ci_data = crds.GossipData.randomFromIndex(rng.random(), 0);
     ci_data.LegacyContactInfo.id = rando_pubkey;
-    var crds_value = try CrdsValue.initSigned(ci_data, &rando_keypair);
+    var crds_value = try GossipDataWithSignature.initSigned(ci_data, &rando_keypair);
 
     const addr = SocketAddr.random(rng.random());
     var ping_lock = gossip_service.ping_cache_rw.write();
@@ -2125,7 +2125,7 @@ test "gossip.gossip_service: tests handle_pull_request" {
     ping_cache._setPong(rando_pubkey, addr);
     ping_lock.unlock();
 
-    var filter = CrdsFilter{
+    var filter = GossipFilter{
         .filter = bloom,
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
@@ -2171,10 +2171,10 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     defer gossip_service.deinit();
 
     var push_from = Pubkey.random(rng.random(), .{});
-    var values = ArrayList(CrdsValue).init(allocator);
+    var values = ArrayList(GossipDataWithSignature).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        var value = try CrdsValue.randomWithIndex(rng.random(), &my_keypair, 0);
+        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &my_keypair, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         try values.append(value);
     }
@@ -2186,7 +2186,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     var gossip_socket = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20);
     send_contact_info.gossip = gossip_socket;
 
-    var ci_value = try CrdsValue.initSigned(crds.CrdsData{
+    var ci_value = try GossipDataWithSignature.initSigned(crds.GossipData{
         .LegacyContactInfo = send_contact_info,
     }, &my_keypair);
     var lg = gossip_service.crds_table_rw.write();
@@ -2262,7 +2262,7 @@ test "gossip.gossip_service: test build_pull_requests" {
     var ping_lock = gossip_service.ping_cache_rw.write();
     var lg = gossip_service.crds_table_rw.write();
     for (0..20) |_| {
-        var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0);
+        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &keypair, 0);
         try lg.mut().insert(value, getWallclockMs());
         var pc: *PingCache = ping_lock.mut();
         pc._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
@@ -2308,7 +2308,7 @@ test "gossip.gossip_service: test build_push_messages" {
     var lg = gossip_service.crds_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try CrdsValue.randomWithIndex(rng.random(), &keypair, 0); // contact info
+        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
         try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
     }
@@ -2316,7 +2316,7 @@ test "gossip.gossip_service: test build_push_messages" {
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     // var id = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var value = try CrdsValue.random(rng.random(), &keypair);
+    var value = try GossipDataWithSignature.random(rng.random(), &keypair);
 
     // set the active set
     {
@@ -2333,7 +2333,7 @@ test "gossip.gossip_service: test build_push_messages" {
         try push_queue.append(value);
         pqlg.unlock();
     }
-    gossip_service.drainPushQueueToCrdsTable(getWallclockMs());
+    gossip_service.drainPushQueueToGossipTable(getWallclockMs());
 
     var clg = gossip_service.crds_table_rw.read();
     try std.testing.expect(clg.get().len() == 11);
@@ -2379,14 +2379,14 @@ test "gossip.gossip_service: test packet verification" {
     var packet_verifier_handle = try Thread.spawn(.{}, GossipService.verifyPackets, .{&gossip_service});
 
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
-    var data = crds.CrdsData.randomFromIndex(rng.random(), 0);
+    var data = crds.GossipData.randomFromIndex(rng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
-    var value = try CrdsValue.initSigned(data, &keypair);
+    var value = try GossipDataWithSignature.initSigned(data, &keypair);
 
     try std.testing.expect(try value.verify(id));
 
-    var values = [_]crds.CrdsValue{value};
+    var values = [_]crds.GossipDataWithSignature{value};
     const message = GossipMessage{
         .PushMessage = .{ id, &values },
     };
@@ -2406,9 +2406,9 @@ test "gossip.gossip_service: test packet verification" {
     var packet_batch_2 = ArrayList(Packet).init(allocator);
 
     // send one which fails sanitization
-    var value_v2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 2), &keypair);
+    var value_v2 = try GossipDataWithSignature.initSigned(crds.GossipData.randomFromIndex(rng.random(), 2), &keypair);
     value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
-    var values_v2 = [_]crds.CrdsValue{value_v2};
+    var values_v2 = [_]crds.GossipDataWithSignature{value_v2};
     const message_v2 = GossipMessage{
         .PushMessage = .{ id, &values_v2 },
     };
@@ -2419,8 +2419,8 @@ test "gossip.gossip_service: test packet verification" {
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
-    var value2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 0), &rand_keypair);
-    var values2 = [_]crds.CrdsValue{value2};
+    var value2 = try GossipDataWithSignature.initSigned(crds.GossipData.randomFromIndex(rng.random(), 0), &rand_keypair);
+    var values2 = [_]crds.GossipDataWithSignature{value2};
     const message2 = GossipMessage{
         .PushMessage = .{ id, &values2 },
     };
@@ -2429,18 +2429,18 @@ test "gossip.gossip_service: test packet verification" {
     var packet2 = Packet.init(from, buf2, out2.len);
     try packet_batch_2.append(packet2);
 
-    // send it with a CrdsValue which hash a slice
+    // send it with a GossipDataWithSignature which hash a slice
     {
         var rand_pubkey = Pubkey.fromPublicKey(&rand_keypair.public_key, true);
         var dshred = crds.DuplicateShred.random(rng.random());
         var chunk: [32]u8 = .{1} ** 32;
         dshred.chunk = &chunk;
         dshred.from = rand_pubkey;
-        var dshred_data = crds.CrdsData{
+        var dshred_data = crds.GossipData{
             .DuplicateShred = .{ 1, dshred },
         };
-        var dshred_value = try CrdsValue.initSigned(dshred_data, &rand_keypair);
-        var values3 = [_]crds.CrdsValue{dshred_value};
+        var dshred_value = try GossipDataWithSignature.initSigned(dshred_data, &rand_keypair);
+        var values3 = [_]crds.GossipDataWithSignature{dshred_value};
         const message3 = GossipMessage{
             .PushMessage = .{ id, &values3 },
         };
@@ -2519,11 +2519,11 @@ test "gossip.gossip_service: process contact_info push packet" {
 
     // new contact info
     var legacy_contact_info = LegacyContactInfo.default(id);
-    var crds_data = crds.CrdsData{
+    var crds_data = crds.GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var crds_value = try crds.CrdsValue.initSigned(crds_data, &kp);
-    var heap_values = try allocator.alloc(crds.CrdsValue, 1);
+    var crds_value = try crds.GossipDataWithSignature.initSigned(crds_data, &kp);
+    var heap_values = try allocator.alloc(crds.GossipDataWithSignature, 1);
     heap_values[0] = crds_value;
     const msg = GossipMessage{
         .PushMessage = .{ id, heap_values },

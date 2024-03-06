@@ -8,31 +8,31 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;
 
 const RwMux = @import("../sync/mux.zig").RwMux;
-const CrdsTable = @import("crds_table.zig").CrdsTable;
-const crds = @import("crds.zig");
-const CrdsValue = crds.CrdsValue;
+const GossipTable = @import("table.zig").GossipTable;
+const crds = @import("data.zig");
+const GossipDataWithSignature = crds.GossipDataWithSignature;
 
 const crds_pull_req = @import("./pull_request.zig");
-const CrdsFilter = crds_pull_req.CrdsFilter;
+const GossipFilter = crds_pull_req.GossipFilter;
 
-pub const CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
+pub const GOSSIP_PULL_CRDS_TIMEOUT_MS: u64 = 15000;
 
-pub fn filterCrdsValues(
+pub fn filterGossipDataWithSignatures(
     alloc: std.mem.Allocator,
-    crds_table: *const CrdsTable,
-    filter: *const CrdsFilter,
+    crds_table: *const GossipTable,
+    filter: *const GossipFilter,
     caller_wallclock: u64,
     max_number_values: usize,
-) error{OutOfMemory}!ArrayList(CrdsValue) {
+) error{OutOfMemory}!ArrayList(GossipDataWithSignature) {
     if (max_number_values == 0) {
-        return ArrayList(CrdsValue).init(alloc);
+        return ArrayList(GossipDataWithSignature).init(alloc);
     }
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    const jitter = rng.intRangeAtMost(u64, 0, CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS / 4);
+    const jitter = rng.intRangeAtMost(u64, 0, GOSSIP_PULL_CRDS_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
     var bloom = filter.filter;
@@ -41,7 +41,7 @@ pub fn filterCrdsValues(
     defer match_indexs.deinit();
 
     const output_size = @min(max_number_values, match_indexs.items.len);
-    var output = try ArrayList(CrdsValue).initCapacity(alloc, output_size);
+    var output = try ArrayList(GossipDataWithSignature).initCapacity(alloc, output_size);
     errdefer output.deinit();
 
     for (match_indexs.items) |entry_index| {
@@ -56,7 +56,7 @@ pub fn filterCrdsValues(
             continue;
         }
         // exclude contact info (? not sure why - labs does it)
-        if (entry.value.data == crds.CrdsData.ContactInfo) {
+        if (entry.value.data == crds.GossipData.ContactInfo) {
             continue;
         }
 
@@ -73,8 +73,8 @@ pub fn filterCrdsValues(
 test "gossip.pull: test filter_crds_values" {
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
-    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
+    var crds_table_rw = RwMux(GossipTable).init(crds_table);
     defer {
         var lg = crds_table_rw.write();
         lg.mut().deinit();
@@ -89,7 +89,7 @@ test "gossip.pull: test filter_crds_values" {
 
     var lg = crds_table_rw.write();
     for (0..100) |_| {
-        var crds_value = try crds.CrdsValue.random(rng, &kp);
+        var crds_value = try crds.GossipDataWithSignature.random(rng, &kp);
         try lg.mut().insert(crds_value, 0);
     }
     lg.unlock();
@@ -98,14 +98,14 @@ test "gossip.pull: test filter_crds_values" {
 
     // recver
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try crds_pull_req.buildCrdsFilters(
+    var filters = try crds_pull_req.buildGossipFilters(
         std.testing.allocator,
         &crds_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer crds_pull_req.deinitCrdsFilters(&filters);
+    defer crds_pull_req.deinitGossipFilters(&filters);
     var filter = filters.items[0];
 
     // corresponding value
@@ -113,19 +113,20 @@ test "gossip.pull: test filter_crds_values" {
     var id = Pubkey.fromPublicKey(&pk, true);
     var legacy_contact_info = crds.LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
+    // TODO: make this consistent across tests
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    var crds_value = try CrdsValue.initSigned(crds.CrdsData{
+    var crds_value = try GossipDataWithSignature.initSigned(crds.GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
     // insert more values which the filters should be missing
     lg = crds_table_rw.write();
     for (0..64) |_| {
-        var v2 = try crds.CrdsValue.random(rng, &kp);
+        var v2 = try crds.GossipDataWithSignature.random(rng, &kp);
         try lg.mut().insert(v2, 0);
     }
 
-    var values = try filterCrdsValues(
+    var values = try filterGossipDataWithSignatures(
         std.testing.allocator,
         lg.get(),
         &filter,

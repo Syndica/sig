@@ -4,32 +4,32 @@ const AutoHashMap = std.AutoHashMap;
 
 const Hash = @import("../core/hash.zig").Hash;
 
-const crds = @import("./crds.zig");
-const CrdsValue = crds.CrdsValue;
-const CrdsData = crds.CrdsData;
-const CrdsVersionedValue = crds.CrdsVersionedValue;
-const CrdsValueLabel = crds.CrdsValueLabel;
+const crds = @import("./data.zig");
+const GossipDataWithSignature = crds.GossipDataWithSignature;
+const GossipData = crds.GossipData;
+const GossipValue = crds.GossipValue;
+const GossipKey = crds.GossipKey;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 
 const CrdsPull = @import("./pull_request.zig");
 
-pub const CRDS_SHARDS_BITS: u32 = 12;
-pub const CRDS_SHARDS_LEN: u32 = 1 << CRDS_SHARDS_BITS;
+pub const GOSSIP_SHARDS_BITS: u32 = 12;
+pub const GOSSIP_SHARDS_LEN: u32 = 1 << GOSSIP_SHARDS_BITS;
 
-pub const CrdsShards = struct {
+pub const GossipShards = struct {
     // shards[k] includes crds values which the first shard_bits of their hash
     // value is equal to k. Each shard is a mapping from crds values indices to
     // their hash value.
-    shard_bits: u32 = CRDS_SHARDS_BITS,
-    shards: [CRDS_SHARDS_LEN]AutoArrayHashMap(usize, u64),
+    shard_bits: u32 = GOSSIP_SHARDS_BITS,
+    shards: [GOSSIP_SHARDS_LEN]AutoArrayHashMap(usize, u64),
 
     const Self = @This();
 
     pub fn init(alloc: std.mem.Allocator) !Self {
-        var shards: [CRDS_SHARDS_LEN]AutoArrayHashMap(usize, u64) = undefined;
-        for (0..CRDS_SHARDS_LEN) |i| {
+        var shards: [GOSSIP_SHARDS_LEN]AutoArrayHashMap(usize, u64) = undefined;
+        for (0..GOSSIP_SHARDS_LEN) |i| {
             shards[i] = AutoArrayHashMap(usize, u64).init(alloc);
         }
 
@@ -46,14 +46,14 @@ pub const CrdsShards = struct {
 
     pub fn insert(self: *Self, crds_index: usize, hash: *const Hash) !void {
         const uhash = CrdsPull.hashToU64(hash);
-        const shard_index = CrdsShards.computeShardIndex(self.shard_bits, uhash);
+        const shard_index = GossipShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         try shard.put(crds_index, uhash);
     }
 
     pub fn remove(self: *Self, crds_index: usize, hash: *const Hash) void {
         const uhash = CrdsPull.hashToU64(hash);
-        const shard_index = CrdsShards.computeShardIndex(self.shard_bits, uhash);
+        const shard_index = GossipShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         _ = shard.swapRemove(crds_index);
     }
@@ -70,7 +70,7 @@ pub const CrdsShards = struct {
 
         if (self.shard_bits < mask_bits) {
             // shard_bits is smaller, all matches with mask will be in the same shard index
-            var shard = self.shards[CrdsShards.computeShardIndex(self.shard_bits, mask)];
+            var shard = self.shards[GossipShards.computeShardIndex(self.shard_bits, mask)];
 
             var shard_iter = shard.iterator();
             var result = std.ArrayList(usize).init(alloc);
@@ -86,7 +86,7 @@ pub const CrdsShards = struct {
             return result;
         } else if (self.shard_bits == mask_bits) {
             // when bits are equal we know the lookup will be exact
-            var shard = self.shards[CrdsShards.computeShardIndex(self.shard_bits, mask)];
+            var shard = self.shards[GossipShards.computeShardIndex(self.shard_bits, mask)];
 
             var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
             try result.insertSlice(0, shard.keys());
@@ -95,7 +95,7 @@ pub const CrdsShards = struct {
             // shardbits > maskbits
             const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
             const count: usize = @intCast(@as(u64, 1) << shift_bits);
-            const end = CrdsShards.computeShardIndex(self.shard_bits, match_mask) + 1;
+            const end = GossipShards.computeShardIndex(self.shard_bits, match_mask) + 1;
 
             var result = std.ArrayList(usize).init(alloc);
             var insert_index: usize = 0;
@@ -109,10 +109,10 @@ pub const CrdsShards = struct {
     }
 };
 
-const CrdsTable = @import("crds_table.zig").CrdsTable;
+const GossipTable = @import("table.zig").GossipTable;
 
-test "gossip.crds_shards: tests CrdsShards" {
-    var shards = try CrdsShards.init(std.testing.allocator);
+test "gossip.crds_shards: tests GossipShards" {
+    var shards = try GossipShards.init(std.testing.allocator);
     defer shards.deinit();
 
     const v = Hash.random();
@@ -124,16 +124,16 @@ test "gossip.crds_shards: tests CrdsShards" {
 }
 
 // test helper fcns
-fn new_test_crds_value(rng: std.rand.Random, crds_table: *CrdsTable) !CrdsVersionedValue {
+fn new_test_crds_value(rng: std.rand.Random, crds_table: *GossipTable) !GossipValue {
     const keypair = try KeyPair.create(null);
-    var value = try CrdsValue.random(rng, &keypair);
+    var value = try GossipDataWithSignature.random(rng, &keypair);
     try crds_table.insert(value, 0);
     const label = value.label();
     const x = crds_table.get(label).?;
     return x;
 }
 
-fn check_mask(value: *const CrdsVersionedValue, mask: u64, mask_bits: u32) bool {
+fn check_mask(value: *const GossipValue, mask: u64, mask_bits: u32) bool {
     const uhash = CrdsPull.hashToU64(&value.value_hash);
     const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
     return (uhash | ones) == (mask | ones);
@@ -142,7 +142,7 @@ fn check_mask(value: *const CrdsVersionedValue, mask: u64, mask_bits: u32) bool 
 // does the same thing as find() but a lot more inefficient
 fn filter_crds_values(
     alloc: std.mem.Allocator,
-    values: []CrdsVersionedValue,
+    values: []GossipValue,
     mask: u64,
     mask_bits: u32,
 ) !std.AutoHashMap(usize, void) {
@@ -158,11 +158,11 @@ fn filter_crds_values(
 test "gossip.crds_shards: test shard find" {
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // gen ranndom values
-    var values = try std.ArrayList(CrdsVersionedValue).initCapacity(std.testing.allocator, 1000);
+    var values = try std.ArrayList(GossipValue).initCapacity(std.testing.allocator, 1000);
     defer values.deinit();
 
     var seed: u64 = @intCast(std.time.milliTimestamp());

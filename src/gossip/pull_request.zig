@@ -9,9 +9,9 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;
 
-const CrdsTable = @import("crds_table.zig").CrdsTable;
-const crds = @import("crds.zig");
-const CrdsValue = crds.CrdsValue;
+const GossipTable = @import("table.zig").GossipTable;
+const crds = @import("data.zig");
+const GossipDataWithSignature = crds.GossipDataWithSignature;
 
 const RwMux = @import("../sync/mux.zig").RwMux;
 
@@ -24,21 +24,21 @@ pub const KEYS: f64 = 8;
 
 /// parses all the values in the crds table and returns a list of
 /// corresponding filters. Note: make sure to call deinit_crds_filters.
-pub fn buildCrdsFilters(
+pub fn buildGossipFilters(
     alloc: std.mem.Allocator,
-    crds_table_rw: *RwMux(CrdsTable),
+    crds_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
-) error{ NotEnoughCrdsValues, OutOfMemory }!ArrayList(CrdsFilter) {
+) error{ NotEnoughGossipDataWithSignatures, OutOfMemory }!ArrayList(GossipFilter) {
     var filter_set = blk: {
         var crds_table_lock = crds_table_rw.read();
-        const crds_table: *const CrdsTable = crds_table_lock.get();
+        const crds_table: *const GossipTable = crds_table_lock.get();
         defer crds_table_lock.unlock();
 
         const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
+        var filter_set = try GossipFilterSet.init(alloc, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all crds values
@@ -62,11 +62,11 @@ pub fn buildCrdsFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForCrdsFilters(alloc, max_n_filters);
+    const filters = try filter_set.consumeForGossipFilters(alloc, max_n_filters);
     return filters;
 }
 
-pub fn deinitCrdsFilters(filters: *ArrayList(CrdsFilter)) void {
+pub fn deinitGossipFilters(filters: *ArrayList(GossipFilter)) void {
     for (filters.items) |*filter| {
         filter.deinit();
     }
@@ -80,7 +80,7 @@ pub fn shuffleFirstN(rng: std.rand.Random, comptime T: type, buf: []T, n: usize)
     }
 }
 
-pub const CrdsFilterSet = struct {
+pub const GossipFilterSet = struct {
     filters: ArrayList(Bloom),
 
     // mask bits represents the number of bits required to represent the number of
@@ -89,14 +89,14 @@ pub const CrdsFilterSet = struct {
 
     const Self = @This();
 
-    pub fn init(alloc: std.mem.Allocator, num_items: usize, bloom_size_bytes: usize) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+    pub fn init(alloc: std.mem.Allocator, num_items: usize, bloom_size_bytes: usize) error{ NotEnoughGossipDataWithSignatures, OutOfMemory }!Self {
         var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
-        var mask_bits = CrdsFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
+        var mask_bits = GossipFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         // TODO; add errdefer handling here
-        var max_items = CrdsFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
+        var max_items = GossipFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
             var filter = try Bloom.random(alloc, @intFromFloat(max_items), FALSE_RATE, @intFromFloat(bloom_size_bits));
@@ -109,7 +109,7 @@ pub const CrdsFilterSet = struct {
         };
     }
 
-    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughGossipDataWithSignatures, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
@@ -124,7 +124,7 @@ pub const CrdsFilterSet = struct {
     }
 
     /// note: does not free filter values bc we take ownership of them in
-    /// getCrdsFilters
+    /// getGossipFilters
     pub fn deinit(self: *Self) void {
         self.filters.deinit();
     }
@@ -142,7 +142,7 @@ pub const CrdsFilterSet = struct {
     }
 
     pub fn add(self: *Self, hash: *const Hash) void {
-        const index = CrdsFilterSet.hashIndex(self.mask_bits, hash);
+        const index = GossipFilterSet.hashIndex(self.mask_bits, hash);
         self.filters.items[index].add(&hash.data);
     }
 
@@ -150,8 +150,8 @@ pub const CrdsFilterSet = struct {
         return self.filters.items.len;
     }
 
-    /// returns a list of CrdsFilters and consumes Self by calling deinit.
-    pub fn consumeForCrdsFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
+    /// returns a list of GossipFilters and consumes Self by calling deinit.
+    pub fn consumeForGossipFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(GossipFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -177,13 +177,13 @@ pub const CrdsFilterSet = struct {
             }
         }
 
-        var output = try ArrayList(CrdsFilter).initCapacity(alloc, output_size);
+        var output = try ArrayList(GossipFilter).initCapacity(alloc, output_size);
         for (0..output_size) |i| {
             const index = indexs.items[i];
 
-            var output_item = CrdsFilter{
+            var output_item = GossipFilter{
                 .filter = self.filters.items[index], // take ownership of filter
-                .mask = CrdsFilter.computeMask(index, self.mask_bits),
+                .mask = GossipFilter.computeMask(index, self.mask_bits),
                 .mask_bits = self.mask_bits,
             };
             output.appendAssumeCapacity(output_item);
@@ -193,7 +193,7 @@ pub const CrdsFilterSet = struct {
     }
 };
 
-pub const CrdsFilter = struct {
+pub const GossipFilter = struct {
     filter: Bloom,
     mask: u64,
     mask_bits: u32,
@@ -251,7 +251,7 @@ pub fn hashToU64(hash: *const Hash) u64 {
 test "gossip.pull: test build_crds_filters" {
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
+    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
     defer crds_table.deinit();
 
     // insert a some value
@@ -265,7 +265,7 @@ test "gossip.pull: test build_crds_filters" {
         var id = Pubkey.random(rng, .{});
         var legacy_contact_info = crds.LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
-        var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+        var crds_value = try crds.GossipDataWithSignature.initSigned(crds.GossipData{
             .LegacyContactInfo = legacy_contact_info,
         }, &kp);
 
@@ -276,17 +276,17 @@ test "gossip.pull: test build_crds_filters" {
     const num_items = crds_table.len();
 
     // build filters
-    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    var crds_table_rw = RwMux(GossipTable).init(crds_table);
 
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try buildCrdsFilters(
+    var filters = try buildGossipFilters(
         std.testing.allocator,
         &crds_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer deinitCrdsFilters(&filters);
+    defer deinitGossipFilters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;
 
@@ -296,26 +296,26 @@ test "gossip.pull: test build_crds_filters" {
         const versioned_value = crds_values[i];
         const hash = versioned_value.value_hash;
 
-        const index = CrdsFilterSet.hashIndex(mask_bits, &hash);
+        const index = GossipFilterSet.hashIndex(mask_bits, &hash);
         const filter = filters.items[index].filter;
         try std.testing.expect(filter.contains(&hash.data));
     }
 }
 
-test "gossip.pull: CrdsFilterSet deinits correct" {
-    var filter_set = try CrdsFilterSet.init(std.testing.allocator, 10000, 200);
+test "gossip.pull: GossipFilterSet deinits correct" {
+    var filter_set = try GossipFilterSet.init(std.testing.allocator, 10000, 200);
 
     const hash = Hash.random();
     filter_set.add(&hash);
 
-    const index = CrdsFilterSet.hashIndex(filter_set.mask_bits, &hash);
+    const index = GossipFilterSet.hashIndex(filter_set.mask_bits, &hash);
     var bloom = filter_set.filters.items[index];
 
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consumeForCrdsFilters(std.testing.allocator, 10);
-    defer deinitCrdsFilters(&f);
+    var f = try filter_set.consumeForGossipFilters(std.testing.allocator, 10);
+    defer deinitGossipFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
 
@@ -325,12 +325,12 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
 
 test "gossip.pull: helper functions are correct" {
     {
-        const v = CrdsFilter.computeMaxItems(100.5, 0.1, 10.0);
+        const v = GossipFilter.computeMaxItems(100.5, 0.1, 10.0);
         try std.testing.expectEqual(@as(f64, 16), v);
     }
 
     {
-        const v = CrdsFilter.computeMaskBits(800, 100);
+        const v = GossipFilter.computeMaskBits(800, 100);
         try std.testing.expectEqual(@as(usize, 3), v);
     }
 
@@ -340,7 +340,7 @@ test "gossip.pull: helper functions are correct" {
     }
 
     {
-        const v = CrdsFilter.computeMask(2, 3);
+        const v = GossipFilter.computeMask(2, 3);
         // 101111111111111111111111111111111111111111111111111111111111111
         try std.testing.expectEqual(@as(u64, 6917529027641081855), v);
     }
@@ -348,7 +348,7 @@ test "gossip.pull: helper functions are correct" {
 
 test "gossip.pull: crds filter matches rust bytes" {
     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-    var filter = CrdsFilter.init(std.testing.allocator);
+    var filter = GossipFilter.init(std.testing.allocator);
     defer filter.deinit();
 
     var buf = [_]u8{0} ** 1024;

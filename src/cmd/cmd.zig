@@ -11,11 +11,11 @@ const io = std.io;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 const echo = @import("../net/echo.zig");
-const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const GossipService = @import("../gossip/service.zig").GossipService;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
 const Registry = @import("../prometheus/registry.zig").Registry;
-const getWallclockMs = @import("../gossip/crds.zig").getWallclockMs;
+const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
