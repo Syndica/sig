@@ -8,6 +8,14 @@ const Logger = @import("../trace/log.zig").Logger;
 pub const SOCKET_TIMEOUT: usize = 1000000;
 pub const PACKETS_PER_BATCH: usize = 64;
 
+pub fn setReadTimeout(fd: std.os.socket_t, timeout_ns: usize) !void {
+    const micros = timeout_ns * 1000;
+    var read_timeout: std.os.timeval = undefined;
+    read_timeout.tv_sec = @intCast(@divTrunc(micros, 1000000));
+    read_timeout.tv_usec = @intCast(@mod(micros, 1000000));
+    try std.os.setsockopt(fd, std.os.SOL.SOCKET, std.os.SO.RCVTIMEO, std.mem.toBytes(read_timeout)[0..]);
+}
+
 pub fn readSocket(
     allocator: std.mem.Allocator,
     socket: *UdpSocket,

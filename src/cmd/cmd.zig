@@ -185,6 +185,42 @@ fn gossip(_: []const []const u8) !void {
         .{ &gossip_service, spy_node },
     );
 
+    const CrdsTable = @import("../gossip/crds_table.zig").CrdsTable;
+
+    // TMP - TODO: remove later
+    var ci_buf: [10]ContactInfo = undefined;
+    var valid_buf: [10]u8 = undefined;
+    @memset(&valid_buf, 0);
+
+    while (true) {
+        std.debug.print("sleeping...\n", .{});
+        std.time.sleep(std.time.ns_per_s * 3);
+
+        var lg = gossip_service.crds_table_rw.read();
+        defer lg.unlock();
+        const crds_table: *const CrdsTable = lg.get();
+
+        var cis = crds_table.getContactInfos(&ci_buf, 0);
+        var is_me_cis: u8 = 0;
+        var invalid_shred: u8 = 0;
+        for (cis, 0..) |*ci, index| { 
+            const is_me = ci.pubkey.equals(&my_pubkey);
+            if (is_me) { 
+                is_me_cis += 1;
+                continue;
+            }
+            const matching_shred_version = contact_info.shred_version == ci.shred_version or contact_info.shred_version == 0;
+            if (!matching_shred_version) { 
+                invalid_shred += 1;
+                continue;
+            }
+            valid_buf[index] = 1;
+        }
+
+        std.debug.print("is_me: {d} invalid_shred: {d}\n", .{is_me_cis, invalid_shred});
+        std.debug.print("valid cis len: {d}\n", .{valid_cis});
+    }
+
     handle.join();
     metrics_thread.detach();
 }

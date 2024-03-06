@@ -567,13 +567,15 @@ pub const CompressionType = enum {
 
 pub const LegacySnapshotHashes = AccountsHashes;
 
+pub const SlotAndHash = @import("../core/snapshots.zig").SlotAndHash;
+
 pub const AccountsHashes = struct {
     from: Pubkey,
-    hashes: []struct { u64, Hash },
+    hashes: []SlotAndHash,
     wallclock: u64,
 
     pub fn random(rng: std.rand.Random) AccountsHashes {
-        var slice: [0]struct { u64, Hash } = .{};
+        var slice: [0]SlotAndHash = .{};
         return AccountsHashes{
             .from = Pubkey.random(rng),
             .hashes = &slice,
@@ -584,8 +586,7 @@ pub const AccountsHashes = struct {
     pub fn sanitize(value: *const AccountsHashes) !void {
         try sanitize_wallclock(value.wallclock);
         for (value.hashes) |*snapshot_hash| {
-            const slot = snapshot_hash[0];
-            if (slot >= MAX_SLOT) {
+            if (snapshot_hash.slot >= MAX_SLOT) {
                 return error.ValueOutOfBounds;
             }
         }
@@ -857,15 +858,15 @@ pub const DuplicateShred = struct {
 
 pub const SnapshotHashes = struct {
     from: Pubkey,
-    full: struct { Slot, Hash },
-    incremental: []struct { Slot, Hash },
+    full: SlotAndHash,
+    incremental: []SlotAndHash,
     wallclock: u64,
 
     pub fn random(rng: std.rand.Random) SnapshotHashes {
-        var slice: [0]struct { Slot, Hash } = .{};
+        var slice: [0]SlotAndHash = .{};
         return SnapshotHashes{
             .from = Pubkey.random(rng),
-            .full = .{ rng.int(u64), Hash.random() },
+            .full = .{ .slot = rng.int(u64), .hash = Hash.random() },
             .incremental = &slice,
             .wallclock = getWallclockMs(),
         };

@@ -269,6 +269,8 @@ pub const BankHashStats = struct {
     num_executable_accounts: u64,
 };
 
+pub const SlotAndHash = struct { slot: Slot, hash: Hash };
+
 pub const AccountsDbFields = struct {
     file_map: HashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
@@ -277,11 +279,10 @@ pub const AccountsDbFields = struct {
 
     // default on EOF
     rooted_slots: ArrayList(Slot),
-    rooted_slot_hashes: ArrayList(SlotHash),
+    rooted_slot_hashes: ArrayList(SlotAndHash),
 
-    pub const SlotHash = struct { slot: Slot, hash: Hash };
     pub const @"!bincode-config:rooted_slots" = defaultArrayListOnEOFConfig(Slot);
-    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotHash);
+    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotAndHash);
 };
 
 pub const SnapshotFields = struct {

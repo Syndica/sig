@@ -300,6 +300,8 @@ pub fn handleRequest(
     logger.debug("done handling request");
 }
 
+const setReadTimeout = @import("../gossip/socket_utils.zig").setReadTimeout;
+
 pub fn requestIpEcho(
     allocator: std.mem.Allocator,
     addr: std.net.Address,
@@ -308,6 +310,8 @@ pub fn requestIpEcho(
     // connect + send
     const conn = try std.net.tcpConnectToAddress(addr);
     defer conn.close();
+    try setReadTimeout(conn.handle, std.time.ns_per_s);
+
     try conn.writeAll(&(.{0} ** HEADER_LENGTH));
     try bincode.write(allocator, conn.writer(), message, .{});
     try conn.writeAll("\n");
