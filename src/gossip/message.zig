@@ -28,7 +28,7 @@ const logger = std.log.scoped(.protocol);
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Gossip GossipMessagemessages
-pub const GossipMessage= union(enum(u32)) {
+pub const GossipMessage = union(enum(u32)) {
     PullRequest: struct { CrdsFilter, CrdsValue },
     PullResponse: struct { Pubkey, []CrdsValue },
     PushMessage: struct { Pubkey, []CrdsValue },
@@ -402,14 +402,14 @@ test "gossip.protocol: Protocol.PullRequest.ContactInfo signature is valid" {
         6,   3,   0,   1,   0,
     };
 
-    var protocol_message = try bincode.readFromSlice(
+    var message = try bincode.readFromSlice(
         std.testing.allocator,
         GossipMessage,
         &contact_info_pull_response_packet_from_mainnet,
         bincode.Params.standard,
     );
-    defer bincode.free(std.testing.allocator, protocol_message);
+    defer bincode.free(std.testing.allocator, message);
 
-    try protocol_message.sanitize();
-    try protocol_message.verifySignature();
+    try message.sanitize();
+    try message.verifySignature();
 }

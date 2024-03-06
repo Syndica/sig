@@ -65,7 +65,7 @@ pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     return packet;
 }
 
-pub fn randomPing(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage{
+pub fn randomPing(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
     const ping = GossipMessage{
         .PingMessage = try Ping.random(rng, keypair),
     };
@@ -78,7 +78,7 @@ pub fn randomPingPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
     return packet;
 }
 
-pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage{
+pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage {
     const pong = GossipMessage{
         .PongMessage = try Pong.random(rng, keypair),
     };
