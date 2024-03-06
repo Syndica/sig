@@ -11,7 +11,7 @@ const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const sanitize_wallclock = @import("./protocol.zig").sanitizeWallclock;
+const sanitize_wallclock = @import("./message.zig").sanitizeWallclock;
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
 /// returns current timestamp in milliseconds

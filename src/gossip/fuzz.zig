@@ -32,9 +32,9 @@ const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;
 const Tuple = std.meta.Tuple;
-const _protocol = @import("protocol.zig");
-const Protocol = _protocol.Protocol;
-const PruneData = _protocol.PruneData;
+const _gossipMessage = @import("message.zig");
+const GossipMessage = _gossipMessage.GossipMessage;
+const PruneData = _gossipMessage.PruneData;
 
 const Ping = @import("ping_pong.zig").Ping;
 const Pong = @import("ping_pong.zig").Pong;
@@ -56,8 +56,7 @@ const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 const Hash = @import("../core/hash.zig").Hash;
 
 const PacketChannel = NonBlockingChannel(Packet);
-const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
-const ProtocolChannel = NonBlockingChannel(ProtocolMessage);
+const GossipChannel = NonBlockingChannel(GossipMessage);
 
 pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -66,8 +65,8 @@ pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     return packet;
 }
 
-pub fn randomPing(rng: std.rand.Random, keypair: *const KeyPair) !Protocol {
-    const ping = Protocol{
+pub fn randomPing(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage{
+    const ping = GossipMessage{
         .PingMessage = try Ping.random(rng, keypair),
     };
     return ping;
@@ -79,8 +78,8 @@ pub fn randomPingPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
     return packet;
 }
 
-pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !Protocol {
-    const pong = Protocol{
+pub fn randomPong(rng: std.rand.Random, keypair: *const KeyPair) !GossipMessage{
+    const pong = GossipMessage{
         .PongMessage = try Pong.random(rng, keypair),
     };
     return pong;
@@ -206,7 +205,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     }
 
     // serialize and send as packet
-    var msg = Protocol{ .PullRequest = .{ filter, crds_value } };
+    var msg = GossipMessage{ .PullRequest = .{ filter, crds_value } };
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);

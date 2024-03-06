@@ -263,7 +263,7 @@ const Sockets = struct {
 };
 
 pub const SocketEntry = struct {
-    key: u8, // Protocol identifier, e.g. tvu, tpu, etc
+    key: u8, // GossipMessageidentifier, e.g. tvu, tpu, etc
     index: u8, // IpAddr index in the accompanying addrs vector.
     offset: u16, // Port offset with respect to the previous entry.
 

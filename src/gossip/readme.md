@@ -118,21 +118,21 @@ can be found in `CrdsTable.remove()`.
 ## Sending/Receiving Requests
 
 We also receive new messages from the network as bytes. Before processing these messages:
--  deserialize them into Protocol messages (defined in `protocol.zig`)
+-  deserialize them into Gossip messages (defined in `message.zig`)
 -  verify their values are valid
 -  verify the signature corresponds are correct
 
-And if any of these checks fail, we discard the value. Otherwise, we process the protocol message.
+And if any of these checks fail, we discard the value. Otherwise, we process the Gossip message.
 
 *Note:* this logic can be found in the `GossipService.verify_packets` method in `gossip/gossip_service.zig`.
 
-There are 4 protocol messages to describe:
+There are 4 Gossip messages to describe:
 - Pull
 - Push
 - Prune
 - and Ping/Pong
 
-## Protocol Messages: Pull
+## Gossip Messages: Pull
 
 Pull messages are used to retrieve new data from other nodes in the network. There are two types of Pull messages: pull requests and pull responses.
 
@@ -422,7 +422,7 @@ We also do the same thing for values that are pruned in the CrdsTable (i.e., val
 
 For each CrdsValue that is successfully inserted in the CrdsTable, we also update the timestamps for all the values from that origin pubkey. We do this so that when we are trimming old CrdsValues in the table, we don't remove values from an active pubkey.
 
-## Protocol Messages: Push
+## Gossip Messages: Push
 
 ### Sending Push Messages
 
@@ -469,7 +469,7 @@ This means, **high-stake nodes are more likely to send push messages to other hi
 
 When receiving a new `PushMessage`, the values are inserted into the CrdsTable and values that failed the insertion (due to being a duplicate) are tracked. The nodes who sent those failed values are then sent prune messages to say, 'stop sending me this data, I’ve already received it from another node’.
 
-## Protocol Message: Prune Messages
+## Gossip Message: Prune Messages
 
 ### Sending Prune Message
 
@@ -533,11 +533,11 @@ When constructing the active set for a CrdsValue:
  - if the origin is not contained in the bloom filter, we haven’t received a corresponding prune message, so we add the peer to the active set
   - if the origin is contained in the bloom filter, we don’t add the peer to the active set
 
-## Protocol Message: Ping/Pong
+## Gossip Message: Ping/Pong
 
 Ping and Pong messages are used to health check nodes quickly and easily. The corresponding logic is defined in `gossip/ping_pong.zig`.
 
-Ping messages are periodically sent to all of the nodes in the network (by parsing the contact information in the CrdsTable). For each of these Ping messages, a corresponding Pong message is expected within a certain amount of time. If we fail to receive the corresponding Pong message, then we don’t send that node any other protocol messages (i.e., we don’t include them in the `ActiveSet` so we don’t send them push messages, nor do we respond to any pull requests received from them).
+Ping messages are periodically sent to all of the nodes in the network (by parsing the contact information in the CrdsTable). For each of these Ping messages, a corresponding Pong message is expected within a certain amount of time. If we fail to receive the corresponding Pong message, then we don’t send that node any other Gossip messages (i.e., we don’t include them in the `ActiveSet` so we don’t send them push messages, nor do we respond to any pull requests received from them).
 
 We track the nodes that have responded to Ping messages with a corresponding Pong message as well as which nodes we are still waiting for a corresponding Pong message for using the `PingCache` structure.
 

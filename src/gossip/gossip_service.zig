@@ -16,9 +16,9 @@ const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 const endpointToString = @import("../net/net.zig").endpointToString;
-const _protocol = @import("protocol.zig");
-const Protocol = _protocol.Protocol;
-const PruneData = _protocol.PruneData;
+const _gossipMessages = @import("message.zig");
+const GossipMessage= _gossipMessages.GossipMessage;
+const PruneData = _gossipMessages.PruneData;
 
 const Mux = @import("../sync/mux.zig").Mux;
 const RwMux = @import("../sync/mux.zig").RwMux;
@@ -64,9 +64,9 @@ const PacketBatch = ArrayList(Packet);
 const PacketChannel = Channel(Packet);
 const PacketBatchChannel = Channel(PacketBatch);
 
-const ProtocolMessage = struct { from_endpoint: EndPoint, message: Protocol };
+const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage};
 
-const ProtocolChannel = Channel(ProtocolMessage);
+const GossipMessageChannel = Channel(GossipMessageWithEndpoint);
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
@@ -116,7 +116,7 @@ pub const GossipService = struct {
     // communication between threads
     packet_incoming_channel: *PacketBatchChannel,
     packet_outgoing_channel: *PacketBatchChannel,
-    verified_incoming_channel: *ProtocolChannel,
+    verified_incoming_channel: *GossipMessageChannel,
 
     crds_table_rw: RwMux(CrdsTable),
     // push message things
@@ -150,7 +150,7 @@ pub const GossipService = struct {
     ) error{ OutOfMemory, GossipAddrUnspecified, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
         var packet_incoming_channel = PacketBatchChannel.init(allocator, 10000);
         var packet_outgoing_channel = PacketBatchChannel.init(allocator, 10000);
-        var verified_incoming_channel = ProtocolChannel.init(allocator, 10000);
+        var verified_incoming_channel = GossipMessageChannel.init(allocator, 10000);
 
         errdefer {
             packet_incoming_channel.deinit();
@@ -317,7 +317,7 @@ pub const GossipService = struct {
     const VerifyMessageTask = struct {
         packet: *const Packet,
         allocator: std.mem.Allocator,
-        verified_incoming_channel: *Channel(ProtocolMessage),
+        verified_incoming_channel: *GossipMessageChannel,
         logger: Logger,
 
         task: Task,
@@ -330,7 +330,7 @@ pub const GossipService = struct {
 
             var protocol_message = bincode.readFromSlice(
                 self.allocator,
-                Protocol,
+                GossipMessage,
                 self.packet.data[0..self.packet.size],
                 bincode.Params.standard,
             ) catch {
@@ -353,7 +353,7 @@ pub const GossipService = struct {
                 return;
             };
 
-            const msg = ProtocolMessage{
+            const msg = GossipMessageWithEndpoint{
                 .from_endpoint = self.packet.addr,
                 .message = protocol_message,
             };
@@ -369,9 +369,9 @@ pub const GossipService = struct {
         }
     };
 
-    /// main logic for deserializing Packets into Protocol messages
+    /// main logic for deserializing Packets into GossipMessagemessages
     /// and verifing they have valid values, and have valid signatures.
-    /// Verified Protocol messages are then sent to the verified_channel.
+    /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(self: *Self) !void {
         var tasks = try self.allocator.alloc(VerifyMessageTask, socket_utils.PACKETS_PER_BATCH);
         defer self.allocator.free(tasks);
@@ -702,7 +702,7 @@ pub const GossipService = struct {
         self.logger.debugf("process_messages loop closed", .{});
     }
 
-    /// main gossip loop for periodically sending new protocol messages.
+    /// main gossip loop for periodically sending new GossipMessagemessages.
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the crds_table, active_set, and failed_pull_hashes).
     fn buildMessages(
@@ -1026,7 +1026,7 @@ pub const GossipService = struct {
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
                 if (peer_contact_info.getSocket(node.SOCKET_TAG_GOSSIP)) |gossip_addr| {
-                    const protocol_msg = Protocol{ .PullRequest = .{ filter_i, my_contact_info_value } };
+                    const protocol_msg = GossipMessage{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
                     var packet = &packet_batch.items[packet_index];
                     var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
@@ -1041,7 +1041,7 @@ pub const GossipService = struct {
         if (should_send_to_entrypoint) {
             const entrypoint = self.entrypoints.items[@as(usize, @intCast(entrypoint_index))];
             for (filters.items) |filter| {
-                const protocol_msg = Protocol{ .PullRequest = .{ filter, my_contact_info_value } };
+                const protocol_msg = GossipMessage{ .PullRequest = .{ filter, my_contact_info_value } };
 
                 var packet = &packet_batch.items[packet_index];
                 var bytes = try bincode.writeToSlice(&packet.data, protocol_msg, bincode.Params{});
@@ -1252,7 +1252,7 @@ pub const GossipService = struct {
 
         for (ping_messages.items, 0..) |*ping_message, i| {
             const pong = try Pong.init(ping_message.ping, &self.my_keypair);
-            const pong_message = Protocol{ .PongMessage = pong };
+            const pong_message = GossipMessage{ .PongMessage = pong };
 
             var packet = &ping_packet_batch.items[i];
             const bytes_written = try bincode.writeToSlice(
@@ -1421,7 +1421,7 @@ pub const GossipService = struct {
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
 
             // put it into a packet
-            var msg = Protocol{ .PruneMessage = .{ self.my_pubkey, prune_data } };
+            var msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
             // msg should never be bigger than the PacketSize and serialization shouldnt fail (unrecoverable)
             var msg_slice = bincode.writeToSlice(&packet_buf, msg, bincode.Params{}) catch unreachable;
             var packet = Packet.init(from_gossip_endpoint, packet_buf, msg_slice.len);
@@ -1547,7 +1547,7 @@ pub const GossipService = struct {
                 now,
             );
             prune_data.sign(&self.my_keypair) catch return error.SignatureError;
-            var protocol = Protocol{ .PruneMessage = .{ self.my_pubkey, prune_data } };
+            var msg = GossipMessage{ .PruneMessage = .{ self.my_pubkey, prune_data } };
 
             self.logger
                 .field("n_pruned_origins", prune_size)
@@ -1555,7 +1555,7 @@ pub const GossipService = struct {
                 .info("gossip: send prune_message");
 
             var packet = &prune_packet_batch.items[count];
-            var written_slice = bincode.writeToSlice(&packet.data, protocol, bincode.Params{}) catch unreachable;
+            var written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;
             packet.size = written_slice.len;
             packet.addr = from_endpoint;
             count += 1;
@@ -1674,7 +1674,7 @@ pub const GossipService = struct {
         packet_batch.appendNTimesAssumeCapacity(Packet.default(), n_pings);
 
         for (pings.items, 0..) |ping_and_addr, i| {
-            const protocol_msg = Protocol{ .PingMessage = ping_and_addr.ping };
+            const protocol_msg = GossipMessage{ .PingMessage = ping_and_addr.ping };
 
             var packet = &packet_batch.items[i];
             var serialized_ping = bincode.writeToSlice(&packet.data, protocol_msg, .{}) catch return error.SerializationError;
@@ -1828,8 +1828,8 @@ pub fn crdsValuesToPackets(
         const values = crds_values[start_index..end_index];
 
         const protocol_msg = switch (chunk_type) {
-            .PushMessage => Protocol{ .PushMessage = .{ my_pubkey.*, values } },
-            .PullResponse => Protocol{ .PullResponse = .{ my_pubkey.*, values } },
+            .PushMessage => GossipMessage{ .PushMessage = .{ my_pubkey.*, values } },
+            .PullResponse => GossipMessage{ .PullResponse = .{ my_pubkey.*, values } },
         };
         var msg_slice = bincode.writeToSlice(&packet_buf, protocol_msg, bincode.Params{}) catch {
             return error.SerializationError;
@@ -2227,7 +2227,7 @@ test "gossip.gossip_service: test build prune messages and handle_push_msgs" {
     };
     var protocol_message = try bincode.readFromSlice(
         allocator,
-        Protocol,
+        GossipMessage,
         packet.data[0..packet.size],
         bincode.Params.standard,
     );
@@ -2390,7 +2390,7 @@ test "gossip.gossip_service: test packet verification" {
     try std.testing.expect(try value.verify(id));
 
     var values = [_]crds.CrdsValue{value};
-    const protocol_msg = Protocol{
+    const protocol_msg = GossipMessage{
         .PushMessage = .{ id, &values },
     };
 
@@ -2412,7 +2412,7 @@ test "gossip.gossip_service: test packet verification" {
     var value_v2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 2), &keypair);
     value_v2.data.EpochSlots[0] = crds.MAX_EPOCH_SLOTS;
     var values_v2 = [_]crds.CrdsValue{value_v2};
-    const protocol_msg_v2 = Protocol{
+    const protocol_msg_v2 = GossipMessage{
         .PushMessage = .{ id, &values_v2 },
     };
     var buf_v2 = [_]u8{0} ** PACKET_DATA_SIZE;
@@ -2424,7 +2424,7 @@ test "gossip.gossip_service: test packet verification" {
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
     var value2 = try CrdsValue.initSigned(crds.CrdsData.randomFromIndex(rng.random(), 0), &rand_keypair);
     var values2 = [_]crds.CrdsValue{value2};
-    const protocol_msg2 = Protocol{
+    const protocol_msg2 = GossipMessage{
         .PushMessage = .{ id, &values2 },
     };
     var buf2 = [_]u8{0} ** PACKET_DATA_SIZE;
@@ -2444,7 +2444,7 @@ test "gossip.gossip_service: test packet verification" {
         };
         var dshred_value = try CrdsValue.initSigned(dshred_data, &rand_keypair);
         var values3 = [_]crds.CrdsValue{dshred_value};
-        const protocol_msg3 = Protocol{
+        const protocol_msg3 = GossipMessage{
             .PushMessage = .{ id, &values3 },
         };
         var buf3 = [_]u8{0} ** PACKET_DATA_SIZE;
@@ -2528,21 +2528,21 @@ test "gossip.gossip_service: process contact_info push packet" {
     var crds_value = try crds.CrdsValue.initSigned(crds_data, &kp);
     var heap_values = try allocator.alloc(crds.CrdsValue, 1);
     heap_values[0] = crds_value;
-    const msg = Protocol{
+    const msg = GossipMessage{
         .PushMessage = .{ id, heap_values },
     };
 
     // packet
     const peer = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000).toEndpoint();
-    const protocol_msg = ProtocolMessage{
+    const protocol_msg = GossipMessageWithEndpoint{
         .from_endpoint = peer,
         .message = msg,
     };
     try verified_channel.send(protocol_msg);
 
     // ping
-    const ping_msg = ProtocolMessage{
-        .message = Protocol{
+    const ping_msg = GossipMessageWithEndpoint{
+        .message = GossipMessage{
             .PingMessage = try Ping.init(.{0} ** 32, &kp),
         },
         .from_endpoint = peer,

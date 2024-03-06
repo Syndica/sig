@@ -23,7 +23,7 @@ pub const gossip = struct {
     pub usingnamespace @import("gossip/gossip_service.zig");
     pub usingnamespace @import("gossip/node.zig");
     pub usingnamespace @import("gossip/packet.zig");
-    pub usingnamespace @import("gossip/protocol.zig");
+    pub usingnamespace @import("gossip/message.zig");
     pub usingnamespace @import("gossip/pull_request.zig");
     pub usingnamespace @import("gossip/pull_response.zig");
     pub usingnamespace @import("gossip/crds_shards.zig");
