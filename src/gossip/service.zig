@@ -31,7 +31,6 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
 const _gossip_table = @import("../gossip/table.zig");
 const GossipTable = _gossip_table.GossipTable;
-const CrdsError = _gossip_table.CrdsError;
 const HashTimeQueue = _gossip_table.HashTimeQueue;
 const UNIQUE_PUBKEY_CAPACITY = _gossip_table.UNIQUE_PUBKEY_CAPACITY;
 const AutoArrayHashSet = _gossip_table.AutoArrayHashSet;

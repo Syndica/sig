@@ -44,9 +44,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const _gossip_table = @import("../gossip/table.zig");
 const GossipTable = _gossip_table.GossipTable;
-const CrdsError = _gossip_table.CrdsError;
 const HashTimeQueue = _gossip_table.HashTimeQueue;
-const CRDS_UNIQUE_PUBKEY_CAPACITY = _gossip_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
 
 const _pull_request = @import("../gossip/pull_request.zig");
 const GossipFilterSet = _pull_request.GossipFilterSet;
@@ -293,20 +291,6 @@ pub fn main() !void {
     );
 
     var fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service_fuzzer, true });
-
-    // std.debug.print("setting up", .{});
-    // while (true) {
-    //     var lg = gossip_service_fuzzer.crds_table_rw.read();
-    //     var table: *const GossipTable = lg.get();
-    //     var n_contacts = table.contact_infos.iterator().len;
-    //     lg.unlock();
-
-    //     if (n_contacts > 0) {
-    //         break;
-    //     }
-    //     std.debug.print(".", .{});
-    //     std.time.sleep(std.time.ns_per_ms);
-    // }
 
     const SLEEP_TIME = 0;
     // const SLEEP_TIME = std.time.ns_per_ms * 10;

@@ -32,7 +32,7 @@ fn do_something(maybe_foo: ?Foo) void {
 
 ### Writing Tests 
 - when writing tests the naming convention is: `test "{path to file}: {test name}"`
-  - for example, in `src/gossip/data.zig` a test is defined as `test "gossip.crds: test CrdsDataWithSignature label() and id() methods"`
+  - for example, in `src/gossip/data.zig` a test is defined as `test "gossip.data: test label() and id() methods"`
 
 ### Linting
 - run `zig fmt src/` in the top-level directory to run the zig linter

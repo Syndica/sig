@@ -301,7 +301,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     }));
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
 
-    // pull requests only use ContactInfo CRDS data
+    // pull requests only use ContactInfo data
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
     var legacy_contact_info = LegacyContactInfo{

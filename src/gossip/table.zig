@@ -71,7 +71,7 @@ pub const InsertResults = struct {
 /// (`get_votes_with_cursor`) which allows you to retrieve values which are
 /// past a certain cursor index. A listener would use their own cursor to
 /// retrieve new values inserted in the store.
-/// insertion of values is all based on the CRDSLabel type -- when duplicates
+/// insertion of values is all based on the GossipData type -- when duplicates
 /// are found, the entry with the largest wallclock time (newest) is stored.
 pub const GossipTable = struct {
     store: AutoArrayHashMap(GossipKey, GossipVersionedData),
