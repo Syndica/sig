@@ -1,19 +1,18 @@
 const std = @import("std");
-const network = @import("zig-network");
-const EndPoint = network.EndPoint;
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Atomic(bool);
-const UdpSocket = network.Socket;
 const Tuple = std.meta.Tuple;
-const crds = @import("../gossip/data.zig");
-const node = @import("../gossip/node.zig");
-const GossipDataWithSignature = crds.GossipDataWithSignature;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const network = @import("zig-network");
+const EndPoint = network.EndPoint;
+const UdpSocket = network.Socket;
+const gossip_data = @import("../gossip/data.zig");
+const GossipDataWithSignature = gossip_data.GossipDataWithSignature;
+const getWallclockMs = gossip_data.getWallclockMs;
+const node = @import("../gossip/node.zig");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
-const _crds_table = @import("../gossip/table.zig");
-const GossipTable = _crds_table.GossipTable;
-const pull_request = @import("../gossip/pull_request.zig");
+const GossipTable = @import("../gossip/table.zig").GossipTable;
+const shuffleFirstN = @import("../gossip/pull_request.zig").shuffleFirstN;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
@@ -65,7 +64,7 @@ pub const ActiveSet = struct {
         }
         const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
         var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        pull_request.shuffleFirstN(rng.random(), node.ContactInfo, crds_peers, size);
+        shuffleFirstN(rng.random(), node.ContactInfo, crds_peers, size);
 
         const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
@@ -145,11 +144,11 @@ test "gossip.active_set: init/deinit" {
     }
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
-        var data = crds.LegacyContactInfo.random(rng.random());
+        var data = gossip_data.LegacyContactInfo.random(rng.random());
         try gossip_peers.append(try data.toContactInfo(alloc));
 
         var keypair = try KeyPair.create(null);
-        var value = try GossipDataWithSignature.initSigned(crds.GossipData{
+        var value = try GossipDataWithSignature.initSigned(gossip_data.GossipData{
             .LegacyContactInfo = data,
         }, &keypair);
         try crds_table.insert(value, getWallclockMs());
@@ -184,8 +183,8 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     var gossip_peers = try std.ArrayList(node.ContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
-    var data = try crds.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
-    var dupe = try crds.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    var data = try gossip_data.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    var dupe = try gossip_data.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;

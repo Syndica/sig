@@ -220,111 +220,6 @@ pub const GossipDataWithSignature = struct {
     }
 };
 
-pub const LegacyContactInfo = struct {
-    id: Pubkey,
-    /// gossip address
-    gossip: SocketAddr,
-    /// address to connect to for replication
-    tvu: SocketAddr,
-    /// address to forward shreds to
-    tvu_forwards: SocketAddr,
-    /// address to send repair responses to
-    repair: SocketAddr,
-    /// transactions address
-    tpu: SocketAddr,
-    /// address to forward unprocessed transactions to
-    tpu_forwards: SocketAddr,
-    /// address to which to send bank state requests
-    tpu_vote: SocketAddr,
-    /// address to which to send JSON-RPC requests
-    rpc: SocketAddr,
-    /// websocket for JSON-RPC push notifications
-    rpc_pubsub: SocketAddr,
-    /// address to send repair requests to
-    serve_repair: SocketAddr,
-    /// latest wallclock picked
-    wallclock: u64,
-    /// node shred version
-    shred_version: u16,
-
-    pub fn sanitize(self: *const LegacyContactInfo) !void {
-        try sanitizeWallclock(self.wallclock);
-    }
-
-    pub fn default(id: Pubkey) LegacyContactInfo {
-        const unspecified_addr = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 0);
-        const wallclock = getWallclockMs();
-
-        return LegacyContactInfo{
-            .id = id,
-            .gossip = unspecified_addr,
-            .tvu = unspecified_addr,
-            .tvu_forwards = unspecified_addr,
-            .repair = unspecified_addr,
-            .tpu = unspecified_addr,
-            .tpu_forwards = unspecified_addr,
-            .tpu_vote = unspecified_addr,
-            .rpc = unspecified_addr,
-            .rpc_pubsub = unspecified_addr,
-            .serve_repair = unspecified_addr,
-            .wallclock = wallclock,
-            .shred_version = 0,
-        };
-    }
-
-    pub fn random(rng: std.rand.Random) LegacyContactInfo {
-        return LegacyContactInfo{
-            .id = Pubkey.random(rng, .{ .skip_encoding = false }),
-            .gossip = SocketAddr.random(rng),
-            .tvu = SocketAddr.random(rng),
-            .tvu_forwards = SocketAddr.random(rng),
-            .repair = SocketAddr.random(rng),
-            .tpu = SocketAddr.random(rng),
-            .tpu_forwards = SocketAddr.random(rng),
-            .tpu_vote = SocketAddr.random(rng),
-            .rpc = SocketAddr.random(rng),
-            .rpc_pubsub = SocketAddr.random(rng),
-            .serve_repair = SocketAddr.random(rng),
-            .wallclock = getWallclockMs(),
-            .shred_version = rng.int(u16),
-        };
-    }
-
-    /// call ContactInfo.deinit to free
-    pub fn toContactInfo(self: *const LegacyContactInfo, allocator: std.mem.Allocator) !ContactInfo {
-        var ci = ContactInfo.init(allocator, self.id, self.wallclock, self.shred_version);
-        try ci.setSocket(node.SOCKET_TAG_GOSSIP, self.gossip);
-        try ci.setSocket(node.SOCKET_TAG_TVU, self.tvu);
-        try ci.setSocket(node.SOCKET_TAG_TVU_FORWARDS, self.tvu_forwards);
-        try ci.setSocket(node.SOCKET_TAG_REPAIR, self.repair);
-        try ci.setSocket(node.SOCKET_TAG_TPU, self.tpu);
-        try ci.setSocket(node.SOCKET_TAG_TPU_FORWARDS, self.tpu_forwards);
-        try ci.setSocket(node.SOCKET_TAG_TPU_VOTE, self.tpu_vote);
-        try ci.setSocket(node.SOCKET_TAG_RPC, self.rpc);
-        try ci.setSocket(node.SOCKET_TAG_RPC_PUBSUB, self.rpc_pubsub);
-        try ci.setSocket(node.SOCKET_TAG_SERVE_REPAIR, self.serve_repair);
-        return ci;
-    }
-
-    pub fn fromContactInfo(ci: *const ContactInfo) LegacyContactInfo {
-        return .{
-            .id = ci.pubkey,
-            .gossip = ci.getSocket(node.SOCKET_TAG_GOSSIP) orelse SocketAddr.UNSPECIFIED,
-            .tvu = ci.getSocket(node.SOCKET_TAG_TVU) orelse SocketAddr.UNSPECIFIED,
-            .tvu_forwards = ci.getSocket(node.SOCKET_TAG_TVU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
-            .repair = ci.getSocket(node.SOCKET_TAG_REPAIR) orelse SocketAddr.UNSPECIFIED,
-            .tpu = ci.getSocket(node.SOCKET_TAG_TPU) orelse SocketAddr.UNSPECIFIED,
-            .tpu_forwards = ci.getSocket(node.SOCKET_TAG_TPU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
-            .tpu_vote = ci.getSocket(node.SOCKET_TAG_TPU_VOTE) orelse SocketAddr.UNSPECIFIED,
-            .rpc = ci.getSocket(node.SOCKET_TAG_RPC) orelse SocketAddr.UNSPECIFIED,
-            .rpc_pubsub = ci.getSocket(node.SOCKET_TAG_RPC_PUBSUB) orelse SocketAddr.UNSPECIFIED,
-            .serve_repair = ci.getSocket(node.SOCKET_TAG_SERVE_REPAIR) orelse SocketAddr.UNSPECIFIED,
-            .wallclock = ci.wallclock,
-            .shred_version = ci.shred_version,
-        };
-    }
-};
-
 pub const GossipKey = union(enum) {
     LegacyContactInfo: Pubkey,
     Vote: struct { u8, Pubkey },
@@ -497,6 +392,111 @@ pub const GossipData = union(enum(u32)) {
     }
 };
 
+pub const LegacyContactInfo = struct {
+    id: Pubkey,
+    /// gossip address
+    gossip: SocketAddr,
+    /// address to connect to for replication
+    tvu: SocketAddr,
+    /// address to forward shreds to
+    tvu_forwards: SocketAddr,
+    /// address to send repair responses to
+    repair: SocketAddr,
+    /// transactions address
+    tpu: SocketAddr,
+    /// address to forward unprocessed transactions to
+    tpu_forwards: SocketAddr,
+    /// address to which to send bank state requests
+    tpu_vote: SocketAddr,
+    /// address to which to send JSON-RPC requests
+    rpc: SocketAddr,
+    /// websocket for JSON-RPC push notifications
+    rpc_pubsub: SocketAddr,
+    /// address to send repair requests to
+    serve_repair: SocketAddr,
+    /// latest wallclock picked
+    wallclock: u64,
+    /// node shred version
+    shred_version: u16,
+
+    pub fn sanitize(self: *const LegacyContactInfo) !void {
+        try sanitizeWallclock(self.wallclock);
+    }
+
+    pub fn default(id: Pubkey) LegacyContactInfo {
+        const unspecified_addr = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, 0);
+        const wallclock = getWallclockMs();
+
+        return LegacyContactInfo{
+            .id = id,
+            .gossip = unspecified_addr,
+            .tvu = unspecified_addr,
+            .tvu_forwards = unspecified_addr,
+            .repair = unspecified_addr,
+            .tpu = unspecified_addr,
+            .tpu_forwards = unspecified_addr,
+            .tpu_vote = unspecified_addr,
+            .rpc = unspecified_addr,
+            .rpc_pubsub = unspecified_addr,
+            .serve_repair = unspecified_addr,
+            .wallclock = wallclock,
+            .shred_version = 0,
+        };
+    }
+
+    pub fn random(rng: std.rand.Random) LegacyContactInfo {
+        return LegacyContactInfo{
+            .id = Pubkey.random(rng, .{ .skip_encoding = false }),
+            .gossip = SocketAddr.random(rng),
+            .tvu = SocketAddr.random(rng),
+            .tvu_forwards = SocketAddr.random(rng),
+            .repair = SocketAddr.random(rng),
+            .tpu = SocketAddr.random(rng),
+            .tpu_forwards = SocketAddr.random(rng),
+            .tpu_vote = SocketAddr.random(rng),
+            .rpc = SocketAddr.random(rng),
+            .rpc_pubsub = SocketAddr.random(rng),
+            .serve_repair = SocketAddr.random(rng),
+            .wallclock = getWallclockMs(),
+            .shred_version = rng.int(u16),
+        };
+    }
+
+    /// call ContactInfo.deinit to free
+    pub fn toContactInfo(self: *const LegacyContactInfo, allocator: std.mem.Allocator) !ContactInfo {
+        var ci = ContactInfo.init(allocator, self.id, self.wallclock, self.shred_version);
+        try ci.setSocket(node.SOCKET_TAG_GOSSIP, self.gossip);
+        try ci.setSocket(node.SOCKET_TAG_TVU, self.tvu);
+        try ci.setSocket(node.SOCKET_TAG_TVU_FORWARDS, self.tvu_forwards);
+        try ci.setSocket(node.SOCKET_TAG_REPAIR, self.repair);
+        try ci.setSocket(node.SOCKET_TAG_TPU, self.tpu);
+        try ci.setSocket(node.SOCKET_TAG_TPU_FORWARDS, self.tpu_forwards);
+        try ci.setSocket(node.SOCKET_TAG_TPU_VOTE, self.tpu_vote);
+        try ci.setSocket(node.SOCKET_TAG_RPC, self.rpc);
+        try ci.setSocket(node.SOCKET_TAG_RPC_PUBSUB, self.rpc_pubsub);
+        try ci.setSocket(node.SOCKET_TAG_SERVE_REPAIR, self.serve_repair);
+        return ci;
+    }
+
+    pub fn fromContactInfo(ci: *const ContactInfo) LegacyContactInfo {
+        return .{
+            .id = ci.pubkey,
+            .gossip = ci.getSocket(node.SOCKET_TAG_GOSSIP) orelse SocketAddr.UNSPECIFIED,
+            .tvu = ci.getSocket(node.SOCKET_TAG_TVU) orelse SocketAddr.UNSPECIFIED,
+            .tvu_forwards = ci.getSocket(node.SOCKET_TAG_TVU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .repair = ci.getSocket(node.SOCKET_TAG_REPAIR) orelse SocketAddr.UNSPECIFIED,
+            .tpu = ci.getSocket(node.SOCKET_TAG_TPU) orelse SocketAddr.UNSPECIFIED,
+            .tpu_forwards = ci.getSocket(node.SOCKET_TAG_TPU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .tpu_vote = ci.getSocket(node.SOCKET_TAG_TPU_VOTE) orelse SocketAddr.UNSPECIFIED,
+            .rpc = ci.getSocket(node.SOCKET_TAG_RPC) orelse SocketAddr.UNSPECIFIED,
+            .rpc_pubsub = ci.getSocket(node.SOCKET_TAG_RPC_PUBSUB) orelse SocketAddr.UNSPECIFIED,
+            .serve_repair = ci.getSocket(node.SOCKET_TAG_SERVE_REPAIR) orelse SocketAddr.UNSPECIFIED,
+            .wallclock = ci.wallclock,
+            .shred_version = ci.shred_version,
+        };
+    }
+};
+
 pub const Vote = struct {
     from: Pubkey,
     transaction: Transaction,
@@ -665,6 +665,7 @@ pub const Uncompressed = struct {
     }
 };
 
+// TODO: replace logic with another library
 pub fn BitVec(comptime T: type) type {
     return struct {
         bits: ?[]T,
