@@ -3,8 +3,8 @@ const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
 const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
-const node = @import("../gossip/node.zig");
-const ContactInfo = node.ContactInfo;
+const ContactInfo = @import("../gossip/data.zig").ContactInfo;
+const SOCKET_TAG_GOSSIP = @import("../gossip/data.zig").SOCKET_TAG_GOSSIP;
 const Logger = @import("../trace/log.zig").Logger;
 const Level = @import("../trace/level.zig").Level;
 const io = std.io;
@@ -123,7 +123,7 @@ fn gossip(_: []const []const u8) !void {
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(node.SOCKET_TAG_GOSSIP, gossip_address);
+    try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_address);
 
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     defer entrypoints.deinit();

@@ -13,7 +13,7 @@ Checkout the full associated blog post here: [https://blog.syndica.io/sig-engine
 - `data.zig`: various gossip data structure definitions 
 - `pull_request.zig`: logic for sending pull *requests* 
 - `pull_response.zig`: logic for sending pull *responses* (/handling incoming pull requests)
-- `crds_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `crds_table` and constructing pull responses
+- `gossip_shards.zig`: datastructure which stores gossip data hashes for quick lookup - used in `gossip_table` and constructing pull responses
 - `active_set.zig`: logic for deriving a list of peers to send push messages to
 - `ping_pong.zig`: logic for sending ping/pong messages as a heartbeat check
 
@@ -35,7 +35,7 @@ There are two main data types we store (defined in `data.zig`) which includes `G
 
 To store this data, we use an indexable-HashMap in a struct called the `GossipTable` located in `table.zig`.
 
-For each `CrdsDataWithSignature` type we store, there is a corresponding `GossipKey` which is used as the key for the hashmap and a `GossipValue` structure for the value for the hashmap.
+For each `CrdsDataWithSignature` type we store, there is a corresponding `GossipKey` which is used as the key for the hashmap and a `GossipVersionedData` structure for the value for the hashmap.
 
 #### GossipTable Keys: `GossipKey`
 
@@ -65,13 +65,13 @@ pub const GossipKey = union(enum) {
 
 When inserting a `CrdsDataWithSignature`, if an entry with the same corresponding label exists (i.e., a duplicate), we keep the value with the largest wallclock time (i.e., the newest).
 
-### GossipTable Values: `GossipValue`
+### GossipTable Values: `GossipVersionedData`
 
-The `GossipValue` structure contains the `CrdsDataWithSignature` inserted along with other
+The `GossipVersionedData` structure contains the `CrdsDataWithSignature` inserted along with other
 related information including its hash, timestamps, and more.
 
 ```zig
-pub const GossipValue = struct {
+pub const GossipVersionedData = struct {
     value: CrdsDataWithSignature,
     value_hash: Hash,
     timestamp_on_insertion: u64,
@@ -84,17 +84,17 @@ pub const GossipValue = struct {
 We’re also interested in reading all stored data of a specific type. For example, when broadcasting data to the rest of the network, we need to retrieve all the contact info values stored in the GossipTable. This is why we use an **indexable** hash map as our main datastructure.
 
 To do this:
-- we insert the value into the GossipTable and  receive its corresponding index (`crds_index = crds_table.insert(&versioned_value)`)
-- we store these indexes in an array corresponding to the specific type we’re tracking (`contact_infos.append(crds_index)`)
-- when we want to retrieve these values, we look up all the indexes stored in the array to get the corresponding values (`versioned_value = crds_table[crds_index]`).
+- we insert the value into the GossipTable and  receive its corresponding index (`gossip_index = gossip_table.insert(&versioned_value)`)
+- we store these indexes in an array corresponding to the specific type we’re tracking (`contact_infos.append(gossip_index)`)
+- when we want to retrieve these values, we look up all the indexes stored in the array to get the corresponding values (`versioned_value = gossip_table[gossip_index]`).
 
 We follow this approach for the `ContactInfos`, `Votes`, `EpochSlots`, and `DuplicateShreds` data types.
 
 ### Reading New Data
 
-To efficiently retrieve *new* data from the GossipTable, we also track a `cursor` variable which is monotonically incremented on each insert/update (which is stored on the `GossipValue` structure using the `cursor_on_insertion` variable).
+To efficiently retrieve *new* data from the GossipTable, we also track a `cursor` variable which is monotonically incremented on each insert/update (which is stored on the `GossipVersionedData` structure using the `cursor_on_insertion` variable).
 
-For example, a listener would track their cursor and periodically call the getter functions (such as, `get_votes_with_cursor`, which allows you to retrieve vote `GossipValue`s which are past a certain cursor index) to retrieve new values.
+For example, a listener would track their cursor and periodically call the getter functions (such as, `get_votes_with_cursor`, which allows you to retrieve vote `GossipVersionedData`s which are past a certain cursor index) to retrieve new values.
 
 Note: this is how we produce new push messages - talked about in a later section.
 
@@ -146,7 +146,7 @@ Note: The majority of pull request code can be found in `pull_requests.zig` and 
 
 Since the GossipTable can store a large amount of values, instead of constructing one large bloom filter, we partition the data in the GossipTable across multiple bloom filters based on the hash value's first `N` bits.
 
-*Note:* When constructing pull requests, in addition to all the values in the GossipTable, we also include values that were recently overwritten (which is tracked in the `crds_table.pruned` variable), and values that were invalid in a previous pull response (discussed more in the 'Handling Pull Responses' section).
+*Note:* When constructing pull requests, in addition to all the values in the GossipTable, we also include values that were recently overwritten (which is tracked in the `gossip_table.pruned` variable), and values that were invalid in a previous pull response (discussed more in the 'Handling Pull Responses' section).
 
 For example, if we are partitioning on the first 3 bits we would use, 2^3 = 8 `Bloom` filters:
   - the first bloom filter would contain hash values whose first 3 bits are equal to 000
@@ -165,11 +165,11 @@ After we construct this filter set (i.e., compute the `mask_bits` and init `2^ma
 
 ```python
 ## main function for building pull requests
-def build_crds_filters(
-    crds_table: *GossipTable
+def build_gossip_filters(
+    gossip_table: *GossipTable
 ) Vec<GossipFilters>:
 	
-    values = crds_table.values()
+    values = gossip_table.values()
     filter_set = GossipFilterSet.init(len(value))
 
     for value in values:
@@ -214,7 +214,7 @@ For example, if you received the `010` mask, you would look up all hash values w
 ```python
     def consumeForGossipFilters(self: GossipFilterSet) Vec<GossipFilters>:
 	    for index in 0..len(self.filters):
-    	    crds_filter = GossipFilter(
+    	    gossip_filter = GossipFilter(
         	    bloom=self.filters[index],
         	    mask=GossipFilter.compute_mask(index, self.mask_bits),
         	    mask_bits=self.mask_bits,
@@ -249,7 +249,7 @@ Notice how the result will be ones everywhere except for the first `mask_bits` b
 
 Pull responses are responses to pull requests and include missing data which was not included in the pull request.
 
-To build a pull response, we find values to match the `GossipFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `GossipShards` struct which is located in `crds_shards.zig`.
+To build a pull response, we find values to match the `GossipFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `GossipShards` struct which is located in `gossip_shards.zig`.
 
 
 <div align="center">
@@ -276,10 +276,10 @@ After inserting a new value in the GossipTable, inserting its hash value into th
 - insert the GossipTable index along with the `u64_hash` into the shard
 
 ```python
-def insert(self: *GossipShards, crds_index: usize, hash: *const Hash):
+def insert(self: *GossipShards, gossip_index: usize, hash: *const Hash):
     shard_index = @as(u64, hash[0..8]) >> (64 - shard_bits)
     shard = self.shard[shard_index]
-    shard.put(crds_index, uhash);
+    shard.put(gossip_index, uhash);
 ```
 
 <div align="center">
@@ -309,8 +309,8 @@ GossipTable values whose first 3 bits of their hash value is 001 by looking up s
 def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>: 
     if (self.shard_bits == mask_bits) {
         shard = self.shard[(mask >> (64 - self.shard_bits)]
-        crds_indexs = shard.keys()
-        return crds_indexs
+        gossip_indexs = shard.keys()
+        return gossip_indexs
     } else { 
         # TODO: 
     }
@@ -341,11 +341,11 @@ def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>:
         shard = self.shards[shard_index]
         
         # scan for matches 
-        crds_indexs = []
+        gossip_indexs = []
         for (indexs, hash_u64) in shard:
             if ((hash_u64 | mask_ones) == (mask | mask_ones)): # match! 
-                crds_indexs.append(indexs)
-        return crds_indexs
+                gossip_indexs.append(indexs)
+        return gossip_indexs
         
     } else { 
         # TODO
@@ -383,13 +383,13 @@ def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>:
         count = 1 << shift_bits
         end = (mask | mask_ones) >> shard_bits 
         
-        crds_indexs = []
+        gossip_indexs = []
         for shard_index in (end-count)..end:
             shard = self.shards[shard_index]
             indexs = shard.keys()
-            crds_indexs.append(indexs)
+            gossip_indexs.append(indexs)
         
-        return crds_indexs 
+        return gossip_indexs 
     }
 ```
 
@@ -397,17 +397,17 @@ After we have all the CrdsDataWithSignature indexes that match the `mask`, we th
 
 ```python
 
-def filter_crds_values(
-    crds_table: *GossipTable
+def filter_gossip_values(
+    gossip_table: *GossipTable
     filter: *GossipFilter
 ) Vec<CrdsDataWithSignatures>:
-    # find crds values whose hash matches the mask 
-    var match_indexs = crds_table.get_bitmask_matches(filter.mask, filter.mask_bits);
+    # find gossip values whose hash matches the mask 
+    var match_indexs = gossip_table.get_bitmask_matches(filter.mask, filter.mask_bits);
 	
     # find the values that arent included in the requests bloom filter
     values = []
     for index in match_indexs:
-	    entry = crds_table[index]       
+	    entry = gossip_table[index]       
 	    if (!filter.bloom.contains(entry.hash)):
     	    values.append(entry)
 
@@ -427,7 +427,7 @@ For each CrdsDataWithSignature that is successfully inserted in the GossipTable,
 ### Sending Push Messages
 
 Push messages are periodically generated to send out new data to a subset of the network’s nodes. To implement this, we track a `push_cursor` variable which represents the
-cursor value of the last pushed value, and use the getter function `crds_table.get_entries_with_cursor(...)` to get newCrdsDataWithSignatures which have been inserted past this value (i.e., are new CrdsDataWithSignatures).
+cursor value of the last pushed value, and use the getter function `gossip_table.get_entries_with_cursor(...)` to get newCrdsDataWithSignatures which have been inserted past this value (i.e., are new CrdsDataWithSignatures).
 
 In Sig, a `PushMessage` is defined as `struct { Pubkey, []CrdsDataWithSignature }`: a source pubkey, and an array of `CrdsDataWithSignature`s. The source pubkey will be the same pubkey on the local node's contact information. And the array of values will be all the new CrdsDataWithSignatures.
 
@@ -443,7 +443,7 @@ A node's active set is a list of nodes in the gossip network with a shred versio
 
 The active set is periodically re-sampled to reduce the chance of eclipse attacks.
 
-Note: see the “Receiving Prune Messages” section for a more detailed explanation on how the `ActiveSet` is constructed on a per-crds-value-origin basis.
+Note: see the “Receiving Prune Messages” section for a more detailed explanation on how the `ActiveSet` is constructed on a per-gossip-value-origin basis.
 
 Note: The solana-labs rust implementation uses stake weight information to build their `ActiveSet`. However, since Sig doesn’t have stake weight information yet, we chose to randomly sample.
 
@@ -497,11 +497,11 @@ def handle_push_message(
     from_pubkey: Pubkey, # received from
     values: []CrdsDataWithSignatures, # values from push msg
     my_pubkey: Pubkey, # local nodes pubkey
-    crds_table: *GossipTable,
+    gossip_table: *GossipTable,
 ) {
     pruned_origins = []
     for value in values:
-	    result = crds_table.insert(value)
+	    result = gossip_table.insert(value)
 	    if result.is_error():
     	    origin = value.id()
     	    pruned_origins.append(origin)

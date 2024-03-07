@@ -2,17 +2,12 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
-const crds = @import("data.zig");
-const GossipDataWithSignature = crds.GossipDataWithSignature;
-const GossipData = crds.GossipData;
-const Version = crds.Version;
-const LegacyVersion2 = crds.LegacyVersion2;
-
-const node = @import("node.zig");
-const ContactInfo = node.ContactInfo;
-
-const pull_import = @import("pull_request.zig");
-const GossipFilter = pull_import.GossipFilter;
+const _gossip_data = @import("data.zig");
+const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const GossipData = _gossip_data.GossipData;
+const ContactInfo = _gossip_data.ContactInfo;
+const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const getWallclockMs = _gossip_data.getWallclockMs;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -175,7 +170,7 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var rng = DefaultPrng.init(crds.getWallclockMs());
+        var rng = DefaultPrng.init(getWallclockMs());
         var ping = Ping.random(rng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
@@ -221,7 +216,7 @@ pub const PingCache = struct {
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (peer.getSocket(node.SOCKET_TAG_GOSSIP)) |gossip_addr| {
+            if (peer.getSocket(SOCKET_TAG_GOSSIP)) |gossip_addr| {
                 var result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);

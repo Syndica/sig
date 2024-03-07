@@ -4,28 +4,24 @@ const Signature = @import("../core/signature.zig").Signature;
 const bincode = @import("../bincode/bincode.zig");
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
-const crds = @import("data.zig");
-const GossipDataWithSignature = crds.GossipDataWithSignature;
-const GossipData = crds.GossipData;
-const Version = crds.Version;
-const LegacyVersion2 = crds.LegacyVersion2;
-const LegacyContactInfo = crds.LegacyContactInfo;
+const _gossip_data = @import("data.zig");
+const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const GossipData = _gossip_data.GossipData;
+const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const getWallclockMs = _gossip_data.getWallclockMs;
 
-const pull_import = @import("pull_request.zig");
-const GossipFilter = pull_import.GossipFilter;
-
+const GossipFilter = @import("pull_request.zig").GossipFilter;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 
-const Ping = @import("./ping_pong.zig").Ping;
-const Pong = @import("./ping_pong.zig").Pong;
+const Ping = @import("ping_pong.zig").Ping;
+const Pong = @import("ping_pong.zig").Pong;
 
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
-/// Gossip GossipMessagemessages
 pub const GossipMessage = union(enum(u32)) {
     PullRequest: struct { GossipFilter, GossipDataWithSignature },
     PullResponse: struct { Pubkey, []GossipDataWithSignature },
@@ -81,8 +77,8 @@ pub const GossipMessage = union(enum(u32)) {
             .PullRequest => {},
             .PullResponse => {},
             .PushMessage => |*msg| {
-                const crds_values = msg[1];
-                for (crds_values) |value| {
+                const gossip_values = msg[1];
+                for (gossip_values) |value| {
                     const data: GossipData = value.data;
                     try data.sanitize();
                 }
@@ -104,8 +100,8 @@ pub const GossipMessage = union(enum(u32)) {
     /// Frees the ephemeral messaging data that is only needed
     /// for the initial processing of an incoming message.
     ///
-    /// Does not free the contained crds data that
-    /// needs to be stored in the crds table.
+    /// Does not free the contained gossip data that
+    /// needs to be stored in the gossip table.
     pub fn shallowFree(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .PullRequest => |*msg| {
@@ -169,7 +165,7 @@ pub const PruneData = struct {
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
             .destination = Pubkey.random(rng, .{}),
-            .wallclock = crds.getWallclockMs(),
+            .wallclock = getWallclockMs(),
         };
         try self.sign(keypair);
 
@@ -207,7 +203,7 @@ pub const PruneData = struct {
 };
 
 test "gossip.protocol: push message serialization is predictable" {
-    var rng = DefaultPrng.init(crds.getWallclockMs());
+    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
     var pubkey = Pubkey.random(rng.random(), .{});
     var values = std.ArrayList(GossipDataWithSignature).init(std.testing.allocator);
     defer values.deinit();
@@ -246,7 +242,7 @@ test "gossip.protocol: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(crds.getWallclockMs());
+    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();
@@ -323,17 +319,17 @@ test "gossip.protocol: pull request serializes and deserializes" {
         .wallclock = 0,
         .shred_version = 0,
     };
-    var crds_data = crds.GossipData{
+    var data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var crds_value = try crds.GossipDataWithSignature.initSigned(crds_data, &keypair);
+    var value = try GossipDataWithSignature.initSigned(data, &keypair);
 
     var filter = GossipFilter.init(testing.allocator);
     defer filter.deinit();
 
     var pull = GossipMessage{ .PullRequest = .{
         filter,
-        crds_value,
+        value,
     } };
 
     var buf = [_]u8{0} ** 1232;
@@ -371,13 +367,13 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
         .shred_version = 0,
     };
 
-    var crds_data = crds.GossipData{
+    var data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
     var rust_bytes = [_]u8{ 2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    var crds_value = try crds.GossipDataWithSignature.initSigned(crds_data, &kp);
-    var values = [_]crds.GossipDataWithSignature{crds_value};
+    var gossip_value = try GossipDataWithSignature.initSigned(data, &kp);
+    var values = [_]GossipDataWithSignature{gossip_value};
     var pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
     var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
     try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);

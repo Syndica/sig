@@ -1,23 +1,20 @@
 const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
-
 const bincode = @import("../bincode/bincode.zig");
-
 const _hash = @import("../core/hash.zig");
 const Hash = _hash.Hash;
-
 const GossipShards = @import("./shards.zig").GossipShards;
-
-const crds = @import("./data.zig");
-const GossipDataWithSignature = crds.GossipDataWithSignature;
-const GossipData = crds.GossipData;
-const GossipValue = crds.GossipValue;
-const GossipKey = crds.GossipKey;
-const LegacyContactInfo = crds.LegacyContactInfo;
-
-const node = @import("./node.zig");
-const ContactInfo = node.ContactInfo;
+const _gossip_data = @import("data.zig");
+const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const GossipData = _gossip_data.GossipData;
+const GossipVersionedData = _gossip_data.GossipVersionedData;
+const GossipKey = _gossip_data.GossipKey;
+const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const ContactInfo = _gossip_data.ContactInfo;
+const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const getWallclockMs = _gossip_data.getWallclockMs;
+const Vote = _gossip_data.Vote;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
@@ -31,10 +28,10 @@ const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
 
-pub const CRDS_UNIQUE_PUBKEY_CAPACITY: usize = 8192;
-pub const MAX_CRDS_VALUES: usize = 1_000_000; // TODO: better value for this
+pub const UNIQUE_PUBKEY_CAPACITY: usize = 8192;
+pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this
 
-pub const CrdsError = error{
+pub const TableError = error{
     OldValue,
     DuplicateValue,
 };
@@ -77,7 +74,7 @@ pub const InsertResults = struct {
 /// insertion of values is all based on the CRDSLabel type -- when duplicates
 /// are found, the entry with the largest wallclock time (newest) is stored.
 pub const GossipTable = struct {
-    store: AutoArrayHashMap(GossipKey, GossipValue),
+    store: AutoArrayHashMap(GossipKey, GossipVersionedData),
 
     // special types tracked with their index
     contact_infos: AutoArrayHashSet(usize),
@@ -93,7 +90,7 @@ pub const GossipTable = struct {
     // tracking for cursor to index
     entries: AutoArrayHashMap(u64, usize),
 
-    // Indices of all crds values associated with a node/pubkey.
+    // Indices of all gossip values associated with a node/pubkey.
     pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
 
     // used to build pull responses efficiently
@@ -112,7 +109,7 @@ pub const GossipTable = struct {
 
     pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool) !Self {
         return Self{
-            .store = AutoArrayHashMap(GossipKey, GossipValue).init(allocator),
+            .store = AutoArrayHashMap(GossipKey, GossipVersionedData).init(allocator),
             .contact_infos = AutoArrayHashSet(usize).init(allocator),
             .shred_versions = AutoHashMap(Pubkey, u16).init(allocator),
             .votes = AutoArrayHashMap(usize, usize).init(allocator),
@@ -153,14 +150,14 @@ pub const GossipTable = struct {
     }
 
     pub fn insert(self: *Self, value: GossipDataWithSignature, now: u64) !void {
-        if (self.store.count() >= MAX_CRDS_VALUES) {
+        if (self.store.count() >= MAX_TABLE_SIZE) {
             return error.GossipTableFull;
         }
 
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
         const value_hash = Hash.generateSha256Hash(bytes);
-        const versioned_value = GossipValue{
+        const versioned_value = GossipVersionedData{
             .value = value,
             .value_hash = value_hash,
             .timestamp_on_insertion = now,
@@ -272,25 +269,25 @@ pub const GossipTable = struct {
             if (old_entry.value_hash.cmp(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
-                return CrdsError.OldValue;
+                return TableError.OldValue;
             } else {
                 // hash is the same then its a duplicate
-                return CrdsError.DuplicateValue;
+                return TableError.DuplicateValue;
             }
         }
     }
 
     pub fn insertValues(
         self: *Self,
-        values: []crds.GossipDataWithSignature,
+        values: []GossipDataWithSignature,
         timeout: u64,
         comptime record_inserts: bool,
         comptime record_timeouts: bool,
     ) error{OutOfMemory}!InsertResults {
-        var now = crds.getWallclockMs();
+        var now = getWallclockMs();
 
         // TODO: change to record duplicate and old values seperately + handle when
-        // crds table is full
+        // gossip table is full
         var failed_indexs = std.ArrayList(usize).init(self.allocator);
         var inserted_indexs = std.ArrayList(usize).init(self.allocator);
         var timeout_indexs = std.ArrayList(usize).init(self.allocator);
@@ -354,7 +351,7 @@ pub const GossipTable = struct {
     }
 
     // ** getter functions **
-    pub fn get(self: *const Self, label: GossipKey) ?GossipValue {
+    pub fn get(self: *const Self, label: GossipKey) ?GossipVersionedData {
         return self.store.get(label);
     }
 
@@ -370,7 +367,12 @@ pub const GossipTable = struct {
         }
     }
 
-    pub fn genericGetWithCursor(hashmap: anytype, store: AutoArrayHashMap(GossipKey, GossipValue), buf: []GossipValue, caller_cursor: *usize) []GossipValue {
+    pub fn genericGetWithCursor(
+        hashmap: anytype,
+        store: AutoArrayHashMap(GossipKey, GossipVersionedData),
+        buf: []GossipVersionedData,
+        caller_cursor: *usize,
+    ) []GossipVersionedData {
         const cursor_indexs = hashmap.keys();
         const store_values = store.values();
 
@@ -394,8 +396,12 @@ pub const GossipTable = struct {
         return buf[0..index];
     }
 
-    pub fn getEntriesWithCursor(self: *const Self, buf: []GossipValue, caller_cursor: *usize) []GossipValue {
-        return GossipTable.genericGetWithCursor(
+    pub fn getEntriesWithCursor(
+        self: *const Self,
+        buf: []GossipVersionedData,
+        caller_cursor: *usize,
+    ) []GossipVersionedData {
+        return genericGetWithCursor(
             self.entries,
             self.store,
             buf,
@@ -403,8 +409,12 @@ pub const GossipTable = struct {
         );
     }
 
-    pub fn getVotesWithCursor(self: *Self, buf: []GossipValue, caller_cursor: *usize) ![]GossipValue {
-        return GossipTable.genericGetWithCursor(
+    pub fn getVotesWithCursor(
+        self: *Self,
+        buf: []GossipVersionedData,
+        caller_cursor: *usize,
+    ) ![]GossipVersionedData {
+        return genericGetWithCursor(
             self.votes,
             self.store,
             buf,
@@ -412,8 +422,12 @@ pub const GossipTable = struct {
         );
     }
 
-    pub fn getEpochSlotsWithCursor(self: *Self, buf: []GossipValue, caller_cursor: *usize) ![]GossipValue {
-        return GossipTable.genericGetWithCursor(
+    pub fn getEpochSlotsWithCursor(
+        self: *Self,
+        buf: []GossipVersionedData,
+        caller_cursor: *usize,
+    ) ![]GossipVersionedData {
+        return genericGetWithCursor(
             self.epoch_slots,
             self.store,
             buf,
@@ -421,8 +435,12 @@ pub const GossipTable = struct {
         );
     }
 
-    pub fn getDuplicateShredsWithCursor(self: *Self, buf: []GossipValue, caller_cursor: *usize) ![]GossipValue {
-        return GossipTable.genericGetWithCursor(
+    pub fn getDuplicateShredsWithCursor(
+        self: *Self,
+        buf: []GossipVersionedData,
+        caller_cursor: *usize,
+    ) ![]GossipVersionedData {
+        return genericGetWithCursor(
             self.duplicate_shreds,
             self.store,
             buf,
@@ -466,7 +484,7 @@ pub const GossipTable = struct {
     }
 
     // ** helper functions **
-    pub fn check_matching_shred_version(self: *const Self, pubkey: Pubkey, expected_shred_version: u16) bool {
+    pub fn checkMatchingShredVersion(self: *const Self, pubkey: Pubkey, expected_shred_version: u16) bool {
         if (self.shred_versions.get(pubkey)) |pubkey_shred_version| {
             if (pubkey_shred_version == expected_shred_version) {
                 return true;
@@ -488,9 +506,9 @@ pub const GossipTable = struct {
     ///
     /// TODO: implement a safer approach to avoid dangling pointers, such as:
     ///  - removal buffer that is populated here and freed later
-    ///  - reference counting for all crds values
+    ///  - reference counting for all gossip values
     pub fn remove(self: *Self, label: GossipKey) error{ LabelNotFound, OutOfMemory }!void {
-        const now = crds.getWallclockMs();
+        const now = getWallclockMs();
 
         const maybe_entry = self.store.getEntry(label);
         if (maybe_entry == null) return error.LabelNotFound;
@@ -652,7 +670,7 @@ pub const GossipTable = struct {
     const GetOldLabelsTask = struct {
         // context
         key: Pubkey,
-        crds_table: *const GossipTable,
+        table: *const GossipTable,
         cutoff_timestamp: u64,
         old_labels: std.ArrayList(GossipKey),
 
@@ -669,14 +687,20 @@ pub const GossipTable = struct {
             defer self.done.store(true, std.atomic.Ordering.Release);
 
             // get assocaited entries
-            const entry = self.crds_table.pubkey_to_values.getEntry(self.key).?;
+            const entry = self.table.pubkey_to_values.getEntry(self.key).?;
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
-            const labels = .{ GossipKey{ .LegacyContactInfo = pubkey.* }, GossipKey{ .ContactInfo = pubkey.* } };
+            const labels = .{
+                GossipKey{ .LegacyContactInfo = pubkey.* },
+                GossipKey{ .ContactInfo = pubkey.* },
+            };
             inline for (labels) |label| {
-                if (self.crds_table.get(label)) |*contact_info| {
-                    const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
+                if (self.table.get(label)) |*contact_info| {
+                    const value_timestamp = @min(
+                        contact_info.value.wallclock(),
+                        contact_info.timestamp_on_insertion,
+                    );
                     if (value_timestamp > self.cutoff_timestamp) {
                         return;
                     }
@@ -688,8 +712,11 @@ pub const GossipTable = struct {
             const count = entry_indexs.count();
 
             for (entry_indexs.iterator().keys[0..count]) |entry_index| {
-                const versioned_value = self.crds_table.store.values()[entry_index];
-                const value_timestamp = @min(versioned_value.value.wallclock(), versioned_value.timestamp_on_insertion);
+                const versioned_value = self.table.store.values()[entry_index];
+                const value_timestamp = @min(
+                    versioned_value.value.wallclock(),
+                    versioned_value.timestamp_on_insertion,
+                );
                 if (value_timestamp <= self.cutoff_timestamp) {
                     self.old_labels.append(versioned_value.value.label()) catch unreachable;
                 }
@@ -716,7 +743,7 @@ pub const GossipTable = struct {
             var old_labels = std.ArrayList(GossipKey).init(self.allocator);
             tasks[i] = GetOldLabelsTask{
                 .key = key,
-                .crds_table = self,
+                .table = self,
                 .cutoff_timestamp = cutoff_timestamp,
                 .old_labels = old_labels,
             };
@@ -750,9 +777,9 @@ pub const GossipTable = struct {
     ) !?ContactInfo {
         var contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
-            const entry: GossipValue = self.store.values()[index];
+            const entry: GossipVersionedData = self.store.values()[index];
             switch (entry.value.data) {
-                .ContactInfo => |ci| if (ci.getSocket(node.SOCKET_TAG_GOSSIP)) |addr| {
+                .ContactInfo => |ci| if (ci.getSocket(SOCKET_TAG_GOSSIP)) |addr| {
                     if (addr.eql(&gossip_addr)) return try ci.clone();
                 },
                 .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {
@@ -825,60 +852,66 @@ pub const HashTimeQueue = struct {
     }
 };
 
-test "gossip.crds_table: remove old values" {
+test "gossip.table: remove old values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
 
     for (0..5) |_| {
-        const value = try GossipDataWithSignature.initSigned(GossipData.random(rng.random()), &keypair);
+        const value = try GossipDataWithSignature.initSigned(
+            GossipData.random(rng.random()),
+            &keypair,
+        );
         // TS = 100
-        try crds_table.insert(value, 100);
+        try table.insert(value, 100);
     }
-    try std.testing.expect(crds_table.len() == 5);
+    try std.testing.expect(table.len() == 5);
 
     // cutoff = 150
-    const values = try crds_table.getOldLabels(200, 50);
+    const values = try table.getOldLabels(200, 50);
     defer values.deinit();
     // remove all values
     for (values.items) |value| {
-        try crds_table.remove(value);
+        try table.remove(value);
     }
 
-    try std.testing.expectEqual(crds_table.len(), 0);
+    try std.testing.expectEqual(table.len(), 0);
 }
 
-test "gossip.crds_table: insert and remove value" {
+test "gossip.table: insert and remove value" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
 
-    const value = try GossipDataWithSignature.initSigned(GossipData.randomFromIndex(rng.random(), 0), &keypair);
-    try crds_table.insert(value, 100);
+    const value = try GossipDataWithSignature.initSigned(
+        GossipData.randomFromIndex(rng.random(), 0),
+        &keypair,
+    );
+    try table.insert(value, 100);
 
     const label = value.label();
-    try crds_table.remove(label);
+    try table.remove(label);
 }
 
-test "gossip.crds_table: trim pruned values" {
+test "gossip.table: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
 
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
@@ -887,27 +920,30 @@ test "gossip.crds_table: trim pruned values" {
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
-        const value = try GossipDataWithSignature.initSigned(GossipData.random(rng.random()), &keypair);
-        try crds_table.insert(value, 100);
+        const value = try GossipDataWithSignature.initSigned(
+            GossipData.random(rng.random()),
+            &keypair,
+        );
+        try table.insert(value, 100);
         try values.append(value);
     }
-    try std.testing.expectEqual(crds_table.len(), N_VALUES);
-    try std.testing.expectEqual(crds_table.purged.len(), 0);
-    try std.testing.expectEqual(crds_table.pubkey_to_values.count(), N_VALUES);
+    try std.testing.expectEqual(table.len(), N_VALUES);
+    try std.testing.expectEqual(table.purged.len(), 0);
+    try std.testing.expectEqual(table.pubkey_to_values.count(), N_VALUES);
 
     for (0..values.items.len) |i| {
         const origin = values.items[i].id();
-        _ = crds_table.pubkey_to_values.get(origin).?;
+        _ = table.pubkey_to_values.get(origin).?;
     }
 
-    try crds_table.attemptTrim(N_TRIM_VALUES);
+    try table.attemptTrim(N_TRIM_VALUES);
 
-    try std.testing.expectEqual(crds_table.len(), N_VALUES - N_TRIM_VALUES);
-    try std.testing.expectEqual(crds_table.pubkey_to_values.count(), N_VALUES - N_TRIM_VALUES);
-    try std.testing.expectEqual(crds_table.purged.len(), N_TRIM_VALUES);
+    try std.testing.expectEqual(table.len(), N_VALUES - N_TRIM_VALUES);
+    try std.testing.expectEqual(table.pubkey_to_values.count(), N_VALUES - N_TRIM_VALUES);
+    try std.testing.expectEqual(table.purged.len(), N_TRIM_VALUES);
 
-    try crds_table.attemptTrim(0);
-    try std.testing.expectEqual(crds_table.len(), 0);
+    try table.attemptTrim(0);
+    try std.testing.expectEqual(table.len(), 0);
 }
 
 test "gossip.HashTimeQueue: insert multiple values" {
@@ -941,11 +977,11 @@ test "gossip.HashTimeQueue: trim pruned values" {
     var value = try GossipDataWithSignature.initSigned(data, &keypair);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
 
     // timestamp = 100
-    try crds_table.insert(value, 100);
+    try table.insert(value, 100);
 
     // should lead to prev being pruned
     var new_data = GossipData{
@@ -955,17 +991,17 @@ test "gossip.HashTimeQueue: trim pruned values" {
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
     value = try GossipDataWithSignature.initSigned(new_data, &keypair);
-    try crds_table.insert(value, 120);
+    try table.insert(value, 120);
 
-    try std.testing.expectEqual(crds_table.purged.len(), 1);
+    try std.testing.expectEqual(table.purged.len(), 1);
 
     // its timestamp should be 120 so, 130 = clear pruned values
-    try crds_table.purged.trim(130);
+    try table.purged.trim(130);
 
-    try std.testing.expectEqual(crds_table.purged.len(), 0);
+    try std.testing.expectEqual(table.purged.len(), 0);
 }
 
-test "gossip.crds_table: insert and get" {
+test "gossip.table: insert and get" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
@@ -974,35 +1010,35 @@ test "gossip.crds_table: insert and get" {
     var value = try GossipDataWithSignature.random(rng, &keypair);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
 
-    try crds_table.insert(value, 0);
+    try table.insert(value, 0);
 
     const label = value.label();
-    const x = crds_table.get(label).?;
+    const x = table.get(label).?;
     _ = x;
 }
 
-test "gossip.crds_table: insert and get votes" {
+test "gossip.table: insert and get votes" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk, true);
 
-    var vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    var crds_value = try GossipDataWithSignature.initSigned(GossipData{
+    var vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
+    var gossip_value = try GossipDataWithSignature.initSigned(GossipData{
         .Vote = .{ 0, vote },
     }, &kp);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
-    try crds_table.insert(crds_value, 0);
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
+    try table.insert(gossip_value, 0);
 
     var cursor: usize = 0;
-    var buf: [100]GossipValue = undefined;
-    var votes = try crds_table.getVotesWithCursor(&buf, &cursor);
+    var buf: [100]GossipVersionedData = undefined;
+    var votes = try table.getVotesWithCursor(&buf, &cursor);
 
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 1);
@@ -1012,53 +1048,53 @@ test "gossip.crds_table: insert and get votes" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
     id = Pubkey.random(rng, .{});
-    vote = crds.Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    crds_value = try GossipDataWithSignature.initSigned(GossipData{
+    vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
+    gossip_value = try GossipDataWithSignature.initSigned(GossipData{
         .Vote = .{ 0, vote },
     }, &kp);
-    try crds_table.insert(crds_value, 1);
+    try table.insert(gossip_value, 1);
 
-    votes = try crds_table.getVotesWithCursor(&buf, &cursor);
+    votes = try table.getVotesWithCursor(&buf, &cursor);
     try std.testing.expect(votes.len == 1);
     try std.testing.expect(cursor == 2);
 
-    const v = try crds_table.getBitmaskMatches(std.testing.allocator, 10, 1);
+    const v = try table.getBitmaskMatches(std.testing.allocator, 10, 1);
     defer v.deinit();
 }
 
-test "gossip.crds_table: insert and get contact_info" {
+test "gossip.table: insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&kp.public_key, true);
 
-    var legacy_contact_info = crds.LegacyContactInfo.default(id);
-    var crds_value = try GossipDataWithSignature.initSigned(GossipData{
+    var legacy_contact_info = LegacyContactInfo.default(id);
+    var gossip_value = try GossipDataWithSignature.initSigned(GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(std.testing.allocator, &tp);
+    defer table.deinit();
 
     // test insertion
-    try crds_table.insert(crds_value, 0);
+    try table.insert(gossip_value, 0);
 
     // test retrieval
     var buf: [100]ContactInfo = undefined;
-    var nodes = crds_table.getContactInfos(&buf, 0);
+    var nodes = table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].pubkey.equals(&id));
 
     // test re-insertion
-    const result = crds_table.insert(crds_value, 0);
-    try std.testing.expectError(CrdsError.DuplicateValue, result);
+    const result = table.insert(gossip_value, 0);
+    try std.testing.expectError(TableError.DuplicateValue, result);
 
     // test re-insertion with greater wallclock
-    crds_value.data.LegacyContactInfo.wallclock += 2;
-    const v = crds_value.data.LegacyContactInfo.wallclock;
-    try crds_table.insert(crds_value, 0);
+    gossip_value.data.LegacyContactInfo.wallclock += 2;
+    const v = gossip_value.data.LegacyContactInfo.wallclock;
+    try table.insert(gossip_value, 0);
 
     // check retrieval
-    nodes = crds_table.getContactInfos(&buf, 0);
+    nodes = table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].wallclock == v);
 }

@@ -1,15 +1,15 @@
 const std = @import("std");
-const Thread = std.Thread;
-const AtomicBool = std.atomic.Atomic(bool);
-const Tuple = std.meta.Tuple;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const UdpSocket = network.Socket;
-const gossip_data = @import("../gossip/data.zig");
-const GossipDataWithSignature = gossip_data.GossipDataWithSignature;
-const getWallclockMs = gossip_data.getWallclockMs;
-const node = @import("../gossip/node.zig");
+const _gossip_data = @import("../gossip/data.zig");
+const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const getWallclockMs = _gossip_data.getWallclockMs;
+const ContactInfo = _gossip_data.ContactInfo;
+const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const GossipTable = @import("../gossip/table.zig").GossipTable;
 const shuffleFirstN = @import("../gossip/pull_request.zig").shuffleFirstN;
@@ -23,7 +23,7 @@ const BLOOM_FALSE_RATE: f64 = 0.1;
 const BLOOM_MAX_BITS: usize = 1024 * 8 * 4;
 
 pub const ActiveSet = struct {
-    // store pubkeys as keys in crds table bc the data can change
+    // store pubkeys as keys in gossip table bc the data can change
     pruned_peers: std.AutoHashMap(Pubkey, Bloom),
     allocator: std.mem.Allocator,
 
@@ -50,7 +50,7 @@ pub const ActiveSet = struct {
 
     pub fn rotate(
         self: *Self,
-        crds_peers: []node.ContactInfo,
+        peers: []ContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
         var iter = self.pruned_peers.iterator();
@@ -59,16 +59,16 @@ pub const ActiveSet = struct {
         }
         self.pruned_peers.clearRetainingCapacity();
 
-        if (crds_peers.len == 0) {
+        if (peers.len == 0) {
             return;
         }
-        const size = @min(crds_peers.len, NUM_ACTIVE_SET_ENTRIES);
+        const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
         var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        shuffleFirstN(rng.random(), node.ContactInfo, crds_peers, size);
+        shuffleFirstN(rng.random(), ContactInfo, peers, size);
 
-        const bloom_num_items = @max(crds_peers.len, MIN_NUM_BLOOM_ITEMS);
+        const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            var entry = try self.pruned_peers.getOrPut(crds_peers[i].pubkey);
+            var entry = try self.pruned_peers.getOrPut(peers[i].pubkey);
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
                 var bloom = try Bloom.random(
@@ -97,7 +97,7 @@ pub const ActiveSet = struct {
         self: *const Self,
         allocator: std.mem.Allocator,
         origin: Pubkey,
-        crds_table: *const GossipTable,
+        table: *const GossipTable,
     ) error{OutOfMemory}!std.ArrayList(EndPoint) {
         var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, GOSSIP_PUSH_FANOUT);
         errdefer active_set_endpoints.deinit();
@@ -106,8 +106,8 @@ pub const ActiveSet = struct {
         var iter = self.pruned_peers.iterator();
         while (iter.next()) |entry| {
             // lookup peer contact info
-            const peer_info = crds_table.getContactInfo(entry.key_ptr.*) orelse continue;
-            const peer_gossip_addr = peer_info.getSocket(node.SOCKET_TAG_GOSSIP) orelse continue;
+            const peer_info = table.getContactInfo(entry.key_ptr.*) orelse continue;
+            const peer_gossip_addr = peer_info.getSocket(SOCKET_TAG_GOSSIP) orelse continue;
 
             peer_gossip_addr.sanitize() catch continue;
 
@@ -132,26 +132,26 @@ test "gossip.active_set: init/deinit" {
 
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var crds_table = try GossipTable.init(alloc, &tp);
-    defer crds_table.deinit();
+    var table = try GossipTable.init(alloc, &tp);
+    defer table.deinit();
 
     // insert some contacts
     var rng = std.rand.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(node.ContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.ArrayList(ContactInfo).initCapacity(alloc, 10);
     defer {
         for (gossip_peers.items) |p| p.deinit();
         gossip_peers.deinit();
     }
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
-        var data = gossip_data.LegacyContactInfo.random(rng.random());
+        var data = LegacyContactInfo.random(rng.random());
         try gossip_peers.append(try data.toContactInfo(alloc));
 
         var keypair = try KeyPair.create(null);
-        var value = try GossipDataWithSignature.initSigned(gossip_data.GossipData{
+        var value = try GossipDataWithSignature.initSigned(.{
             .LegacyContactInfo = data,
         }, &keypair);
-        try crds_table.insert(value, getWallclockMs());
+        try table.insert(value, getWallclockMs());
     }
 
     var active_set = ActiveSet.init(alloc);
@@ -162,7 +162,7 @@ test "gossip.active_set: init/deinit" {
 
     const origin = Pubkey.random(rng.random(), .{});
 
-    var fanout = try active_set.getFanoutPeers(alloc, origin, &crds_table);
+    var fanout = try active_set.getFanoutPeers(alloc, origin, &table);
     defer fanout.deinit();
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
@@ -171,7 +171,7 @@ test "gossip.active_set: init/deinit" {
     const peer_pubkey = iter.next().?.*;
     active_set.prune(peer_pubkey, origin);
 
-    var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &crds_table);
+    var fanout_with_prune = try active_set.getFanoutPeers(alloc, origin, &table);
     defer fanout_with_prune.deinit();
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
 }
@@ -180,11 +180,11 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     var alloc = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(node.ContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.ArrayList(ContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
-    var data = try gossip_data.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
-    var dupe = try gossip_data.LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    var data = try LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
+    var dupe = try LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;

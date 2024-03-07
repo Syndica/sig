@@ -7,14 +7,15 @@ const std = @import("std");
 const _gossip_service = @import("./service.zig");
 const GossipService = _gossip_service.GossipService;
 const ChunkType = _gossip_service.ChunkType;
-const GossipDataWithSignaturesToPackets = _gossip_service.GossipDataWithSignaturesToPackets;
+const GossipDataToPackets = _gossip_service.GossipDataToPackets;
 const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
 
 const Logger = @import("../trace/log.zig").Logger;
-const crds = @import("data.zig");
-const LegacyContactInfo = crds.LegacyContactInfo;
-const node = @import("../gossip/node.zig");
-const ContactInfo = node.ContactInfo;
+const _gossip_data = @import("data.zig");
+const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const ContactInfo = _gossip_data.ContactInfo;
+const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
 const AtomicBool = std.atomic.Atomic(bool);
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -31,26 +32,26 @@ const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;
 const Tuple = std.meta.Tuple;
-const _gossipMessage = @import("message.zig");
-const GossipMessage = _gossipMessage.GossipMessage;
-const PruneData = _gossipMessage.PruneData;
+const _gossip_message = @import("message.zig");
+const GossipMessage = _gossip_message.GossipMessage;
+const PruneData = _gossip_message.PruneData;
 
 const Ping = @import("ping_pong.zig").Ping;
 const Pong = @import("ping_pong.zig").Pong;
 const bincode = @import("../bincode/bincode.zig");
-const GossipDataWithSignature = crds.GossipDataWithSignature;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const _crds_table = @import("../gossip/table.zig");
-const GossipTable = _crds_table.GossipTable;
-const CrdsError = _crds_table.CrdsError;
-const HashTimeQueue = _crds_table.HashTimeQueue;
-const CRDS_UNIQUE_PUBKEY_CAPACITY = _crds_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
+const _gossip_table = @import("../gossip/table.zig");
+const GossipTable = _gossip_table.GossipTable;
+const CrdsError = _gossip_table.CrdsError;
+const HashTimeQueue = _gossip_table.HashTimeQueue;
+const CRDS_UNIQUE_PUBKEY_CAPACITY = _gossip_table.CRDS_UNIQUE_PUBKEY_CAPACITY;
 
-const pull_request = @import("../gossip/pull_request.zig");
-const GossipFilter = pull_request.GossipFilter;
-const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
+const _pull_request = @import("../gossip/pull_request.zig");
+const GossipFilterSet = _pull_request.GossipFilterSet;
+const GossipFilter = _pull_request.GossipFilter;
+const MAX_NUM_PULL_REQUESTS = _pull_request.MAX_NUM_PULL_REQUESTS;
 
 const Hash = @import("../core/hash.zig").Hash;
 
@@ -111,18 +112,18 @@ pub fn randomGossipDataWithSignature(rng: std.rand.Random, maybe_should_pass_sig
 
 pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
-    var crds_values: [size]GossipDataWithSignature = undefined;
+    var values: [size]GossipDataWithSignature = undefined;
     var should_pass_sig_verification = rng.boolean();
     for (0..size) |i| {
         var value = try randomGossipDataWithSignature(rng, should_pass_sig_verification);
-        crds_values[i] = value;
+        values[i] = value;
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try GossipDataWithSignaturesToPackets(
+    const packets = try GossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
-        &crds_values,
+        &values,
         &to_addr,
         ChunkType.PushMessage,
     );
@@ -131,18 +132,18 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
 
 pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
-    var crds_values: [size]GossipDataWithSignature = undefined;
+    var values: [size]GossipDataWithSignature = undefined;
     var should_pass_sig_verification = rng.boolean();
     for (0..size) |i| {
         var value = try randomGossipDataWithSignature(rng, should_pass_sig_verification);
-        crds_values[i] = value;
+        values[i] = value;
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try GossipDataWithSignaturesToPackets(
+    const packets = try GossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
-        &crds_values,
+        &values,
         &to_addr,
         ChunkType.PullResponse,
     );
@@ -156,7 +157,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    var crds_value = try GossipDataWithSignature.initSigned(crds.GossipData{
+    var value = try GossipDataWithSignature.initSigned(.{
         .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
     }, keypair);
 
@@ -174,20 +175,20 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
 
         // add more random hashes
         for (0..5) |_| {
-            var value = try randomGossipDataWithSignature(rng, true);
+            var rand_value = try randomGossipDataWithSignature(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
-            const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
+            const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
             filter.filter.add(&value_hash.data);
         }
     } else {
         // add some valid hashes
-        var filter_set = try pull_request.GossipFilterSet.initTest(allocator, filter.mask_bits);
+        var filter_set = try GossipFilterSet.initTest(allocator, filter.mask_bits);
 
         for (0..5) |_| {
-            var value = try randomGossipDataWithSignature(rng, true);
+            var rand_value = try randomGossipDataWithSignature(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
-            const bytes = try bincode.writeToSlice(&buf, value, bincode.Params.standard);
+            const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
             filter_set.add(&value_hash);
         }
@@ -204,7 +205,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     }
 
     // serialize and send as packet
-    var msg = GossipMessage{ .PullRequest = .{ filter, crds_value } };
+    var msg = GossipMessage{ .PullRequest = .{ filter, value } };
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
@@ -279,7 +280,7 @@ pub fn main() !void {
 
     var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
-    try fuzz_contact_info.setSocket(node.SOCKET_TAG_GOSSIP, fuzz_address);
+    try fuzz_contact_info.setSocket(SOCKET_TAG_GOSSIP, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(

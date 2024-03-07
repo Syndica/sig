@@ -1309,8 +1309,8 @@ pub const ThreadPool = struct {
 // };
 
 // test "sync.thread_pool: workpool works" {
-//     var crds: GossipTable = GossipTable{};
-//     var a = GossipTableTrimContext{ .index = 1, .max_trim = 2, .self = &crds };
+//     var gossip: GossipTable = GossipTable{};
+//     var a = GossipTableTrimContext{ .index = 1, .max_trim = 2, .self = &gossip };
 //     defer WorkPool.deinit();
 //     try WorkPool.go(testing.allocator, GossipTableTrimContext, a, GossipTable.trim);
 
