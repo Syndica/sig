@@ -2087,6 +2087,12 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
 
     var snapshot_paths = try SnapshotPaths.find(allocator, dir_path);
     var snapshots = try AllSnapshotFields.fromPaths(allocator, dir_path, snapshot_paths);
+    defer {
+        allocator.free(snapshots.full_path);
+        if (snapshots.incremental_path) |inc_path| {
+            allocator.free(inc_path);
+        }
+    }
 
     var disk_dir: ?[]const u8 = null;
     var disk_capacity: usize = 0;
@@ -2096,7 +2102,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
         disk_capacity = 1000;
     }
 
-    const snapshot = try snapshots.collapse();
+    const snapshot = try snapshots.all_fields.collapse();
     var logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
     var accounts_db = try AccountsDB.init(allocator, logger, .{
@@ -2115,7 +2121,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
 
     return .{
         accounts_db,
-        snapshots,
+        snapshots.all_fields,
     };
 }
 
