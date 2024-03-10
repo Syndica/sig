@@ -848,41 +848,48 @@ pub const AllSnapshotFields = struct {
     paths: SnapshotPaths,
     was_collapsed: bool = false, // used for deinit()
 
-    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !@This() {
+    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !struct {
+        all_fields: AllSnapshotFields,
+        full_path: []const u8,
+        incremental_path: ?[]const u8,
+    } {
         // unpack
         const full_metadata_path = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{d}/{d}",
             .{ snapshot_dir, "snapshots", paths.full_snapshot.slot, paths.full_snapshot.slot },
         );
-        defer allocator.free(full_metadata_path);
 
-        std.debug.print("reading full snapshot from {s}\n", .{full_metadata_path});
-        var full = try SnapshotFields.readFromFilePath(
+        var full_fields = try SnapshotFields.readFromFilePath(
             allocator,
             full_metadata_path,
         );
 
-        var incremental: ?SnapshotFields = null;
+        var incremental_fields: ?SnapshotFields = null;
+        var incremental_metadata_path: ?[]const u8 = null;
         if (paths.incremental_snapshot) |incremental_snapshot_path| {
-            const incremental_metadata_path = try std.fmt.allocPrint(
+            incremental_metadata_path = try std.fmt.allocPrint(
                 allocator,
                 "{s}/{s}/{d}/{d}",
                 .{ snapshot_dir, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
             );
-            defer allocator.free(incremental_metadata_path);
 
-            std.debug.print("reading incremental snapshot from {s}\n", .{incremental_metadata_path});
-            incremental = try SnapshotFields.readFromFilePath(
+            incremental_fields = try SnapshotFields.readFromFilePath(
                 allocator,
-                incremental_metadata_path,
+                incremental_metadata_path.?,
             );
         }
 
-        return .{
-            .full = full,
-            .incremental = incremental,
+        const all_fields = .{
+            .full = full_fields,
+            .incremental = incremental_fields,
             .paths = paths,
+        };
+
+        return .{
+            .all_fields = all_fields,
+            .full_path = full_metadata_path,
+            .incremental_path = incremental_metadata_path,
         };
     }
 
@@ -956,7 +963,6 @@ pub fn parallelUnpackZstdTarBall(
     n_threads: usize,
     full_snapshot: bool,
 ) !void {
-    std.debug.print("unpacking {s}\n", .{path});
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
@@ -970,7 +976,6 @@ pub fn parallelUnpackZstdTarBall(
         file.handle,
         0,
     );
-    var timer = try std.time.Timer.start();
     var tar_stream = try ZstdReader.init(memory);
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
     try parallelUntarToFileSystem(
@@ -980,7 +985,6 @@ pub fn parallelUnpackZstdTarBall(
         n_threads,
         n_files_estimate,
     );
-    std.debug.print("unpacked {s} in {s}\n", .{ path, std.fmt.fmtDuration(timer.read()) });
 }
 
 test "core.accounts_db: test full snapshot path parsing" {
