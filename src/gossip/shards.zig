@@ -18,7 +18,7 @@ const hashToU64 = @import("./pull_request.zig").hashToU64;
 pub const GOSSIP_SHARDS_BITS: u32 = 12;
 pub const GOSSIP_SHARDS_LEN: u32 = 1 << GOSSIP_SHARDS_BITS;
 
-pub const GossipShards = struct {
+pub const GossipTableShards = struct {
     // shards[k] includes gossip values which the first shard_bits of their hash
     // value is equal to k. Each shard is a mapping from gossip values indices to
     // their hash value.
@@ -44,14 +44,14 @@ pub const GossipShards = struct {
 
     pub fn insert(self: *Self, gossip_index: usize, hash: *const Hash) !void {
         const uhash = hashToU64(hash);
-        const shard_index = GossipShards.computeShardIndex(self.shard_bits, uhash);
+        const shard_index = GossipTableShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         try shard.put(gossip_index, uhash);
     }
 
     pub fn remove(self: *Self, gossip_index: usize, hash: *const Hash) void {
         const uhash = hashToU64(hash);
-        const shard_index = GossipShards.computeShardIndex(self.shard_bits, uhash);
+        const shard_index = GossipTableShards.computeShardIndex(self.shard_bits, uhash);
         const shard = &self.shards[shard_index];
         _ = shard.swapRemove(gossip_index);
     }
@@ -68,7 +68,7 @@ pub const GossipShards = struct {
 
         if (self.shard_bits < mask_bits) {
             // shard_bits is smaller, all matches with mask will be in the same shard index
-            var shard = self.shards[GossipShards.computeShardIndex(self.shard_bits, mask)];
+            var shard = self.shards[GossipTableShards.computeShardIndex(self.shard_bits, mask)];
 
             var shard_iter = shard.iterator();
             var result = std.ArrayList(usize).init(alloc);
@@ -84,7 +84,7 @@ pub const GossipShards = struct {
             return result;
         } else if (self.shard_bits == mask_bits) {
             // when bits are equal we know the lookup will be exact
-            var shard = self.shards[GossipShards.computeShardIndex(self.shard_bits, mask)];
+            var shard = self.shards[GossipTableShards.computeShardIndex(self.shard_bits, mask)];
 
             var result = try std.ArrayList(usize).initCapacity(alloc, shard.count());
             try result.insertSlice(0, shard.keys());
@@ -93,7 +93,7 @@ pub const GossipShards = struct {
             // shardbits > maskbits
             const shift_bits: u6 = @intCast(self.shard_bits - mask_bits);
             const count: usize = @intCast(@as(u64, 1) << shift_bits);
-            const end = GossipShards.computeShardIndex(self.shard_bits, match_mask) + 1;
+            const end = GossipTableShards.computeShardIndex(self.shard_bits, match_mask) + 1;
 
             var result = std.ArrayList(usize).init(alloc);
             var insert_index: usize = 0;
@@ -109,8 +109,8 @@ pub const GossipShards = struct {
 
 const GossipTable = @import("table.zig").GossipTable;
 
-test "gossip.gossip_shards: tests GossipShards" {
-    var shards = try GossipShards.init(std.testing.allocator);
+test "gossip.gossip_shards: tests GossipTableShards" {
+    var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 
     const v = Hash.random();

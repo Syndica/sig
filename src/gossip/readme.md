@@ -249,16 +249,16 @@ Notice how the result will be ones everywhere except for the first `mask_bits` b
 
 Pull responses are responses to pull requests and include missing data which was not included in the pull request.
 
-To build a pull response, we find values to match the `GossipPullFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `GossipShards` struct which is located in `gossip_shards.zig`.
+To build a pull response, we find values to match the `GossipPullFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `GossipTableShards` struct which is located in `gossip_shards.zig`.
 
 
 <div align="center">
 <img src="imgs/2023-08-08-13-37-04.png" width="525" height="500">
 </div>
 
-#### `GossipShards`
+#### `GossipTableShards`
 
-The `GossipShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `GossipPullFilterSet` structure and the `mask_bits`). Whenever we insert a new value in
+The `GossipTableShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `GossipPullFilterSet` structure and the `mask_bits`). Whenever we insert a new value in
 the `GossipTable`, we insert its hash into the `GossipShard` structure.
 
 To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes SignedGossipDatas which the first `shard_bits` of their hash value is equal to `k`.
@@ -269,14 +269,14 @@ The struct allows us to quickly look up all the SignedGossipDatas whose hash mat
 
 *Note:* `shard_bits` is a hardcoded constant in the program equal to `12`, so we will have 2^12 = 4096 shard indexes.
 
-After inserting a new value in the GossipTable, inserting its hash value into the `GossipShards` struct is straightforward:
+After inserting a new value in the GossipTable, inserting its hash value into the `GossipTableShards` struct is straightforward:
 - take the first 8 bytes of a hash and cast it to a `u64` (`hash_u64 = @as(u64, hash[0..8])`)
 - compute the first `shard_bits` bits of the `u64` by computing `shard_index = hash_u64 >> (64 - shard_bits)`
 - get the corresponding shard: `self.shards[shard_index]`
 - insert the GossipTable index along with the `u64_hash` into the shard
 
 ```python
-def insert(self: *GossipShards, gossip_index: usize, hash: *const Hash):
+def insert(self: *GossipTableShards, gossip_index: usize, hash: *const Hash):
     shard_index = @as(u64, hash[0..8]) >> (64 - shard_bits)
     shard = self.shard[shard_index]
     shard.put(gossip_index, uhash);
@@ -286,7 +286,7 @@ def insert(self: *GossipShards, gossip_index: usize, hash: *const Hash):
 <img src="imgs/2023-08-08-13-42-47.png" width="520" height="350">
 </div>
 
-#### `GossipShards`: Finding hash matches
+#### `GossipTableShards`: Finding hash matches
 
 To build a Pull Response, we need to retrieve values in the GossipTable whose hash matches a `mask` (i.e., their first `mask_bit` bits are equal to `mask`).
 To find these matches there are three cases we need to consider:
@@ -306,7 +306,7 @@ GossipTable values whose first 3 bits of their hash value is 001 by looking up s
 </div>
 
 ```python 
-def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>: 
+def find_matches(self: *GossipTableShards, mask: u64, mask_bits: u64) Vec<usize>: 
     if (self.shard_bits == mask_bits) {
         shard = self.shard[(mask >> (64 - self.shard_bits)]
         gossip_indexs = shard.keys()
@@ -329,7 +329,7 @@ For example, if shard_bits = 3 and mask_bits = 5 and our mask is 00101, we would
 </div>
 
 ```python
-def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>: 
+def find_matches(self: *GossipTableShards, mask: u64, mask_bits: u64) Vec<usize>: 
     # ones everywhere except for the first `mask_bits`
     mask_ones = (~0 >> mask_bits)
     
@@ -370,7 +370,7 @@ For example,
 </div>
 
 ```python
-def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>: 
+def find_matches(self: *GossipTableShards, mask: u64, mask_bits: u64) Vec<usize>: 
     # ones everywhere except for the first `mask_bits`
     mask_ones = (~0 >> mask_bits)
     

@@ -4,7 +4,7 @@ const AutoHashMap = std.AutoHashMap;
 const bincode = @import("../bincode/bincode.zig");
 const _hash = @import("../core/hash.zig");
 const Hash = _hash.Hash;
-const GossipShards = @import("./shards.zig").GossipShards;
+const GossipTableShards = @import("./shards.zig").GossipTableShards;
 const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
 const GossipData = _gossip_data.GossipData;
@@ -94,7 +94,7 @@ pub const GossipTable = struct {
     pubkey_to_values: AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)),
 
     // used to build pull responses efficiently
-    shards: GossipShards,
+    shards: GossipTableShards,
 
     // used when sending pull requests
     purged: HashTimeQueue,
@@ -118,7 +118,7 @@ pub const GossipTable = struct {
             .converted_contact_infos = AutoArrayHashMap(Pubkey, ContactInfo).init(allocator),
             .entries = AutoArrayHashMap(u64, usize).init(allocator),
             .pubkey_to_values = AutoArrayHashMap(Pubkey, AutoArrayHashSet(usize)).init(allocator),
-            .shards = try GossipShards.init(allocator),
+            .shards = try GossipTableShards.init(allocator),
             .purged = HashTimeQueue.init(allocator),
             .allocator = allocator,
             .thread_pool = thread_pool,
