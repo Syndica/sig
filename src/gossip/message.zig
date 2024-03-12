@@ -5,7 +5,7 @@ const bincode = @import("../bincode/bincode.zig");
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const _gossip_data = @import("data.zig");
-const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const SignedGossipData = _gossip_data.SignedGossipData;
 const GossipData = _gossip_data.GossipData;
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const getWallclockMs = _gossip_data.getWallclockMs;
@@ -23,9 +23,9 @@ const Pong = @import("ping_pong.zig").Pong;
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 pub const GossipMessage = union(enum(u32)) {
-    PullRequest: struct { GossipFilter, GossipDataWithSignature },
-    PullResponse: struct { Pubkey, []GossipDataWithSignature },
-    PushMessage: struct { Pubkey, []GossipDataWithSignature },
+    PullRequest: struct { GossipFilter, SignedGossipData },
+    PullResponse: struct { Pubkey, []SignedGossipData },
+    PushMessage: struct { Pubkey, []SignedGossipData },
     PruneMessage: struct { Pubkey, PruneData },
     PingMessage: Ping,
     PongMessage: Pong,
@@ -205,7 +205,7 @@ pub const PruneData = struct {
 test "gossip.protocol: push message serialization is predictable" {
     var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
     var pubkey = Pubkey.random(rng.random(), .{});
-    var values = std.ArrayList(GossipDataWithSignature).init(std.testing.allocator);
+    var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
     var msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
@@ -215,7 +215,7 @@ test "gossip.protocol: push message serialization is predictable" {
         bincode.Params{},
     );
 
-    var value = try GossipDataWithSignature.random(rng.random(), &(try KeyPair.create(null)));
+    var value = try SignedGossipData.random(rng.random(), &(try KeyPair.create(null)));
     const value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         value,
@@ -322,7 +322,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     var data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var value = try GossipDataWithSignature.initSigned(data, &keypair);
+    var value = try SignedGossipData.initSigned(data, &keypair);
 
     var filter = GossipFilter.init(testing.allocator);
     defer filter.deinit();
@@ -372,8 +372,8 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
     };
 
     var rust_bytes = [_]u8{ 2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    var gossip_value = try GossipDataWithSignature.initSigned(data, &kp);
-    var values = [_]GossipDataWithSignature{gossip_value};
+    var gossip_value = try SignedGossipData.initSigned(data, &kp);
+    var values = [_]SignedGossipData{gossip_value};
     var pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
     var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
     try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);

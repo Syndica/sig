@@ -41,7 +41,7 @@ pub const MAX_SLOT_PER_ENTRY: usize = 2048 * 8;
 pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
 pub const GossipVersionedData = struct {
-    value: GossipDataWithSignature,
+    value: SignedGossipData,
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
@@ -64,7 +64,7 @@ pub const GossipVersionedData = struct {
     }
 };
 
-pub const GossipDataWithSignature = struct {
+pub const SignedGossipData = struct {
     signature: Signature,
     data: GossipData,
 
@@ -1292,7 +1292,7 @@ test "gossip.data: test sig verify duplicateShreds" {
     var data = DuplicateShred.random(rng.random());
     data.from = pubkey;
 
-    var value = try GossipDataWithSignature.initSigned(GossipData{ .DuplicateShred = .{ 0, data } }, &keypair);
+    var value = try SignedGossipData.initSigned(GossipData{ .DuplicateShred = .{ 0, data } }, &keypair);
 
     try std.testing.expect(try value.verify(pubkey));
 }
@@ -1307,7 +1307,7 @@ test "gossip.data: test sanitize GossipData" {
     }
 }
 
-test "gossip.data: test GossipDataWithSignature label() and id() methods" {
+test "gossip.data: test SignedGossipData label() and id() methods" {
     var kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -1316,7 +1316,7 @@ test "gossip.data: test GossipDataWithSignature label() and id() methods" {
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
 
-    var value = try GossipDataWithSignature.initSigned(GossipData{
+    var value = try SignedGossipData.initSigned(GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 

@@ -25,7 +25,7 @@ A gossip spy is, in essence, software written to do two things: store data and s
 
 Solana’s gossip data is stored in a Conflict-free Replicated Data Store (CRDS) in `gossip/table.zig`.
 
-There are two main data types we store (defined in `data.zig`) which includes `GossipData` and `GossipDataWithSignature` datastructures. A `GossipData` enum covers various gossip data types including `ContactInfo` for node details like public keys and addresses, `Vote` for block validity signatures (being phased out for lower bandwidth), and more. Secondly, `GossipDataWithSignature` holds a `GossipData` struct and a signature over its data. When processing incoming gossip data from the network, we first verify the signature of the `GossipDataWithSignature` and then insert it into the GossipTable.
+There are two main data types we store (defined in `data.zig`) which includes `GossipData` and `SignedGossipData` datastructures. A `GossipData` enum covers various gossip data types including `ContactInfo` for node details like public keys and addresses, `Vote` for block validity signatures (being phased out for lower bandwidth), and more. Secondly, `SignedGossipData` holds a `GossipData` struct and a signature over its data. When processing incoming gossip data from the network, we first verify the signature of the `SignedGossipData` and then insert it into the GossipTable.
 
 <div align="center">
 <img src="imgs/2023-08-11-12-41-17.png" width="420" height="200">
@@ -35,7 +35,7 @@ There are two main data types we store (defined in `data.zig`) which includes `G
 
 To store this data, we use an indexable-HashMap in a struct called the `GossipTable` located in `table.zig`.
 
-For each `GossipDataWithSignature` type we store, there is a corresponding `GossipKey` which is used as the key for the hashmap and a `GossipVersionedData` structure for the value for the hashmap.
+For each `SignedGossipData` type we store, there is a corresponding `GossipKey` which is used as the key for the hashmap and a `GossipVersionedData` structure for the value for the hashmap.
 
 #### GossipTable Keys: `GossipKey`
 
@@ -63,16 +63,16 @@ pub const GossipKey = union(enum) {
 }
 ```
 
-When inserting a `GossipDataWithSignature`, if an entry with the same corresponding label exists (i.e., a duplicate), we keep the value with the largest wallclock time (i.e., the newest).
+When inserting a `SignedGossipData`, if an entry with the same corresponding label exists (i.e., a duplicate), we keep the value with the largest wallclock time (i.e., the newest).
 
 ### GossipTable Values: `GossipVersionedData`
 
-The `GossipVersionedData` structure contains the `GossipDataWithSignature` inserted along with other
+The `GossipVersionedData` structure contains the `SignedGossipData` inserted along with other
 related information including its hash, timestamps, and more.
 
 ```zig
 pub const GossipVersionedData = struct {
-    value: GossipDataWithSignature,
+    value: SignedGossipData,
     value_hash: Hash,
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
@@ -103,7 +103,7 @@ Note: this is how we produce new push messages - talked about in a later section
 
 The GossipTable is also periodically trimmed to maintain a max number of unique pubkeys (the max number of pubkeys is set to `8192` in the codebase) and remove values with old timestamps, so memory growth is bounded.
 
-We use the field, `GossipTable.pubkey_to_values`, to track all the GossipDataWithSignatures in the table associated with a specific node’s pubkey and periodically call `GossipTable.attempt_trim` to remove all the values associated with the oldest pubkeys when close to capacity. `GossipTable.remove_old_labels` is called to remove values with old timestamps periodically as well.
+We use the field, `GossipTable.pubkey_to_values`, to track all the SignedGossipDatas in the table associated with a specific node’s pubkey and periodically call `GossipTable.attempt_trim` to remove all the values associated with the oldest pubkeys when close to capacity. `GossipTable.remove_old_labels` is called to remove values with old timestamps periodically as well.
 
 In the solana-labs implementation, the gossip pubkeys with the smallest stake weight are removed first, however, we don't have stake weight information yet in Sig. This will be future work.
 
@@ -138,7 +138,7 @@ Pull messages are used to retrieve new data from other nodes in the network. The
 
 ### Building Pull *Requests*
 
-Pull requests are requests for new data. A pull request contains a representation of the GossipDataWithSignatures a node currently has, which the receiving node parses and uses to find data which it currently has but is not included in the request.
+Pull requests are requests for new data. A pull request contains a representation of the SignedGossipDatas a node currently has, which the receiving node parses and uses to find data which it currently has but is not included in the request.
 
 To represent values that a node currently has, we construct a bloom filter over the values stored in its GossipTable.
 
@@ -161,7 +161,7 @@ To implement this we use the `GossipFilterSet` struct which is a list of `Gossip
 `mask_bits` is a variable that depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the GossipTable, and more. It
 will likely be different for each pull request.
 
-After we construct this filter set (i.e., compute the `mask_bits` and init `2^mask_bits` bloom filters), we add all of the `GossipDataWithSignatures` in the GossipTable into the set, and construct a list of `GossipFilter`s to send to other random nodes.
+After we construct this filter set (i.e., compute the `mask_bits` and init `2^mask_bits` bloom filters), we add all of the `SignedGossipDatas` in the GossipTable into the set, and construct a list of `GossipFilter`s to send to other random nodes.
 
 ```python
 ## main function for building pull requests
@@ -203,11 +203,11 @@ class GossipFilterSet():
 	    self.filters[index].add(hash)
 ```
 
-To build a vector of `GossipFilters` from a `GossipFilterSet`, each `GossipFilter` will need a bloom filter to represent a subset of the GossipDataWithSignatures, and a corresponding identifier mask which identifies the hash bits that each filter contains (using a variable called `mask`).
+To build a vector of `GossipFilters` from a `GossipFilterSet`, each `GossipFilter` will need a bloom filter to represent a subset of the SignedGossipDatas, and a corresponding identifier mask which identifies the hash bits that each filter contains (using a variable called `mask`).
 
 For example, the mask of the first filter would be `000`, the mask of the second filter would be `001`, the third filter would be `010`, ...
 
-When a node receives a pull request, the `mask` is used to efficiently look up all the matching GossipDataWithSignatures.
+When a node receives a pull request, the `mask` is used to efficiently look up all the matching SignedGossipDatas.
 
 For example, if you received the `010` mask, you would look up all hash values whose first 3 bits are `010` and then find values that are not included in the bloom filter. These values would then be used to construct a pull response.
 
@@ -261,11 +261,11 @@ To build a pull response, we find values to match the `GossipFilter`'s `mask`, a
 The `GossipShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `GossipFilterSet` structure and the `mask_bits`). Whenever we insert a new value in
 the `GossipTable`, we insert its hash into the `GossipShard` structure.
 
-To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes GossipDataWithSignatures which the first `shard_bits` of their hash value is equal to `k`.
+To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes SignedGossipDatas which the first `shard_bits` of their hash value is equal to `k`.
 - The keys in the hash map are of type `usize` which is the GossipTable index of the hash.
 - And the values of the hash map are of type `u64` which represents the hash value represented as a `u64`.
 
-The struct allows us to quickly look up all the GossipDataWithSignatures whose hash matches a pull request's `mask` (compared to iterating over all the GossipDataWithSignatures).
+The struct allows us to quickly look up all the SignedGossipDatas whose hash matches a pull request's `mask` (compared to iterating over all the SignedGossipDatas).
 
 *Note:* `shard_bits` is a hardcoded constant in the program equal to `12`, so we will have 2^12 = 4096 shard indexes.
 
@@ -393,14 +393,14 @@ def find_matches(self: *GossipShards, mask: u64, mask_bits: u64) Vec<usize>:
     }
 ```
 
-After we have all the GossipDataWithSignature indexes that match the `mask`, we then check which values are not included in the request's bloom filter (i.e., values that the node is missing).
+After we have all the SignedGossipData indexes that match the `mask`, we then check which values are not included in the request's bloom filter (i.e., values that the node is missing).
 
 ```python
 
 def filter_gossip_values(
     gossip_table: *GossipTable
     filter: *GossipFilter
-) Vec<GossipDataWithSignatures>:
+) Vec<SignedGossipDatas>:
     # find gossip values whose hash matches the mask 
     var match_indexs = gossip_table.get_bitmask_matches(filter.mask, filter.mask_bits);
 	
@@ -420,20 +420,20 @@ When receiving a pull response, we insert all the values received in the GossipT
 
 We also do the same thing for values that are pruned in the GossipTable (i.e., values that are overwritten) in `GossipTable.pruned`.
 
-For each GossipDataWithSignature that is successfully inserted in the GossipTable, we also update the timestamps for all the values from that origin pubkey. We do this so that when we are trimming old GossipDataWithSignatures in the table, we don't remove values from an active pubkey.
+For each SignedGossipData that is successfully inserted in the GossipTable, we also update the timestamps for all the values from that origin pubkey. We do this so that when we are trimming old SignedGossipDatas in the table, we don't remove values from an active pubkey.
 
 ## Gossip Messages: Push
 
 ### Sending Push Messages
 
 Push messages are periodically generated to send out new data to a subset of the network’s nodes. To implement this, we track a `push_cursor` variable which represents the
-cursor value of the last pushed value, and use the getter function `gossip_table.get_entries_with_cursor(...)` to get newGossipDataWithSignatures which have been inserted past this value (i.e., are new GossipDataWithSignatures).
+cursor value of the last pushed value, and use the getter function `gossip_table.get_entries_with_cursor(...)` to get newSignedGossipDatas which have been inserted past this value (i.e., are new SignedGossipDatas).
 
-In Sig, a `PushMessage` is defined as `struct { Pubkey, []GossipDataWithSignature }`: a source pubkey, and an array of `GossipDataWithSignature`s. The source pubkey will be the same pubkey on the local node's contact information. And the array of values will be all the new GossipDataWithSignatures.
+In Sig, a `PushMessage` is defined as `struct { Pubkey, []SignedGossipData }`: a source pubkey, and an array of `SignedGossipData`s. The source pubkey will be the same pubkey on the local node's contact information. And the array of values will be all the new SignedGossipDatas.
 
 An important note is that all messages sent through gossip should be less than or equal to a [maximum transmission unit (MTU)](https://en.wikipedia.org/wiki/Maximum_transmission_unit) of 1280 bytes (which is referred to as the `Packet` struct throughout the codebase).
 
-Because sometimes there are more GossipDataWithSignatures to push than can fit inside one of these packets (i.e., `bytes([]GossipDataWithSignature) > MTU`), the GossipDataWithSignatures are partitioned into packet-sized chunk `PushMessages` which are then serialized across multiple `Packets` instead of one large packet.
+Because sometimes there are more SignedGossipDatas to push than can fit inside one of these packets (i.e., `bytes([]SignedGossipData) > MTU`), the SignedGossipDatas are partitioned into packet-sized chunk `PushMessages` which are then serialized across multiple `Packets` instead of one large packet.
 
 These values are then sent as a `PushMessage` to all the nodes in the local node's `ActiveSet` struct.
 
@@ -490,12 +490,12 @@ pub const PruneData = struct {
 }
 ```
 
-The comments explain most of the variables in the struct. The `prunes` field a list of `origin` pubkeys (pubkeys of the node which create a corresponding GossipDataWithSignature). When inserting the received values from a new push message, if a GossipDataWithSignature fails to be inserted into the GossipTable, the `origin` of the value (i.e., the pubkey of the node that created the value) is added to the prunes list. And lastly, the destination field is set to the node which sent the push message.
+The comments explain most of the variables in the struct. The `prunes` field a list of `origin` pubkeys (pubkeys of the node which create a corresponding SignedGossipData). When inserting the received values from a new push message, if a SignedGossipData fails to be inserted into the GossipTable, the `origin` of the value (i.e., the pubkey of the node that created the value) is added to the prunes list. And lastly, the destination field is set to the node which sent the push message.
 
 ```python
 def handle_push_message(
     from_pubkey: Pubkey, # received from
-    values: []GossipDataWithSignatures, # values from push msg
+    values: []SignedGossipDatas, # values from push msg
     my_pubkey: Pubkey, # local nodes pubkey
     gossip_table: *GossipTable,
 ) {
@@ -525,11 +525,11 @@ def handle_push_message(
 
 When a prune message is received, we track which `from_address` pruned a specific `origin` using a `HashMap(from_address: Pubkey, origin_bloom: Bloom)` where  `from_address: Pubkey` is the address which sent the prune message to a `Bloom` filter which origins are inserted into.
 
-When constructing the active set for a GossipDataWithSignature:
+When constructing the active set for a SignedGossipData:
 - we find the `origin` of that value
 - iterate over the peers in the active set
 - look up the peer in the hashmap to find their corresponding bloom filter
-- and check if the origin of the GossipDataWithSignature is contained in the bloom filter
+- and check if the origin of the SignedGossipData is contained in the bloom filter
  - if the origin is not contained in the bloom filter, we haven’t received a corresponding prune message, so we add the peer to the active set
   - if the origin is contained in the bloom filter, we don’t add the peer to the active set
 

@@ -13,7 +13,7 @@ const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_S
 const Logger = @import("../trace/log.zig").Logger;
 const _gossip_data = @import("data.zig");
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
-const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const SignedGossipData = _gossip_data.SignedGossipData;
 const ContactInfo = _gossip_data.ContactInfo;
 const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
 const AtomicBool = std.atomic.Atomic(bool);
@@ -89,13 +89,13 @@ pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
     return packet;
 }
 
-pub fn randomGossipDataWithSignature(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !GossipDataWithSignature {
+pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
     var keypair = try KeyPair.create(null);
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
 
     // will have random id
-    // var value = try GossipDataWithSignature.random(rng, &keypair);
-    var value = try GossipDataWithSignature.randomWithIndex(rng, &keypair, 0);
+    // var value = try SignedGossipData.random(rng, &keypair);
+    var value = try SignedGossipData.randomWithIndex(rng, &keypair, 0);
     value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false));
     try value.sign(&keypair);
 
@@ -110,10 +110,10 @@ pub fn randomGossipDataWithSignature(rng: std.rand.Random, maybe_should_pass_sig
 
 pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
-    var values: [size]GossipDataWithSignature = undefined;
+    var values: [size]SignedGossipData = undefined;
     var should_pass_sig_verification = rng.boolean();
     for (0..size) |i| {
-        var value = try randomGossipDataWithSignature(rng, should_pass_sig_verification);
+        var value = try randomSignedGossipData(rng, should_pass_sig_verification);
         values[i] = value;
     }
 
@@ -130,10 +130,10 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
 
 pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !std.ArrayList(Packet) {
     const size: comptime_int = 5;
-    var values: [size]GossipDataWithSignature = undefined;
+    var values: [size]SignedGossipData = undefined;
     var should_pass_sig_verification = rng.boolean();
     for (0..size) |i| {
-        var value = try randomGossipDataWithSignature(rng, should_pass_sig_verification);
+        var value = try randomSignedGossipData(rng, should_pass_sig_verification);
         values[i] = value;
     }
 
@@ -155,7 +155,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
-    var value = try GossipDataWithSignature.initSigned(.{
+    var value = try SignedGossipData.initSigned(.{
         .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
     }, keypair);
 
@@ -173,7 +173,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
 
         // add more random hashes
         for (0..5) |_| {
-            var rand_value = try randomGossipDataWithSignature(rng, true);
+            var rand_value = try randomSignedGossipData(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);
@@ -184,7 +184,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         var filter_set = try GossipFilterSet.initTest(allocator, filter.mask_bits);
 
         for (0..5) |_| {
-            var rand_value = try randomGossipDataWithSignature(rng, true);
+            var rand_value = try randomSignedGossipData(rng, true);
             var buf: [PACKET_DATA_SIZE]u8 = undefined;
             const bytes = try bincode.writeToSlice(&buf, rand_value, bincode.Params.standard);
             const value_hash = Hash.generateSha256Hash(bytes);

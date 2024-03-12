@@ -6,7 +6,7 @@ const _hash = @import("../core/hash.zig");
 const Hash = _hash.Hash;
 const GossipShards = @import("./shards.zig").GossipShards;
 const _gossip_data = @import("data.zig");
-const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const SignedGossipData = _gossip_data.SignedGossipData;
 const GossipData = _gossip_data.GossipData;
 const GossipVersionedData = _gossip_data.GossipVersionedData;
 const GossipKey = _gossip_data.GossipKey;
@@ -149,7 +149,7 @@ pub const GossipTable = struct {
         self.converted_contact_infos.deinit();
     }
 
-    pub fn insert(self: *Self, value: GossipDataWithSignature, now: u64) !void {
+    pub fn insert(self: *Self, value: SignedGossipData, now: u64) !void {
         if (self.store.count() >= MAX_TABLE_SIZE) {
             return error.GossipTableFull;
         }
@@ -279,7 +279,7 @@ pub const GossipTable = struct {
 
     pub fn insertValues(
         self: *Self,
-        values: []GossipDataWithSignature,
+        values: []SignedGossipData,
         timeout: u64,
         comptime record_inserts: bool,
         comptime record_timeouts: bool,
@@ -498,10 +498,10 @@ pub const GossipTable = struct {
     /// This frees the memory for any pointers in the GossipData.
     /// Be sure that this GossipData is not being used anywhere else when calling this.
     ///
-    /// This method is not safe because neither GossipTable nor GossipDataWithSignature
-    /// provide any guarantees that the GossipDataWithSignature being removed is not
+    /// This method is not safe because neither GossipTable nor SignedGossipData
+    /// provide any guarantees that the SignedGossipData being removed is not
     /// also being accessed somewhere else in the code after this is called.
-    /// Since this frees the GossipDataWithSignature, any accesses of the GossipDataWithSignature
+    /// Since this frees the SignedGossipData, any accesses of the SignedGossipData
     /// after this function is called will result in a segfault.
     ///
     /// TODO: implement a safer approach to avoid dangling pointers, such as:
@@ -863,7 +863,7 @@ test "gossip.table: remove old values" {
     defer table.deinit();
 
     for (0..5) |_| {
-        const value = try GossipDataWithSignature.initSigned(
+        const value = try SignedGossipData.initSigned(
             GossipData.random(rng.random()),
             &keypair,
         );
@@ -893,7 +893,7 @@ test "gossip.table: insert and remove value" {
     var table = try GossipTable.init(std.testing.allocator, &tp);
     defer table.deinit();
 
-    const value = try GossipDataWithSignature.initSigned(
+    const value = try SignedGossipData.initSigned(
         GossipData.randomFromIndex(rng.random(), 0),
         &keypair,
     );
@@ -916,11 +916,11 @@ test "gossip.table: trim pruned values" {
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
 
-    var values = std.ArrayList(GossipDataWithSignature).init(std.testing.allocator);
+    var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
     for (0..N_VALUES) |_| {
-        const value = try GossipDataWithSignature.initSigned(
+        const value = try SignedGossipData.initSigned(
             GossipData.random(rng.random()),
             &keypair,
         );
@@ -974,7 +974,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     var data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.random(rng),
     };
-    var value = try GossipDataWithSignature.initSigned(data, &keypair);
+    var value = try SignedGossipData.initSigned(data, &keypair);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -990,7 +990,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     new_data.LegacyContactInfo.id = data.LegacyContactInfo.id;
     // older wallclock
     new_data.LegacyContactInfo.wallclock += data.LegacyContactInfo.wallclock;
-    value = try GossipDataWithSignature.initSigned(new_data, &keypair);
+    value = try SignedGossipData.initSigned(new_data, &keypair);
     try table.insert(value, 120);
 
     try std.testing.expectEqual(table.purged.len(), 1);
@@ -1007,7 +1007,7 @@ test "gossip.table: insert and get" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    var value = try GossipDataWithSignature.random(rng, &keypair);
+    var value = try SignedGossipData.random(rng, &keypair);
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
@@ -1027,7 +1027,7 @@ test "gossip.table: insert and get votes" {
     var id = Pubkey.fromPublicKey(&pk, true);
 
     var vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    var gossip_value = try GossipDataWithSignature.initSigned(GossipData{
+    var gossip_value = try SignedGossipData.initSigned(GossipData{
         .Vote = .{ 0, vote },
     }, &kp);
 
@@ -1049,7 +1049,7 @@ test "gossip.table: insert and get votes" {
     const rng = rand.random();
     id = Pubkey.random(rng, .{});
     vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    gossip_value = try GossipDataWithSignature.initSigned(GossipData{
+    gossip_value = try SignedGossipData.initSigned(GossipData{
         .Vote = .{ 0, vote },
     }, &kp);
     try table.insert(gossip_value, 1);
@@ -1067,7 +1067,7 @@ test "gossip.table: insert and get contact_info" {
     var id = Pubkey.fromPublicKey(&kp.public_key, true);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
-    var gossip_value = try GossipDataWithSignature.initSigned(GossipData{
+    var gossip_value = try SignedGossipData.initSigned(GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 

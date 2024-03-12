@@ -5,7 +5,7 @@ const AutoHashMap = std.AutoHashMap;
 const Hash = @import("../core/hash.zig").Hash;
 
 const gossip = @import("./data.zig");
-const GossipDataWithSignature = gossip.GossipDataWithSignature;
+const SignedGossipData = gossip.SignedGossipData;
 const GossipData = gossip.GossipData;
 const GossipVersionedData = gossip.GossipVersionedData;
 const GossipKey = gossip.GossipKey;
@@ -124,7 +124,7 @@ test "gossip.gossip_shards: tests GossipShards" {
 // test helper fcns
 fn newTestGossipVersionedData(rng: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
     const keypair = try KeyPair.create(null);
-    var value = try GossipDataWithSignature.random(rng, &keypair);
+    var value = try SignedGossipData.random(rng, &keypair);
     try gossip_table.insert(value, 0);
     const label = value.label();
     const x = gossip_table.get(label).?;

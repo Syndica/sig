@@ -4,7 +4,7 @@ const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const UdpSocket = network.Socket;
 const _gossip_data = @import("../gossip/data.zig");
-const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const SignedGossipData = _gossip_data.SignedGossipData;
 const getWallclockMs = _gossip_data.getWallclockMs;
 const ContactInfo = _gossip_data.ContactInfo;
 const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
@@ -148,7 +148,7 @@ test "gossip.active_set: init/deinit" {
         try gossip_peers.append(try data.toContactInfo(alloc));
 
         var keypair = try KeyPair.create(null);
-        var value = try GossipDataWithSignature.initSigned(.{
+        var value = try SignedGossipData.initSigned(.{
             .LegacyContactInfo = data,
         }, &keypair);
         try table.insert(value, getWallclockMs());

@@ -10,7 +10,7 @@ const RwMux = @import("../sync/mux.zig").RwMux;
 const GossipTable = @import("table.zig").GossipTable;
 const _gossip_data = @import("data.zig");
 const GossipData = _gossip_data.GossipData;
-const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const SignedGossipData = _gossip_data.SignedGossipData;
 
 const _pull_request = @import("pull_request.zig");
 const GossipFilter = _pull_request.GossipFilter;
@@ -19,15 +19,15 @@ const deinitGossipFilters = _pull_request.deinitGossipFilters;
 
 pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 
-pub fn filterGossipDataWithSignatures(
+pub fn filterSignedGossipDatas(
     allocator: std.mem.Allocator,
     gossip_table: *const GossipTable,
     filter: *const GossipFilter,
     caller_wallclock: u64,
     max_number_values: usize,
-) error{OutOfMemory}!ArrayList(GossipDataWithSignature) {
+) error{OutOfMemory}!ArrayList(SignedGossipData) {
     if (max_number_values == 0) {
-        return ArrayList(GossipDataWithSignature).init(allocator);
+        return ArrayList(SignedGossipData).init(allocator);
     }
 
     var seed: u64 = @intCast(std.time.milliTimestamp());
@@ -43,7 +43,7 @@ pub fn filterGossipDataWithSignatures(
     defer match_indexs.deinit();
 
     const output_size = @min(max_number_values, match_indexs.items.len);
-    var output = try ArrayList(GossipDataWithSignature).initCapacity(allocator, output_size);
+    var output = try ArrayList(SignedGossipData).initCapacity(allocator, output_size);
     errdefer output.deinit();
 
     for (match_indexs.items) |entry_index| {
@@ -93,7 +93,7 @@ test "gossip.pull_response: test filtering values works" {
 
     var lg = gossip_table_rw.write();
     for (0..100) |_| {
-        var gossip_value = try GossipDataWithSignature.random(rng, &kp);
+        var gossip_value = try SignedGossipData.random(rng, &kp);
         try lg.mut().insert(gossip_value, 0);
     }
     lg.unlock();
@@ -119,18 +119,18 @@ test "gossip.pull_response: test filtering values works" {
     legacy_contact_info.id = id;
     // TODO: make this consistent across tests
     legacy_contact_info.wallclock = @intCast(std.time.milliTimestamp());
-    var gossip_value = try GossipDataWithSignature.initSigned(.{
+    var gossip_value = try SignedGossipData.initSigned(.{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();
     for (0..64) |_| {
-        var v2 = try GossipDataWithSignature.random(rng, &kp);
+        var v2 = try SignedGossipData.random(rng, &kp);
         try lg.mut().insert(v2, 0);
     }
 
-    var values = try filterGossipDataWithSignatures(
+    var values = try filterSignedGossipDatas(
         std.testing.allocator,
         lg.get(),
         &filter,

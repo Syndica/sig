@@ -10,7 +10,7 @@ const exp = std.math.exp;
 
 const GossipTable = @import("table.zig").GossipTable;
 const _gossip_data = @import("data.zig");
-const GossipDataWithSignature = _gossip_data.GossipDataWithSignature;
+const SignedGossipData = _gossip_data.SignedGossipData;
 const getWallclockMs = _gossip_data.getWallclockMs;
 const RwMux = @import("../sync/mux.zig").RwMux;
 
@@ -27,7 +27,7 @@ pub fn buildGossipFilters(
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
-) error{ NotEnoughGossipDataWithSignatures, OutOfMemory }!ArrayList(GossipFilter) {
+) error{ NotEnoughSignedGossipDatas, OutOfMemory }!ArrayList(GossipFilter) {
     var filter_set = blk: {
         var gossip_table_lock = gossip_table_rw.read();
         defer gossip_table_lock.unlock();
@@ -90,7 +90,7 @@ pub const GossipFilterSet = struct {
         alloc: std.mem.Allocator,
         num_items: usize,
         bloom_size_bytes: usize,
-    ) error{ NotEnoughGossipDataWithSignatures, OutOfMemory }!Self {
+    ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
         var mask_bits = GossipFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
@@ -115,7 +115,7 @@ pub const GossipFilterSet = struct {
         };
     }
 
-    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughGossipDataWithSignatures, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
@@ -272,7 +272,7 @@ test "gossip.pull_request: test building filters" {
         var id = Pubkey.random(rng, .{});
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
-        var gossip_value = try GossipDataWithSignature.initSigned(.{
+        var gossip_value = try SignedGossipData.initSigned(.{
             .LegacyContactInfo = legacy_contact_info,
         }, &kp);
 

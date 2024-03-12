@@ -25,7 +25,7 @@ const gossip = @import("../gossip/data.zig");
 const LegacyContactInfo = gossip.LegacyContactInfo;
 const ContactInfo = @import("data.zig").ContactInfo;
 const SOCKET_TAG_GOSSIP = @import("data.zig").SOCKET_TAG_GOSSIP;
-const GossipDataWithSignature = gossip.GossipDataWithSignature;
+const SignedGossipData = gossip.SignedGossipData;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
@@ -104,7 +104,7 @@ pub const GossipService = struct {
     gossip_table_rw: RwMux(GossipTable),
     // push message things
     active_set_rw: RwMux(ActiveSet),
-    push_msg_queue_mux: Mux(ArrayList(GossipDataWithSignature)),
+    push_msg_queue_mux: Mux(ArrayList(SignedGossipData)),
     // pull message things
     failed_pull_hashes_mux: Mux(HashTimeQueue),
 
@@ -163,7 +163,7 @@ pub const GossipService = struct {
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT) catch return error.SocketSetTimeoutFailed; // 1 second
 
         var failed_pull_hashes = HashTimeQueue.init(allocator);
-        var push_msg_q = ArrayList(GossipDataWithSignature).init(allocator);
+        var push_msg_q = ArrayList(SignedGossipData).init(allocator);
 
         var echo_server = echo.Server.init(allocator, gossip_address.port(), logger, exit);
 
@@ -185,7 +185,7 @@ pub const GossipService = struct {
             .verified_incoming_channel = verified_incoming_channel,
             .gossip_table_rw = gossip_table_rw,
             .allocator = allocator,
-            .push_msg_queue_mux = Mux(ArrayList(GossipDataWithSignature)).init(push_msg_q),
+            .push_msg_queue_mux = Mux(ArrayList(SignedGossipData)).init(push_msg_q),
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
             .entrypoints = entrypoint_list,
@@ -421,19 +421,19 @@ pub const GossipService = struct {
     };
 
     pub const PushMessage = struct {
-        gossip_values: []GossipDataWithSignature,
+        gossip_values: []SignedGossipData,
         from_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
     };
 
     pub const PullRequestMessage = struct {
         filter: GossipFilter,
-        value: GossipDataWithSignature,
+        value: SignedGossipData,
         from_endpoint: EndPoint,
     };
 
     pub const PullResponseMessage = struct {
-        gossip_values: []GossipDataWithSignature,
+        gossip_values: []SignedGossipData,
         from_pubkey: *Pubkey,
     };
 
@@ -481,7 +481,7 @@ pub const GossipService = struct {
                     // Important: this uses shallowFree instead of bincode.free
                     //
                     // The message contains some messaging metadata plus a
-                    // payload of a GossipDataWithSignature. The metadata won't be needed
+                    // payload of a SignedGossipData. The metadata won't be needed
                     // after this iteration is complete. The payload will be
                     // needed since it is stored in the GossipTable.
                     //
@@ -493,9 +493,9 @@ pub const GossipService = struct {
                     // allocations in the metadata.
                     //
                     // The compromise is a "shallow" free that only frees the
-                    // messaging metadata. GossipDataWithSignature ownership will be
+                    // messaging metadata. SignedGossipData ownership will be
                     // transferred to GossipTable. The GossipTable implementation
-                    // becomes responsible for freeing any GossipDataWithSignatures when
+                    // becomes responsible for freeing any SignedGossipDatas when
                     // needed.
                     //
                     // TODO: this approach is not ideal because it is difficult
@@ -528,7 +528,7 @@ pub const GossipService = struct {
                         });
                     },
                     .PullRequest => |*pull| {
-                        const value: GossipDataWithSignature = pull[1];
+                        const value: SignedGossipData = pull[1];
                         switch (value.data) {
                             .ContactInfo => |*data| {
                                 if (data.pubkey.equals(&self.my_pubkey)) {
@@ -735,10 +735,10 @@ pub const GossipService = struct {
             if (top_of_loop_ts - last_push_ts > GOSSIP_PULL_TIMEOUT_MS / 2) {
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
-                var my_contact_info_value = try gossip.GossipDataWithSignature.initSigned(gossip.GossipData{
+                var my_contact_info_value = try gossip.SignedGossipData.initSigned(gossip.GossipData{
                     .ContactInfo = self.my_contact_info,
                 }, &self.my_keypair);
-                var my_legacy_contact_info_value = try gossip.GossipDataWithSignature.initSigned(gossip.GossipData{
+                var my_legacy_contact_info_value = try gossip.SignedGossipData.initSigned(gossip.GossipData{
                     .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
                 }, &self.my_keypair);
 
@@ -746,7 +746,7 @@ pub const GossipService = struct {
                 {
                     var push_msg_queue_lock = self.push_msg_queue_mux.lock();
                     defer push_msg_queue_lock.unlock();
-                    var push_msg_queue: *ArrayList(GossipDataWithSignature) = push_msg_queue_lock.mut();
+                    var push_msg_queue: *ArrayList(SignedGossipData) = push_msg_queue_lock.mut();
 
                     try push_msg_queue.append(my_contact_info_value);
                     try push_msg_queue.append(my_legacy_contact_info_value);
@@ -829,7 +829,7 @@ pub const GossipService = struct {
         // find new values in gossip table
         // TODO: benchmark different approach of HashMapping(origin, value) first
         // then deriving the active set per origin in a batch
-        var push_messages = std.AutoHashMap(EndPoint, ArrayList(GossipDataWithSignature)).init(self.allocator);
+        var push_messages = std.AutoHashMap(EndPoint, ArrayList(SignedGossipData)).init(self.allocator);
         defer {
             var push_iter = push_messages.iterator();
             while (push_iter.next()) |push_entry| {
@@ -880,7 +880,7 @@ pub const GossipService = struct {
                     if (maybe_peer_entry) |peer_entry| {
                         try peer_entry.value_ptr.append(value);
                     } else {
-                        var peer_entry = try ArrayList(GossipDataWithSignature).initCapacity(self.allocator, 1);
+                        var peer_entry = try ArrayList(SignedGossipData).initCapacity(self.allocator, 1);
                         peer_entry.appendAssumeCapacity(value);
                         try push_messages.put(peer, peer_entry);
                     }
@@ -896,7 +896,7 @@ pub const GossipService = struct {
 
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
-            const gossip_values: *const ArrayList(GossipDataWithSignature) = push_entry.value_ptr;
+            const gossip_values: *const ArrayList(SignedGossipData) = push_entry.value_ptr;
             const to_endpoint: *const EndPoint = push_entry.key_ptr;
 
             // send the values as a pull response
@@ -998,7 +998,7 @@ pub const GossipService = struct {
 
         // update wallclock and sign
         self.my_contact_info.wallclock = now;
-        const my_contact_info_value = try gossip.GossipDataWithSignature.initSigned(gossip.GossipData{
+        const my_contact_info_value = try gossip.SignedGossipData.initSigned(gossip.GossipData{
             .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
         }, &self.my_keypair);
 
@@ -1042,7 +1042,7 @@ pub const GossipService = struct {
         my_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
         filter: *GossipFilter,
-        value: *GossipDataWithSignature,
+        value: *SignedGossipData,
         gossip_table: *const GossipTable,
         output: ArrayList(Packet),
         output_limit: *std.atomic.Atomic(i64),
@@ -1063,7 +1063,7 @@ pub const GossipService = struct {
                 return;
             }
 
-            const response_gossip_values = pull_response.filterGossipDataWithSignatures(
+            const response_gossip_values = pull_response.filterSignedGossipDatas(
                 self.allocator,
                 self.gossip_table,
                 self.filter,
@@ -1269,7 +1269,7 @@ pub const GossipService = struct {
         }
 
         const now = getWallclockMs();
-        var failed_insert_ptrs = ArrayList(*GossipDataWithSignature).init(self.allocator);
+        var failed_insert_ptrs = ArrayList(*SignedGossipData).init(self.allocator);
         defer failed_insert_ptrs.deinit();
 
         {
@@ -1632,7 +1632,7 @@ pub const GossipService = struct {
     ) void {
         var push_msg_queue_lock = self.push_msg_queue_mux.lock();
         defer push_msg_queue_lock.unlock();
-        var push_msg_queue: *ArrayList(GossipDataWithSignature) = push_msg_queue_lock.mut();
+        var push_msg_queue: *ArrayList(SignedGossipData) = push_msg_queue_lock.mut();
 
         var gossip_table_lock = self.gossip_table_rw.write();
         defer gossip_table_lock.unlock();
@@ -1731,12 +1731,12 @@ pub const GossipService = struct {
     pub fn filterBasedOnShredVersion(
         self: *Self,
         gossip_table: *const GossipTable,
-        gossip_values: []GossipDataWithSignature,
+        gossip_values: []SignedGossipData,
         from_pubkey: Pubkey,
     ) usize {
         // we use swap remove which just reorders the array
         // (order dm), so we just track the new len -- ie, no allocations/frees
-        var gossip_values_array = ArrayList(GossipDataWithSignature).fromOwnedSlice(self.allocator, gossip_values);
+        var gossip_values_array = ArrayList(SignedGossipData).fromOwnedSlice(self.allocator, gossip_values);
         const my_shred_version = self.my_shred_version.load(.Monotonic);
         if (my_shred_version == 0) {
             return gossip_values_array.items.len;
@@ -1785,7 +1785,7 @@ pub const ChunkType = enum(u8) {
 pub fn GossipDataToPackets(
     allocator: std.mem.Allocator,
     my_pubkey: *const Pubkey,
-    gossip_values: []GossipDataWithSignature,
+    gossip_values: []SignedGossipData,
     to_endpoint: *const EndPoint,
     chunk_type: ChunkType,
 ) error{ OutOfMemory, SerializationError }!ArrayList(Packet) {
@@ -1825,7 +1825,7 @@ pub fn GossipDataToPackets(
 
 pub fn chunkValuesIntoPacketIndexes(
     allocator: std.mem.Allocator,
-    gossip_values: []GossipDataWithSignature,
+    gossip_values: []SignedGossipData,
     max_chunk_bytes: usize,
 ) error{ OutOfMemory, SerializationError }!ArrayList(usize) {
     var packet_indexs = try ArrayList(usize).initCapacity(allocator, 1);
@@ -1891,7 +1891,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
 
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        var value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
         try lg.mut().insert(value, getWallclockMs());
@@ -1940,7 +1940,7 @@ test "gossip.gossip_service: tests handling prune messages" {
     }
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        var value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
         try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
     }
@@ -2006,10 +2006,10 @@ test "gossip.gossip_service: tests handling pull responses" {
     defer gossip_service.deinit();
 
     // get random values
-    var gossip_values: [5]GossipDataWithSignature = undefined;
+    var gossip_values: [5]SignedGossipData = undefined;
     var kp = try KeyPair.create(null);
     for (0..5) |i| {
-        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &kp, 0);
+        var value = try SignedGossipData.randomWithIndex(rng.random(), &kp, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         gossip_values[i] = value;
     }
@@ -2074,7 +2074,7 @@ test "gossip.gossip_service: tests handle pull request" {
     while (!done) {
         count += 1;
         for (0..5) |_| {
-            var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &my_keypair, 0);
+            var value = try SignedGossipData.randomWithIndex(rng.random(), &my_keypair, 0);
             value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
             try gossip_table.insert(value, getWallclockMs());
 
@@ -2102,7 +2102,7 @@ test "gossip.gossip_service: tests handle pull request" {
 
     var ci_data = gossip.GossipData.randomFromIndex(rng.random(), 0);
     ci_data.LegacyContactInfo.id = rando_pubkey;
-    var gossip_value = try GossipDataWithSignature.initSigned(ci_data, &rando_keypair);
+    var gossip_value = try SignedGossipData.initSigned(ci_data, &rando_keypair);
 
     const addr = SocketAddr.random(rng.random());
     var ping_lock = gossip_service.ping_cache_rw.write();
@@ -2156,10 +2156,10 @@ test "gossip.gossip_service: test build prune messages and handle push messages"
     defer gossip_service.deinit();
 
     var push_from = Pubkey.random(rng.random(), .{});
-    var values = ArrayList(GossipDataWithSignature).init(allocator);
+    var values = ArrayList(SignedGossipData).init(allocator);
     defer values.deinit();
     for (0..10) |_| {
-        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &my_keypair, 0);
+        var value = try SignedGossipData.randomWithIndex(rng.random(), &my_keypair, 0);
         value.data.LegacyContactInfo.id = Pubkey.random(rng.random(), .{});
         try values.append(value);
     }
@@ -2171,7 +2171,7 @@ test "gossip.gossip_service: test build prune messages and handle push messages"
     var gossip_socket = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20);
     send_contact_info.gossip = gossip_socket;
 
-    var ci_value = try GossipDataWithSignature.initSigned(gossip.GossipData{
+    var ci_value = try SignedGossipData.initSigned(gossip.GossipData{
         .LegacyContactInfo = send_contact_info,
     }, &my_keypair);
     var lg = gossip_service.gossip_table_rw.write();
@@ -2247,7 +2247,7 @@ test "gossip.gossip_service: test build pull requests" {
     var ping_lock = gossip_service.ping_cache_rw.write();
     var lg = gossip_service.gossip_table_rw.write();
     for (0..20) |_| {
-        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &keypair, 0);
+        var value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0);
         try lg.mut().insert(value, getWallclockMs());
         var pc: *PingCache = ping_lock.mut();
         pc._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
@@ -2293,7 +2293,7 @@ test "gossip.gossip_service: test build push messages" {
     var lg = gossip_service.gossip_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try GossipDataWithSignature.randomWithIndex(rng.random(), &keypair, 0); // contact info
+        var value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
         try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
     }
@@ -2301,7 +2301,7 @@ test "gossip.gossip_service: test build push messages" {
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     // var id = Pubkey.fromPublicKey(&keypair.public_key, false);
-    var value = try GossipDataWithSignature.random(rng.random(), &keypair);
+    var value = try SignedGossipData.random(rng.random(), &keypair);
 
     // set the active set
     {
@@ -2367,11 +2367,11 @@ test "gossip.gossip_service: test packet verification" {
     var data = gossip.GossipData.randomFromIndex(rng.random(), 0);
     data.LegacyContactInfo.id = id;
     data.LegacyContactInfo.wallclock = 0;
-    var value = try GossipDataWithSignature.initSigned(data, &keypair);
+    var value = try SignedGossipData.initSigned(data, &keypair);
 
     try std.testing.expect(try value.verify(id));
 
-    var values = [_]gossip.GossipDataWithSignature{value};
+    var values = [_]gossip.SignedGossipData{value};
     const message = GossipMessage{
         .PushMessage = .{ id, &values },
     };
@@ -2391,9 +2391,9 @@ test "gossip.gossip_service: test packet verification" {
     var packet_batch_2 = ArrayList(Packet).init(allocator);
 
     // send one which fails sanitization
-    var value_v2 = try GossipDataWithSignature.initSigned(gossip.GossipData.randomFromIndex(rng.random(), 2), &keypair);
+    var value_v2 = try SignedGossipData.initSigned(gossip.GossipData.randomFromIndex(rng.random(), 2), &keypair);
     value_v2.data.EpochSlots[0] = gossip.MAX_EPOCH_SLOTS;
-    var values_v2 = [_]gossip.GossipDataWithSignature{value_v2};
+    var values_v2 = [_]gossip.SignedGossipData{value_v2};
     const message_v2 = GossipMessage{
         .PushMessage = .{ id, &values_v2 },
     };
@@ -2404,8 +2404,8 @@ test "gossip.gossip_service: test packet verification" {
 
     // send one with a incorrect signature
     var rand_keypair = try KeyPair.create([_]u8{3} ** 32);
-    var value2 = try GossipDataWithSignature.initSigned(gossip.GossipData.randomFromIndex(rng.random(), 0), &rand_keypair);
-    var values2 = [_]gossip.GossipDataWithSignature{value2};
+    var value2 = try SignedGossipData.initSigned(gossip.GossipData.randomFromIndex(rng.random(), 0), &rand_keypair);
+    var values2 = [_]gossip.SignedGossipData{value2};
     const message2 = GossipMessage{
         .PushMessage = .{ id, &values2 },
     };
@@ -2414,7 +2414,7 @@ test "gossip.gossip_service: test packet verification" {
     var packet2 = Packet.init(from, buf2, out2.len);
     try packet_batch_2.append(packet2);
 
-    // send it with a GossipDataWithSignature which hash a slice
+    // send it with a SignedGossipData which hash a slice
     {
         var rand_pubkey = Pubkey.fromPublicKey(&rand_keypair.public_key, true);
         var dshred = gossip.DuplicateShred.random(rng.random());
@@ -2424,8 +2424,8 @@ test "gossip.gossip_service: test packet verification" {
         var dshred_data = gossip.GossipData{
             .DuplicateShred = .{ 1, dshred },
         };
-        var dshred_value = try GossipDataWithSignature.initSigned(dshred_data, &rand_keypair);
-        var values3 = [_]gossip.GossipDataWithSignature{dshred_value};
+        var dshred_value = try SignedGossipData.initSigned(dshred_data, &rand_keypair);
+        var values3 = [_]gossip.SignedGossipData{dshred_value};
         const message3 = GossipMessage{
             .PushMessage = .{ id, &values3 },
         };
@@ -2507,8 +2507,8 @@ test "gossip.gossip_service: process contact info push packet" {
     var gossip_data = gossip.GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var gossip_value = try gossip.GossipDataWithSignature.initSigned(gossip_data, &kp);
-    var heap_values = try allocator.alloc(gossip.GossipDataWithSignature, 1);
+    var gossip_value = try gossip.SignedGossipData.initSigned(gossip_data, &kp);
+    var heap_values = try allocator.alloc(gossip.SignedGossipData, 1);
     heap_values[0] = gossip_value;
     const msg = GossipMessage{
         .PushMessage = .{ id, heap_values },
