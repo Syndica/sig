@@ -49,10 +49,7 @@ const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
 
 const PacketBatch = ArrayList(Packet);
-const PacketBatchChannel = Channel(PacketBatch);
-
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
-const GossipMessageChannel = Channel(GossipMessageWithEndpoint);
 
 pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 pub const GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
@@ -97,9 +94,9 @@ pub const GossipService = struct {
     exit: *AtomicBool,
 
     // communication between threads
-    packet_incoming_channel: *PacketBatchChannel,
-    packet_outgoing_channel: *PacketBatchChannel,
-    verified_incoming_channel: *GossipMessageChannel,
+    packet_incoming_channel: *Channel(PacketBatch),
+    packet_outgoing_channel: *Channel(PacketBatch),
+    verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
 
     gossip_table_rw: RwMux(GossipTable),
     // push message things
@@ -131,9 +128,9 @@ pub const GossipService = struct {
         exit: *AtomicBool,
         logger: Logger,
     ) error{ OutOfMemory, GossipAddrUnspecified, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
-        var packet_incoming_channel = PacketBatchChannel.init(allocator, 10000);
-        var packet_outgoing_channel = PacketBatchChannel.init(allocator, 10000);
-        var verified_incoming_channel = GossipMessageChannel.init(allocator, 10000);
+        var packet_incoming_channel = Channel(PacketBatch).init(allocator, 10000);
+        var packet_outgoing_channel = Channel(PacketBatch).init(allocator, 10000);
+        var verified_incoming_channel = Channel(GossipMessageWithEndpoint).init(allocator, 10000);
 
         errdefer {
             packet_incoming_channel.deinit();
@@ -300,7 +297,7 @@ pub const GossipService = struct {
     const VerifyMessageTask = struct {
         allocator: std.mem.Allocator,
         packet: *const Packet,
-        verified_incoming_channel: *GossipMessageChannel,
+        verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
         logger: Logger,
 
         task: Task,
