@@ -235,9 +235,10 @@ pub const AccountsDB = struct {
         defer accounts_dir.close();
 
         var files = try readDirectory(self.allocator, accounts_dir);
+        // var filenames = ArrayList([]const u8).fromOwnedSlice(self.allocator, files.filenames.items[0..500]);
         var filenames = files.filenames;
         defer {
-            filenames.deinit();
+            files.filenames.deinit();
             self.allocator.free(files.filename_memory);
         }
 
@@ -351,7 +352,13 @@ pub const AccountsDB = struct {
     ) !void {
         const thread_db = &thread_dbs[thread_id];
         const thread_filenames = file_names[start_index..end_index];
-        try parseAndBinAccountFiles(fields, accounts_dir_path, thread_db, thread_filenames, 2_000);
+        try parseAndBinAccountFiles(
+            fields,
+            accounts_dir_path,
+            thread_db,
+            thread_filenames,
+            1_500,
+        );
     }
 
     /// loads and verifies the account files into the threads file map
@@ -770,7 +777,11 @@ pub const AccountsDB = struct {
             if (n_pubkeys_in_bin > keys.len) {
                 if (!self.allocator.resize(keys, n_pubkeys_in_bin)) {
                     self.allocator.free(keys);
-                    keys = try self.allocator.alloc(Pubkey, n_pubkeys_in_bin);
+                    const new_keys = try self.allocator.alloc(Pubkey, n_pubkeys_in_bin);
+                    keys.ptr = new_keys.ptr;
+                    keys.len = new_keys.len;
+                } else {
+                    keys.len = n_pubkeys_in_bin;
                 }
             }
 
@@ -1364,7 +1375,6 @@ pub fn FastMap(
                 self.deinit(); // release old memory
 
                 self._capacity = new_self._capacity;
-                self._count = new_self._count;
                 self.groups = new_self.groups;
                 self.states = new_self.states;
                 self.memory = new_self.memory;
@@ -1908,7 +1918,8 @@ pub fn main() !void {
     const disk_index_dir: ?[]const u8 = "test_data/tmp";
     // const disk_index_dir: ?[]const u8 = null;
     const index_ram_capacity = 100_000;
-    const force_unpack_snapshot = false;
+    // const force_unpack_snapshot = false;
+    const force_unpack_snapshot = true;
     const snapshot_dir = "../snapshots/";
     // const snapshot_dir = "test_data/";
 
@@ -1957,6 +1968,7 @@ pub fn main() !void {
         defer snapshot_dir_iter.close();
 
         timer.reset();
+        std.debug.print("unpacking {s}...", .{snapshot_paths.full_snapshot.path});
         logger.infof("unpacking {s}...", .{snapshot_paths.full_snapshot.path});
         try parallelUnpackZstdTarBall(
             allocator,
@@ -1984,6 +1996,7 @@ pub fn main() !void {
         logger.infof("not unpacking snapshot...", .{});
     }
 
+    timer.reset();
     logger.infof("reading snapshot metadata...", .{});
     var snapshots = try AllSnapshotFields.fromPaths(allocator, snapshot_dir, snapshot_paths);
     defer {
@@ -2067,23 +2080,22 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
 
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{});
-    dir.access("accounts", .{}) catch {
-        // unpack both snapshots to get the acccount files
-        try parallelUnpackZstdTarBall(
-            allocator,
-            "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
-            dir,
-            1,
-            true,
-        );
-        try parallelUnpackZstdTarBall(
-            allocator,
-            "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
-            dir,
-            1,
-            true,
-        );
-    };
+
+    // unpack both snapshots to get the acccount files
+    try parallelUnpackZstdTarBall(
+        allocator,
+        "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
+        dir,
+        1,
+        true,
+    );
+    try parallelUnpackZstdTarBall(
+        allocator,
+        "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
+        dir,
+        1,
+        true,
+    );
 
     var snapshot_paths = try SnapshotPaths.find(allocator, dir_path);
     var snapshots = try AllSnapshotFields.fromPaths(allocator, dir_path, snapshot_paths);
@@ -2337,20 +2349,20 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const args = [_]BenchArgs{
-        // // test accounts in ram
+        // test accounts in ram
         BenchArgs{
             .n_accounts = 100_000,
             .slot_list_len = 1,
             .accounts = .ram,
             .index = .ram,
-            .name = "100k accounts (1_slot - ram index)",
+            .name = "100k accounts (1_slot - ram index - ram accounts)",
         },
         BenchArgs{
             .n_accounts = 10_000,
             .slot_list_len = 10,
             .accounts = .ram,
             .index = .ram,
-            .name = "10k accounts (10_slots - ram index)",
+            .name = "10k accounts (10_slots - ram index - ram accounts)",
         },
 
         // tests large number of accounts on disk
@@ -2359,38 +2371,68 @@ pub const BenchmarkAccountsDB = struct {
             .slot_list_len = 10,
             .accounts = .disk,
             .index = .ram,
-            .name = "10k accounts (10_slots - disk index)",
+            .name = "10k accounts (10_slots - ram index - disk accounts)",
         },
         BenchArgs{
             .n_accounts = 500_000,
             .slot_list_len = 1,
             .accounts = .disk,
             .index = .ram,
-            .name = "500k accounts (1_slot - disk index)",
+            .name = "500k accounts (1_slot - ram index - disk accounts)",
         },
         BenchArgs{
             .n_accounts = 500_000,
             .slot_list_len = 3,
             .accounts = .disk,
             .index = .ram,
-            .name = "500k accounts (3_slot - disk index)",
+            .name = "500k accounts (3_slot - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 3_000_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "3M accounts (1_slot - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 3_000_000,
+            .slot_list_len = 3,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "3M accounts (3_slot - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .n_accounts_multiple = 2, // 1 mill accounts init
+            .index = .ram,
+            .name = "3M accounts (3_slot - ram index - disk accounts)",
         },
 
-        // // testing disk indexes
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .name = "500k accounts (1_slot - disk index)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 3_000_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .name = "3m accounts (1_slot - disk index)",
-        // },
+        // testing disk indexes
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .name = "500k accounts (1_slot - disk index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 3_000_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .name = "3m accounts (1_slot - disk index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .n_accounts_multiple = 2,
+            .name = "500k accounts (1_slot - disk index - disk accounts)",
+        },
     };
 
     pub fn readAccounts(bench_args: BenchArgs) !u64 {
