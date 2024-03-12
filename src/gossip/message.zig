@@ -4,41 +4,36 @@ const Signature = @import("../core/signature.zig").Signature;
 const bincode = @import("../bincode/bincode.zig");
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
-const crds = @import("crds.zig");
-const CrdsValue = crds.CrdsValue;
-const CrdsData = crds.CrdsData;
-const Version = crds.Version;
-const LegacyVersion2 = crds.LegacyVersion2;
-const LegacyContactInfo = crds.LegacyContactInfo;
+const _gossip_data = @import("data.zig");
+const SignedGossipData = _gossip_data.SignedGossipData;
+const GossipData = _gossip_data.GossipData;
+const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const getWallclockMs = _gossip_data.getWallclockMs;
 
-const pull_import = @import("pull_request.zig");
-const CrdsFilter = pull_import.CrdsFilter;
-
+const GossipPullFilter = @import("pull_request.zig").GossipPullFilter;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 
-const Ping = @import("./ping_pong.zig").Ping;
-const Pong = @import("./ping_pong.zig").Pong;
-
-const logger = std.log.scoped(.protocol);
+const Ping = @import("ping_pong.zig").Ping;
+const Pong = @import("ping_pong.zig").Pong;
 
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
-/// Gossip protocol messages
-pub const Protocol = union(enum(u32)) {
-    PullRequest: struct { CrdsFilter, CrdsValue },
-    PullResponse: struct { Pubkey, []CrdsValue },
-    PushMessage: struct { Pubkey, []CrdsValue },
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268
+pub const GossipMessage = union(enum(u32)) {
+    PullRequest: struct { GossipPullFilter, SignedGossipData },
+    PullResponse: struct { Pubkey, []SignedGossipData },
+    PushMessage: struct { Pubkey, []SignedGossipData },
     PruneMessage: struct { Pubkey, PruneData },
     PingMessage: Ping,
     PongMessage: Pong,
 
     const Self = @This();
 
-    pub fn verifySignature(self: *Protocol) !void {
+    pub fn verifySignature(self: *Self) !void {
         switch (self.*) {
             .PullRequest => |*pull| {
                 var value = pull[1];
@@ -78,14 +73,14 @@ pub const Protocol = union(enum(u32)) {
         }
     }
 
-    pub fn sanitize(self: *Protocol) !void {
+    pub fn sanitize(self: *Self) !void {
         switch (self.*) {
             .PullRequest => {},
             .PullResponse => {},
             .PushMessage => |*msg| {
-                const crds_values = msg[1];
-                for (crds_values) |value| {
-                    const data: CrdsData = value.data;
+                const gossip_values = msg[1];
+                for (gossip_values) |value| {
+                    const data: GossipData = value.data;
                     try data.sanitize();
                 }
             },
@@ -106,9 +101,9 @@ pub const Protocol = union(enum(u32)) {
     /// Frees the ephemeral messaging data that is only needed
     /// for the initial processing of an incoming message.
     ///
-    /// Does not free the contained crds data that
-    /// needs to be stored in the crds table.
-    pub fn shallowFree(self: *Protocol, allocator: std.mem.Allocator) void {
+    /// Does not free the contained gossip data that
+    /// needs to be stored in the gossip table.
+    pub fn shallowFree(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .PullRequest => |*msg| {
                 msg[0].deinit();
@@ -171,7 +166,7 @@ pub const PruneData = struct {
             .prunes = &[0]Pubkey{},
             .signature = Signature.init(.{0} ** 64),
             .destination = Pubkey.random(rng, .{}),
-            .wallclock = crds.getWallclockMs(),
+            .wallclock = getWallclockMs(),
         };
         try self.sign(keypair);
 
@@ -208,20 +203,20 @@ pub const PruneData = struct {
     }
 };
 
-test "gossip.protocol: push message serialization is predictable" {
-    var rng = DefaultPrng.init(crds.getWallclockMs());
+test "gossip.message: push message serialization is predictable" {
+    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
     var pubkey = Pubkey.random(rng.random(), .{});
-    var values = std.ArrayList(CrdsValue).init(std.testing.allocator);
+    var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
-    var msg = Protocol{ .PushMessage = .{ pubkey, values.items } };
+    var msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const empty_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg,
         bincode.Params{},
     );
 
-    var value = try CrdsValue.random(rng.random(), &(try KeyPair.create(null)));
+    var value = try SignedGossipData.random(rng.random(), &(try KeyPair.create(null)));
     const value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         value,
@@ -230,7 +225,7 @@ test "gossip.protocol: push message serialization is predictable" {
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
 
-    var msg_with_value = Protocol{ .PushMessage = .{ pubkey, values.items } };
+    var msg_with_value = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const msg_value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg_with_value,
@@ -240,7 +235,7 @@ test "gossip.protocol: push message serialization is predictable" {
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
 
-test "gossip.protocol: test prune data sig verify" {
+test "gossip.message: test prune data sig verify" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
@@ -248,7 +243,7 @@ test "gossip.protocol: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(crds.getWallclockMs());
+    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();
@@ -268,36 +263,36 @@ test "gossip.protocol: test prune data sig verify" {
     try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
 }
 
-test "gossip.protocol: ping message serializes and deserializes correctly" {
+test "gossip.message: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
     var rng = std.rand.DefaultPrng.init(0);
 
-    var original = Protocol{ .PingMessage = try Ping.random(rng.random(), &keypair) };
+    var original = GossipMessage{ .PingMessage = try Ping.random(rng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
 
     var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, Protocol, serialized, bincode.Params.standard);
+    var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
 
     try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
     try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-test "gossip.protocol: test ping pong sig verify" {
+test "gossip.message: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
     var rng = std.rand.DefaultPrng.init(0);
     var ping = try Ping.random(rng.random(), &keypair);
-    var msg = Protocol{ .PingMessage = ping };
+    var msg = GossipMessage{ .PingMessage = ping };
     try msg.verifySignature();
 
-    var pong = Protocol{ .PongMessage = try Pong.init(&ping, &keypair) };
+    var pong = GossipMessage{ .PongMessage = try Pong.init(&ping, &keypair) };
     try pong.verifySignature();
 }
 
-test "gossip.protocol: pull request serializes and deserializes" {
+test "gossip.message: pull request serializes and deserializes" {
     var rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 190, 193, 13, 216, 175, 227, 117, 168, 246, 219, 213, 39, 67, 249, 88, 3, 238, 151, 144, 15, 23, 142, 153, 198, 47, 221, 117, 132, 218, 28, 29, 115, 248, 253, 211, 101, 137, 19, 174, 112, 43, 57, 251, 110, 173, 14, 71, 0, 186, 24, 36, 61, 75, 241, 119, 73, 86, 93, 136, 249, 167, 40, 134, 14, 0, 0, 0, 0, 25, 117, 21, 11, 61, 170, 38, 18, 67, 196, 242, 219, 50, 154, 4, 254, 79, 227, 253, 229, 188, 230, 121, 12, 227, 248, 199, 156, 253, 144, 175, 67, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
@@ -307,7 +302,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     }));
     var pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
 
-    // pull requests only use ContactInfo CRDS data
+    // pull requests only use ContactInfo data
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
     var legacy_contact_info = LegacyContactInfo{
@@ -325,28 +320,28 @@ test "gossip.protocol: pull request serializes and deserializes" {
         .wallclock = 0,
         .shred_version = 0,
     };
-    var crds_data = crds.CrdsData{
+    var data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var crds_value = try crds.CrdsValue.initSigned(crds_data, &keypair);
+    var value = try SignedGossipData.initSigned(data, &keypair);
 
-    var filter = CrdsFilter.init(testing.allocator);
+    var filter = GossipPullFilter.init(testing.allocator);
     defer filter.deinit();
 
-    var pull = Protocol{ .PullRequest = .{
+    var pull = GossipMessage{ .PullRequest = .{
         filter,
-        crds_value,
+        value,
     } };
 
     var buf = [_]u8{0} ** 1232;
     var serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, Protocol, serialized, bincode.Params.standard);
+    var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
     try testing.expect(std.meta.eql(pull, deserialized));
 }
 
-test "gossip.protocol: push message serializes and deserializes correctly" {
+test "gossip.message: push message serializes and deserializes correctly" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -373,19 +368,19 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
         .shred_version = 0,
     };
 
-    var crds_data = crds.CrdsData{
+    var data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
     var rust_bytes = [_]u8{ 2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    var crds_value = try crds.CrdsValue.initSigned(crds_data, &kp);
-    var values = [_]crds.CrdsValue{crds_value};
-    var pushmsg = Protocol{ .PushMessage = .{ id, &values } };
+    var gossip_value = try SignedGossipData.initSigned(data, &kp);
+    var values = [_]SignedGossipData{gossip_value};
+    var pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
     var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
     try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);
 }
 
-test "gossip.protocol: Protocol.PullRequest.ContactInfo signature is valid" {
+test "gossip.message: Protocol.PullRequest.ContactInfo signature is valid" {
     var contact_info_pull_response_packet_from_mainnet = [_]u8{
         1,   0,   0,   0,   9,   116, 228, 64,  179, 73,  145, 220, 74,  55,  179, 56,  86,  218,
         47,  62,  172, 162, 127, 102, 37,  146, 103, 117, 255, 245, 248, 212, 101, 163, 188, 231,
@@ -402,14 +397,14 @@ test "gossip.protocol: Protocol.PullRequest.ContactInfo signature is valid" {
         6,   3,   0,   1,   0,
     };
 
-    var protocol_message = try bincode.readFromSlice(
+    var message = try bincode.readFromSlice(
         std.testing.allocator,
-        Protocol,
+        GossipMessage,
         &contact_info_pull_response_packet_from_mainnet,
         bincode.Params.standard,
     );
-    defer bincode.free(std.testing.allocator, protocol_message);
+    defer bincode.free(std.testing.allocator, message);
 
-    try protocol_message.sanitize();
-    try protocol_message.verifySignature();
+    try message.sanitize();
+    try message.verifySignature();
 }

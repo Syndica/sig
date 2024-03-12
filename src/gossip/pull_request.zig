@@ -1,7 +1,6 @@
 const std = @import("std");
 const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
-const ContactInfo = @import("node.zig").ContactInfo;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
@@ -9,46 +8,44 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const exp = std.math.exp;
 
-const CrdsTable = @import("crds_table.zig").CrdsTable;
-const crds = @import("crds.zig");
-const CrdsValue = crds.CrdsValue;
-
+const GossipTable = @import("table.zig").GossipTable;
+const _gossip_data = @import("data.zig");
+const SignedGossipData = _gossip_data.SignedGossipData;
+const getWallclockMs = _gossip_data.getWallclockMs;
 const RwMux = @import("../sync/mux.zig").RwMux;
 
-pub const MAX_CRDS_OBJECT_SIZE: usize = 928;
-pub const MAX_BLOOM_SIZE: usize = MAX_CRDS_OBJECT_SIZE;
-
+pub const MAX_BLOOM_SIZE: usize = 928;
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
 pub const FALSE_RATE: f64 = 0.1;
 pub const KEYS: f64 = 8;
 
-/// parses all the values in the crds table and returns a list of
-/// corresponding filters. Note: make sure to call deinit_crds_filters.
-pub fn buildCrdsFilters(
+/// parses all the values in the gossip table and returns a list of
+/// corresponding filters. Note: make sure to call deinit_gossip_filters.
+pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
-    crds_table_rw: *RwMux(CrdsTable),
+    gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
-) error{ NotEnoughCrdsValues, OutOfMemory }!ArrayList(CrdsFilter) {
+) error{ NotEnoughSignedGossipDatas, OutOfMemory }!ArrayList(GossipPullFilter) {
     var filter_set = blk: {
-        var crds_table_lock = crds_table_rw.read();
-        const crds_table: *const CrdsTable = crds_table_lock.get();
-        defer crds_table_lock.unlock();
+        var gossip_table_lock = gossip_table_rw.read();
+        defer gossip_table_lock.unlock();
+        const gossip_table: *const GossipTable = gossip_table_lock.get();
 
-        const num_items = crds_table.len() + crds_table.purged.len() + failed_pull_hashes.items.len;
+        const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try CrdsFilterSet.init(alloc, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, num_items, bloom_size);
         errdefer filter_set.deinit();
 
-        // add all crds values
-        const crds_values = crds_table.store.iterator().values;
-        for (0..crds_table.len()) |i| {
-            const hash = crds_values[i].value_hash;
+        // add all gossip values
+        const gossip_values = gossip_table.store.iterator().values;
+        for (0..gossip_table.len()) |i| {
+            const hash = gossip_values[i].value_hash;
             filter_set.add(&hash);
         }
         // add purged values
-        const purged_values = try crds_table.purged.getValues();
+        const purged_values = try gossip_table.purged.getValues();
         for (purged_values.items) |hash| {
             filter_set.add(&hash);
         }
@@ -62,11 +59,11 @@ pub fn buildCrdsFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForCrdsFilters(alloc, max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, max_n_filters);
     return filters;
 }
 
-pub fn deinitCrdsFilters(filters: *ArrayList(CrdsFilter)) void {
+pub fn deinitGossipPullFilters(filters: *ArrayList(GossipPullFilter)) void {
     for (filters.items) |*filter| {
         filter.deinit();
     }
@@ -80,7 +77,7 @@ pub fn shuffleFirstN(rng: std.rand.Random, comptime T: type, buf: []T, n: usize)
     }
 }
 
-pub const CrdsFilterSet = struct {
+pub const GossipPullFilterSet = struct {
     filters: ArrayList(Bloom),
 
     // mask bits represents the number of bits required to represent the number of
@@ -89,17 +86,26 @@ pub const CrdsFilterSet = struct {
 
     const Self = @This();
 
-    pub fn init(alloc: std.mem.Allocator, num_items: usize, bloom_size_bytes: usize) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+    pub fn init(
+        alloc: std.mem.Allocator,
+        num_items: usize,
+        bloom_size_bytes: usize,
+    ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
-        var mask_bits = CrdsFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
+        var mask_bits = GossipPullFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         // TODO; add errdefer handling here
-        var max_items = CrdsFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
+        var max_items = GossipPullFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            var filter = try Bloom.random(alloc, @intFromFloat(max_items), FALSE_RATE, @intFromFloat(bloom_size_bits));
+            var filter = try Bloom.random(
+                alloc,
+                @intFromFloat(max_items),
+                FALSE_RATE,
+                @intFromFloat(bloom_size_bits),
+            );
             filters.appendAssumeCapacity(filter);
         }
 
@@ -109,7 +115,7 @@ pub const CrdsFilterSet = struct {
         };
     }
 
-    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughCrdsValues, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
@@ -124,7 +130,7 @@ pub const CrdsFilterSet = struct {
     }
 
     /// note: does not free filter values bc we take ownership of them in
-    /// getCrdsFilters
+    /// getGossipPullFilters
     pub fn deinit(self: *Self) void {
         self.filters.deinit();
     }
@@ -142,7 +148,7 @@ pub const CrdsFilterSet = struct {
     }
 
     pub fn add(self: *Self, hash: *const Hash) void {
-        const index = CrdsFilterSet.hashIndex(self.mask_bits, hash);
+        const index = GossipPullFilterSet.hashIndex(self.mask_bits, hash);
         self.filters.items[index].add(&hash.data);
     }
 
@@ -150,8 +156,8 @@ pub const CrdsFilterSet = struct {
         return self.filters.items.len;
     }
 
-    /// returns a list of CrdsFilters and consumes Self by calling deinit.
-    pub fn consumeForCrdsFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(CrdsFilter) {
+    /// returns a list of GossipPullFilters and consumes Self by calling deinit.
+    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -161,39 +167,39 @@ pub const CrdsFilterSet = struct {
             indexs.appendAssumeCapacity(i);
         }
 
-        const output_size = @min(set_size, max_size);
+        const n_filters = @min(set_size, max_size);
         const can_consume_all = max_size >= set_size;
 
         if (!can_consume_all) {
-
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(crds.getWallclockMs());
-            shuffleFirstN(rng.random(), usize, indexs.items, output_size);
+            var rng = std.rand.DefaultPrng.init(getWallclockMs());
+            shuffleFirstN(rng.random(), usize, indexs.items, n_filters);
 
             // release others
-            for (output_size..set_size) |i| {
+            for (n_filters..set_size) |i| {
                 const index = indexs.items[i];
                 self.filters.items[index].deinit();
             }
         }
 
-        var output = try ArrayList(CrdsFilter).initCapacity(alloc, output_size);
-        for (0..output_size) |i| {
+        var filters = try ArrayList(GossipPullFilter).initCapacity(alloc, n_filters);
+        for (0..n_filters) |i| {
             const index = indexs.items[i];
 
-            var output_item = CrdsFilter{
+            var filter = GossipPullFilter{
                 .filter = self.filters.items[index], // take ownership of filter
-                .mask = CrdsFilter.computeMask(index, self.mask_bits),
+                .mask = GossipPullFilter.computeMask(index, self.mask_bits),
                 .mask_bits = self.mask_bits,
             };
-            output.appendAssumeCapacity(output_item);
+            filters.appendAssumeCapacity(filter);
         }
 
-        return output;
+        return filters;
     }
 };
 
-pub const CrdsFilter = struct {
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_gossip_pull.rs#L60
+pub const GossipPullFilter = struct {
     filter: Bloom,
     mask: u64,
     mask_bits: u32,
@@ -248,11 +254,13 @@ pub fn hashToU64(hash: *const Hash) u64 {
     return std.mem.readIntLittle(u64, buf);
 }
 
-test "gossip.pull: test build_crds_filters" {
+const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+
+test "gossip.pull_request: test building filters" {
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var crds_table = try CrdsTable.init(std.testing.allocator, &tp);
-    defer crds_table.deinit();
+    var gossip_table = try GossipTable.init(std.testing.allocator, &tp);
+    defer gossip_table.deinit();
 
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
@@ -263,59 +271,59 @@ test "gossip.pull: test build_crds_filters" {
 
     for (0..64) |_| {
         var id = Pubkey.random(rng, .{});
-        var legacy_contact_info = crds.LegacyContactInfo.default(id);
+        var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
-        var crds_value = try crds.CrdsValue.initSigned(crds.CrdsData{
+        var gossip_value = try SignedGossipData.initSigned(.{
             .LegacyContactInfo = legacy_contact_info,
         }, &kp);
 
-        try crds_table.insert(crds_value, 0);
+        try gossip_table.insert(gossip_value, 0);
     }
 
     const max_bytes = 2;
-    const num_items = crds_table.len();
+    const num_items = gossip_table.len();
 
     // build filters
-    var crds_table_rw = RwMux(CrdsTable).init(crds_table);
+    var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
 
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try buildCrdsFilters(
+    var filters = try buildGossipPullFilters(
         std.testing.allocator,
-        &crds_table_rw,
+        &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer deinitCrdsFilters(&filters);
+    defer deinitGossipPullFilters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;
 
     // assert value is in the filter
-    const crds_values = crds_table.store.iterator().values;
+    const gossip_values = gossip_table.store.iterator().values;
     for (0..num_items) |i| {
-        const versioned_value = crds_values[i];
+        const versioned_value = gossip_values[i];
         const hash = versioned_value.value_hash;
 
-        const index = CrdsFilterSet.hashIndex(mask_bits, &hash);
+        const index = GossipPullFilterSet.hashIndex(mask_bits, &hash);
         const filter = filters.items[index].filter;
         try std.testing.expect(filter.contains(&hash.data));
     }
 }
 
-test "gossip.pull: CrdsFilterSet deinits correct" {
-    var filter_set = try CrdsFilterSet.init(std.testing.allocator, 10000, 200);
+test "gossip.pull_request: filter set deinits correct" {
+    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, 10000, 200);
 
     const hash = Hash.random();
     filter_set.add(&hash);
 
-    const index = CrdsFilterSet.hashIndex(filter_set.mask_bits, &hash);
+    const index = GossipPullFilterSet.hashIndex(filter_set.mask_bits, &hash);
     var bloom = filter_set.filters.items[index];
 
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consumeForCrdsFilters(std.testing.allocator, 10);
-    defer deinitCrdsFilters(&f);
+    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, 10);
+    defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
 
@@ -323,14 +331,14 @@ test "gossip.pull: CrdsFilterSet deinits correct" {
     try std.testing.expect(x.filter.contains(&hash.data));
 }
 
-test "gossip.pull: helper functions are correct" {
+test "gossip.pull_request: helper functions are correct" {
     {
-        const v = CrdsFilter.computeMaxItems(100.5, 0.1, 10.0);
+        const v = GossipPullFilter.computeMaxItems(100.5, 0.1, 10.0);
         try std.testing.expectEqual(@as(f64, 16), v);
     }
 
     {
-        const v = CrdsFilter.computeMaskBits(800, 100);
+        const v = GossipPullFilter.computeMaskBits(800, 100);
         try std.testing.expectEqual(@as(usize, 3), v);
     }
 
@@ -340,15 +348,15 @@ test "gossip.pull: helper functions are correct" {
     }
 
     {
-        const v = CrdsFilter.computeMask(2, 3);
+        const v = GossipPullFilter.computeMask(2, 3);
         // 101111111111111111111111111111111111111111111111111111111111111
         try std.testing.expectEqual(@as(u64, 6917529027641081855), v);
     }
 }
 
-test "gossip.pull: crds filter matches rust bytes" {
+test "gossip.pull_request: gossip filter matches rust bytes" {
     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-    var filter = CrdsFilter.init(std.testing.allocator);
+    var filter = GossipPullFilter.init(std.testing.allocator);
     defer filter.deinit();
 
     var buf = [_]u8{0} ** 1024;
