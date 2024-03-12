@@ -4,11 +4,11 @@ const AutoHashMap = std.AutoHashMap;
 
 const Hash = @import("../core/hash.zig").Hash;
 
-const gossip = @import("./data.zig");
-const SignedGossipData = gossip.SignedGossipData;
-const GossipData = gossip.GossipData;
-const GossipVersionedData = gossip.GossipVersionedData;
-const GossipKey = gossip.GossipKey;
+const _gossip_data = @import("data.zig");
+const SignedGossipData = _gossip_data.SignedGossipData;
+const GossipData = _gossip_data.GossipData;
+const GossipVersionedData = _gossip_data.GossipVersionedData;
+const GossipKey = _gossip_data.GossipKey;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
