@@ -10,7 +10,7 @@ const GossipData = _gossip_data.GossipData;
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const getWallclockMs = _gossip_data.getWallclockMs;
 
-const GossipFilter = @import("pull_request.zig").GossipFilter;
+const GossipPullFilter = @import("pull_request.zig").GossipPullFilter;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
 
 const DefaultPrng = std.rand.DefaultPrng;
@@ -23,7 +23,7 @@ const Pong = @import("ping_pong.zig").Pong;
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 pub const GossipMessage = union(enum(u32)) {
-    PullRequest: struct { GossipFilter, SignedGossipData },
+    PullRequest: struct { GossipPullFilter, SignedGossipData },
     PullResponse: struct { Pubkey, []SignedGossipData },
     PushMessage: struct { Pubkey, []SignedGossipData },
     PruneMessage: struct { Pubkey, PruneData },
@@ -324,7 +324,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     };
     var value = try SignedGossipData.initSigned(data, &keypair);
 
-    var filter = GossipFilter.init(testing.allocator);
+    var filter = GossipPullFilter.init(testing.allocator);
     defer filter.deinit();
 
     var pull = GossipMessage{ .PullRequest = .{

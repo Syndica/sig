@@ -47,8 +47,8 @@ const GossipTable = _gossip_table.GossipTable;
 const HashTimeQueue = _gossip_table.HashTimeQueue;
 
 const _pull_request = @import("../gossip/pull_request.zig");
-const GossipFilterSet = _pull_request.GossipFilterSet;
-const GossipFilter = _pull_request.GossipFilter;
+const GossipPullFilterSet = _pull_request.GossipPullFilterSet;
+const GossipPullFilter = _pull_request.GossipPullFilter;
 const MAX_NUM_PULL_REQUESTS = _pull_request.MAX_NUM_PULL_REQUESTS;
 
 const Hash = @import("../core/hash.zig").Hash;
@@ -159,7 +159,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
     }, keypair);
 
-    var filter = GossipFilter{
+    var filter = GossipPullFilter{
         .filter = bloom,
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,
@@ -181,7 +181,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
         }
     } else {
         // add some valid hashes
-        var filter_set = try GossipFilterSet.initTest(allocator, filter.mask_bits);
+        var filter_set = try GossipPullFilterSet.initTest(allocator, filter.mask_bits);
 
         for (0..5) |_| {
             var rand_value = try randomSignedGossipData(rng, true);
@@ -191,7 +191,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
             filter_set.add(&value_hash);
         }
 
-        var filters = try filter_set.consumeForGossipFilters(allocator, 1);
+        var filters = try filter_set.consumeForGossipPullFilters(allocator, 1);
         filter.filter = filters.items[0].filter;
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;

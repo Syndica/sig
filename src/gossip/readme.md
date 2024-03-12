@@ -156,29 +156,29 @@ For example, if we are partitioning on the first 3 bits we would use, 2^3 = 8 `B
 
 If we are tracking a `Hash` with bits `00101110101`, we would only consider its first 3 bits, `001`, and so we would add the hash to the first bloom filter (`@cast(usize, 001) = 1`). 
 
-To implement this we use the `GossipFilterSet` struct which is a list of `GossipFilters`. Throughout the codebase, the first bits:
+To implement this we use the `GossipPullFilterSet` struct which is a list of `GossipPullFilters`. Throughout the codebase, the first bits:
 `N`, is called `mask_bits`.
 `mask_bits` is a variable that depends on many factors including the desired false-positive rate of the bloom filters, the number of items in the GossipTable, and more. It
 will likely be different for each pull request.
 
-After we construct this filter set (i.e., compute the `mask_bits` and init `2^mask_bits` bloom filters), we add all of the `SignedGossipDatas` in the GossipTable into the set, and construct a list of `GossipFilter`s to send to other random nodes.
+After we construct this filter set (i.e., compute the `mask_bits` and init `2^mask_bits` bloom filters), we add all of the `SignedGossipDatas` in the GossipTable into the set, and construct a list of `GossipPullFilter`s to send to other random nodes.
 
 ```python
 ## main function for building pull requests
 def build_gossip_filters(
     gossip_table: *GossipTable
-) Vec<GossipFilters>:
+) Vec<GossipPullFilters>:
 	
     values = gossip_table.values()
-    filter_set = GossipFilterSet.init(len(value))
+    filter_set = GossipPullFilterSet.init(len(value))
 
     for value in values:
 	    filter_set.add(value)
 
-    # GossipFilterSet => Vec<GossipFilters>
-    return filter_set.consumeForGossipFilters()
+    # GossipPullFilterSet => Vec<GossipPullFilters>
+    return filter_set.consumeForGossipPullFilters()
 
-class GossipFilterSet():
+class GossipPullFilterSet():
     mask_bits: u64
     filters: Vec<Bloom>
 	
@@ -203,7 +203,7 @@ class GossipFilterSet():
 	    self.filters[index].add(hash)
 ```
 
-To build a vector of `GossipFilters` from a `GossipFilterSet`, each `GossipFilter` will need a bloom filter to represent a subset of the SignedGossipDatas, and a corresponding identifier mask which identifies the hash bits that each filter contains (using a variable called `mask`).
+To build a vector of `GossipPullFilters` from a `GossipPullFilterSet`, each `GossipPullFilter` will need a bloom filter to represent a subset of the SignedGossipDatas, and a corresponding identifier mask which identifies the hash bits that each filter contains (using a variable called `mask`).
 
 For example, the mask of the first filter would be `000`, the mask of the second filter would be `001`, the third filter would be `010`, ...
 
@@ -212,11 +212,11 @@ When a node receives a pull request, the `mask` is used to efficiently look up a
 For example, if you received the `010` mask, you would look up all hash values whose first 3 bits are `010` and then find values that are not included in the bloom filter. These values would then be used to construct a pull response.
 
 ```python
-    def consumeForGossipFilters(self: GossipFilterSet) Vec<GossipFilters>:
+    def consumeForGossipPullFilters(self: GossipPullFilterSet) Vec<GossipPullFilters>:
 	    for index in 0..len(self.filters):
-    	    gossip_filter = GossipFilter(
+    	    gossip_filter = GossipPullFilter(
         	    bloom=self.filters[index],
-        	    mask=GossipFilter.compute_mask(index, self.mask_bits),
+        	    mask=GossipPullFilter.compute_mask(index, self.mask_bits),
         	    mask_bits=self.mask_bits,
 	    )
 ```
@@ -249,7 +249,7 @@ Notice how the result will be ones everywhere except for the first `mask_bits` b
 
 Pull responses are responses to pull requests and include missing data which was not included in the pull request.
 
-To build a pull response, we find values to match the `GossipFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `GossipShards` struct which is located in `gossip_shards.zig`.
+To build a pull response, we find values to match the `GossipPullFilter`'s `mask`, and filter to only include values that are not included in the request's `Bloom` filter. To find values that match the filter's `mask`, we use the `GossipShards` struct which is located in `gossip_shards.zig`.
 
 
 <div align="center">
@@ -258,7 +258,7 @@ To build a pull response, we find values to match the `GossipFilter`'s `mask`, a
 
 #### `GossipShards`
 
-The `GossipShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `GossipFilterSet` structure and the `mask_bits`). Whenever we insert a new value in
+The `GossipShards` struct stores hash values based on the first `shard_bits` of a hash value (similar to the `GossipPullFilterSet` structure and the `mask_bits`). Whenever we insert a new value in
 the `GossipTable`, we insert its hash into the `GossipShard` structure.
 
 To store these hashes efficiently we use an array of HashMaps (`shards = [4096]AutoArrayHashMap(usize, u64),`) where `shards[k]` includes SignedGossipDatas which the first `shard_bits` of their hash value is equal to `k`.
@@ -399,7 +399,7 @@ After we have all the SignedGossipData indexes that match the `mask`, we then ch
 
 def filter_gossip_values(
     gossip_table: *GossipTable
-    filter: *GossipFilter
+    filter: *GossipPullFilter
 ) Vec<SignedGossipDatas>:
     # find gossip values whose hash matches the mask 
     var match_indexs = gossip_table.get_bitmask_matches(filter.mask, filter.mask_bits);

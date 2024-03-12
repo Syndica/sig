@@ -37,7 +37,7 @@ const AutoArrayHashSet = _gossip_table.AutoArrayHashSet;
 const Logger = @import("../trace/log.zig").Logger;
 const Entry = @import("../trace/entry.zig").Entry;
 const pull_request = @import("../gossip/pull_request.zig");
-const GossipFilter = pull_request.GossipFilter;
+const GossipPullFilter = pull_request.GossipPullFilter;
 const MAX_NUM_PULL_REQUESTS = pull_request.MAX_NUM_PULL_REQUESTS;
 const pull_response = @import("../gossip/pull_response.zig");
 const ActiveSet = @import("../gossip/active_set.zig").ActiveSet;
@@ -427,7 +427,7 @@ pub const GossipService = struct {
     };
 
     pub const PullRequestMessage = struct {
-        filter: GossipFilter,
+        filter: GossipPullFilter,
         value: SignedGossipData,
         from_endpoint: EndPoint,
     };
@@ -978,14 +978,14 @@ pub const GossipService = struct {
         defer failed_pull_hashes_array.deinit();
 
         // build gossip filters
-        var filters = try pull_request.buildGossipFilters(
+        var filters = try pull_request.buildGossipPullFilters(
             self.allocator,
             &self.gossip_table_rw,
             &failed_pull_hashes_array,
             bloom_size,
             MAX_NUM_PULL_REQUESTS,
         );
-        defer pull_request.deinitGossipFilters(&filters);
+        defer pull_request.deinitGossipPullFilters(&filters);
 
         // build packet responses
         var n_packets: usize = 0;
@@ -1041,7 +1041,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
-        filter: *GossipFilter,
+        filter: *GossipPullFilter,
         value: *SignedGossipData,
         gossip_table: *const GossipTable,
         output: ArrayList(Packet),
@@ -2110,7 +2110,7 @@ test "gossip.gossip_service: tests handle pull request" {
     ping_cache._setPong(rando_pubkey, addr);
     ping_lock.unlock();
 
-    var filter = GossipFilter{
+    var filter = GossipPullFilter{
         .filter = bloom,
         .mask = (~@as(usize, 0)) >> N_FILTER_BITS,
         .mask_bits = N_FILTER_BITS,

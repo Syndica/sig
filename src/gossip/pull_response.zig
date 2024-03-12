@@ -13,16 +13,16 @@ const GossipData = _gossip_data.GossipData;
 const SignedGossipData = _gossip_data.SignedGossipData;
 
 const _pull_request = @import("pull_request.zig");
-const GossipFilter = _pull_request.GossipFilter;
-const buildGossipFilters = _pull_request.buildGossipFilters;
-const deinitGossipFilters = _pull_request.deinitGossipFilters;
+const GossipPullFilter = _pull_request.GossipPullFilter;
+const buildGossipPullFilters = _pull_request.buildGossipPullFilters;
+const deinitGossipPullFilters = _pull_request.deinitGossipPullFilters;
 
 pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 
 pub fn filterSignedGossipDatas(
     allocator: std.mem.Allocator,
     gossip_table: *const GossipTable,
-    filter: *const GossipFilter,
+    filter: *const GossipPullFilter,
     caller_wallclock: u64,
     max_number_values: usize,
 ) error{OutOfMemory}!ArrayList(SignedGossipData) {
@@ -102,14 +102,14 @@ test "gossip.pull_response: test filtering values works" {
 
     // recver
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try buildGossipFilters(
+    var filters = try buildGossipPullFilters(
         std.testing.allocator,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer deinitGossipFilters(&filters);
+    defer deinitGossipPullFilters(&filters);
     var filter = filters.items[0];
 
     // corresponding value

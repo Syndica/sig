@@ -21,13 +21,13 @@ pub const KEYS: f64 = 8;
 
 /// parses all the values in the gossip table and returns a list of
 /// corresponding filters. Note: make sure to call deinit_gossip_filters.
-pub fn buildGossipFilters(
+pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
     gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
     max_n_filters: usize,
-) error{ NotEnoughSignedGossipDatas, OutOfMemory }!ArrayList(GossipFilter) {
+) error{ NotEnoughSignedGossipDatas, OutOfMemory }!ArrayList(GossipPullFilter) {
     var filter_set = blk: {
         var gossip_table_lock = gossip_table_rw.read();
         defer gossip_table_lock.unlock();
@@ -35,7 +35,7 @@ pub fn buildGossipFilters(
 
         const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try GossipFilterSet.init(alloc, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all gossip values
@@ -59,11 +59,11 @@ pub fn buildGossipFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForGossipFilters(alloc, max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, max_n_filters);
     return filters;
 }
 
-pub fn deinitGossipFilters(filters: *ArrayList(GossipFilter)) void {
+pub fn deinitGossipPullFilters(filters: *ArrayList(GossipPullFilter)) void {
     for (filters.items) |*filter| {
         filter.deinit();
     }
@@ -77,7 +77,7 @@ pub fn shuffleFirstN(rng: std.rand.Random, comptime T: type, buf: []T, n: usize)
     }
 }
 
-pub const GossipFilterSet = struct {
+pub const GossipPullFilterSet = struct {
     filters: ArrayList(Bloom),
 
     // mask bits represents the number of bits required to represent the number of
@@ -93,11 +93,11 @@ pub const GossipFilterSet = struct {
     ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
-        var mask_bits = GossipFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
+        var mask_bits = GossipPullFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         // TODO; add errdefer handling here
-        var max_items = GossipFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
+        var max_items = GossipPullFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
             var filter = try Bloom.random(
@@ -130,7 +130,7 @@ pub const GossipFilterSet = struct {
     }
 
     /// note: does not free filter values bc we take ownership of them in
-    /// getGossipFilters
+    /// getGossipPullFilters
     pub fn deinit(self: *Self) void {
         self.filters.deinit();
     }
@@ -148,7 +148,7 @@ pub const GossipFilterSet = struct {
     }
 
     pub fn add(self: *Self, hash: *const Hash) void {
-        const index = GossipFilterSet.hashIndex(self.mask_bits, hash);
+        const index = GossipPullFilterSet.hashIndex(self.mask_bits, hash);
         self.filters.items[index].add(&hash.data);
     }
 
@@ -156,8 +156,8 @@ pub const GossipFilterSet = struct {
         return self.filters.items.len;
     }
 
-    /// returns a list of GossipFilters and consumes Self by calling deinit.
-    pub fn consumeForGossipFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(GossipFilter) {
+    /// returns a list of GossipPullFilters and consumes Self by calling deinit.
+    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -182,13 +182,13 @@ pub const GossipFilterSet = struct {
             }
         }
 
-        var filters = try ArrayList(GossipFilter).initCapacity(alloc, n_filters);
+        var filters = try ArrayList(GossipPullFilter).initCapacity(alloc, n_filters);
         for (0..n_filters) |i| {
             const index = indexs.items[i];
 
-            var filter = GossipFilter{
+            var filter = GossipPullFilter{
                 .filter = self.filters.items[index], // take ownership of filter
-                .mask = GossipFilter.computeMask(index, self.mask_bits),
+                .mask = GossipPullFilter.computeMask(index, self.mask_bits),
                 .mask_bits = self.mask_bits,
             };
             filters.appendAssumeCapacity(filter);
@@ -198,7 +198,7 @@ pub const GossipFilterSet = struct {
     }
 };
 
-pub const GossipFilter = struct {
+pub const GossipPullFilter = struct {
     filter: Bloom,
     mask: u64,
     mask_bits: u32,
@@ -286,14 +286,14 @@ test "gossip.pull_request: test building filters" {
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
 
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
-    var filters = try buildGossipFilters(
+    var filters = try buildGossipPullFilters(
         std.testing.allocator,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
         100,
     );
-    defer deinitGossipFilters(&filters);
+    defer deinitGossipPullFilters(&filters);
 
     const mask_bits = filters.items[0].mask_bits;
 
@@ -303,26 +303,26 @@ test "gossip.pull_request: test building filters" {
         const versioned_value = gossip_values[i];
         const hash = versioned_value.value_hash;
 
-        const index = GossipFilterSet.hashIndex(mask_bits, &hash);
+        const index = GossipPullFilterSet.hashIndex(mask_bits, &hash);
         const filter = filters.items[index].filter;
         try std.testing.expect(filter.contains(&hash.data));
     }
 }
 
 test "gossip.pull_request: filter set deinits correct" {
-    var filter_set = try GossipFilterSet.init(std.testing.allocator, 10000, 200);
+    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, 10000, 200);
 
     const hash = Hash.random();
     filter_set.add(&hash);
 
-    const index = GossipFilterSet.hashIndex(filter_set.mask_bits, &hash);
+    const index = GossipPullFilterSet.hashIndex(filter_set.mask_bits, &hash);
     var bloom = filter_set.filters.items[index];
 
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consumeForGossipFilters(std.testing.allocator, 10);
-    defer deinitGossipFilters(&f);
+    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, 10);
+    defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
 
@@ -332,12 +332,12 @@ test "gossip.pull_request: filter set deinits correct" {
 
 test "gossip.pull_request: helper functions are correct" {
     {
-        const v = GossipFilter.computeMaxItems(100.5, 0.1, 10.0);
+        const v = GossipPullFilter.computeMaxItems(100.5, 0.1, 10.0);
         try std.testing.expectEqual(@as(f64, 16), v);
     }
 
     {
-        const v = GossipFilter.computeMaskBits(800, 100);
+        const v = GossipPullFilter.computeMaskBits(800, 100);
         try std.testing.expectEqual(@as(usize, 3), v);
     }
 
@@ -347,7 +347,7 @@ test "gossip.pull_request: helper functions are correct" {
     }
 
     {
-        const v = GossipFilter.computeMask(2, 3);
+        const v = GossipPullFilter.computeMask(2, 3);
         // 101111111111111111111111111111111111111111111111111111111111111
         try std.testing.expectEqual(@as(u64, 6917529027641081855), v);
     }
@@ -355,7 +355,7 @@ test "gossip.pull_request: helper functions are correct" {
 
 test "gossip.pull_request: gossip filter matches rust bytes" {
     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
-    var filter = GossipFilter.init(std.testing.allocator);
+    var filter = GossipPullFilter.init(std.testing.allocator);
     defer filter.deinit();
 
     var buf = [_]u8{0} ** 1024;
