@@ -7,7 +7,7 @@ const std = @import("std");
 const _gossip_service = @import("./service.zig");
 const GossipService = _gossip_service.GossipService;
 const ChunkType = _gossip_service.ChunkType;
-const GossipDataToPackets = _gossip_service.GossipDataToPackets;
+const gossipDataToPackets = _gossip_service.gossipDataToPackets;
 const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
 
 const Logger = @import("../trace/log.zig").Logger;
@@ -118,7 +118,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try GossipDataToPackets(
+    const packets = try gossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
         &values,
@@ -138,7 +138,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     }
 
     const allocator = std.heap.page_allocator;
-    const packets = try GossipDataToPackets(
+    const packets = try gossipDataToPackets(
         allocator,
         &Pubkey.fromPublicKey(&keypair.public_key, false),
         &values,

@@ -900,7 +900,7 @@ pub const GossipService = struct {
             const to_endpoint: *const EndPoint = push_entry.key_ptr;
 
             // send the values as a pull response
-            var packets = try GossipDataToPackets(
+            var packets = try gossipDataToPackets(
                 self.allocator,
                 &self.my_pubkey,
                 gossip_values.items,
@@ -1079,7 +1079,7 @@ pub const GossipService = struct {
                 std.atomic.Ordering.Release,
             );
 
-            const packets = GossipDataToPackets(
+            const packets = gossipDataToPackets(
                 self.allocator,
                 self.my_pubkey,
                 response_gossip_values.items,
@@ -1782,7 +1782,7 @@ pub const ChunkType = enum(u8) {
     PullResponse,
 };
 
-pub fn GossipDataToPackets(
+pub fn gossipDataToPackets(
     allocator: std.mem.Allocator,
     my_pubkey: *const Pubkey,
     gossip_values: []SignedGossipData,
