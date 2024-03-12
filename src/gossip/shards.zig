@@ -18,6 +18,7 @@ const hashToU64 = @import("./pull_request.zig").hashToU64;
 pub const GOSSIP_SHARDS_BITS: u32 = 12;
 pub const GOSSIP_SHARDS_LEN: u32 = 1 << GOSSIP_SHARDS_BITS;
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_shards.rs#L11
 pub const GossipTableShards = struct {
     // shards[k] includes gossip values which the first shard_bits of their hash
     // value is equal to k. Each shard is a mapping from gossip values indices to

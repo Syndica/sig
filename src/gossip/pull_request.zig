@@ -198,6 +198,7 @@ pub const GossipPullFilterSet = struct {
     }
 };
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_gossip_pull.rs#L60
 pub const GossipPullFilter = struct {
     filter: Bloom,
     mask: u64,

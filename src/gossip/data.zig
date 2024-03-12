@@ -40,6 +40,7 @@ pub const MAX_SLOT: u64 = 1_000_000_000_000_000;
 pub const MAX_SLOT_PER_ENTRY: usize = 2048 * 8;
 pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L122
 pub const GossipVersionedData = struct {
     value: SignedGossipData,
     value_hash: Hash,
@@ -64,6 +65,7 @@ pub const GossipVersionedData = struct {
     }
 };
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L45
 pub const SignedGossipData = struct {
     signature: Signature,
     data: GossipData,
@@ -235,6 +237,7 @@ pub const SignedGossipData = struct {
     }
 };
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L500
 pub const GossipKey = union(enum) {
     LegacyContactInfo: Pubkey,
     Vote: struct { u8, Pubkey },
@@ -250,6 +253,7 @@ pub const GossipKey = union(enum) {
     ContactInfo: Pubkey,
 };
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85
 pub const GossipData = union(enum(u32)) {
     LegacyContactInfo: LegacyContactInfo,
     Vote: struct { u8, Vote },

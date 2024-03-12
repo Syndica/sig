@@ -97,6 +97,8 @@ pub const PubkeyAndSocketAddr = struct {
     socket_addr: SocketAddr,
 };
 
+pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
+
 /// Maintains records of remote nodes which have returned a valid response to a
 /// ping message, and on-the-fly ping messages pending a pong response from the
 /// remote node.
@@ -238,7 +240,6 @@ pub const PingCache = struct {
         }, std.time.Instant.now() catch unreachable);
     }
 };
-pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
 
 test "gossip.ping_pong: PingCache works" {
     var ping_cache = try PingCache.init(testing.allocator, 10_000, 1000, 1024);

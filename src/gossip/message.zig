@@ -22,6 +22,7 @@ const Pong = @import("ping_pong.zig").Pong;
 
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
+// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268
 pub const GossipMessage = union(enum(u32)) {
     PullRequest: struct { GossipPullFilter, SignedGossipData },
     PullResponse: struct { Pubkey, []SignedGossipData },
@@ -202,7 +203,7 @@ pub const PruneData = struct {
     }
 };
 
-test "gossip.protocol: push message serialization is predictable" {
+test "gossip.message: push message serialization is predictable" {
     var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
     var pubkey = Pubkey.random(rng.random(), .{});
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
@@ -234,7 +235,7 @@ test "gossip.protocol: push message serialization is predictable" {
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
 
-test "gossip.protocol: test prune data sig verify" {
+test "gossip.message: test prune data sig verify" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,
@@ -262,7 +263,7 @@ test "gossip.protocol: test prune data sig verify" {
     try std.testing.expectEqualSlices(u8, &rust_bytes, &sig_bytes);
 }
 
-test "gossip.protocol: ping message serializes and deserializes correctly" {
+test "gossip.message: ping message serializes and deserializes correctly" {
     var keypair = KeyPair.create(null) catch unreachable;
 
     var rng = std.rand.DefaultPrng.init(0);
@@ -279,7 +280,7 @@ test "gossip.protocol: ping message serializes and deserializes correctly" {
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
 
-test "gossip.protocol: test ping pong sig verify" {
+test "gossip.message: test ping pong sig verify" {
     var keypair = KeyPair.create(null) catch unreachable;
 
     var rng = std.rand.DefaultPrng.init(0);
@@ -291,7 +292,7 @@ test "gossip.protocol: test ping pong sig verify" {
     try pong.verifySignature();
 }
 
-test "gossip.protocol: pull request serializes and deserializes" {
+test "gossip.message: pull request serializes and deserializes" {
     var rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 190, 193, 13, 216, 175, 227, 117, 168, 246, 219, 213, 39, 67, 249, 88, 3, 238, 151, 144, 15, 23, 142, 153, 198, 47, 221, 117, 132, 218, 28, 29, 115, 248, 253, 211, 101, 137, 19, 174, 112, 43, 57, 251, 110, 173, 14, 71, 0, 186, 24, 36, 61, 75, 241, 119, 73, 86, 93, 136, 249, 167, 40, 134, 14, 0, 0, 0, 0, 25, 117, 21, 11, 61, 170, 38, 18, 67, 196, 242, 219, 50, 154, 4, 254, 79, 227, 253, 229, 188, 230, 121, 12, 227, 248, 199, 156, 253, 144, 175, 67, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
@@ -340,7 +341,7 @@ test "gossip.protocol: pull request serializes and deserializes" {
     try testing.expect(std.meta.eql(pull, deserialized));
 }
 
-test "gossip.protocol: push message serializes and deserializes correctly" {
+test "gossip.message: push message serializes and deserializes correctly" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
@@ -379,7 +380,7 @@ test "gossip.protocol: push message serializes and deserializes correctly" {
     try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);
 }
 
-test "gossip.protocol: Protocol.PullRequest.ContactInfo signature is valid" {
+test "gossip.message: Protocol.PullRequest.ContactInfo signature is valid" {
     var contact_info_pull_response_packet_from_mainnet = [_]u8{
         1,   0,   0,   0,   9,   116, 228, 64,  179, 73,  145, 220, 74,  55,  179, 56,  86,  218,
         47,  62,  172, 162, 127, 102, 37,  146, 103, 117, 255, 245, 248, 212, 101, 163, 188, 231,
