@@ -87,3 +87,11 @@ pub const prometheus = struct {
     pub usingnamespace @import("prometheus/metric.zig");
     pub usingnamespace @import("prometheus/registry.zig");
 };
+
+pub const tvu = struct {
+    usingnamespace repair;
+    pub const repair = struct {
+        pub usingnamespace @import("tvu/repair/message.zig");
+        pub usingnamespace @import("tvu/repair/service.zig");
+    };
+};

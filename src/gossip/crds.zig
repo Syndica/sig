@@ -306,6 +306,22 @@ pub const LegacyContactInfo = struct {
             .shred_version = ci.shred_version,
         };
     }
+
+    pub fn eql(self: *const @This(), other: *const @This()) bool {
+        return self.id.equals(&other.id) and
+            self.gossip.eql(&other.gossip) and
+            self.tvu.eql(&other.tvu) and
+            self.tvu_forwards.eql(&other.tvu_forwards) and
+            self.repair.eql(&other.repair) and
+            self.tpu.eql(&other.tpu) and
+            self.tpu_forwards.eql(&other.tpu_forwards) and
+            self.tpu_vote.eql(&other.tpu_vote) and
+            self.rpc.eql(&other.rpc) and
+            self.rpc_pubsub.eql(&other.rpc_pubsub) and
+            self.serve_repair.eql(&other.serve_repair) and
+            self.wallclock == other.wallclock and
+            self.shred_version == other.shred_version;
+    }
 };
 
 pub fn sanitizeSocket(socket: *const SocketAddr) !void {

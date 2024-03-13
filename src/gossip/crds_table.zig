@@ -431,29 +431,64 @@ pub const CrdsTable = struct {
         );
     }
 
+    /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.
+    /// You must provide a buffer to fill with the contact infos. If you want all contact
+    /// infos, the buffer should be at least `self.contact_infos.count()` in size.
     pub fn getContactInfos(
         self: *const Self,
         buf: []ContactInfo,
         minimum_insertion_timestamp: u64,
     ) []ContactInfo {
-        const store_values = self.store.values();
-        const contact_indexs = self.contact_infos.iterator().keys;
         const size = @min(self.contact_infos.count(), buf.len);
-
+        var infos = self.contactInfoIterator(minimum_insertion_timestamp);
         for (0..size) |i| {
-            const index = contact_indexs[i];
-            const entry = store_values[index];
-            if (entry.timestamp_on_insertion >= minimum_insertion_timestamp) {
-                const contact_info = switch (entry.value.data) {
-                    .LegacyContactInfo => |lci| self.converted_contact_infos.get(lci.id) orelse unreachable,
-                    .ContactInfo => |ci| ci,
-                    else => unreachable,
-                };
-                buf[i] = contact_info;
-            }
+            if (infos.next()) |info| {
+                buf[i] = info;
+            } else break;
         }
         return buf[0..size];
     }
+
+    /// Similar to getContactInfos, but returns an iterator instead
+    /// of a slice. This allows you to avoid an allocation and avoid
+    /// copying every value.
+    pub fn contactInfoIterator(
+        self: *const Self,
+        minimum_insertion_timestamp: u64,
+    ) ContactInfoIterator {
+        return .{
+            .values = self.store.values(),
+            .converted_contact_infos = &self.converted_contact_infos,
+            .indices = self.contact_infos.iterator().keys,
+            .count = self.contact_infos.count(),
+            .minimum_insertion_timestamp = minimum_insertion_timestamp,
+        };
+    }
+
+    pub const ContactInfoIterator = struct {
+        values: []const CrdsVersionedValue,
+        converted_contact_infos: *const AutoArrayHashMap(Pubkey, ContactInfo),
+        indices: [*]usize,
+        count: usize,
+        minimum_insertion_timestamp: u64,
+        index_cursor: usize = 0,
+
+        pub fn next(self: *@This()) ?ContactInfo {
+            while (self.index_cursor < self.count) {
+                const index = self.indices[self.index_cursor];
+                self.index_cursor += 1;
+                const value = self.values[index];
+                if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
+                    return switch (value.value.data) {
+                        .LegacyContactInfo => |lci| self.converted_contact_infos.get(lci.id) orelse unreachable,
+                        .ContactInfo => |ci| ci,
+                        else => unreachable,
+                    };
+                }
+            }
+            return null;
+        }
+    };
 
     // ** shard getter fcns **
     pub fn getBitmaskMatches(

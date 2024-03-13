@@ -4,6 +4,8 @@ const HardForks = @import("hard_forks.zig").HardForks;
 const Slot = @import("clock.zig").Slot;
 const Allocator = std.mem.Allocator;
 
+pub const Nonce = u32;
+
 pub const ShredVersion = struct {
     value: u16,
 
