@@ -9,7 +9,7 @@ const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
 const ContactInfo = sig.gossip.ContactInfo;
-const GossipTable = sig.gossip.CrdsTable;
+const GossipTable = sig.gossip.GossipTable;
 const LruCacheCustom = sig.common.LruCacheCustom;
 const Nonce = sig.core.Nonce;
 const Pubkey = sig.core.Pubkey;
