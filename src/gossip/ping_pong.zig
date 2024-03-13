@@ -79,7 +79,7 @@ pub const Pong = struct {
         };
     }
 
-    pub fn verify(self: *Self) !void {
+    pub fn verify(self: *const Self) error{InvalidSignature}!void {
         if (!self.signature.verify(self.from, &self.hash.data)) {
             return error.InvalidSignature;
         }

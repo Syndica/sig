@@ -15,6 +15,9 @@ const Slot = sig.core.Slot;
 
 const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
 
+/// Analogous to `SIGNED_REPAIR_TIME_WINDOW`
+const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
+
 /// Internal representation of a repair request.
 /// Does not contain any header or identification, only info about the desired shreds.
 ///
@@ -32,6 +35,8 @@ pub const RepairRequest = union(enum) {
 /// - convert request to message
 /// - serialize message
 /// - sign message
+///
+/// Analogous to `ServeRepair::map_repair_request`
 pub fn serializeRepairRequest(
     allocator: Allocator,
     request: RepairRequest,
@@ -132,8 +137,46 @@ pub const RepairMessage = union(enum(u8)) {
         }
     }
 
-    pub fn verify() bool {
-        return false;
+    /// Analogous to `ServeRepair::verify_signed_packet`
+    pub fn verify(
+        self: *const @This(),
+        /// bincode serialized data, from which this struct was deserialized
+        serialized: []u8,
+        /// to compare to the header. typically is this validator's own pubkey
+        expected_recipient: Pubkey,
+        /// unix timestamp in seconds when this function is called
+        current_timestamp_secs: u64,
+    ) error{ IdMismatch, InvalidSignature, Malformed, TimeSkew }!void {
+        switch (self.*) {
+            .Pong => |pong| try pong.verify(),
+            inline else => |msg| {
+                // i am the intended recipient
+                const header: RepairRequestHeader = msg.header;
+                if (!header.recipient.equals(&expected_recipient)) {
+                    return error.IdMismatch;
+                }
+
+                // message was generated recently
+                const time_diff = @as(i128, current_timestamp_secs) - @as(i128, header.timestamp);
+                const time_diff_abs = std.math.absInt(time_diff) catch unreachable;
+                if (time_diff_abs > SIGNED_REPAIR_TIME_WINDOW_SECS) {
+                    return error.TimeSkew;
+                }
+
+                // signature is valid
+                if (serialized.len < 4 + SIGNATURE_LENGTH) {
+                    return error.Malformed;
+                }
+                var verifier = header.signature.verifier(header.sender) catch {
+                    return error.InvalidSignature;
+                };
+                verifier.update(serialized[0..4]);
+                verifier.update(serialized[4 + SIGNATURE_LENGTH ..]);
+                verifier.verify() catch {
+                    return error.InvalidSignature;
+                };
+            },
+        }
     }
 };
 
@@ -146,14 +189,50 @@ pub const RepairRequestHeader = struct {
 
     fn eql(self: *const @This(), other: *const @This()) bool {
         return self.signature.eql(&other.signature) and
-            std.mem.eql(u8, &self.sender.data, &other.sender.data) and
-            std.mem.eql(u8, &self.recipient.data, &other.recipient.data) and
+            self.sender.equals(&other.sender) and
+            self.recipient.equals(&other.recipient) and
             self.timestamp == other.timestamp and
             self.nonce == other.nonce;
     }
 };
 
-test "tvu.repair.message: RepairRequestHeader serialization" {
+test "tvu.repair.message: signed/serialized RepairRequest is valid" {
+    const allocator = std.testing.allocator;
+    var rand = std.rand.DefaultPrng.init(392138);
+    const rng = rand.random();
+
+    inline for (.{
+        RepairRequest{ .Orphan = rng.int(Slot) },
+        RepairRequest{ .Shred = .{ rng.int(Slot), rng.int(u64) } },
+        RepairRequest{ .HighestShred = .{ rng.int(Slot), rng.int(u64) } },
+    }) |request| {
+        var kp_noise: [32]u8 = undefined;
+        rng.bytes(&kp_noise);
+        const keypair = try KeyPair.create(kp_noise);
+        const recipient = Pubkey.random(rng, .{ .skip_encoding = true });
+        const timestamp = rng.int(u64);
+        const nonce = rng.int(Nonce);
+
+        var serialized = try serializeRepairRequest(
+            allocator,
+            request,
+            &keypair,
+            recipient,
+            timestamp,
+            nonce,
+        );
+        defer allocator.free(serialized);
+
+        var deserialized = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
+        try deserialized.verify(serialized, recipient, timestamp);
+
+        serialized[10] = 0; // >99% chance that this invalidates the signature
+        var bad = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
+        if (bad.verify(serialized, recipient, timestamp)) |_| @panic("should err") else |_| {}
+    }
+}
+
+test "tvu.repair.message: RepairRequestHeader serialization round trip" {
     var rng = std.rand.DefaultPrng.init(5224);
     var signature: [sig.core.SIGNATURE_LENGTH]u8 = undefined;
     rng.fill(&signature);
@@ -170,23 +249,42 @@ test "tvu.repair.message: RepairRequestHeader serialization" {
     const serialized = try bincode.writeToSlice(&buf, header, .{});
 
     const expected = [_]u8{
-        39,  95,  42,  53,  95,  32,  120, 241, 244, 206, 142, 80,  233, 26,  232, 206, 241, 24,  226,
-        101, 183, 172, 170, 201, 42,  127, 121, 127, 213, 234, 180, 0,   226, 0,   128, 58,  176, 144,
-        99,  139, 220, 112, 10,  117, 212, 239, 129, 197, 170, 11,  92,  151, 239, 163, 174, 85,  172,
-        227, 75,  115, 1,   143, 134, 9,   21,  189, 8,   17,  240, 55,  159, 41,  45,  133, 143, 153,
-        57,  113, 39,  28,  86,  183, 182, 76,  41,  19,  160, 55,  54,  41,  126, 184, 144, 195, 245,
-        38,  164, 157, 171, 233, 18,  178, 15,  2,   196, 46,  124, 59,  178, 108, 95,  194, 39,  18,
-        119, 16,  226, 118, 112, 26,  255, 82,  27,  175, 162, 144, 207, 151, 36,  23,  0,   0,   0,
-        0,   0,   0,   123, 0,   0,   0,
+        39,  95,  42,  53,  95,  32,  120, 241, 244, 206, 142, 80,  233, 26,  232, 206, 241,
+        24,  226, 101, 183, 172, 170, 201, 42,  127, 121, 127, 213, 234, 180, 0,   226, 0,
+        128, 58,  176, 144, 99,  139, 220, 112, 10,  117, 212, 239, 129, 197, 170, 11,  92,
+        151, 239, 163, 174, 85,  172, 227, 75,  115, 1,   143, 134, 9,   21,  189, 8,   17,
+        240, 55,  159, 41,  45,  133, 143, 153, 57,  113, 39,  28,  86,  183, 182, 76,  41,
+        19,  160, 55,  54,  41,  126, 184, 144, 195, 245, 38,  164, 157, 171, 233, 18,  178,
+        15,  2,   196, 46,  124, 59,  178, 108, 95,  194, 39,  18,  119, 16,  226, 118, 112,
+        26,  255, 82,  27,  175, 162, 144, 207, 151, 36,  23,  0,   0,   0,   0,   0,   0,
+        123, 0,   0,   0,
     };
 
     try std.testing.expect(std.mem.eql(u8, &expected, serialized));
 
-    const roundtripped = try bincode.readFromSlice(std.testing.allocator, RepairRequestHeader, serialized, .{});
+    const roundtripped = try bincode.readFromSlice(
+        std.testing.allocator,
+        RepairRequestHeader,
+        serialized,
+        .{},
+    );
     try std.testing.expect(header.eql(&roundtripped));
 }
 
-test "tvu.repair.message: RepairProtocolMessage.WindowIndex serialization" {
+test "tvu.repair.message: RepairProtocolMessage.Pong serialization round trip" {
+    try testHelpers.assertMessageSerializesCorrectly(57340, .Pong, &[_]u8{
+        7,   0,   0,   0,   252, 143, 181, 36,  240, 87,  69,  104, 157, 159, 242, 94,  101,
+        48,  187, 120, 173, 241, 68,  167, 217, 67,  141, 46,  105, 85,  179, 69,  249, 140,
+        6,   145, 6,   201, 32,  10,  11,  24,  157, 240, 245, 65,  91,  80,  255, 89,  18,
+        136, 27,  80,  101, 106, 118, 175, 154, 105, 205, 69,  2,   112, 61,  168, 217, 197,
+        251, 212, 16,  137, 153, 40,  116, 229, 235, 90,  12,  54,  76,  123, 187, 108, 132,
+        78,  151, 13,  47,  0,   127, 182, 158, 5,   19,  226, 204, 0,   120, 218, 175, 155,
+        122, 155, 94,  44,  198, 119, 196, 127, 121, 242, 98,  87,  235, 233, 241, 57,  53,
+        125, 88,  67,  4,   23,  164, 128, 221, 124, 139, 84,  106, 7,
+    });
+}
+
+test "tvu.repair.message: RepairProtocolMessage.WindowIndex serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(4823794, .WindowIndex, &[_]u8{
         8,   0,   0,   0,   100, 7,   241, 74,  194, 88,  24,  128, 85,  15,  149, 108, 142,
         133, 234, 217, 3,   79,  124, 171, 68,  30,  189, 219, 173, 11,  184, 159, 208, 104,
@@ -201,7 +299,7 @@ test "tvu.repair.message: RepairProtocolMessage.WindowIndex serialization" {
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.HighestWindowIndex serialization" {
+test "tvu.repair.message: RepairProtocolMessage.HighestWindowIndex serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(636345, .HighestWindowIndex, &[_]u8{
         9,   0,   0,   0,   44,  123, 16,  108, 173, 151, 229, 132, 4,  0,   5,   215, 25,
         179, 235, 166, 181, 42,  30,  231, 218, 43,  166, 238, 92,  80, 234, 87,  30,  123,
@@ -216,7 +314,7 @@ test "tvu.repair.message: RepairProtocolMessage.HighestWindowIndex serialization
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.Orphan serialization" {
+test "tvu.repair.message: RepairProtocolMessage.Orphan serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(734566, .Orphan, &[_]u8{
         10,  0,   0,   0,   52,  54,  182, 49,  197, 238, 253, 118, 145, 61,  198, 235, 42,
         211, 229, 42,  2,   33,  5,   161, 179, 171, 26,  243, 51,  240, 82,  98,  121, 90,
@@ -230,7 +328,7 @@ test "tvu.repair.message: RepairProtocolMessage.Orphan serialization" {
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.AncestorHashes serialization" {
+test "tvu.repair.message: RepairProtocolMessage.AncestorHashes serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(6236757, .AncestorHashes, &[_]u8{
         11,  0,   0,   0,   192, 86,  218, 156, 168, 139, 216, 200, 30,  181, 244, 121, 90,
         41,  177, 117, 55,  40,  199, 207, 62,  118, 56,  134, 73,  88,  74,  2,   139, 189,
@@ -257,7 +355,11 @@ test "tvu.repair.message: RepairProtocolMessage serializes to size <= MAX_SERIAL
 }
 
 const testHelpers = struct {
-    fn assertMessageSerializesCorrectly(seed: u64, tag: RepairMessage.Tag, expected: []const u8) !void {
+    fn assertMessageSerializesCorrectly(
+        seed: u64,
+        tag: RepairMessage.Tag,
+        expected: []const u8,
+    ) !void {
         var rng = std.rand.DefaultPrng.init(seed);
         const msg = testHelpers.randomRepairProtocolMessage(rng.random(), tag);
         debugMessage(&msg);
@@ -266,8 +368,36 @@ const testHelpers = struct {
         const serialized = try bincode.writeToSlice(&buf, msg, .{});
         try std.testing.expect(std.mem.eql(u8, expected, serialized));
 
-        const roundtripped = try bincode.readFromSlice(std.testing.allocator, RepairMessage, serialized, .{});
+        switch (msg) {
+            .Pong => |_| try msg.verify(serialized, undefined, 0),
+            inline else => |m| {
+                const result = msg.verify(serialized, m.header.recipient, m.header.timestamp);
+                if (result) |_| @panic("should fail due to signature") else |_| {}
+            },
+        }
+
+        const roundtripped = try bincode.readFromSlice(
+            std.testing.allocator,
+            RepairMessage,
+            serialized,
+            .{},
+        );
         try std.testing.expect(msg.eql(&roundtripped));
+
+        // // rust template to generate expectation:
+        // let header = RepairRequestHeader {
+        //     signature: Signature::new(&[]),
+        //     sender: Pubkey::from([]),
+        //     recipient: Pubkey::from([]),
+        //     timestamp: ,
+        //     nonce: ,
+        // };
+        // let msg = RepairProtocol::AncestorHashes {
+        //     header,
+        //     slot: ,
+        // };
+        // let data = bincode::serialize(&msg).unwrap();
+        // println!("{data:?}");
     }
 
     fn randomRepairRequestHeader(rng: std.rand.Random) RepairRequestHeader {
@@ -291,7 +421,8 @@ const testHelpers = struct {
             .Pong => x: {
                 var buf: [32]u8 = undefined;
                 rng.bytes(&buf);
-                break :x .{ .Pong = Pong.random(rng, &(KeyPair.create(buf) catch unreachable)) catch unreachable };
+                const kp = KeyPair.create(buf) catch unreachable;
+                break :x .{ .Pong = Pong.random(rng, &(kp)) catch unreachable };
             },
             .WindowIndex => .{ .WindowIndex = .{
                 .header = randomRepairRequestHeader(rng),
@@ -320,7 +451,11 @@ const testHelpers = struct {
         if (!DEBUG) return;
         std.debug.print("_\n\n", .{});
         switch (message.*) {
-            // .Pong => |*msg| {},
+            .Pong => |*msg| {
+                std.debug.print("from: {any}\n\n", .{msg.from});
+                std.debug.print("hash: {any}\n\n", .{msg.hash});
+                std.debug.print("signature: {any}\n\n", .{msg.signature});
+            },
             .WindowIndex => |*msg| {
                 debugHeader(msg.header);
             },
@@ -333,7 +468,6 @@ const testHelpers = struct {
             .AncestorHashes => |*msg| {
                 debugHeader(msg.header);
             },
-            else => {},
         }
         std.debug.print("{any}", .{message});
     }
