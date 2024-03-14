@@ -16,6 +16,7 @@ const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
 const Registry = @import("../prometheus/registry.zig").Registry;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -104,18 +105,31 @@ fn identity(_: []const []const u8) !void {
     try std.io.getStdErr().writer().print("Identity: {s}\n", .{pubkey[0..size]});
 }
 
-// gossip entrypoint
+/// gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
+    var logger = try spawnLogger();
     defer logger.deinit();
-    logger.spawn();
+    const metrics_thread = try spawnMetrics(logger);
+    defer metrics_thread.detach();
 
-    // var logger: Logger = .noop;
+    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
+    const entrypoints = try getEntrypoints(logger);
+    const shred_version = getShredVersionFromIpEcho(logger, entrypoints.items);
 
-    const metrics_thread = try spawnMetrics(gpa_allocator, logger);
+    var gossip_service = try initGossip(logger, my_keypair, entrypoints, shred_version);
+    defer gossip_service.deinit();
 
-    var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
+    var handle = try spawnGossip(&gossip_service);
+    handle.join();
+}
 
+/// Initialize an instance of GossipService and configure with CLI arguments
+fn initGossip(
+    logger: Logger,
+    my_keypair: KeyPair,
+    entrypoints: std.ArrayList(SocketAddr),
+    shred_version: u16,
+) !GossipService {
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     var gossip_address = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, gossip_port);
     logger.infof("gossip port: {d}", .{gossip_port});
@@ -124,14 +138,57 @@ fn gossip(_: []const []const u8) !void {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_address);
+    contact_info.shred_version = shred_version;
 
+    var exit = std.atomic.Atomic(bool).init(false);
+    return try GossipService.init(
+        gpa_allocator,
+        contact_info,
+        my_keypair,
+        entrypoints,
+        &exit,
+        logger,
+    );
+}
+
+/// Spawn a thread to run gossip and configure with CLI arguments
+fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread {
+    const spy_node = gossip_spy_node_option.value.bool;
+    return try std.Thread.spawn(
+        .{},
+        GossipService.run,
+        .{ gossip_service, spy_node },
+    );
+}
+
+/// determine our shred version. in the solana-labs client, this approach is only
+/// used for validation. normally, shred version comes from the snapshot.
+fn getShredVersionFromIpEcho(logger: Logger, entrypoints: []SocketAddr) u16 {
+    for (entrypoints) |entrypoint| {
+        if (echo.requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
+            if (response.shred_version) |shred_version| {
+                var addr_str = entrypoint.toString();
+                logger.infof(
+                    "shred version: {} - from entrypoint ip echo: {s}",
+                    .{ shred_version.value, addr_str[0][0..addr_str[1]] },
+                );
+                return shred_version.value;
+            }
+        } else |_| {}
+    } else {
+        logger.warn("could not get a shred version from an entrypoint");
+        return 0;
+    }
+}
+
+fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     defer entrypoints.deinit();
     if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
         for (entrypoints_strs) |entrypoint| {
             var value = SocketAddr.parse(entrypoint) catch {
                 std.debug.print("Invalid entrypoint: {s}\n", .{entrypoint});
-                return;
+                return error.InvalidEntrypoint;
             };
             try entrypoints.append(value);
         }
@@ -148,54 +205,22 @@ fn gossip(_: []const []const u8) !void {
     }
     logger.infof("entrypoints: {s}", .{entrypoint_string[0..stream.pos]});
 
-    // determine our shred version. in the solana-labs client, this approach is only
-    // used for validation. normally, shred version comes from the snapshot.
-    contact_info.shred_version = loop: for (entrypoints.items) |entrypoint| {
-        if (echo.requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
-            if (response.shred_version) |shred_version| {
-                var addr_str = entrypoint.toString();
-                logger.infof(
-                    "shred version: {} - from entrypoint ip echo: {s}",
-                    .{ shred_version.value, addr_str[0][0..addr_str[1]] },
-                );
-                break shred_version.value;
-            }
-        } else |_| {}
-    } else {
-        logger.warn("could not get a shred version from an entrypoint");
-        break :loop 0;
-    };
-
-    var exit = std.atomic.Atomic(bool).init(false);
-    var gossip_service = try GossipService.init(
-        gpa_allocator,
-        contact_info,
-        my_keypair,
-        entrypoints,
-        &exit,
-        logger,
-    );
-    defer gossip_service.deinit();
-
-    const spy_node = gossip_spy_node_option.value.bool;
-    var handle = try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{ &gossip_service, spy_node },
-    );
-
-    handle.join();
-    metrics_thread.detach();
+    return entrypoints;
 }
 
 /// Initializes the global registry. Returns error if registry was already initialized.
 /// Spawns a thread to serve the metrics over http on the CLI configured port.
-/// Uses same allocator for both registry and http adapter.
-fn spawnMetrics(allocator: std.mem.Allocator, logger: Logger) !std.Thread {
+fn spawnMetrics(logger: Logger) !std.Thread {
     var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
     logger.infof("metrics port: {d}", .{metrics_port});
     const registry = globalRegistry();
-    return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
+    return try std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port });
+}
+
+fn spawnLogger() !Logger {
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
+    logger.spawn();
+    return logger;
 }
 
 pub fn run() !void {
