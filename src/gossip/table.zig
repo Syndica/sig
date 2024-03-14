@@ -461,7 +461,7 @@ pub const GossipTable = struct {
         var infos = self.contactInfoIterator(minimum_insertion_timestamp);
         for (0..size) |i| {
             if (infos.next()) |info| {
-                buf[i] = info;
+                buf[i] = info.*;
             } else break;
         }
         return buf[0..size];
@@ -491,15 +491,15 @@ pub const GossipTable = struct {
         minimum_insertion_timestamp: u64,
         index_cursor: usize = 0,
 
-        pub fn next(self: *@This()) ?ContactInfo {
+        pub fn next(self: *@This()) ?*const ContactInfo {
             while (self.index_cursor < self.count) {
                 const index = self.indices[self.index_cursor];
                 self.index_cursor += 1;
-                const value = self.values[index];
+                const value = &self.values[index];
                 if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
                     return switch (value.value.data) {
-                        .LegacyContactInfo => |lci| self.converted_contact_infos.get(lci.id) orelse unreachable,
-                        .ContactInfo => |ci| ci,
+                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id) orelse unreachable,
+                        .ContactInfo => |*ci| ci,
                         else => unreachable,
                     };
                 }

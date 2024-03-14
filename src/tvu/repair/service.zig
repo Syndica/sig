@@ -191,11 +191,12 @@ const RepairPeerProvider = struct {
         var infos = gossip.contactInfoIterator(0);
         while (infos.next()) |info| {
             const socket = info.getSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR);
-            if (info.pubkey != self.my_pubkey and
-                info.shred_version == self.my_shred_version and
-                info.getSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR) != null and
-                info.getSocket(sig.gossip.SOCKET_TAG_TVU) != null)
+            if (info.pubkey != self.my_pubkey and // don't request from self
+                info.shred_version == self.my_shred_version and // need compatible shreds
+                socket != null and // node must be able to receive repair requests
+                info.getSocket(sig.gossip.SOCKET_TAG_TVU) != null) // node needs access to shreds
             {
+                // exclude nodes that are known to be missing this slot
                 if (gossip.get(.{ .LowestSlot = info.pubkey })) |lsv| {
                     if (lsv.value.data.LowestSlot[1].lowest > slot) {
                         continue;
