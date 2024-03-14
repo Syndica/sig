@@ -10,6 +10,7 @@ const Socket = zig_network.Socket;
 
 const ContactInfo = sig.gossip.ContactInfo;
 const GossipTable = sig.gossip.GossipTable;
+const Logger = sig.trace.Logger;
 const LruCacheCustom = sig.common.LruCacheCustom;
 const Nonce = sig.core.Nonce;
 const Pubkey = sig.core.Pubkey;
@@ -29,28 +30,37 @@ pub const RepairService = struct {
     allocator: Allocator,
     requester: RepairRequester,
     peers: RepairPeerProvider,
+    logger: Logger,
 
-    pub fn run(self: *@This(), exit: Atomic(bool)) void {
-        const request = self.initialSnapshotRepair();
-        try self.requester.sendRepairRequest(request);
+    pub fn deinit(self: *@This()) void {
+        self.peers.deinit();
+    }
 
+    pub fn run(self: *@This()) !void {
+        var initial_repair_done = false;
         while (true) {
+            if (!initial_repair_done) if (try self.initialSnapshotRepair()) |request| {
+                try self.requester.sendRepairRequest(request);
+                initial_repair_done = true;
+            };
             // TODO repair logic
-            if (exit.load(.Monotonic)) return;
             std.time.sleep(1_000_000_000);
         }
     }
 
-    fn initialSnapshotRepair(self: *@This()) Socket.SendError!AddressedRepairRequest {
+    fn initialSnapshotRepair(self: *@This()) !?AddressedRepairRequest {
         const slot = getLatestSlotFromSnapshot();
         const request: RepairRequest = .{ .HighestShred = .{ slot, 0 } };
-        const peer = self.peers.getRandomPeer();
+        const maybe_peer = try self.peers.getRandomPeer(slot);
 
-        return .{
+        if (maybe_peer) |peer| return .{
             .request = request,
             .recipient = peer.pubkey,
             .recipient_addr = peer.serve_repair_socket,
-        };
+        } else {
+            self.logger.err("no repair peers found, skipping initial repair");
+            return null;
+        }
     }
 };
 
@@ -60,21 +70,26 @@ pub const RepairRequester = struct {
     rng: Random,
     keypair: *const KeyPair,
     udp_send_socket: Socket,
+    logger: Logger,
 
     pub fn sendRepairRequest(
         self: *const @This(),
         request: AddressedRepairRequest,
-    ) Socket.SendError!void {
+    ) !void {
         const timestamp = std.time.milliTimestamp();
         const data = try serializeRepairRequest(
             self.allocator,
             request.request,
             self.keypair,
             request.recipient,
-            timestamp,
+            @intCast(timestamp),
             self.rng.int(Nonce),
         );
-        try self.udp_send_socket.sendTo(request.recipient_addr.toEndpoint(), data);
+        self.logger.infof(
+            "sending repair request {} to {}",
+            .{ request.request, request.recipient_addr },
+        );
+        _ = try self.udp_send_socket.sendTo(request.recipient_addr.toEndpoint(), data);
     }
 };
 
@@ -110,7 +125,7 @@ pub const RepairPeer = struct {
 /// The key for these benchmarks is to understand the actual repair requests that
 /// are being requested on mainnet. There are trade-offs for different kinds
 /// of requests. Naive benchmarks will optimize the wrong behaviors.
-const RepairPeerProvider = struct {
+pub const RepairPeerProvider = struct {
     allocator: Allocator,
     rng: Random,
     gossip: *RwMux(GossipTable),
@@ -151,24 +166,25 @@ const RepairPeerProvider = struct {
 
     /// Selects a peer at random from gossip or cache that is expected
     /// to be able to handle a repair request for the specified slot.
-    pub fn getRandomPeer(self: *const @This(), slot: Slot) RepairPeer {
-        const peers = self.getPeers(slot);
+    pub fn getRandomPeer(self: *@This(), slot: Slot) !?RepairPeer {
+        const peers = try self.getPeers(slot);
+        if (peers.len == 0) return null;
         const index = self.rng.intRangeLessThan(usize, 0, peers.len);
         return peers[index];
     }
 
     /// Tries to get peers that could have the slot. Checks cache, falling back to gossip.
-    fn getPeers(self: *const @This(), slot: Slot) []RepairPeer {
-        const now = std.time.timestamp();
+    fn getPeers(self: *@This(), slot: Slot) ![]RepairPeer {
+        const now: u64 = @intCast(std.time.timestamp());
 
         if (self.cache.get(slot)) |peers| {
             if (now - peers.insertion_time_secs <= REPAIR_PEERS_CACHE_TTL_SECONDS) {
-                return peers;
+                return peers.peers;
             }
         }
 
-        const peers = self.getRepairPeersFromGossip(self.allocator, slot);
-        self.cache.insert(slot, .{
+        const peers = try self.getRepairPeersFromGossip(self.allocator, slot);
+        try self.cache.insert(slot, .{
             .insertion_time_secs = now,
             .peers = peers,
         });
@@ -178,21 +194,21 @@ const RepairPeerProvider = struct {
     /// Gets a list of peers that are likely to have the desired slot.
     /// Acquires the gossip table lock. Use cache when possible to avoid contention.
     fn getRepairPeersFromGossip(
-        self: *const @This(),
+        self: *@This(),
         allocator: Allocator,
         slot: Slot,
     ) error{OutOfMemory}![]RepairPeer {
-        const reader = self.gossip.read();
+        var reader = self.gossip.read();
         defer reader.unlock();
-        const gossip: GossipTable = reader.get();
+        const gossip: *const GossipTable = reader.get();
         const buf = try allocator.alloc(RepairPeer, gossip.contact_infos.count());
-        errdefer buf.deinit();
-        var i = 0;
+        errdefer allocator.free(buf);
+        var i: usize = 0;
         var infos = gossip.contactInfoIterator(0);
         while (infos.next()) |info| {
             const socket = info.getSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR);
-            if (info.pubkey != self.my_pubkey and // don't request from self
-                info.shred_version == self.my_shred_version and // need compatible shreds
+            if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
+                info.shred_version == self.my_shred_version.load(.Monotonic) and // need compatible shreds
                 socket != null and // node must be able to receive repair requests
                 info.getSocket(sig.gossip.SOCKET_TAG_TVU) != null) // node needs access to shreds
             {
@@ -229,17 +245,17 @@ test "tvu.repair.service: RepairService initializes" {
         Pubkey.fromPublicKey(&keypair.public_key, true),
         &my_shred_version,
     );
-    defer peers.deinit();
-
-    const service = RepairService{
+    var service = RepairService{
         .allocator = allocator,
         .requester = RepairRequester{
             .allocator = allocator,
             .rng = rand.random(),
             .udp_send_socket = try Socket.create(.ipv4, .udp),
             .keypair = &keypair,
+            .logger = undefined,
         },
         .peers = peers,
+        .logger = undefined,
     };
-    _ = service;
+    service.deinit();
 }

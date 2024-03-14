@@ -1,22 +1,33 @@
 const std = @import("std");
-const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
-const enumFromName = @import("../utils/types.zig").enumFromName;
-const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
-const ContactInfo = @import("../gossip/data.zig").ContactInfo;
-const SOCKET_TAG_GOSSIP = @import("../gossip/data.zig").SOCKET_TAG_GOSSIP;
-const Logger = @import("../trace/log.zig").Logger;
-const Level = @import("../trace/level.zig").Level;
-const io = std.io;
+const cli = @import("zig-cli");
+const network = @import("zig-network");
+const sig = @import("../lib.zig");
+const helpers = @import("helpers.zig");
+
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const SocketAddr = @import("../net/net.zig").SocketAddr;
-const echo = @import("../net/echo.zig");
-const GossipService = @import("../gossip/service.zig").GossipService;
-const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
-const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
-const Registry = @import("../prometheus/registry.zig").Registry;
-const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const Random = std.rand.Random;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
+const Socket = network.Socket;
+
+const ContactInfo = @import("../gossip/data.zig").ContactInfo;
+const GossipService = sig.gossip.GossipService;
+const Level = sig.trace.Level;
+const Logger = sig.trace.Logger;
+const Registry = sig.prometheus.Registry;
+const RepairService = sig.tvu.repair.RepairService;
+const RepairPeerProvider = sig.tvu.repair.RepairPeerProvider;
+const RepairRequester = sig.tvu.repair.RepairRequester;
+
+const enumFromName = sig.utils.enumFromName;
+const getOrInitIdentity = helpers.getOrInitIdentity;
+const globalRegistry = sig.prometheus.globalRegistry;
+const getWallclockMs = sig.gossip.getWallclockMs;
+const requestIpEcho = sig.net.requestIpEcho;
+const servePrometheus = sig.prometheus.servePrometheus;
+
+const SOCKET_TAG_GOSSIP = sig.gossip.SOCKET_TAG_GOSSIP;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -90,10 +101,17 @@ var app = &cli.App{
             &gossip_entrypoints_option,
             &gossip_spy_node_option,
         } },
+        &cli.Command{ .name = "validator", .help = "Run validator", .description = 
+        \\Start a full Solana validator client.
+        , .action = validator, .options = &.{
+            &gossip_port_option,
+            &gossip_entrypoints_option,
+            &gossip_spy_node_option,
+        } },
     },
 };
 
-// prints (and creates if DNE) pubkey in ~/.sig/identity.key
+/// entrypoint to print (and create if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
     var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     defer logger.deinit();
@@ -105,7 +123,7 @@ fn identity(_: []const []const u8) !void {
     try std.io.getStdErr().writer().print("Identity: {s}\n", .{pubkey[0..size]});
 }
 
-/// gossip entrypoint
+/// entrypoint to run only gossip
 fn gossip(_: []const []const u8) !void {
     var logger = try spawnLogger();
     defer logger.deinit();
@@ -121,6 +139,30 @@ fn gossip(_: []const []const u8) !void {
 
     var handle = try spawnGossip(&gossip_service);
     handle.join();
+}
+
+/// entrypoint to run a full solana validator
+fn validator(_: []const []const u8) !void {
+    var logger = try spawnLogger();
+    defer logger.deinit();
+    const metrics_thread = try spawnMetrics(logger);
+    defer metrics_thread.detach();
+
+    var rand = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
+    const entrypoints = try getEntrypoints(logger);
+    const shred_version = getShredVersionFromIpEcho(logger, entrypoints.items); // TODO atomic owned here? or owned by gossip is good?
+
+    var gossip_service = try initGossip(logger, my_keypair, entrypoints, shred_version);
+    defer gossip_service.deinit();
+    var gossip_handle = try spawnGossip(&gossip_service);
+
+    var repair_svc = try initRepair(rand.random(), &gossip_service, &my_keypair, logger);
+    defer repair_svc.deinit();
+    var repair_handle = try std.Thread.spawn(.{}, RepairService.run, .{&repair_svc});
+
+    gossip_handle.join();
+    repair_handle.join();
 }
 
 /// Initialize an instance of GossipService and configure with CLI arguments
@@ -151,6 +193,33 @@ fn initGossip(
     );
 }
 
+fn initRepair(
+    random: Random,
+    gossip_service: *GossipService,
+    my_keypair: *const KeyPair,
+    logger: Logger,
+) !RepairService {
+    var peers = try RepairPeerProvider.init(
+        gpa_allocator,
+        random,
+        &gossip_service.gossip_table_rw,
+        Pubkey.fromPublicKey(&my_keypair.public_key, true),
+        &gossip_service.my_shred_version,
+    );
+    return RepairService{
+        .allocator = gpa_allocator,
+        .requester = RepairRequester{
+            .allocator = gpa_allocator,
+            .rng = random,
+            .udp_send_socket = try Socket.create(.ipv4, .udp),
+            .keypair = my_keypair,
+            .logger = logger,
+        },
+        .peers = peers,
+        .logger = logger,
+    };
+}
+
 /// Spawn a thread to run gossip and configure with CLI arguments
 fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread {
     const spy_node = gossip_spy_node_option.value.bool;
@@ -165,7 +234,7 @@ fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread 
 /// used for validation. normally, shred version comes from the snapshot.
 fn getShredVersionFromIpEcho(logger: Logger, entrypoints: []SocketAddr) u16 {
     for (entrypoints) |entrypoint| {
-        if (echo.requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
+        if (requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
             if (response.shred_version) |shred_version| {
                 var addr_str = entrypoint.toString();
                 logger.infof(

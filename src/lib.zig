@@ -55,6 +55,7 @@ pub const utils = struct {
 };
 
 pub const trace = struct {
+    pub usingnamespace @import("trace/level.zig");
     pub usingnamespace @import("trace/log.zig");
     pub usingnamespace @import("trace/entry.zig");
 };
