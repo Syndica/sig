@@ -22,6 +22,9 @@ const ZstdReader = @import("../zstd/reader.zig").Reader;
 const parallelUntarToFileSystem = @import("../utils/tar.zig").parallelUntarToFileSystem;
 
 pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
+pub const MAX_RECENT_BLOCKHASHES: usize = 300;
+pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
+const CACHED_KEY_SIZE: usize = 20;
 
 pub const StakeHistoryEntry = struct {
     effective: u64, // effective stake at this epoch
@@ -105,6 +108,7 @@ pub const BlockhashQueue = struct {
     max_age: usize,
 };
 
+// TODO: move this elsewhere
 pub fn HashSet(comptime T: type) type {
     return HashMap(T, void);
 }
@@ -632,14 +636,11 @@ const Result = union(enum) {
     Error: TransactionError,
 };
 
-pub const MAX_RECENT_BLOCKHASHES: usize = 300;
-pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
-
-const CACHED_KEY_SIZE: usize = 20;
 const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     key_slice: [CACHED_KEY_SIZE]u8,
     result: Result,
 }) });
+
 const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
 
 pub const StatusCache = struct {
@@ -986,7 +987,7 @@ pub fn parallelUnpackZstdTarBall(
     );
 }
 
-test "core.accounts_db: test full snapshot path parsing" {
+test "core.accounts_db.snapshots: test full snapshot path parsing" {
     const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotPath.fromPath(full_snapshot_path);
 
@@ -995,7 +996,7 @@ test "core.accounts_db: test full snapshot path parsing" {
     try std.testing.expect(std.mem.eql(u8, snapshot_info.path, full_snapshot_path));
 }
 
-test "core.accounts_db: test incremental snapshot path parsing" {
+test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
     const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotPath.fromPath(path);
 
@@ -1005,7 +1006,7 @@ test "core.accounts_db: test incremental snapshot path parsing" {
     try std.testing.expect(std.mem.eql(u8, snapshot_info.path, path));
 }
 
-test "core.snapshot_fields: parse status cache" {
+test "core.accounts_db.snapshotss: parse status cache" {
     const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";
@@ -1015,7 +1016,7 @@ test "core.snapshot_fields: parse status cache" {
     try std.testing.expect(status_cache.bank_slot_deltas.items.len > 0);
 }
 
-test "core.snapshot_fields: parse snapshot fields" {
+test "core.accounts_db.snapshotss: parse snapshot fields" {
     const allocator = std.testing.allocator;
     const snapshot_path = "test_data/10";
 
@@ -1023,7 +1024,7 @@ test "core.snapshot_fields: parse snapshot fields" {
     defer snapshot_fields.deinit(allocator);
 }
 
-test "core.snapshot_fields: parse incremental snapshot fields" {
+test "core.accounts_db.snapshotss: parse incremental snapshot fields" {
     const allocator = std.testing.allocator;
     const snapshot_path = "test_data/25";
 

@@ -12,6 +12,14 @@ const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
+const BitVec = @import("../bloom/bitvec.zig").BitVec;
+const DynamicBitSet = std.bit_set.DynamicBitSet;
+const BitVecConfig = @import("../bloom/bitvec.zig").BitVecConfig;
+const bincode = @import("../bincode/bincode.zig");
+
+pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+pub const SlotCheckResult = enum { Future, TooOld, Found, NotFound };
+
 // note: depreciated sysvars not included:
 // - fees
 // - recent_blockhashes
@@ -108,16 +116,6 @@ pub const StakeHistory = ArrayList(struct {
 pub const LastRestartSlot = struct {
     last_restart_slot: Slot,
 };
-
-const BitVec = @import("../bloom/bitvec.zig").BitVec;
-
-pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
-
-pub const SlotCheckResult = enum { Future, TooOld, Found, NotFound };
-
-const DynamicBitSet = std.bit_set.DynamicBitSet;
-const BitVecConfig = @import("../bloom/bitvec.zig").BitVecConfig;
-const bincode = @import("../bincode/bincode.zig");
 
 pub const SlotHistory = struct {
     bits: DynamicBitSet,

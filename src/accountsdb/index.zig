@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 
@@ -6,14 +7,37 @@ const Account = @import("../core/account.zig").Account;
 const hashAccount = @import("../core/account.zig").hashAccount;
 const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/time.zig").Slot;
+const Epoch = @import("../core/time.zig").Epoch;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const bincode = @import("../bincode/bincode.zig");
 
+const AccountsDbFields = @import("snapshots.zig").AccountsDbFields;
+const AccountFileInfo = @import("snapshots.zig").AccountFileInfo;
 const AccountFile = @import("accounts_file.zig").AccountFile;
+const FileId = @import("accounts_file.zig").FileId;
+const AccountInFile = @import("accounts_file.zig").AccountInFile;
+const computeSizeInFile = @import("accounts_file.zig").computeSizeInFile;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
+const NestedHashTree = @import("../common/merkle_tree.zig").NestedHashTree;
+const GenesisConfig = @import("genesis_config.zig").GenesisConfig;
+const StatusCache = @import("snapshots.zig").StatusCache;
+const Bank = @import("bank.zig").Bank;
+const readDirectory = @import("../utils/directory.zig").readDirectory;
+const SnapshotPaths = @import("snapshots.zig").SnapshotPaths;
+const AllSnapshotFields = @import("snapshots.zig").AllSnapshotFields;
+const parallelUnpackZstdTarBall = @import("snapshots.zig").parallelUnpackZstdTarBall;
+const SnapshotFields = @import("snapshots.zig").SnapshotFields;
+const BankIncrementalSnapshotPersistence = @import("snapshots.zig").BankIncrementalSnapshotPersistence;
+
+const Logger = @import("../trace/log.zig").Logger;
+const Level = @import("../trace/level.zig").Level;
+const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
+
+/// reference to an account (either in a file or cache)
 pub const AccountRef = struct {
     pubkey: Pubkey,
     slot: Slot,
@@ -41,6 +65,317 @@ pub const AccountRef = struct {
     }
 };
 
+/// stores the mapping from Pubkey to the account location (AccountRef)
+pub const AccountIndex = struct {
+    bins: []AccountIndexBin,
+    calculator: PubkeyBinCalculator,
+    allocator: std.mem.Allocator,
+    use_disk: bool,
+    memory_linked_list: ?*RefMemoryLinkedList = null,
+
+    const Self = @This();
+
+    pub fn init(
+        // used to allocate the bin slice and other bin metadata
+        allocator: std.mem.Allocator,
+        // number of bins to shard pubkeys across
+        n_bins: usize,
+        ram_config: RamMemoryConfig,
+        disk_config: ?DiskMemoryConfig,
+    ) !Self {
+        const calculator = PubkeyBinCalculator.init(n_bins);
+
+        var bins = try allocator.alloc(AccountIndexBin, n_bins);
+        for (bins, 0..) |*bin, bin_i| {
+            bin.* = try AccountIndexBin.initCapacity(
+                allocator,
+                ram_config,
+                disk_config,
+                bin_i,
+            );
+        }
+        const use_disk = disk_config != null;
+
+        return Self{
+            .bins = bins,
+            .calculator = calculator,
+            .allocator = allocator,
+            .use_disk = use_disk,
+        };
+    }
+
+    pub fn deinit(self: *Self, free_memory: bool) void {
+        for (self.bins) |*bin| {
+            bin.deinit();
+        }
+        self.allocator.free(self.bins);
+
+        var maybe_curr = self.memory_linked_list;
+        while (maybe_curr) |curr| {
+            if (free_memory) {
+                curr.memory.deinit();
+            }
+            maybe_curr = curr.next_ptr;
+            self.allocator.destroy(curr);
+        }
+    }
+
+    pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !void {
+        var node = try self.allocator.create(RefMemoryLinkedList);
+        node.* = .{
+            .memory = refs,
+        };
+        if (self.memory_linked_list == null) {
+            self.memory_linked_list = node;
+        } else {
+            var tail = self.memory_linked_list.?;
+            while (tail.next_ptr) |ptr| {
+                tail = ptr;
+            }
+            tail.next_ptr = node;
+        }
+    }
+
+    pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
+        return self.calculator.binIndex(pubkey);
+    }
+
+    pub inline fn getBin(self: *const Self, index: usize) *AccountIndexBin {
+        return &self.bins[index];
+    }
+
+    pub inline fn getBinFromPubkey(
+        self: *const Self,
+        pubkey: *const Pubkey,
+    ) *AccountIndexBin {
+        const bin_index = self.calculator.binIndex(pubkey);
+        return &self.bins[bin_index];
+    }
+
+    pub inline fn numberOfBins(self: *const Self) usize {
+        return self.bins.len;
+    }
+
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot)
+    pub fn indexRefIfNotDuplicate(self: *Self, account_ref: *AccountRef) void {
+        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey);
+        if (result.found_existing) {
+            // traverse until you find the end
+            var curr: *AccountRef = result.value_ptr.*;
+            while (true) {
+                if (curr.slot == account_ref.slot) {
+                    // found a duplicate => dont do the insertion
+                    break;
+                } else if (curr.next_ptr == null) {
+                    // end of the list => insert it here
+                    curr.next_ptr = account_ref;
+                    break;
+                } else {
+                    // keep traversing
+                    curr = curr.next_ptr.?;
+                }
+            }
+        } else {
+            result.value_ptr.* = account_ref;
+        }
+    }
+
+    /// adds a reference to the index
+    pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
+        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+        if (result.found_existing) {
+            // traverse until you find the end
+            var curr: *AccountRef = result.value_ptr.*;
+            while (true) {
+                if (curr.next_ptr == null) { // 2)
+                    curr.next_ptr = account_ref;
+                    break;
+                } else {
+                    curr = curr.next_ptr.?;
+                }
+            }
+        } else {
+            result.value_ptr.* = account_ref;
+        }
+    }
+
+    /// indexes and accounts file by parsing out the accounts.
+    pub fn indexAccountFile(self: *Self, allocator: std.mem.Allocator, accounts_file: *AccountFile) !void {
+        var offset: usize = 0;
+
+        while (true) {
+            var account = accounts_file.readAccount(offset) catch break;
+            const pubkey = account.store_info.pubkey;
+
+            const hash_is_missing = std.mem.eql(u8, &account.hash().data, &Hash.default().data);
+            if (hash_is_missing) {
+                const hash = hashAccount(
+                    account.account_info.lamports,
+                    account.data,
+                    &account.account_info.owner.data,
+                    account.account_info.executable,
+                    account.account_info.rent_epoch,
+                    &pubkey.data,
+                );
+                account.hash_ptr.* = hash;
+            }
+
+            const account_ref = AccountRef{
+                .pubkey = pubkey,
+                .slot = accounts_file.slot,
+                .location = .{
+                    .File = .{
+                        .file_id = @as(u32, @intCast(accounts_file.id)),
+                        .offset = offset,
+                    },
+                },
+            };
+
+            // put this in a per bin vector []Vec(AccountRef)
+            const index_bin = self.getBinFromPubkey(&pubkey);
+            const refs = index_bin.getRefs();
+            try AccountIndexBin.put(refs, allocator, account_ref);
+
+            offset = offset + account.len;
+        }
+    }
+
+    pub fn validateAccountFile(
+        self: *Self,
+        accounts_file: *AccountFile,
+        bin_counts: []usize,
+        account_refs: *ArrayList(AccountRef),
+    ) !void {
+        var offset: usize = 0;
+        var n_accounts: usize = 0;
+
+        if (bin_counts.len != self.numberOfBins()) {
+            return error.BinCountMismatch;
+        }
+
+        while (true) {
+            const account = accounts_file.readAccount(offset) catch break;
+            try account.validate();
+
+            try account_refs.append(.{
+                .pubkey = account.store_info.pubkey,
+                .slot = accounts_file.slot,
+                .location = .{
+                    .File = .{
+                        .file_id = @as(u32, @intCast(accounts_file.id)),
+                        .offset = offset,
+                    },
+                },
+            });
+
+            const pubkey = &account.store_info.pubkey;
+            const bin_index = self.getBinIndex(pubkey);
+            bin_counts[bin_index] += 1;
+
+            offset = offset + account.len;
+            n_accounts += 1;
+        }
+
+        if (offset != std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64))) {
+            return error.InvalidAccountFileLength;
+        }
+
+        accounts_file.n_accounts = n_accounts;
+    }
+};
+
+pub const AccountIndexBin = struct {
+    account_refs: RefMap,
+    disk_memory: ?DiskMemory,
+    allocator: std.mem.Allocator,
+
+    pub const DiskMemory = struct {
+        account_refs: RefMap,
+        allocator: *DiskMemoryAllocator,
+    };
+
+    const RefMap = FastMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
+
+    pub fn initCapacity(
+        allocator: std.mem.Allocator,
+        ram_memory_config: RamMemoryConfig,
+        maybe_disk_memory_config: ?DiskMemoryConfig,
+        bin_index: usize,
+    ) !AccountIndexBin {
+        // setup ram references
+        var account_refs = RefMap.init(ram_memory_config.allocator);
+        if (ram_memory_config.capacity > 0) {
+            try account_refs.ensureTotalCapacity(ram_memory_config.capacity);
+        }
+
+        // setup disk references
+        var disk_memory: ?DiskMemory = null;
+        if (maybe_disk_memory_config) |*disk_memory_config| {
+            std.fs.cwd().access(disk_memory_config.dir_path, .{}) catch {
+                try std.fs.cwd().makeDir(disk_memory_config.dir_path);
+            };
+
+            const disk_filepath = try std.fmt.allocPrint(
+                allocator,
+                "{s}/bin{d}_index_data",
+                .{ disk_memory_config.dir_path, bin_index },
+            );
+
+            // need to store on heap so `ptr.allocator()` is always correct
+            var ptr = try allocator.create(DiskMemoryAllocator);
+            ptr.* = try DiskMemoryAllocator.init(disk_filepath);
+
+            var disk_account_refs = RefMap.init(ptr.allocator());
+            if (disk_memory_config.capacity > 0) {
+                try account_refs.ensureTotalCapacity(disk_memory_config.capacity);
+            }
+
+            disk_memory = .{
+                .account_refs = disk_account_refs,
+                .allocator = ptr,
+            };
+        }
+
+        return AccountIndexBin{
+            .account_refs = account_refs,
+            .disk_memory = disk_memory,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *AccountIndexBin) void {
+        self.account_refs.deinit();
+        if (self.disk_memory) |*disk_memory| {
+            disk_memory.account_refs.deinit();
+            disk_memory.allocator.deinit(self.allocator);
+            self.allocator.destroy(disk_memory.allocator);
+        }
+    }
+
+    pub inline fn getInMemRefs(self: *AccountIndexBin) *RefMap {
+        return &self.account_refs;
+    }
+
+    pub inline fn getDiskRefs(self: *AccountIndexBin) ?*RefMap {
+        if (self.disk_memory) |*disk_memory| {
+            return &disk_memory.account_refs;
+        } else {
+            return null;
+        }
+    }
+
+    pub inline fn getRefs(self: *AccountIndexBin) *RefMap {
+        if (self.disk_memory) |*disk_memory| {
+            return &disk_memory.account_refs;
+        } else {
+            return &self.account_refs;
+        }
+    }
+};
+
+/// custom hashmap used for the index's map
 pub fn FastMap(
     comptime Key: type,
     comptime Value: type,
@@ -366,321 +701,15 @@ pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
     return key1.equals(&key2);
 }
 
-pub const AccountIndexBin = struct {
-    account_refs: RefMap,
-    disk_memory: ?DiskMemory,
-    allocator: std.mem.Allocator,
-
-    pub const DiskMemory = struct {
-        account_refs: RefMap,
-        allocator: *DiskMemoryAllocator,
-    };
-
-    const RefMap = FastMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
-
-    pub fn initCapacity(
-        allocator: std.mem.Allocator,
-        ram_memory_config: RamMemoryConfig,
-        maybe_disk_memory_config: ?DiskMemoryConfig,
-        bin_index: usize,
-    ) !AccountIndexBin {
-        // setup ram references
-        var account_refs = RefMap.init(ram_memory_config.allocator);
-        if (ram_memory_config.capacity > 0) {
-            try account_refs.ensureTotalCapacity(ram_memory_config.capacity);
-        }
-
-        // setup disk references
-        var disk_memory: ?DiskMemory = null;
-        if (maybe_disk_memory_config) |*disk_memory_config| {
-            std.fs.cwd().access(disk_memory_config.dir_path, .{}) catch {
-                try std.fs.cwd().makeDir(disk_memory_config.dir_path);
-            };
-
-            const disk_filepath = try std.fmt.allocPrint(
-                allocator,
-                "{s}/bin{d}_index_data",
-                .{ disk_memory_config.dir_path, bin_index },
-            );
-
-            // need to store on heap so `ptr.allocator()` is always correct
-            var ptr = try allocator.create(DiskMemoryAllocator);
-            ptr.* = try DiskMemoryAllocator.init(disk_filepath);
-
-            var disk_account_refs = RefMap.init(ptr.allocator());
-            if (disk_memory_config.capacity > 0) {
-                try account_refs.ensureTotalCapacity(disk_memory_config.capacity);
-            }
-
-            disk_memory = .{
-                .account_refs = disk_account_refs,
-                .allocator = ptr,
-            };
-        }
-
-        return AccountIndexBin{
-            .account_refs = account_refs,
-            .disk_memory = disk_memory,
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *AccountIndexBin) void {
-        self.account_refs.deinit();
-        if (self.disk_memory) |*disk_memory| {
-            disk_memory.account_refs.deinit();
-            disk_memory.allocator.deinit(self.allocator);
-            self.allocator.destroy(disk_memory.allocator);
-        }
-    }
-
-    pub inline fn getInMemRefs(self: *AccountIndexBin) *RefMap {
-        return &self.account_refs;
-    }
-
-    pub inline fn getDiskRefs(self: *AccountIndexBin) ?*RefMap {
-        if (self.disk_memory) |*disk_memory| {
-            return &disk_memory.account_refs;
-        } else {
-            return null;
-        }
-    }
-
-    pub inline fn getRefs(self: *AccountIndexBin) *RefMap {
-        if (self.disk_memory) |*disk_memory| {
-            return &disk_memory.account_refs;
-        } else {
-            return &self.account_refs;
-        }
-    }
-};
-
-// TODO: be able to re-use this backing memory (whats free/occupied?)
-// will likely just need a quick simd bitvec
+/// used to track account reference data. This architechture allows
+/// us to allocate memory blocks of references in one go and then link them
+/// together for deallocation.
 pub const RefMemoryLinkedList = struct {
     memory: ArrayList(AccountRef),
     next_ptr: ?*RefMemoryLinkedList = null,
-};
 
-/// stores the mapping from Pubkey to the account location (AccountRef)
-pub const AccountIndex = struct {
-    bins: []AccountIndexBin,
-    calculator: PubkeyBinCalculator,
-    allocator: std.mem.Allocator,
-    use_disk: bool,
-    memory_linked_list: ?*RefMemoryLinkedList = null,
-
-    const Self = @This();
-
-    pub fn init(
-        // used to allocate the bin slice and other bin metadata
-        allocator: std.mem.Allocator,
-        // number of bins to shard pubkeys across
-        n_bins: usize,
-        ram_config: RamMemoryConfig,
-        disk_config: ?DiskMemoryConfig,
-    ) !Self {
-        const calculator = PubkeyBinCalculator.init(n_bins);
-
-        var bins = try allocator.alloc(AccountIndexBin, n_bins);
-        for (bins, 0..) |*bin, bin_i| {
-            bin.* = try AccountIndexBin.initCapacity(
-                allocator,
-                ram_config,
-                disk_config,
-                bin_i,
-            );
-        }
-        const use_disk = disk_config != null;
-
-        return Self{
-            .bins = bins,
-            .calculator = calculator,
-            .allocator = allocator,
-            .use_disk = use_disk,
-        };
-    }
-
-    pub fn deinit(self: *Self, free_memory: bool) void {
-        for (self.bins) |*bin| {
-            bin.deinit();
-        }
-        self.allocator.free(self.bins);
-
-        var maybe_curr = self.memory_linked_list;
-        while (maybe_curr) |curr| {
-            if (free_memory) {
-                curr.memory.deinit();
-            }
-            maybe_curr = curr.next_ptr;
-            self.allocator.destroy(curr);
-        }
-    }
-
-    pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !void {
-        var node = try self.allocator.create(RefMemoryLinkedList);
-        node.* = .{
-            .memory = refs,
-        };
-        if (self.memory_linked_list == null) {
-            self.memory_linked_list = node;
-        } else {
-            var tail = self.memory_linked_list.?;
-            while (tail.next_ptr) |ptr| {
-                tail = ptr;
-            }
-            tail.next_ptr = node;
-        }
-    }
-
-    pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
-        return self.calculator.binIndex(pubkey);
-    }
-
-    pub inline fn getBin(self: *const Self, index: usize) *AccountIndexBin {
-        return &self.bins[index];
-    }
-
-    pub inline fn getBinFromPubkey(
-        self: *const Self,
-        pubkey: *const Pubkey,
-    ) *AccountIndexBin {
-        const bin_index = self.calculator.binIndex(pubkey);
-        return &self.bins[bin_index];
-    }
-
-    pub inline fn numberOfBins(self: *const Self) usize {
-        return self.bins.len;
-    }
-
-    /// adds the reference to the index if there is not a duplicate (ie, the same slot)
-    pub fn indexRefIfNotDuplicate(self: *Self, account_ref: *AccountRef) void {
-        const bin = self.getBinFromPubkey(&account_ref.pubkey);
-        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey);
-        if (result.found_existing) {
-            // traverse until you find the end
-            var curr: *AccountRef = result.value_ptr.*;
-            while (true) {
-                if (curr.slot == account_ref.slot) {
-                    // found a duplicate => dont do the insertion
-                    break;
-                } else if (curr.next_ptr == null) {
-                    // end of the list => insert it here
-                    curr.next_ptr = account_ref;
-                    break;
-                } else {
-                    // keep traversing
-                    curr = curr.next_ptr.?;
-                }
-            }
-        } else {
-            result.value_ptr.* = account_ref;
-        }
-    }
-
-    /// adds a reference to the index
-    pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
-        const bin = self.getBinFromPubkey(&account_ref.pubkey);
-        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey); // 1)
-        if (result.found_existing) {
-            // traverse until you find the end
-            var curr: *AccountRef = result.value_ptr.*;
-            while (true) {
-                if (curr.next_ptr == null) { // 2)
-                    curr.next_ptr = account_ref;
-                    break;
-                } else {
-                    curr = curr.next_ptr.?;
-                }
-            }
-        } else {
-            result.value_ptr.* = account_ref;
-        }
-    }
-
-    /// indexes and accounts file by parsing out the accounts.
-    pub fn indexAccountFile(self: *Self, allocator: std.mem.Allocator, accounts_file: *AccountFile) !void {
-        var offset: usize = 0;
-
-        while (true) {
-            var account = accounts_file.readAccount(offset) catch break;
-            const pubkey = account.store_info.pubkey;
-
-            const hash_is_missing = std.mem.eql(u8, &account.hash().data, &Hash.default().data);
-            if (hash_is_missing) {
-                const hash = hashAccount(
-                    account.account_info.lamports,
-                    account.data,
-                    &account.account_info.owner.data,
-                    account.account_info.executable,
-                    account.account_info.rent_epoch,
-                    &pubkey.data,
-                );
-                account.hash_ptr.* = hash;
-            }
-
-            const account_ref = AccountRef{
-                .pubkey = pubkey,
-                .slot = accounts_file.slot,
-                .location = .{
-                    .File = .{
-                        .file_id = @as(u32, @intCast(accounts_file.id)),
-                        .offset = offset,
-                    },
-                },
-            };
-
-            // put this in a per bin vector []Vec(AccountRef)
-            const index_bin = self.getBinFromPubkey(&pubkey);
-            const refs = index_bin.getRefs();
-            try AccountIndexBin.put(refs, allocator, account_ref);
-
-            offset = offset + account.len;
-        }
-    }
-
-    pub fn validateAccountFile(
-        self: *Self,
-        accounts_file: *AccountFile,
-        bin_counts: []usize,
-        account_refs: *ArrayList(AccountRef),
-    ) !void {
-        var offset: usize = 0;
-        var n_accounts: usize = 0;
-
-        if (bin_counts.len != self.numberOfBins()) {
-            return error.BinCountMismatch;
-        }
-
-        while (true) {
-            const account = accounts_file.readAccount(offset) catch break;
-            try account.validate();
-
-            try account_refs.append(.{
-                .pubkey = account.store_info.pubkey,
-                .slot = accounts_file.slot,
-                .location = .{
-                    .File = .{
-                        .file_id = @as(u32, @intCast(accounts_file.id)),
-                        .offset = offset,
-                    },
-                },
-            });
-
-            const pubkey = &account.store_info.pubkey;
-            const bin_index = self.getBinIndex(pubkey);
-            bin_counts[bin_index] += 1;
-
-            offset = offset + account.len;
-            n_accounts += 1;
-        }
-
-        if (offset != std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64))) {
-            return error.InvalidAccountFileLength;
-        }
-
-        accounts_file.n_accounts = n_accounts;
-    }
+    // TODO: be able to re-use this backing memory (whats free/occupied?)
+    // will likely just need a quick simd bitvec
 };
 
 pub const DiskMemoryConfig = struct {
@@ -697,6 +726,8 @@ pub const RamMemoryConfig = struct {
     allocator: std.mem.Allocator = std.heap.page_allocator,
 };
 
+/// calculator to know which bin a pubkey belongs to
+/// (since the index is sharded into bins).
 pub const PubkeyBinCalculator = struct {
     shift_bits: u6,
 
