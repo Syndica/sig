@@ -5,12 +5,6 @@ const base58 = @import("base58-zig");
 
 pub const HASH_SIZE: usize = 32;
 
-pub const CompareResult = enum {
-    Greater,
-    Less,
-    Equal,
-};
-
 pub const Hash = struct {
     data: [HASH_SIZE]u8,
 

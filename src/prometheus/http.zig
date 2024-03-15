@@ -2,7 +2,6 @@ const std = @import("std");
 
 const httpz = @import("httpz");
 
-const Level = @import("../trace/level.zig").Level;
 const Registry = @import("registry.zig").Registry;
 const global_registry = @import("registry.zig").global_registry;
 const default_buckets = @import("histogram.zig").default_buckets;

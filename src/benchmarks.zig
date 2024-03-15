@@ -33,7 +33,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "accounts_db", filter)) {
         try benchmark(
-            @import("core/accounts_db.zig").BenchmarkAccountsDB,
+            @import("accountsdb/db.zig").BenchmarkAccountsDB,
             max_time_per_bench,
             TimeUnits.nanoseconds,
         );

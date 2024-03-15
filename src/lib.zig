@@ -14,11 +14,16 @@ pub const core = struct {
     pub usingnamespace @import("core/time.zig");
     pub usingnamespace @import("core/hard_forks.zig");
     pub usingnamespace @import("core/shred.zig");
-    pub usingnamespace @import("core/genesis_config.zig");
-    pub usingnamespace @import("core/snapshots.zig");
-    pub usingnamespace @import("core/accounts_file.zig");
-    pub usingnamespace @import("core/accounts_db.zig");
-    pub usingnamespace @import("core/sysvars.zig");
+};
+
+pub const accounts_db = struct {
+    pub usingnamespace @import("accountsdb/db.zig");
+    pub usingnamespace @import("accountsdb/bank.zig");
+    pub usingnamespace @import("accountsdb/accounts_file.zig");
+    pub usingnamespace @import("accountsdb/genesis_config.zig");
+    pub usingnamespace @import("accountsdb/index.zig");
+    pub usingnamespace @import("accountsdb/snapshots.zig");
+    pub usingnamespace @import("accountsdb/sysvars.zig");
 };
 
 pub const gossip = struct {

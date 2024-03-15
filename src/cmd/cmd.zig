@@ -3,7 +3,6 @@ const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
 const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
-const LegacyContactInfo = @import("../gossip/crds.zig").LegacyContactInfo;
 const node = @import("../gossip/node.zig");
 const ContactInfo = node.ContactInfo;
 const Logger = @import("../trace/log.zig").Logger;
