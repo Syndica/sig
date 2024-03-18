@@ -58,7 +58,7 @@ pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 
 test "core.bank: load and validate from test snapshot" {
     var allocator = std.testing.allocator;
 
-    const full_metadata_path = "test_data/snapshots/10/10";
+    const full_metadata_path = "test_data/10";
     var full_snapshot_fields = try SnapshotFields.readFromFilePath(
         allocator,
         full_metadata_path,
