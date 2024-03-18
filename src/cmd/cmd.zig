@@ -106,11 +106,11 @@ fn identity(_: []const []const u8) !void {
 
 // gossip entrypoint
 fn gossip(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
-    defer logger.deinit();
-    logger.spawn();
+    // var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
+    // defer logger.deinit();
+    // logger.spawn();
 
-    // var logger: Logger = .noop;
+    var logger: Logger = .noop;
 
     const metrics_thread = try spawnMetrics(gpa_allocator, logger);
 
@@ -184,41 +184,127 @@ fn gossip(_: []const []const u8) !void {
         .{ &gossip_service, spy_node },
     );
 
-    const CrdsTable = @import("../gossip/crds_table.zig").CrdsTable;
+    const GossipTable = @import("../gossip/table.zig").GossipTable;
+    const SOCKET_TAG_RPC = @import("../gossip/data.zig").SOCKET_TAG_RPC;
+    const SlotAndHash = @import("../gossip/data.zig").SlotAndHash;
+
+    const GENESIS_FILE: []const u8 = "genesis.tar.bz2";
+
+    const PeerSnapshotHash = struct {
+        contact_info: ContactInfo,
+        full_snapshot: SlotAndHash,
+        inc_snapshot: ?SlotAndHash,
+    };
+    var has_genesis = false;
 
     // TMP - TODO: remove later
     var ci_buf: [10]ContactInfo = undefined;
     var valid_buf: [10]u8 = undefined;
     @memset(&valid_buf, 0);
 
+    var peer_snapshots = std.ArrayList(PeerSnapshotHash).init(gpa_allocator);
+    defer peer_snapshots.deinit();
+
     while (true) {
         std.debug.print("sleeping...\n", .{});
         std.time.sleep(std.time.ns_per_s * 3);
 
-        var lg = gossip_service.crds_table_rw.read();
+        var lg = gossip_service.gossip_table_rw.read();
         defer lg.unlock();
-        const crds_table: *const CrdsTable = lg.get();
+        const table: *const GossipTable = lg.get();
 
-        var cis = crds_table.getContactInfos(&ci_buf, 0);
+        var cis = table.getContactInfos(&ci_buf, 0);
         var is_me_cis: u8 = 0;
         var invalid_shred: u8 = 0;
-        for (cis, 0..) |*ci, index| { 
+        for (cis, 0..) |*ci, index| {
             const is_me = ci.pubkey.equals(&my_pubkey);
-            if (is_me) { 
+            if (is_me) {
                 is_me_cis += 1;
                 continue;
             }
             const matching_shred_version = contact_info.shred_version == ci.shred_version or contact_info.shred_version == 0;
-            if (!matching_shred_version) { 
+            if (!matching_shred_version) {
                 invalid_shred += 1;
                 continue;
             }
             valid_buf[index] = 1;
         }
 
-        std.debug.print("is_me: {d} invalid_shred: {d}\n", .{is_me_cis, invalid_shred});
-        std.debug.print("valid cis len: {d}\n", .{valid_cis});
+        var valid_count: usize = 0;
+        for (0..valid_buf.len) |i| {
+            if (valid_buf[i] == 1) {
+                valid_count += 1;
+
+                var ci = &ci_buf[i];
+                if (ci.getSocket(SOCKET_TAG_RPC)) |rpc_socket| {
+                    const r = rpc_socket.toString();
+                    // genesis download
+                    const genesis_url = try std.fmt.allocPrint(gpa_allocator, "http://{s}/{s}", .{
+                        r[0][0..r[1]],
+                        GENESIS_FILE,
+                    });
+                    // _ = genesis_url;
+                    std.debug.print("genesis_url: {s}\n", .{genesis_url});
+
+                    if (!has_genesis) {
+                        // TODO: download genesis file
+                        // TODO: unpack genesis file (bzip)
+                        // has_genesis = true;
+                    }
+
+                    // snapshot download
+                    const pubkey = ci.pubkey;
+                    if (table.get(.{ .SnapshotHashes = pubkey })) |snapshot_hash| {
+                        const hashes = snapshot_hash.value.data.SnapshotHashes;
+
+                        var max_inc_hash: ?SlotAndHash = null;
+                        for (hashes.incremental) |inc_hash| {
+                            if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
+                                max_inc_hash = inc_hash;
+                            }
+                        }
+                        try peer_snapshots.append(.{
+                            .contact_info = ci.*,
+                            .full_snapshot = hashes.full,
+                            .inc_snapshot = max_inc_hash,
+                        });
+                    }
+                }
+            }
+        }
+
+        for (peer_snapshots.items) |peer| {
+            const rpc_socket = peer.contact_info.getSocket(SOCKET_TAG_RPC).?;
+            const r = rpc_socket.toString();
+            const snapshot_url = try std.fmt.allocPrint(gpa_allocator, "http://{s}/snapshot-{d}-{s}.{s}", .{
+                r[0][0..r[1]],
+                peer.full_snapshot.slot,
+                peer.full_snapshot.hash,
+                "tar.zst",
+            });
+            std.debug.print("snapshot_url: {s}\n", .{snapshot_url});
+
+            if (peer.inc_snapshot) |inc_snapshot| {
+                const inc_snapshot_url = try std.fmt.allocPrint(gpa_allocator, "http://{s}/incremental-snapshot-{d}-{d}-{s}.{s}", .{
+                    r[0][0..r[1]],
+                    peer.full_snapshot.slot,
+                    inc_snapshot.slot,
+                    inc_snapshot.hash,
+                    "tar.zst",
+                });
+                std.debug.print("inc_snapshot_url: {s}\n", .{inc_snapshot_url});
+            }
+
+            // TODO: download snapshot file
+            // TODO: unpack snapshot file
+
+            std.debug.print("---------\n", .{});
+        }
+
+        peer_snapshots.clearRetainingCapacity();
     }
+
+    // only contact infos which have a valid rpc port
 
     handle.join();
     metrics_thread.detach();

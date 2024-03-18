@@ -300,7 +300,7 @@ pub fn handleRequest(
     logger.debug("done handling request");
 }
 
-const setReadTimeout = @import("../gossip/socket_utils.zig").setReadTimeout;
+const setReadTimeout = @import("../net/socket_utils.zig").setReadTimeout;
 
 pub fn requestIpEcho(
     allocator: std.mem.Allocator,
