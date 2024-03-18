@@ -2,27 +2,29 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
 
-const _genesis_config = @import("./genesis_config.zig");
+const _genesis_config = @import("genesis_config.zig");
 const UnixTimestamp = _genesis_config.UnixTimestamp;
 const FeeRateGovernor = _genesis_config.FeeRateGovernor;
 const EpochSchedule = _genesis_config.EpochSchedule;
 const Rent = _genesis_config.Rent;
 const Inflation = _genesis_config.Inflation;
 
-const Account = @import("./account.zig").Account;
-const Hash = @import("./hash.zig").Hash;
-const Slot = @import("./time.zig").Slot;
-const Epoch = @import("./time.zig").Epoch;
-const Pubkey = @import("./pubkey.zig").Pubkey;
+const Account = @import("../core/account.zig").Account;
+const Hash = @import("../core/hash.zig").Hash;
+const Slot = @import("../core/time.zig").Slot;
+const Epoch = @import("../core/time.zig").Epoch;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
-pub const sysvars = @import("./sysvars.zig");
 const readDirectory = @import("../utils/directory.zig").readDirectory;
-
+pub const sysvars = @import("sysvars.zig");
 const ZstdReader = @import("../zstd/reader.zig").Reader;
 const parallelUntarToFileSystem = @import("../utils/tar.zig").parallelUntarToFileSystem;
 
 pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
+pub const MAX_RECENT_BLOCKHASHES: usize = 300;
+pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
+const CACHED_KEY_SIZE: usize = 20;
 
 pub const StakeHistoryEntry = struct {
     effective: u64, // effective stake at this epoch
@@ -106,6 +108,7 @@ pub const BlockhashQueue = struct {
     max_age: usize,
 };
 
+// TODO: move this elsewhere
 pub fn HashSet(comptime T: type) type {
     return HashMap(T, void);
 }
@@ -634,14 +637,11 @@ const Result = union(enum) {
     Error: TransactionError,
 };
 
-pub const MAX_RECENT_BLOCKHASHES: usize = 300;
-pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
-
-const CACHED_KEY_SIZE: usize = 20;
 const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     key_slice: [CACHED_KEY_SIZE]u8,
     result: Result,
 }) });
+
 const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
 
 pub const StatusCache = struct {
@@ -849,41 +849,48 @@ pub const AllSnapshotFields = struct {
     paths: SnapshotPaths,
     was_collapsed: bool = false, // used for deinit()
 
-    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !@This() {
+    pub fn fromPaths(allocator: std.mem.Allocator, snapshot_dir: []const u8, paths: SnapshotPaths) !struct {
+        all_fields: AllSnapshotFields,
+        full_path: []const u8,
+        incremental_path: ?[]const u8,
+    } {
         // unpack
         const full_metadata_path = try std.fmt.allocPrint(
             allocator,
             "{s}/{s}/{d}/{d}",
             .{ snapshot_dir, "snapshots", paths.full_snapshot.slot, paths.full_snapshot.slot },
         );
-        defer allocator.free(full_metadata_path);
 
-        std.debug.print("reading full snapshot from {s}\n", .{full_metadata_path});
-        var full = try SnapshotFields.readFromFilePath(
+        var full_fields = try SnapshotFields.readFromFilePath(
             allocator,
             full_metadata_path,
         );
 
-        var incremental: ?SnapshotFields = null;
+        var incremental_fields: ?SnapshotFields = null;
+        var incremental_metadata_path: ?[]const u8 = null;
         if (paths.incremental_snapshot) |incremental_snapshot_path| {
-            const incremental_metadata_path = try std.fmt.allocPrint(
+            incremental_metadata_path = try std.fmt.allocPrint(
                 allocator,
                 "{s}/{s}/{d}/{d}",
                 .{ snapshot_dir, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
             );
-            defer allocator.free(incremental_metadata_path);
 
-            std.debug.print("reading incremental snapshot from {s}\n", .{incremental_metadata_path});
-            incremental = try SnapshotFields.readFromFilePath(
+            incremental_fields = try SnapshotFields.readFromFilePath(
                 allocator,
-                incremental_metadata_path,
+                incremental_metadata_path.?,
             );
         }
 
-        return .{
-            .full = full,
-            .incremental = incremental,
+        const all_fields = .{
+            .full = full_fields,
+            .incremental = incremental_fields,
             .paths = paths,
+        };
+
+        return .{
+            .all_fields = all_fields,
+            .full_path = full_metadata_path,
+            .incremental_path = incremental_metadata_path,
         };
     }
 
@@ -957,7 +964,6 @@ pub fn parallelUnpackZstdTarBall(
     n_threads: usize,
     full_snapshot: bool,
 ) !void {
-    std.debug.print("unpacking {s}\n", .{path});
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
@@ -971,7 +977,6 @@ pub fn parallelUnpackZstdTarBall(
         file.handle,
         0,
     );
-    var timer = try std.time.Timer.start();
     var tar_stream = try ZstdReader.init(memory);
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
     try parallelUntarToFileSystem(
@@ -981,10 +986,9 @@ pub fn parallelUnpackZstdTarBall(
         n_threads,
         n_files_estimate,
     );
-    std.debug.print("unpacked {s} in {s}\n", .{ path, std.fmt.fmtDuration(timer.read()) });
 }
 
-test "core.accounts_db: test full snapshot path parsing" {
+test "core.accounts_db.snapshots: test full snapshot path parsing" {
     const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotPath.fromPath(full_snapshot_path);
 
@@ -993,7 +997,7 @@ test "core.accounts_db: test full snapshot path parsing" {
     try std.testing.expect(std.mem.eql(u8, snapshot_info.path, full_snapshot_path));
 }
 
-test "core.accounts_db: test incremental snapshot path parsing" {
+test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
     const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotPath.fromPath(path);
 
@@ -1003,7 +1007,7 @@ test "core.accounts_db: test incremental snapshot path parsing" {
     try std.testing.expect(std.mem.eql(u8, snapshot_info.path, path));
 }
 
-test "core.snapshot_fields: parse status cache" {
+test "core.accounts_db.snapshotss: parse status cache" {
     const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";
@@ -1013,7 +1017,7 @@ test "core.snapshot_fields: parse status cache" {
     try std.testing.expect(status_cache.bank_slot_deltas.items.len > 0);
 }
 
-test "core.snapshot_fields: parse snapshot fields" {
+test "core.accounts_db.snapshotss: parse snapshot fields" {
     const allocator = std.testing.allocator;
     const snapshot_path = "test_data/10";
 
@@ -1021,7 +1025,7 @@ test "core.snapshot_fields: parse snapshot fields" {
     defer snapshot_fields.deinit(allocator);
 }
 
-test "core.snapshot_fields: parse incremental snapshot fields" {
+test "core.accounts_db.snapshotss: parse incremental snapshot fields" {
     const allocator = std.testing.allocator;
     const snapshot_path = "test_data/25";
 

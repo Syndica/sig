@@ -1,6 +1,6 @@
 const Pubkey = @import("pubkey.zig").Pubkey;
 const Epoch = @import("./time.zig").Epoch;
-const AccountInFile = @import("./accounts_file.zig").AccountInFile;
+const AccountInFile = @import("../accountsdb/accounts_file.zig").AccountInFile;
 
 pub const Account = struct {
     lamports: u64,

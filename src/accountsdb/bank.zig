@@ -1,9 +1,8 @@
 const std = @import("std");
-const AccountsDB = @import("./accounts_db.zig").AccountsDB;
-const GenesisConfig = @import("./genesis_config.zig").GenesisConfig;
-const BankFields = @import("./snapshots.zig").BankFields;
-
-const SnapshotFields = @import("./snapshots.zig").SnapshotFields;
+const AccountsDB = @import("db.zig").AccountsDB;
+const GenesisConfig = @import("genesis_config.zig").GenesisConfig;
+const BankFields = @import("snapshots.zig").BankFields;
+const SnapshotFields = @import("snapshots.zig").SnapshotFields;
 
 pub const Bank = struct {
     accounts_db: *AccountsDB,
@@ -51,6 +50,7 @@ pub const Bank = struct {
 };
 
 pub const SECONDS_PER_YEAR: f64 = 365.242_199 * 24.0 * 60.0 * 60.0;
+
 pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 {
     return years * SECONDS_PER_YEAR * (1_000_000_000.0 / @as(f64, @floatFromInt(tick_duration_ns))) / @as(f64, @floatFromInt(ticks_per_slot));
 }
@@ -58,7 +58,7 @@ pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 
 test "core.bank: load and validate from test snapshot" {
     var allocator = std.testing.allocator;
 
-    const full_metadata_path = "test_data/snapshots/10/10";
+    const full_metadata_path = "test_data/10";
     var full_snapshot_fields = try SnapshotFields.readFromFilePath(
         allocator,
         full_metadata_path,

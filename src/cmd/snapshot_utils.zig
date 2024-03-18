@@ -5,7 +5,7 @@ pub fn main() void {}
 // const AccountsDbFields = @import("../core/snapshots.zig").AccountsDbFields;
 // const AccountFileInfo = @import("../core/snapshots.zig").AccountFileInfo;
 // const AccountFile = @import("../core/accounts_file.zig").AccountFile;
-// const AccountRef = @import("../core/accounts_db.zig").AccountRef;
+// const AccountRef = @import("../accountsdb/db.zig").AccountRef;
 
 // const Account = @import("../core/account.zig").Account;
 // const Pubkey = @import("../core/pubkey.zig").Pubkey;

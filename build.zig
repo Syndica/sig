@@ -212,7 +212,7 @@ pub fn build(b: *std.Build) void {
         },
         ExecCommand{
             .name = "db",
-            .path = "src/core/accounts_db.zig",
+            .path = "src/accountsdb/db.zig",
             .description = "run accounts-db code",
         },
     };

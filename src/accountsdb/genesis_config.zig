@@ -1,16 +1,16 @@
 const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
-
-const Account = @import("account.zig").Account;
-const Pubkey = @import("pubkey.zig").Pubkey;
-
-const Slot = @import("time.zig").Slot;
-const Epoch = @import("time.zig").Epoch;
+const Account = @import("../core/account.zig").Account;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const Slot = @import("../core/time.zig").Slot;
+const Epoch = @import("../core/time.zig").Epoch;
 const bincode = @import("../bincode/bincode.zig");
 
 pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);
+pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
+
 pub const RustDuration = struct {
     secs: u64,
     nanos: u32,
@@ -86,8 +86,6 @@ pub const Inflation = struct {
     /// DEPRECATED, this field is currently unused
     __unused: f64,
 };
-
-pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
 
 pub const EpochSchedule = extern struct {
     /// The maximum number of slots in each epoch.

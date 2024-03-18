@@ -33,7 +33,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "accounts_db", filter)) {
         try benchmark(
-            @import("core/accounts_db.zig").BenchmarkAccountsDB,
+            @import("accountsdb/db.zig").BenchmarkAccountsDB,
             max_time_per_bench,
             TimeUnits.nanoseconds,
         );
@@ -41,7 +41,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "socket_utils", filter)) {
         try benchmark(
-            @import("gossip/socket_utils.zig").BenchmarkPacketProcessing,
+            @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             TimeUnits.milliseconds,
         );
@@ -49,7 +49,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, "gossip", filter)) {
         try benchmark(
-            @import("gossip/gossip_service.zig").BenchmarkGossipServiceGeneral,
+            @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
             TimeUnits.milliseconds,
         );

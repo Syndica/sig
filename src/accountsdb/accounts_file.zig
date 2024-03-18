@@ -2,16 +2,13 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
 
-const Account = @import("./account.zig").Account;
-const hashAccount = @import("./account.zig").hashAccount;
-const Hash = @import("./hash.zig").Hash;
-const Slot = @import("./time.zig").Slot;
-const Epoch = @import("./time.zig").Epoch;
-const Pubkey = @import("./pubkey.zig").Pubkey;
+const Account = @import("../core/account.zig").Account;
+const Hash = @import("../core/hash.zig").Hash;
+const Slot = @import("../core/time.zig").Slot;
+const Epoch = @import("../core/time.zig").Epoch;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
 
-const AccountFileInfo = @import("./snapshots.zig").AccountFileInfo;
-const AccountIndex = @import("accounts_db.zig").AccountIndex;
-const AccountRef = @import("./accounts_db.zig").AccountRef;
+const AccountFileInfo = @import("snapshots.zig").AccountFileInfo;
 
 pub const FileId = u32;
 

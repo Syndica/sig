@@ -10,10 +10,11 @@ pub fn printTimeEstimate(
 ) void {
     if (i == 0 or total == 0) return;
     if (i > total) {
-        std.debug.print("{s}: {d}/{d} (?%) (time left: ...)\r", .{
+        std.debug.print("{s}: {d}/{d} (?%) (time left: ...) (elp: {s})\r", .{
             name,
             i,
             total,
+            std.fmt.fmtDuration(timer.read()),
         });
         return;
     }
@@ -26,21 +27,23 @@ pub fn printTimeEstimate(
     const ns_left = ns_per_vec * left;
 
     if (other_info) |info| {
-        std.debug.print("{s}: {d}/{d} ({d}%) {s} (time left: {s})\r", .{
+        std.debug.print("{s}: {d}/{d} ({d}%) {s} (time left: {s}) (elp: {s})\r", .{
             name,
             i,
             total,
             p_done,
             info,
             std.fmt.fmtDuration(ns_left),
+            std.fmt.fmtDuration(timer.read()),
         });
     } else {
-        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {s})\r", .{
+        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {s}) (elp: {s})\r", .{
             name,
             i,
             total,
             p_done,
             std.fmt.fmtDuration(ns_left),
+            std.fmt.fmtDuration(timer.read()),
         });
     }
 }

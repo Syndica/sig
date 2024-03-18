@@ -14,26 +14,29 @@ pub const core = struct {
     pub usingnamespace @import("core/time.zig");
     pub usingnamespace @import("core/hard_forks.zig");
     pub usingnamespace @import("core/shred.zig");
-    pub usingnamespace @import("core/genesis_config.zig");
-    pub usingnamespace @import("core/snapshots.zig");
-    pub usingnamespace @import("core/accounts_file.zig");
-    pub usingnamespace @import("core/accounts_db.zig");
-    pub usingnamespace @import("core/sysvars.zig");
+};
+
+pub const accounts_db = struct {
+    pub usingnamespace @import("accountsdb/db.zig");
+    pub usingnamespace @import("accountsdb/bank.zig");
+    pub usingnamespace @import("accountsdb/accounts_file.zig");
+    pub usingnamespace @import("accountsdb/genesis_config.zig");
+    pub usingnamespace @import("accountsdb/index.zig");
+    pub usingnamespace @import("accountsdb/snapshots.zig");
+    pub usingnamespace @import("accountsdb/sysvars.zig");
 };
 
 pub const gossip = struct {
-    pub usingnamespace @import("gossip/crds.zig");
-    pub usingnamespace @import("gossip/crds_table.zig");
-    pub usingnamespace @import("gossip/gossip_service.zig");
-    pub usingnamespace @import("gossip/node.zig");
+    pub usingnamespace @import("gossip/data.zig");
+    pub usingnamespace @import("gossip/table.zig");
+    pub usingnamespace @import("gossip/service.zig");
     pub usingnamespace @import("gossip/packet.zig");
-    pub usingnamespace @import("gossip/protocol.zig");
+    pub usingnamespace @import("gossip/message.zig");
     pub usingnamespace @import("gossip/pull_request.zig");
     pub usingnamespace @import("gossip/pull_response.zig");
-    pub usingnamespace @import("gossip/crds_shards.zig");
+    pub usingnamespace @import("gossip/shards.zig");
     pub usingnamespace @import("gossip/ping_pong.zig");
     pub usingnamespace @import("gossip/active_set.zig");
-    pub usingnamespace @import("gossip/socket_utils.zig");
 };
 
 pub const bloom = struct {
@@ -81,6 +84,7 @@ pub const cmd = struct {
 pub const net = struct {
     pub usingnamespace @import("net/net.zig");
     pub usingnamespace @import("net/echo.zig");
+    pub usingnamespace @import("net/socket_utils.zig");
 };
 
 pub const prometheus = struct {

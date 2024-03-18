@@ -236,6 +236,18 @@ pub const SocketAddr = union(enum(u8)) {
             },
         }
     }
+
+    pub fn sanitize(socket: *const Self) !void {
+        if (socket.port() == 0) {
+            return error.InvalidPort;
+        }
+        if (socket.isUnspecified()) {
+            return error.UnspecifiedAddress;
+        }
+        if (socket.isMulticast()) {
+            return error.MulticastAddress;
+        }
+    }
 };
 
 pub const SocketAddrV4 = struct {

@@ -2,14 +2,9 @@ const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
 const base58 = @import("base58-zig");
+const CompareOperator = std.math.CompareOperator;
 
 pub const HASH_SIZE: usize = 32;
-
-pub const CompareResult = enum {
-    Greater,
-    Less,
-    Equal,
-};
 
 pub const Hash = struct {
     data: [HASH_SIZE]u8,
@@ -19,7 +14,6 @@ pub const Hash = struct {
     pub fn default() Self {
         return .{ .data = [_]u8{0} ** HASH_SIZE };
     }
-
     // used in tests
     pub fn random() Self {
         var seed = @as(u64, @intCast(std.time.milliTimestamp()));
@@ -42,7 +36,7 @@ pub const Hash = struct {
         return hash;
     }
 
-    pub fn cmp(a: *const Self, b: *const Self) std.math.Order {
+    pub fn cmp(a: *const Self, b: *const Self) CompareOperator {
         for (0..HASH_SIZE) |i| {
             if (a.data[i] > b.data[i]) {
                 return .gt;
