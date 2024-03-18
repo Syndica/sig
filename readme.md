@@ -183,9 +183,9 @@ zig build test
 
 Include `--summary all` with any test command to see a summary of the test results.
 
-Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.crds_table` like this:
+Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.table` like this:
 ```bash
-zig build test --summary all -- gossip.crds_table
+zig build test --summary all -- gossip.table
 ```
 
 ### 📊 Benchmark

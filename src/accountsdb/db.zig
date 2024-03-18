@@ -217,7 +217,7 @@ pub const AccountsDB = struct {
             const t_index = try LoadingThreadAccountsDB.init(
                 page_allocator,
                 n_bins,
-                .{}, 
+                .{},
                 disk_config,
             );
             thread_dbs.appendAssumeCapacity(t_index);
@@ -1027,7 +1027,6 @@ pub const AccountStorage = struct {
         self.cache.deinit();
     }
 };
-
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
