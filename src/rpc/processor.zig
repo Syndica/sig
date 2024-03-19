@@ -1,7 +1,8 @@
 const std = @import("std");
 const t = @import("types.zig");
-const GossipService = @import("../gossip/gossip_service.zig").GossipService;
-const CrdsTable = @import("../gossip/crds_table.zig").CrdsTable;
+const ContactInfo = @import("../gossip/data.zig").ContactInfo;
+const GossipService = @import("../gossip/service.zig").GossipService;
+const GossipTable = @import("../gossip/table.zig").GossipTable;
 
 pub const RpcRequestProcessor = struct {
     gossip_service: *GossipService,
@@ -96,23 +97,23 @@ pub const RpcRequestProcessor = struct {
         self: *Self,
         allocator: std.mem.Allocator,
     ) t.Result([]t.RpcContactInfo) {
-        var crds_table_rlock = self.gossip_service.crds_table_rw.read();
-        defer crds_table_rlock.unlock();
-        var crds_table: *const CrdsTable = crds_table_rlock.get();
+        var table_rlock = self.gossip_service.gossip_table_rw.read();
+        defer table_rlock.unlock();
+        var table: *const GossipTable = table_rlock.get();
 
-        var contact_infos = crds_table.getAllContactInfos() catch return .{ .Err = t.Error.Internal };
+        var contact_infos = table.getAllContactInfos() catch return .{ .Err = t.Error.Internal };
         var rpc_contact_infos = std.ArrayList(t.RpcContactInfo).initCapacity(allocator, contact_infos.items.len) catch return .{ .Err = t.Error.Internal };
 
         for (contact_infos.items) |contact_info| {
             rpc_contact_infos.appendAssumeCapacity(t.RpcContactInfo{
                 .featureSet = null,
-                .gossip = contact_info.gossip,
-                .pubkey = contact_info.id,
-                .pubsub = contact_info.rpc_pubsub,
-                .rpc = contact_info.rpc,
+                .gossip = contact_info.getSocket(ContactInfo.SOCKET_TAG_GOSSIP),
+                .pubkey = contact_info.pubkey,
+                .pubsub = contact_info.getSocket(ContactInfo.SOCKET_TAG_RPC_PUBSUB),
+                .rpc = contact_info.getSocket(ContactInfo.SOCKET_TAG_RPC),
                 .shredVersion = contact_info.shred_version,
-                .tpu = contact_info.tpu,
-                .tpuQuic = contact_info.tpu_forwards, // TODO: correct value
+                .tpu = contact_info.getSocket(ContactInfo.SOCKET_TAG_TPU),
+                .tpuQuic = contact_info.getSocket(ContactInfo.SOCKET_TAG_TPU_QUIC), // TODO: correct value
                 .version = null, // TODO: populate
             });
         }

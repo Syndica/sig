@@ -1,6 +1,6 @@
 const httpz = @import("httpz");
 const std = @import("std");
-const GossipService = @import("../gossip/gossip_service.zig").GossipService;
+const GossipService = @import("../gossip/service.zig").GossipService;
 const Logger = @import("../trace/log.zig").Logger;
 const testing = std.testing;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;

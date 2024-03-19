@@ -2,23 +2,18 @@ const std = @import("std");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
-const crds = @import("crds.zig");
-const CrdsValue = crds.CrdsValue;
-const CrdsData = crds.CrdsData;
-const Version = crds.Version;
-const LegacyVersion2 = crds.LegacyVersion2;
-const LegacyContactInfo = crds.LegacyContactInfo;
-const ContactInfo = @import("node.zig").ContactInfo;
-
-const pull_import = @import("pull_request.zig");
-const CrdsFilter = pull_import.CrdsFilter;
+const _gossip_data = @import("data.zig");
+const SignedGossipData = _gossip_data.SignedGossipData;
+const GossipData = _gossip_data.GossipData;
+const ContactInfo = _gossip_data.ContactInfo;
+const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const getWallclockMs = _gossip_data.getWallclockMs;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const testing = std.testing;
 const LruCache = @import("../common/lru.zig").LruCache;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
-const bincode = @import("../bincode/bincode.zig");
 const Instant = std.time.Instant;
 const assert = std.debug.assert;
 
@@ -97,10 +92,12 @@ pub const Pong = struct {
 };
 
 /// `PubkeyAndSocketAddr` is a 2 element tuple: `.{ Pubkey, SocketAddr }`
-pub const PubkeyAndSocketAddr = struct { Pubkey, SocketAddr };
-pub fn newPubkeyAndSocketAddr(pubkey: Pubkey, socket_addr: SocketAddr) PubkeyAndSocketAddr {
-    return .{ pubkey, socket_addr };
-}
+pub const PubkeyAndSocketAddr = struct {
+    pubkey: Pubkey,
+    socket_addr: SocketAddr,
+};
+
+pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
 
 /// Maintains records of remote nodes which have returned a valid response to a
 /// ping message, and on-the-fly ping messages pending a pong response from the
@@ -148,11 +145,9 @@ pub const PingCache = struct {
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
-        var peer_and_addr = newPubkeyAndSocketAddr(pong.from, socket);
+        var peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
-            const pubkey: Pubkey = pubkey_and_addr[0];
-            const addr: SocketAddr = pubkey_and_addr[1];
-            if (pubkey.equals(&pong.from) and addr.eql(&socket)) {
+            if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
                 _ = self.pings.pop(peer_and_addr);
                 _ = self.pongs.put(peer_and_addr, now);
                 _ = self.pending_cache.pop(pong.hash);
@@ -177,7 +172,7 @@ pub const PingCache = struct {
                 return null;
             }
         }
-        var rng = DefaultPrng.init(crds.getWallclockMs());
+        var rng = DefaultPrng.init(getWallclockMs());
         var ping = Ping.random(rng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
@@ -216,20 +211,20 @@ pub const PingCache = struct {
         self: *Self,
         allocator: std.mem.Allocator,
         our_keypair: KeyPair,
-        peers: []LegacyContactInfo,
+        peers: []ContactInfo,
     ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
         var now = std.time.Instant.now() catch @panic("time not supported by OS!");
         var valid_peers = std.ArrayList(usize).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (!peer.gossip.isUnspecified()) {
-                var result = self.check(now, PubkeyAndSocketAddr{ peer.id, peer.gossip }, &our_keypair);
+            if (peer.getSocket(SOCKET_TAG_GOSSIP)) |gossip_addr| {
+                var result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
                 }
                 if (result.maybe_ping) |ping| {
-                    try pings.append(.{ .ping = ping, .socket = peer.gossip });
+                    try pings.append(.{ .ping = ping, .socket = gossip_addr });
                 }
             }
         }
@@ -239,10 +234,12 @@ pub const PingCache = struct {
 
     // only used in tests
     pub fn _setPong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
-        _ = self.pongs.put(newPubkeyAndSocketAddr(peer, socket_addr), std.time.Instant.now() catch unreachable);
+        _ = self.pongs.put(PubkeyAndSocketAddr{
+            .pubkey = peer,
+            .socket_addr = socket_addr,
+        }, std.time.Instant.now() catch unreachable);
     }
 };
-pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
 
 test "gossip.ping_pong: PingCache works" {
     var ping_cache = try PingCache.init(testing.allocator, 10_000, 1000, 1024);
@@ -252,23 +249,23 @@ test "gossip.ping_pong: PingCache works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var node = PubkeyAndSocketAddr{ Pubkey.random(rng), SocketAddr.UNSPECIFIED };
+    var the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng), .socket_addr = SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
     var ping = ping_cache.maybePing(
         now1,
-        node,
+        the_node,
         &our_kp,
     );
 
     var now2 = try std.time.Instant.now();
 
-    var resp = ping_cache.check(now2, node, &our_kp);
+    var resp = ping_cache.check(now2, the_node, &our_kp);
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
-    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]LegacyContactInfo{});
+    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]ContactInfo{});
     defer result.valid_peers.deinit();
     defer result.pings.deinit();
 

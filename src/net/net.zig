@@ -197,6 +197,23 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
+    pub fn toAddress(self: Self) std.net.Address {
+        return switch (self) {
+            .V4 => |a| std.net.Address.initIp4(a.ip.octets, a.port),
+            .V6 => |a| std.net.Address.initIp6(a.ip.octets, a.port, a.flowinfo, a.scope_id),
+        };
+    }
+
+    /// returns:
+    /// - array: the string, plus some extra bytes at the end
+    /// - integer: length of the string within the array
+    pub fn toString(self: Self) struct { [53]u8, usize } {
+        var buf: [53]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        self.toAddress().format("", .{}, stream.writer()) catch unreachable;
+        return .{ buf, stream.pos };
+    }
+
     pub fn isUnspecified(self: *const Self) bool {
         switch (self.*) {
             .V4 => |addr| {
@@ -220,25 +237,27 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    // TODO: decide on `toString` method approach
-    pub fn toString(self: Self, buff: []u8) ![]const u8 {
-        switch (self) {
-            .V4 => |v4| {
-                return try std.fmt.bufPrint(buff, "{d}.{d}.{d}.{d}:{d}", .{ v4.ip.octets[0], v4.ip.octets[1], v4.ip.octets[2], v4.ip.octets[3], v4.port });
-            },
-            .V6 => |_| {
-                // TODO: properly print ipv6
-                return try std.fmt.bufPrint(buff, "N/A", .{});
-            },
-        }
-    }
-
     pub fn jsonStringify(
         self: *const Self,
         jw: anytype,
     ) !void {
         var buff = [_]u8{0} ** 24;
-        try jw.write(self.toString(&buff) catch unreachable);
+        _ = self; 
+        _ = jw;
+        _ = buff;
+        // try jw.write(self.toString(&buff) catch unreachable);
+    }
+
+    pub fn sanitize(socket: *const Self) !void {
+        if (socket.port() == 0) {
+            return error.InvalidPort;
+        }
+        if (socket.isUnspecified()) {
+            return error.UnspecifiedAddress;
+        }
+        if (socket.isMulticast()) {
+            return error.MulticastAddress;
+        }
     }
 };
 
