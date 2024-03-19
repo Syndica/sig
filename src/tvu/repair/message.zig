@@ -144,8 +144,8 @@ pub const RepairMessage = union(enum(u8)) {
         serialized: []u8,
         /// to compare to the header. typically is this validator's own pubkey
         expected_recipient: Pubkey,
-        /// unix timestamp in seconds when this function is called
-        current_timestamp_secs: u64,
+        /// unix timestamp in milliseconds when this function is called
+        current_timestamp_millis: u64,
     ) error{ IdMismatch, InvalidSignature, Malformed, TimeSkew }!void {
         switch (self.*) {
             .Pong => |pong| try pong.verify(),
@@ -157,7 +157,7 @@ pub const RepairMessage = union(enum(u8)) {
                 }
 
                 // message was generated recently
-                const time_diff = @as(i128, current_timestamp_secs) - @as(i128, header.timestamp);
+                const time_diff = @as(i128, current_timestamp_millis) - @as(i128, header.timestamp);
                 const time_diff_abs = std.math.absInt(time_diff) catch unreachable;
                 if (time_diff_abs > SIGNED_REPAIR_TIME_WINDOW_SECS) {
                     return error.TimeSkew;

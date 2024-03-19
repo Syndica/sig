@@ -25,7 +25,9 @@ fn getLatestSlot() u64 {
     return 255043752;
 }
 
-/// Identifies which repairs are needed and sends the requests.
+/// Identifies which repairs are needed and sends them
+/// - delegates to RepairPeerProvider to identify repair peers.
+/// - delegates to RepairRequester to send the requests.
 pub const RepairService = struct {
     allocator: Allocator,
     requester: RepairRequester,
@@ -62,7 +64,7 @@ pub const RepairService = struct {
     }
 };
 
-/// Signs and serializes messages. Sends data over the network.
+/// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
     rng: Random,
@@ -83,6 +85,7 @@ pub const RepairRequester = struct {
             @intCast(timestamp),
             self.rng.int(Nonce),
         );
+        defer self.allocator.free(data);
         const addr = request.recipient_addr.toString();
         self.logger.infof(
             "sending repair request to {s} - {}",
@@ -228,36 +231,83 @@ pub const RepairPeerProvider = struct {
     }
 };
 
-test "tvu.repair.service: RepairService initializes" {
+test "tvu.repair.service: RepairService sends repair request to gossip peer" {
+    const SignedGossipData = sig.gossip.SignedGossipData;
     const allocator = std.testing.allocator;
-    var rand = std.rand.DefaultPrng.init(0);
+    var rand = std.rand.DefaultPrng.init(4328095);
+    var random = rand.random();
 
+    // my details
     const keypair = KeyPair.create(null) catch unreachable;
-    const my_shred_version = Atomic(u16).init(0);
+    const my_shred_version = Atomic(u16).init(random.int(u16));
+    const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
-    var gossip_mux = RwMux(GossipTable).init(gossip);
+    defer gossip.deinit();
+    var logger = Logger.init(allocator, .warn);
+    defer logger.deinit();
 
+    // connectivity
+    const repair_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
+    var repair_socket = try Socket.create(.ipv4, .udp);
+    try repair_socket.bind(.{
+        .port = repair_port,
+        .address = .{ .ipv4 = .{ .value = .{ 0, 0, 0, 0 } } },
+    });
+
+    // peer
+    const peer_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
+    const peer_keypair = KeyPair.create(null) catch unreachable;
+    var peer_socket = try Socket.create(.ipv4, .udp);
+    const peer_endpoint = .{
+        .address = .{ .ipv4 = .{ .value = .{ 127, 0, 0, 1 } } },
+        .port = peer_port,
+    };
+    try peer_socket.bind(peer_endpoint);
+    try peer_socket.setReadTimeout(100_000);
+    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key, true), wallclock, my_shred_version.load(.Unordered));
+    defer peer_contact_info.deinit();
+    try peer_contact_info.setSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(sig.gossip.SOCKET_TAG_TVU, SocketAddr.fromEndpoint(&peer_endpoint));
+    try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
+
+    // init service
+    var exit = Atomic(bool).init(false);
+    var gossip_mux = RwMux(GossipTable).init(gossip);
     var peers = try RepairPeerProvider.init(
         allocator,
-        rand.random(),
+        random,
         &gossip_mux,
         Pubkey.fromPublicKey(&keypair.public_key, true),
         &my_shred_version,
     );
-    var socket = try Socket.create(.ipv4, .udp);
-    var exit = Atomic(bool).init(false);
     var service = RepairService{
         .allocator = allocator,
         .requester = RepairRequester{
             .allocator = allocator,
-            .rng = rand.random(),
-            .udp_send_socket = &socket,
+            .rng = random,
+            .udp_send_socket = &repair_socket,
             .keypair = &keypair,
-            .logger = undefined,
+            .logger = logger,
         },
         .peers = peers,
-        .logger = undefined,
+        .logger = logger,
         .exit = &exit,
     };
-    service.deinit();
+    defer service.deinit();
+
+    // run test
+    const handle = try std.Thread.spawn(.{}, RepairService.run, .{&service});
+    var buf: [200]u8 = undefined;
+    const size = peer_socket.receive(&buf) catch 0;
+
+    // assertions
+    try std.testing.expect(160 == size);
+    const msg = try sig.bincode.readFromSlice(allocator, sig.tvu.repair.RepairMessage, buf[0..160], .{});
+    try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key, true), @intCast(std.time.milliTimestamp()));
+    try std.testing.expect(msg.HighestWindowIndex.slot == getLatestSlot());
+    try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);
+
+    // exit
+    exit.store(true, .Monotonic);
+    handle.join();
 }
