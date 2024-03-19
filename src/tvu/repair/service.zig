@@ -209,11 +209,11 @@ pub const RepairPeerProvider = struct {
         var i: usize = 0;
         var infos = gossip.contactInfoIterator(0);
         while (infos.next()) |info| {
-            const socket = info.getSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR);
+            const socket = info.getSocket(sig.gossip.socket_tag.SERVE_REPAIR);
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
                 info.shred_version == self.my_shred_version.load(.Monotonic) and // need compatible shreds
                 socket != null and // node must be able to receive repair requests
-                info.getSocket(sig.gossip.SOCKET_TAG_TVU) != null) // node needs access to shreds
+                info.getSocket(sig.gossip.socket_tag.TVU) != null) // node needs access to shreds
             {
                 // exclude nodes that are known to be missing this slot
                 if (gossip.get(.{ .LowestSlot = info.pubkey })) |lsv| {
@@ -266,8 +266,8 @@ test "tvu.repair.service: RepairService sends repair request to gossip peer" {
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
     var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key, true), wallclock, my_shred_version.load(.Unordered));
-    try peer_contact_info.setSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
-    try peer_contact_info.setSocket(sig.gossip.SOCKET_TAG_TVU, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(sig.gossip.socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(sig.gossip.socket_tag.TVU, SocketAddr.fromEndpoint(&peer_endpoint));
     try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
 
     // init service
@@ -410,10 +410,10 @@ const TestPeerGenerator = struct {
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key, true);
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
-            try contact_info.setSocket(sig.gossip.SOCKET_TAG_SERVE_REPAIR, serve_repair_addr);
+            try contact_info.setSocket(sig.gossip.socket_tag.SERVE_REPAIR, serve_repair_addr);
         }
         if (peer_type != .MissingTvuPort) {
-            try contact_info.setSocket(sig.gossip.SOCKET_TAG_TVU, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
+            try contact_info.setSocket(sig.gossip.socket_tag.TVU, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
         try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {

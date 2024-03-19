@@ -24,7 +24,7 @@ const bincode = @import("../bincode/bincode.zig");
 const gossip = @import("../gossip/data.zig");
 const LegacyContactInfo = gossip.LegacyContactInfo;
 const ContactInfo = @import("data.zig").ContactInfo;
-const SOCKET_TAG_GOSSIP = @import("data.zig").SOCKET_TAG_GOSSIP;
+const socket_tag = @import("data.zig").socket_tag;
 const SignedGossipData = gossip.SignedGossipData;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -154,7 +154,7 @@ pub const GossipService = struct {
         var active_set = ActiveSet.init(allocator);
 
         // bind the socket
-        const gossip_address = my_contact_info.getSocket(SOCKET_TAG_GOSSIP) orelse return error.GossipAddrUnspecified;
+        const gossip_address = my_contact_info.getSocket(socket_tag.GOSSIP) orelse return error.GossipAddrUnspecified;
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
         gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
         gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT) catch return error.SocketSetTimeoutFailed; // 1 second
@@ -1005,7 +1005,7 @@ pub const GossipService = struct {
                 const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
-                if (peer_contact_info.getSocket(SOCKET_TAG_GOSSIP)) |gossip_addr| {
+                if (peer_contact_info.getSocket(socket_tag.GOSSIP)) |gossip_addr| {
                     const message = GossipMessage{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
                     var packet = &packet_batch.items[packet_index];
@@ -1374,7 +1374,7 @@ pub const GossipService = struct {
                 return error.CantFindContactInfo;
             };
         };
-        const from_gossip_addr = from_contact_info.getSocket(SOCKET_TAG_GOSSIP) orelse return error.InvalidGossipAddress;
+        const from_gossip_addr = from_contact_info.getSocket(socket_tag.GOSSIP) orelse return error.InvalidGossipAddress;
         gossip.sanitizeSocket(&from_gossip_addr) catch return error.InvalidGossipAddress;
         const from_gossip_endpoint = from_gossip_addr.toEndpoint();
 
@@ -1474,7 +1474,7 @@ pub const GossipService = struct {
                     // unable to find contact info
                     continue;
                 };
-                const from_gossip_addr = from_contact_info.getSocket(SOCKET_TAG_GOSSIP) orelse continue;
+                const from_gossip_addr = from_contact_info.getSocket(socket_tag.GOSSIP) orelse continue;
                 from_gossip_addr.sanitize() catch {
                     // invalid gossip socket
                     continue;
@@ -1698,7 +1698,7 @@ pub const GossipService = struct {
 
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
-            const peer_gossip_addr = contact_info.getSocket(SOCKET_TAG_GOSSIP);
+            const peer_gossip_addr = contact_info.getSocket(socket_tag.GOSSIP);
 
             // filter self
             if (contact_info.pubkey.equals(&self.my_pubkey)) {
@@ -2117,7 +2117,7 @@ test "gossip.gossip_service: tests handle pull request" {
     defer pull_requests.deinit();
     try pull_requests.append(GossipService.PullRequestMessage{
         .filter = filter,
-        .from_endpoint = (contact_info.getSocket(SOCKET_TAG_GOSSIP) orelse unreachable).toEndpoint(),
+        .from_endpoint = (contact_info.getSocket(socket_tag.GOSSIP) orelse unreachable).toEndpoint(),
         .value = gossip_value,
     });
 
@@ -2557,7 +2557,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
     var my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
     var contact_info = try LegacyContactInfo.random(rng.random()).toContactInfo(std.testing.allocator);
-    try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_address);
+    try contact_info.setSocket(socket_tag.GOSSIP, gossip_address);
     var exit = AtomicBool.init(false);
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
@@ -2610,7 +2610,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
         var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
-        try contact_info.setSocket(SOCKET_TAG_GOSSIP, address);
+        try contact_info.setSocket(socket_tag.GOSSIP, address);
 
         // var logger = Logger.init(allocator, .debug);
         // defer logger.deinit();
@@ -2713,6 +2713,6 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);
-    try contact_info.setSocket(SOCKET_TAG_GOSSIP, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
+    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0));
     return contact_info;
 }

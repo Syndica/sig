@@ -12,7 +12,7 @@ const GossipVersionedData = _gossip_data.GossipVersionedData;
 const GossipKey = _gossip_data.GossipKey;
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const ContactInfo = _gossip_data.ContactInfo;
-const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const socket_tag = _gossip_data.socket_tag;
 const getWallclockMs = _gossip_data.getWallclockMs;
 const Vote = _gossip_data.Vote;
 
@@ -820,7 +820,7 @@ pub const GossipTable = struct {
         for (contact_indexs) |index| {
             const entry: GossipVersionedData = self.store.values()[index];
             switch (entry.value.data) {
-                .ContactInfo => |ci| if (ci.getSocket(SOCKET_TAG_GOSSIP)) |addr| {
+                .ContactInfo => |ci| if (ci.getSocket(socket_tag.GOSSIP)) |addr| {
                     if (addr.eql(&gossip_addr)) return try ci.clone();
                 },
                 .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {

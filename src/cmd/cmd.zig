@@ -30,10 +30,7 @@ const getWallclockMs = sig.gossip.getWallclockMs;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 
-const SOCKET_TAG_GOSSIP = sig.gossip.SOCKET_TAG_GOSSIP;
-const SOCKET_TAG_TVU = sig.gossip.SOCKET_TAG_TVU;
-const SOCKET_TAG_REPAIR = sig.gossip.SOCKET_TAG_REPAIR;
-const SOCKET_TAG_SERVE_REPAIR = sig.gossip.SOCKET_TAG_SERVE_REPAIR;
+const socket_tag = sig.gossip.socket_tag;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -203,7 +200,7 @@ fn validator(_: []const []const u8) !void {
         &exit,
         entrypoints,
         shred_version,
-        &.{.{ .tag = SOCKET_TAG_REPAIR, .port = repair_port }},
+        &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
     );
     defer gossip_service.deinit();
     var gossip_handle = try spawnGossip(&gossip_service);
@@ -247,7 +244,7 @@ fn initGossip(
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(SOCKET_TAG_GOSSIP, SocketAddr.initIpv4(gossip_host_ip, gossip_port));
+    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.initIpv4(gossip_host_ip, gossip_port));
     for (sockets) |socket| {
         try contact_info.setSocket(socket.tag, SocketAddr.initIpv4(gossip_host_ip, socket.port));
     }
