@@ -1041,7 +1041,6 @@ pub fn main() !void {
     const n_threads_snapshot_unpack = 20;
     const disk_index_dir: ?[]const u8 = "test_data/tmp";
     // const disk_index_dir: ?[]const u8 = null;
-    const index_ram_capacity = 100_000;
     // const force_unpack_snapshot = false;
     const force_unpack_snapshot = true;
     const snapshot_dir = "../snapshots/";
@@ -1141,7 +1140,6 @@ pub fn main() !void {
     // load and validate
     logger.infof("initializing accounts-db...", .{});
     var accounts_db = try AccountsDB.init(allocator, logger, AccountsDBConfig{
-        .index_ram_capacity = index_ram_capacity,
         .disk_index_dir = disk_index_dir,
     });
     defer accounts_db.deinit();
@@ -1390,11 +1388,18 @@ pub const BenchmarkAccountsDB = struct {
     };
 
     pub const BenchArgs = struct {
+        /// the number of accounts to store in the database (for each slot)
         n_accounts: usize,
+        /// the number of slots to store (each slot is one batch write)
         slot_list_len: usize,
+        /// the accounts memory type (ram (as a ArrayList) or disk (as a file))
         accounts: MemoryType,
+        /// the index memory type (ram or disk (disk-memory allocator))
         index: MemoryType,
+        /// the number of accounts to prepopulate the index with as a multiple of n_accounts
+        /// ie, if n_accounts = 100 and n_accounts_multiple = 10, then the index will have 10x100=1000 accounts prepopulated
         n_accounts_multiple: usize = 0,
+        /// the name of the benchmark
         name: []const u8 = "",
     };
 
@@ -1519,6 +1524,16 @@ pub const BenchmarkAccountsDB = struct {
             pubkeys[i] = Pubkey.random(rng);
         }
 
+        var all_filenames = try ArrayList([]const u8).initCapacity(allocator, slot_list_len + bench_args.n_accounts_multiple);
+        defer all_filenames.deinit();
+        defer {
+            for (all_filenames.items) |filepath| {
+                std.fs.cwd().deleteFile(filepath) catch {
+                    std.debug.print("failed to delete file: {s}\n", .{filepath});
+                };
+            }
+        }
+
         if (bench_args.accounts == .ram) {
             const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
             var accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
@@ -1548,19 +1563,8 @@ pub const BenchmarkAccountsDB = struct {
             const elapsed = timer.read();
             std.debug.print("WRITE: {d}\n", .{elapsed});
         } else {
-            var slot_list_filenames = try ArrayList([]const u8).initCapacity(allocator, slot_list_len);
-            defer slot_list_filenames.deinit();
-
             var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
             defer account_files.deinit();
-
-            // defer {
-            //     for (slot_list_filenames.items) |filepath| {
-            //         std.fs.cwd().deleteFile(filepath) catch {
-            //             std.debug.print("failed to delete file: {s}\n", .{filepath});
-            //         };
-            //     }
-            // }
 
             for (0..(slot_list_len + bench_args.n_accounts_multiple)) |s| {
                 var size: usize = 0;
@@ -1611,9 +1615,10 @@ pub const BenchmarkAccountsDB = struct {
                 if (s < bench_args.n_accounts_multiple) {
                     try accounts_db.putAccountFile(&account_file, n_accounts);
                 } else {
-                    slot_list_filenames.appendAssumeCapacity(filepath);
+                    // to be indexed later (and timed)
                     account_files.appendAssumeCapacity(account_file);
                 }
+                all_filenames.appendAssumeCapacity(filepath);
             }
 
             var timer = try std.time.Timer.start();
