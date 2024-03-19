@@ -898,7 +898,7 @@ pub const SnapshotHashes = struct {
 };
 
 // allows socket tags to be accessable through the file too
-// maybe hacky?
+// TODO: maybe remove, maybe hacky?
 pub usingnamespace ContactInfo;
 
 pub const ContactInfo = struct {
@@ -1182,7 +1182,7 @@ test "gossip.data: new contact info" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
 }
 
@@ -1211,7 +1211,7 @@ test "gossip.data: set & get socket on contact info" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng, .{}), @as(u64, @intCast(std.time.microTimestamp())), 1000);
+    var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng), @as(u64, @intCast(std.time.microTimestamp())), 1000);
     defer ci.deinit();
     try ci.setSocket(ContactInfo.SOCKET_TAG_RPC, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
 

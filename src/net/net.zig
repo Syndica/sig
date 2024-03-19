@@ -242,7 +242,7 @@ pub const SocketAddr = union(enum(u8)) {
         jw: anytype,
     ) !void {
         var buff = [_]u8{0} ** 24;
-        _ = self; 
+        _ = self;
         _ = jw;
         _ = buff;
         // try jw.write(self.toString(&buff) catch unreachable);

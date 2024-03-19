@@ -1094,7 +1094,7 @@ test "gossip.table: insert and get contact_info" {
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].pubkey.equals(&id));
 
-    // test getting all 
+    // test getting all
     var nodes2 = try table.getAllContactInfos();
     defer nodes2.deinit();
     try std.testing.expect(nodes2.items.len == 1);
