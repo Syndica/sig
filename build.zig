@@ -206,11 +206,6 @@ pub fn build(b: *std.Build) void {
             .description = "benchmark client",
         },
         ExecCommand{
-            .name = "snapshot_utils",
-            .path = "src/cmd/snapshot_utils.zig",
-            .description = "snapshot utils",
-        },
-        ExecCommand{
             .name = "db",
             .path = "src/accountsdb/db.zig",
             .description = "run accounts-db code",
