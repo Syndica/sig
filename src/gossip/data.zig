@@ -270,7 +270,12 @@ pub const GossipData = union(enum(u32)) {
 
     pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
-            inline .LegacyContactInfo, .ContactInfo, .AccountsHashes, .LegacySnapshotHashes => |*v| {
+            inline .LegacyContactInfo,
+            .ContactInfo,
+            .AccountsHashes,
+            .LegacySnapshotHashes,
+            .NodeInstance,
+            => |*v| {
                 try v.sanitize();
             },
             .Vote => |*v| {
@@ -815,6 +820,10 @@ pub const NodeInstance = struct {
             .token = self.token,
         };
     }
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
+    }
 };
 
 pub const ShredType = enum(u8) {
@@ -1332,7 +1341,10 @@ test "gossip.data: pubkey matches rust" {
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk, true);
 
-    const rust_bytes = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92 };
+    const rust_bytes = [_]u8{
+        138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45, 60,  186, 93,  114,
+        202, 103, 9,   191, 29,  148, 18,  27,  243, 116, 136, 1,  180, 15,  111, 92,
+    };
     var buf = [_]u8{0} ** 1024;
     var bytes = try bincode.writeToSlice(buf[0..], id, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes[0..bytes.len]);
@@ -1356,7 +1368,17 @@ test "gossip.data: contact info serialization matches rust" {
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = 0;
 
-    var contact_info_rust = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var contact_info_rust = [_]u8{
+        138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45, 60,  186, 93,  114,
+        202, 103, 9,   191, 29,  148, 18,  27,  243, 116, 136, 1,  180, 15,  111, 92,
+        0,   0,   0,   0,   127, 0,   0,   1,   210, 4,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,
+    };
     var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], &contact_info_rust);
 }
@@ -1378,7 +1400,17 @@ test "gossip.data: gossip data serialization matches rust" {
     };
 
     var buf = [_]u8{0} ** 1024;
-    var rust_gossip_data = [_]u8{ 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var rust_gossip_data = [_]u8{
+        0,   0,  0,   0,   138, 136, 227, 221, 116, 9,  241, 149, 253, 82,  219, 45,  60,
+        186, 93, 114, 202, 103, 9,   191, 29,  148, 18, 27,  243, 116, 136, 1,   180, 15,
+        111, 92, 0,   0,   0,   0,   127, 0,   0,   1,  210, 4,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,
+    };
     var bytes = try bincode.writeToSlice(buf[0..], gossip_data, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_gossip_data[0..bytes.len]);
 }
@@ -1440,10 +1472,27 @@ test "gossip.data: sanitize valid ContactInfo works" {
 }
 
 test "gossip.data: sanitize invalid ContactInfo has error" {
-    var rand = std.rand.DefaultPrng.init(871329);
+    var rand = std.rand.DefaultPrng.init(3414214);
     const rng = rand.random();
     const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 1_000_000_000_000_000, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
+}
+
+test "gossip.data: sanitize valid NodeInstance works" {
+    var rand = std.rand.DefaultPrng.init(23523413);
+    const rng = rand.random();
+    const instance = NodeInstance.random(rng);
+    const data = GossipData{ .NodeInstance = instance };
+    try data.sanitize();
+}
+
+test "gossip.data: sanitize invalid NodeInstance has error" {
+    var rand = std.rand.DefaultPrng.init(524145234);
+    const rng = rand.random();
+    var instance = NodeInstance.random(rng);
+    instance.wallclock = 1_000_000_000_487_283;
+    const data = GossipData{ .NodeInstance = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
