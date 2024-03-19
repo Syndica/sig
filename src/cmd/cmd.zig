@@ -5,7 +5,7 @@ const network = @import("zig-network");
 const sig = @import("../lib.zig");
 const helpers = @import("helpers.zig");
 
-const Pubkey = sig.core.Pubkey;
+const Atomic = std.atomic.Atomic;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
@@ -15,6 +15,7 @@ const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
 const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
+const Pubkey = sig.core.Pubkey;
 const Registry = sig.prometheus.Registry;
 const RepairService = sig.tvu.repair.RepairService;
 const RepairPeerProvider = sig.tvu.repair.RepairPeerProvider;
@@ -167,12 +168,13 @@ fn gossip(_: []const []const u8) !void {
     const metrics_thread = try spawnMetrics(logger);
     defer metrics_thread.detach();
 
+    var exit = std.atomic.Atomic(bool).init(false);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
     const shred_version = getShredVersionFromIpEcho(logger, entrypoints.items);
 
-    var gossip_service = try initGossip(logger, my_keypair, entrypoints, shred_version, &.{});
+    var gossip_service = try initGossip(logger, my_keypair, &exit, entrypoints, shred_version, &.{});
     defer gossip_service.deinit();
 
     var handle = try spawnGossip(&gossip_service);
@@ -198,6 +200,7 @@ fn validator(_: []const []const u8) !void {
     var gossip_service = try initGossip(
         logger,
         my_keypair,
+        &exit,
         entrypoints,
         shred_version,
         &.{.{ .tag = SOCKET_TAG_REPAIR, .port = repair_port }},
@@ -209,7 +212,7 @@ fn validator(_: []const []const u8) !void {
     try repair_socket.bindToPort(repair_port);
     try repair_socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
 
-    var repair_svc = try initRepair(rand.random(), &gossip_service, &my_keypair, &repair_socket, logger);
+    var repair_svc = try initRepair(logger, &my_keypair, &exit, rand.random(), &gossip_service, &repair_socket);
     defer repair_svc.deinit();
     var repair_handle = try std.Thread.spawn(.{}, RepairService.run, .{&repair_svc});
 
@@ -231,6 +234,7 @@ fn validator(_: []const []const u8) !void {
 fn initGossip(
     logger: Logger,
     my_keypair: KeyPair,
+    exit: *Atomic(bool),
     entrypoints: std.ArrayList(SocketAddr),
     shred_version: u16,
     sockets: []const struct { tag: u8, port: u16 },
@@ -249,23 +253,23 @@ fn initGossip(
     }
     contact_info.shred_version = shred_version;
 
-    var exit = std.atomic.Atomic(bool).init(false);
     return try GossipService.init(
         gpa_allocator,
         contact_info,
         my_keypair,
         entrypoints,
-        &exit,
+        exit,
         logger,
     );
 }
 
 fn initRepair(
+    logger: Logger,
+    my_keypair: *const KeyPair,
+    exit: *Atomic(bool),
     random: Random,
     gossip_service: *GossipService,
-    my_keypair: *const KeyPair,
     socket: *Socket,
-    logger: Logger,
 ) !RepairService {
     var peers = try RepairPeerProvider.init(
         gpa_allocator,
@@ -285,6 +289,7 @@ fn initRepair(
         },
         .peers = peers,
         .logger = logger,
+        .exit = exit,
     };
 }
 
