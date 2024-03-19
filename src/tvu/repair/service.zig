@@ -244,17 +244,20 @@ test "tvu.repair.service: RepairService initializes" {
         Pubkey.fromPublicKey(&keypair.public_key, true),
         &my_shred_version,
     );
+    var socket = try Socket.create(.ipv4, .udp);
+    var exit = Atomic(bool).init(false);
     var service = RepairService{
         .allocator = allocator,
         .requester = RepairRequester{
             .allocator = allocator,
             .rng = rand.random(),
-            .udp_send_socket = try Socket.create(.ipv4, .udp),
+            .udp_send_socket = &socket,
             .keypair = &keypair,
             .logger = undefined,
         },
         .peers = peers,
         .logger = undefined,
+        .exit = &exit,
     };
     service.deinit();
 }
