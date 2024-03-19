@@ -127,7 +127,6 @@ pub const GossipTable = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.store.deinit();
         self.contact_infos.deinit();
         self.shred_versions.deinit();
         self.votes.deinit();
@@ -148,6 +147,12 @@ pub const GossipTable = struct {
             entry.value_ptr.deinit();
         }
         self.converted_contact_infos.deinit();
+
+        var store_iter = self.store.iterator();
+        while (store_iter.next()) |entry| {
+            bincode.free(self.allocator, entry.value_ptr.value.data);
+        }
+        self.store.deinit();
     }
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !void {

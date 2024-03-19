@@ -733,7 +733,7 @@ pub const GossipService = struct {
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
                 var my_contact_info_value = try gossip.SignedGossipData.initSigned(gossip.GossipData{
-                    .ContactInfo = self.my_contact_info,
+                    .ContactInfo = try self.my_contact_info.clone(),
                 }, &self.my_keypair);
                 var my_legacy_contact_info_value = try gossip.SignedGossipData.initSigned(gossip.GossipData{
                     .LegacyContactInfo = LegacyContactInfo.fromContactInfo(&self.my_contact_info),
@@ -1861,7 +1861,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -1914,7 +1914,7 @@ test "gossip.gossip_service: tests handling prune messages" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -1988,7 +1988,7 @@ test "gossip.gossip_service: tests handling pull responses" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2047,7 +2047,7 @@ test "gossip.gossip_service: tests handle pull request" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2138,7 +2138,7 @@ test "gossip.gossip_service: test build prune messages and handle push messages"
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2225,7 +2225,7 @@ test "gossip.gossip_service: test build pull requests" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2267,7 +2267,7 @@ test "gossip.gossip_service: test build push messages" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2340,7 +2340,7 @@ test "gossip.gossip_service: test packet verification" {
     var id = Pubkey.fromPublicKey(&keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(id);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2470,7 +2470,7 @@ test "gossip.gossip_service: process contact info push packet" {
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, true);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 
@@ -2559,7 +2559,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
     var contact_info = try LegacyContactInfo.random(rng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_address);
     var exit = AtomicBool.init(false);
-    var logger = Logger.init(std.testing.allocator, .debug);
+    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 

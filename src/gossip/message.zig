@@ -231,7 +231,7 @@ test "gossip.message: push message serialization is predictable" {
         msg_with_value,
         bincode.Params{},
     );
-    std.debug.print("value_size, empty_size, msg_value_size: {d} {d} {d}\n", .{ value_size, empty_size, msg_value_size });
+    // std.debug.print("value_size, empty_size, msg_value_size: {d} {d} {d}\n", .{ value_size, empty_size, msg_value_size });
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
 

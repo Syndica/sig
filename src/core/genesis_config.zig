@@ -145,10 +145,14 @@ pub const GenesisConfig = struct {
 };
 
 test "core.genesis_config: test" {
+    const Logger = @import("../trace/log.zig").Logger;
     const alloc = std.testing.allocator;
     const genesis_path = "./test_data/genesis.bin";
     const abs_genesis_path = try std.fs.cwd().realpathAlloc(alloc, genesis_path);
     defer alloc.free(abs_genesis_path);
+    var logger = Logger.init(alloc, Logger.TEST_DEFAULT_LEVEL);
+    defer logger.deinit();
+    logger.spawn();
 
     // open file
     var file = try std.fs.openFileAbsolute(abs_genesis_path, .{});
@@ -157,7 +161,7 @@ test "core.genesis_config: test" {
     try file.seekFromEnd(0);
     const file_size = try file.getPos();
     try file.seekTo(0);
-    std.debug.print("length: {d}\n", .{file_size});
+    logger.debugf("length: {d}", .{file_size});
 
     var buf_reader = std.io.bufferedReader(file.reader());
     var in_stream = buf_reader.reader();
@@ -176,5 +180,5 @@ test "core.genesis_config: test" {
     );
     defer bincode.free(std.testing.allocator, config);
 
-    std.debug.print("{any}", .{config});
+    logger.debugf("{any}", .{config});
 }
