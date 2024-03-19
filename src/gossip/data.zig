@@ -270,7 +270,7 @@ pub const GossipData = union(enum(u32)) {
 
     pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
-            .LegacyContactInfo => |*v| {
+            inline .LegacyContactInfo, .ContactInfo, .AccountsHashes, .LegacySnapshotHashes => |*v| {
                 try v.sanitize();
             },
             .Vote => |*v| {
@@ -308,12 +308,6 @@ pub const GossipData = union(enum(u32)) {
 
                 const value: LowestSlot = v[1];
                 try value.sanitize();
-            },
-            .LegacySnapshotHashes => |*v| {
-                try v.sanitize();
-            },
-            .AccountsHashes => |*v| {
-                try v.sanitize();
             },
             else => {
                 std.debug.print("sanitize not implemented for type: {s}\n", .{@tagName(self.*)});
@@ -997,6 +991,10 @@ pub const ContactInfo = struct {
         };
     }
 
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
+    }
+
     pub fn getSocket(self: *const Self, key: u8) ?SocketAddr {
         if (self.cache[key].eql(&SocketAddr.UNSPECIFIED)) {
             return null;
@@ -1430,4 +1428,22 @@ test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
     const end = LegacyContactInfo.fromContactInfo(&ci);
 
     try std.testing.expect(std.meta.eql(start, end));
+}
+
+test "gossip.data: sanitize valid ContactInfo works" {
+    var rand = std.rand.DefaultPrng.init(871329);
+    const rng = rand.random();
+    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 100, 123, 246);
+    defer info.deinit();
+    const data = GossipData{ .ContactInfo = info };
+    try data.sanitize();
+}
+
+test "gossip.data: sanitize invalid ContactInfo has error" {
+    var rand = std.rand.DefaultPrng.init(871329);
+    const rng = rand.random();
+    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 1_000_000_000_000_000, 123, 246);
+    defer info.deinit();
+    const data = GossipData{ .ContactInfo = info };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
