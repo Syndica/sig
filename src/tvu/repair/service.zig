@@ -21,8 +21,8 @@ const Slot = sig.core.Slot;
 const RepairRequest = sig.tvu.repair.RepairRequest;
 const serializeRepairRequest = sig.tvu.repair.serializeRepairRequest;
 
-fn getLatestSlotFromSnapshot() u64 {
-    return 1;
+fn getLatestSlot() u64 {
+    return 255043752;
 }
 
 /// Identifies which repairs are needed and sends the requests.
@@ -31,25 +31,24 @@ pub const RepairService = struct {
     requester: RepairRequester,
     peers: RepairPeerProvider,
     logger: Logger,
+    exit: *Atomic(bool),
 
     pub fn deinit(self: *@This()) void {
         self.peers.deinit();
     }
 
     pub fn run(self: *@This()) !void {
-        var initial_repair_done = false;
-        while (true) {
-            if (!initial_repair_done) if (try self.initialSnapshotRepair()) |request| {
+        while (!self.exit.load(.Unordered)) {
+            if (try self.initialSnapshotRepair()) |request| {
                 try self.requester.sendRepairRequest(request);
-                initial_repair_done = true;
-            };
+            }
             // TODO repair logic
-            std.time.sleep(1_000_000_000);
+            std.time.sleep(100_000_000);
         }
     }
 
     fn initialSnapshotRepair(self: *@This()) !?AddressedRepairRequest {
-        const slot = getLatestSlotFromSnapshot();
+        const slot = getLatestSlot();
         const request: RepairRequest = .{ .HighestShred = .{ slot, 0 } };
         const maybe_peer = try self.peers.getRandomPeer(slot);
 
@@ -58,7 +57,6 @@ pub const RepairService = struct {
             .recipient = peer.pubkey,
             .recipient_addr = peer.serve_repair_socket,
         } else {
-            self.logger.err("no repair peers found, skipping initial repair");
             return null;
         }
     }
@@ -69,7 +67,7 @@ pub const RepairRequester = struct {
     allocator: Allocator,
     rng: Random,
     keypair: *const KeyPair,
-    udp_send_socket: Socket,
+    udp_send_socket: *Socket,
     logger: Logger,
 
     pub fn sendRepairRequest(
@@ -85,9 +83,10 @@ pub const RepairRequester = struct {
             @intCast(timestamp),
             self.rng.int(Nonce),
         );
+        const addr = request.recipient_addr.toString();
         self.logger.infof(
-            "sending repair request {} to {}",
-            .{ request.request, request.recipient_addr },
+            "sending repair request to {s} - {}",
+            .{ addr[0][0..addr[1]], request.request },
         );
         _ = try self.udp_send_socket.sendTo(request.recipient_addr.toEndpoint(), data);
     }

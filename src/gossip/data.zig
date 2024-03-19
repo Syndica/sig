@@ -10,7 +10,7 @@ const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const sanitizeWallclock = @import("./message.zig").sanitizeWallclock;
-const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 
 const network = @import("zig-network");
 const var_int = @import("../utils/varint.zig");
@@ -897,6 +897,7 @@ pub const SnapshotHashes = struct {
     }
 };
 
+// TODO how about scoping these so usage is like: socket_tag.GOSSIP?
 pub const SOCKET_TAG_GOSSIP: u8 = 0;
 pub const SOCKET_TAG_REPAIR: u8 = 1;
 pub const SOCKET_TAG_RPC: u8 = 2;

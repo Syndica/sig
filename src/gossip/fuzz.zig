@@ -26,8 +26,8 @@ const getWallclockMs = @import("data.zig").getWallclockMs;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
-const Packet = @import("packet.zig").Packet;
-const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
+const Packet = @import("../net/packet.zig").Packet;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;

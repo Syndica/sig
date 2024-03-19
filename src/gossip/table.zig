@@ -26,7 +26,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
-const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8192;
 pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this

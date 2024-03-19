@@ -53,7 +53,7 @@ pub const Ping = struct {
         };
     }
 
-    pub fn verify(self: *Self) !void {
+    pub fn verify(self: *const Self) !void {
         if (!self.signature.verify(self.from, &self.token)) {
             return error.InvalidSignature;
         }
