@@ -31,12 +31,12 @@ fn getLatestSlot() u64 {
 pub const RepairService = struct {
     allocator: Allocator,
     requester: RepairRequester,
-    peers: RepairPeerProvider,
+    peer_provider: RepairPeerProvider,
     logger: Logger,
     exit: *Atomic(bool),
 
     pub fn deinit(self: *@This()) void {
-        self.peers.deinit();
+        self.peer_provider.deinit();
     }
 
     pub fn run(self: *@This()) !void {
@@ -52,7 +52,7 @@ pub const RepairService = struct {
     fn initialSnapshotRepair(self: *@This()) !?AddressedRepairRequest {
         const slot = getLatestSlot();
         const request: RepairRequest = .{ .HighestShred = .{ slot, 0 } };
-        const maybe_peer = try self.peers.getRandomPeer(slot);
+        const maybe_peer = try self.peer_provider.getRandomPeer(slot);
 
         if (maybe_peer) |peer| return .{
             .request = request,
@@ -130,7 +130,7 @@ pub const RepairPeer = struct {
 pub const RepairPeerProvider = struct {
     allocator: Allocator,
     rng: Random,
-    gossip: *RwMux(GossipTable),
+    gossip_table_rw: *RwMux(GossipTable),
     cache: LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit),
     my_pubkey: Pubkey,
     my_shred_version: *const Atomic(u16),
@@ -153,7 +153,7 @@ pub const RepairPeerProvider = struct {
     ) error{OutOfMemory}!RepairPeerProvider {
         return .{
             .allocator = allocator,
-            .gossip = gossip,
+            .gossip_table_rw = gossip,
             .cache = try LruCacheCustom(.non_locking, Slot, RepairPeers, Allocator, RepairPeers.deinit)
                 .initWithContext(allocator, REPAIR_PEERS_CACHE_CAPACITY, allocator),
             .my_pubkey = my_pubkey,
@@ -201,29 +201,29 @@ pub const RepairPeerProvider = struct {
         allocator: Allocator,
         slot: Slot,
     ) error{OutOfMemory}![]RepairPeer {
-        var reader = self.gossip.read();
-        defer reader.unlock();
-        const gossip: *const GossipTable = reader.get();
-        const buf = try allocator.alloc(RepairPeer, gossip.contact_infos.count());
+        var gossip_table_lock = self.gossip_table_rw.read();
+        defer gossip_table_lock.unlock();
+        const gossip_table: *const GossipTable = gossip_table_lock.get();
+        const buf = try allocator.alloc(RepairPeer, gossip_table.contact_infos.count());
         errdefer allocator.free(buf);
         var i: usize = 0;
-        var infos = gossip.contactInfoIterator(0);
+        var infos = gossip_table.contactInfoIterator(0);
         while (infos.next()) |info| {
-            const socket = info.getSocket(sig.gossip.socket_tag.SERVE_REPAIR);
+            const serve_repair_socket = info.getSocket(sig.gossip.socket_tag.SERVE_REPAIR);
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
                 info.shred_version == self.my_shred_version.load(.Monotonic) and // need compatible shreds
-                socket != null and // node must be able to receive repair requests
+                serve_repair_socket != null and // node must be able to receive repair requests
                 info.getSocket(sig.gossip.socket_tag.TVU) != null) // node needs access to shreds
             {
                 // exclude nodes that are known to be missing this slot
-                if (gossip.get(.{ .LowestSlot = info.pubkey })) |lsv| {
+                if (gossip_table.get(.{ .LowestSlot = info.pubkey })) |lsv| {
                     if (lsv.value.data.LowestSlot[1].lowest > slot) {
                         continue;
                     }
                 }
                 buf[i] = .{
                     .pubkey = info.pubkey,
-                    .serve_repair_socket = socket.?,
+                    .serve_repair_socket = serve_repair_socket.?,
                 };
                 i += 1;
             }
@@ -289,7 +289,7 @@ test "tvu.repair.service: RepairService sends repair request to gossip peer" {
             .keypair = &keypair,
             .logger = logger,
         },
-        .peers = peers,
+        .peer_provider = peers,
         .logger = logger,
         .exit = &exit,
     };
