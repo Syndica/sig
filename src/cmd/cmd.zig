@@ -268,7 +268,7 @@ fn initRepair(
     gossip_service: *GossipService,
     socket: *Socket,
 ) !RepairService {
-    var peers = try RepairPeerProvider.init(
+    var peer_provider = try RepairPeerProvider.init(
         gpa_allocator,
         random,
         &gossip_service.gossip_table_rw,
@@ -284,7 +284,7 @@ fn initRepair(
             .keypair = my_keypair,
             .logger = logger,
         },
-        .peers = peers,
+        .peer_provider = peer_provider,
         .logger = logger,
         .exit = exit,
     };

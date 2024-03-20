@@ -115,11 +115,7 @@ pub const RepairMessage = union(enum(u8)) {
             return false;
         }
         switch (self.*) {
-            .Pong => |*s| {
-                return std.mem.eql(u8, &s.from.data, &other.Pong.from.data) and
-                    std.mem.eql(u8, &s.hash.data, &other.Pong.hash.data) and
-                    std.mem.eql(u8, &s.signature.data, &other.Pong.signature.data);
-            },
+            .Pong => |*s| return s.eql(&other.Pong),
             .WindowIndex => |*s| {
                 const o = other.WindowIndex;
                 return s.header.eql(&o.header) and s.slot == o.slot and s.shred_index == o.shred_index;

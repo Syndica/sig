@@ -89,6 +89,12 @@ pub const Pong = struct {
         const ping = try Ping.random(rng, keypair);
         return try Pong.init(&ping, keypair);
     }
+
+    pub fn eql(self: *const @This(), other: *const @This()) bool {
+        return std.mem.eql(u8, &self.from.data, &other.from.data) and
+            std.mem.eql(u8, &self.hash.data, &other.hash.data) and
+            std.mem.eql(u8, &self.signature.data, &other.signature.data);
+    }
 };
 
 /// `PubkeyAndSocketAddr` is a 2 element tuple: `.{ Pubkey, SocketAddr }`
