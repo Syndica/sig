@@ -181,7 +181,7 @@ fn gossip(_: []const []const u8) !void {
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, spy_node },
+        .{ &gossip_service, spy_node, true },
     );
 
     handle.join();
