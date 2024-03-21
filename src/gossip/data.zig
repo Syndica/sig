@@ -591,7 +591,7 @@ pub const CompressionType = enum {
 
 pub const LegacySnapshotHashes = AccountsHashes;
 
-pub const SlotAndHash = @import("../accountsdb/snapshots.zig").SlotAndHash;
+const SlotAndHash = @import("../accountsdb/snapshots.zig").SlotAndHash;
 
 pub const AccountsHashes = struct {
     from: Pubkey,
