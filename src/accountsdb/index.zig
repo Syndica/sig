@@ -122,9 +122,7 @@ pub const AccountIndex = struct {
 
     pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !void {
         var node = try self.allocator.create(RefMemoryLinkedList);
-        node.* = .{
-            .memory = refs,
-        };
+        node.* = .{ .memory = refs };
         if (self.memory_linked_list == null) {
             self.memory_linked_list = node;
         } else {

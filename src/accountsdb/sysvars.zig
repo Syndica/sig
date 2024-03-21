@@ -105,8 +105,8 @@ pub const Rent = struct {
     burn_percent: u8,
 };
 
-pub const SlotHashes = ArrayList(SlotHash);
-pub const SlotHash = struct { slot: Slot, hash: Hash };
+const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
+pub const SlotHashes = ArrayList(SlotAndHash);
 
 pub const StakeHistory = ArrayList(struct {
     epoch: Epoch,

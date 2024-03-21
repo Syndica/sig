@@ -24,6 +24,7 @@ pub const accounts_db = struct {
     pub usingnamespace @import("accountsdb/index.zig");
     pub usingnamespace @import("accountsdb/snapshots.zig");
     pub usingnamespace @import("accountsdb/sysvars.zig");
+    pub usingnamespace @import("accountsdb/download.zig");
 };
 
 pub const gossip = struct {

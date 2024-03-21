@@ -16,6 +16,7 @@ const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
 const Registry = @import("../prometheus/registry.zig").Registry;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
+const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -110,14 +111,12 @@ fn gossip(_: []const []const u8) !void {
     defer logger.deinit();
     logger.spawn();
 
-    // var logger: Logger = .noop;
-
     const metrics_thread = try spawnMetrics(gpa_allocator, logger);
 
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
-    var gossip_address = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, gossip_port);
+    var gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, gossip_port);
     logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
@@ -183,6 +182,8 @@ fn gossip(_: []const []const u8) !void {
         GossipService.run,
         .{ &gossip_service, spy_node },
     );
+
+    try downloadSnapshotsFromGossip(gpa_allocator, &gossip_service);
 
     handle.join();
     metrics_thread.detach();
