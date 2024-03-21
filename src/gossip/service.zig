@@ -298,7 +298,7 @@ pub const GossipService = struct {
 
     fn runGossipDumpService(self: *Self) !void {
         const start_time = std.time.timestamp();
-        const dir = try std.fmt.allocPrint(self.allocator, "crds-dumps/{}", .{start_time});
+        const dir = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
         defer self.allocator.free(dir);
         try std.fs.cwd().makePath(dir);
         while (true) {
@@ -353,7 +353,7 @@ pub const GossipService = struct {
 
         // create file
         const now = std.time.timestamp();
-        const filename = try std.fmt.allocPrint(self.allocator, "{s}/crds-dump-{}.csv", .{ dir, now });
+        const filename = try std.fmt.allocPrint(self.allocator, "{s}/gossip-dump-{}.csv", .{ dir, now });
         defer self.allocator.free(filename);
         var file = try std.fs.cwd().createFile(filename, .{});
         defer file.close();
