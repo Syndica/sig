@@ -9,23 +9,22 @@ const Atomic = std.atomic.Atomic;
 const assert = std.debug.assert;
 const testing = std.testing;
 const http = std.http;
+const bincode = @import("../bincode/bincode.zig");
 
 const MAX_PORT_COUNT_PER_MSG: usize = 4;
 const MAX_REQ_HEADER_SIZE = 8192;
 const SERVER_LISTENER_LINGERING_TIMEOUT: u64 = std.time.ns_per_s * 1;
+const HEADER_LENGTH: usize = 4;
 
 const IpEchoServerMessage = struct {
-    tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16,
-    udp_ports: [MAX_PORT_COUNT_PER_MSG]u16,
+    tcp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
+    udp_ports: [MAX_PORT_COUNT_PER_MSG]u16 = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
 
     const Self = @This();
 
     pub fn init(tcp_ports: []u16, udp_ports: []u16) Self {
         assert(tcp_ports.len <= MAX_PORT_COUNT_PER_MSG and udp_ports.len <= MAX_PORT_COUNT_PER_MSG);
-        var self = Self{
-            .tcp_ports = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
-            .udp_ports = [_]u16{0} ** MAX_PORT_COUNT_PER_MSG,
-        };
+        var self = Self{};
 
         std.mem.copyForwards(u16, &self.tcp_ports, tcp_ports);
         std.mem.copyForwards(u16, &self.udp_ports, udp_ports);
@@ -299,6 +298,25 @@ pub fn handleRequest(
     }
 
     logger.debug("done handling request");
+}
+
+pub fn requestIpEcho(
+    allocator: std.mem.Allocator,
+    addr: std.net.Address,
+    message: IpEchoServerMessage,
+) !IpEchoServerResponse {
+    // connect + send
+    const conn = try std.net.tcpConnectToAddress(addr);
+    defer conn.close();
+    try conn.writeAll(&(.{0} ** HEADER_LENGTH));
+    try bincode.write(allocator, conn.writer(), message, .{});
+    try conn.writeAll("\n");
+
+    // get response
+    var buff: [32]u8 = undefined;
+    const len = try conn.readAll(&buff);
+    var bufferStream = std.io.fixedBufferStream(buff[HEADER_LENGTH..len]);
+    return try bincode.read(allocator, IpEchoServerResponse, bufferStream.reader(), .{});
 }
 
 test "net.echo: Server works" {

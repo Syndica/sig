@@ -27,7 +27,16 @@ pub const GetMetricError = error{
 };
 
 /// Global registry singleton for convenience.
-pub const global_registry: *OnceCell(Registry(.{})) = &global_registry_owned;
+///
+/// The registry is initialized the first time this is called
+/// and reused for future calls.
+pub fn globalRegistry() *Registry(.{}) {
+    return global_registry_owned.getOrInit(
+        Registry(.{}).init,
+        .{gpa.allocator()},
+    );
+}
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 var global_registry_owned: OnceCell(Registry(.{})) = .{};
 
 const RegistryOptions = struct {

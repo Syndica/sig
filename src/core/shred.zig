@@ -1,7 +1,6 @@
 const Hash = @import("hash.zig").Hash;
 const std = @import("std");
 const HardForks = @import("hard_forks.zig").HardForks;
-const Slot = @import("clock.zig").Slot;
 const Allocator = std.mem.Allocator;
 
 pub const ShredVersion = struct {

@@ -1287,14 +1287,14 @@ pub const ThreadPool = struct {
 // pub const WorkPool = NewWorkPool(null);
 // const testing = std.testing;
 
-// const CrdsTableTrimContext = struct {
+// const GossipTableTrimContext = struct {
 //     index: usize,
 //     max_trim: usize,
-//     self: *CrdsTable,
+//     self: *GossipTable,
 // };
 
-// const CrdsTable = struct {
-//     pub fn trim(context: CrdsTableTrimContext) void {
+// const GossipTable = struct {
+//     pub fn trim(context: GossipTableTrimContext) void {
 //         const self = context.self;
 //         _ = self;
 //         const max_trim = context.max_trim;
@@ -1309,10 +1309,10 @@ pub const ThreadPool = struct {
 // };
 
 // test "sync.thread_pool: workpool works" {
-//     var crds: CrdsTable = CrdsTable{};
-//     var a = CrdsTableTrimContext{ .index = 1, .max_trim = 2, .self = &crds };
+//     var gossip: GossipTable = GossipTable{};
+//     var a = GossipTableTrimContext{ .index = 1, .max_trim = 2, .self = &gossip };
 //     defer WorkPool.deinit();
-//     try WorkPool.go(testing.allocator, CrdsTableTrimContext, a, CrdsTable.trim);
+//     try WorkPool.go(testing.allocator, GossipTableTrimContext, a, GossipTable.trim);
 
 //     std.time.sleep(std.time.ns_per_s * 1);
 //     WorkPool.pool.shutdown();

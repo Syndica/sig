@@ -38,12 +38,6 @@ while n_removes > 0:
         with open(filename, 'r') as f:
             full_lines = f.readlines()
 
-        # filter lines to start with 'const' or 'pub const' 
-        lines = [line for line in full_lines if line.startswith('const') or line.startswith('pub const')]
-
-        # get lines which include '@import' 
-        lines = [line for line in lines if '@import' in line]
-
         # parse the value {VAR} name in 'const {VAR} = @import ...' 
         import_var_names = []
         for (i, line) in enumerate(full_lines):
@@ -76,7 +70,9 @@ while n_removes > 0:
                 continue
             new_lines.append(line)
 
-        print(unused_vars)
+        if (len(lines_to_remove) > 0): 
+            print(filename) 
+            print(unused_vars)
 
         # write 
         with open(filename, 'w') as f:
