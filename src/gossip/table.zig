@@ -462,14 +462,14 @@ pub const GossipTable = struct {
         buf: []ContactInfo,
         minimum_insertion_timestamp: u64,
     ) []ContactInfo {
-        const size = @min(self.contact_infos.count(), buf.len);
         var infos = self.contactInfoIterator(minimum_insertion_timestamp);
-        for (0..size) |i| {
-            if (infos.next()) |info| {
-                buf[i] = info.*;
-            } else break;
+        var i: usize = 0;
+        while (infos.next()) |info| {
+            if (i >= buf.len) break;
+            buf[i] = info.*;
+            i += 1;
         }
-        return buf[0..size];
+        return buf[0..i];
     }
 
     /// Similar to getContactInfos, but returns an iterator instead
