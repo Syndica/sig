@@ -56,7 +56,7 @@ pub fn downloadSnapshotsFromGossip(
             var contacts = table.getContactInfos(&contact_info_buf, 0);
             std.debug.print("found {d} contacts\n", .{contacts.len});
 
-            for (contacts) |*ci| {
+            search_loop: for (contacts) |*ci| {
                 const is_me = ci.pubkey.equals(&my_pubkey);
                 if (is_me) {
                     continue;
@@ -77,6 +77,13 @@ pub fn downloadSnapshotsFromGossip(
                     }
                 }
 
+                // dont try to download from a slow peer
+                for (slow_peer_pubkeys.items) |slow_peer| {
+                    if (slow_peer.equals(&ci.pubkey)) {
+                        continue :search_loop;
+                    }
+                }
+
                 try available_snapshot_peers.append(.{
                     // NOTE: maybe we need to deep clone here due to arraylist sockets?
                     .contact_info = ci.*,
@@ -88,15 +95,6 @@ pub fn downloadSnapshotsFromGossip(
         }
 
         for (available_snapshot_peers.items) |peer| {
-            // dont try to download from a slow peer
-            var is_slow_peer = false;
-            for (slow_peer_pubkeys.items) |slow_peer| {
-                if (slow_peer.equals(&peer.contact_info.pubkey)) {
-                    is_slow_peer = true;
-                }
-            }
-            if (is_slow_peer) continue;
-
             // download the full snapshot
             const snapshot_filename = try std.fmt.allocPrint(allocator, "snapshot-{d}-{s}.{s}", .{
                 peer.full_snapshot.slot,
