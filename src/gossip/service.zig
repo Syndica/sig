@@ -1795,23 +1795,6 @@ pub const GossipService = struct {
     }
 };
 
-fn gossipDataVariantName(val: *const SignedGossipData) []const u8 {
-    return switch (val.data) {
-        .LegacyContactInfo => "LegacyContactInfo",
-        .Vote => "Vote",
-        .LowestSlot => "LowestSlot",
-        .LegacySnapshotHashes => "LegacySnapshotHashes",
-        .AccountsHashes => "AccountsHashes",
-        .EpochSlots => "EpochSlots",
-        .LegacyVersion => "LegacyVersion",
-        .Version => "Version",
-        .NodeInstance => "NodeInstance",
-        .DuplicateShred => "DuplicateShred",
-        .SnapshotHashes => "SnapshotHashes",
-        .ContactInfo => "ContactInfo",
-    };
-}
-
 pub const ChunkType = enum(u8) {
     PushMessage,
     PullResponse,
