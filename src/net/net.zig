@@ -16,6 +16,20 @@ pub const SocketAddr = union(enum(u8)) {
         },
     };
 
+    pub fn init(addr: IpAddr, portt: u16) Self {
+        return switch (addr) {
+            .ipv4 => |ipv4| .{ .V4 = .{ .ip = ipv4, .port = portt } },
+            .ipv6 => |ipv6| .{
+                .V6 = .{
+                    .ip = ipv6,
+                    .port = portt,
+                    .flowinfo = 0,
+                    .scope_id = 0,
+                },
+            },
+        };
+    }
+
     pub fn parse(bytes: []const u8) !Self {
         // TODO: parse v6 if v4 fails
         return parseIpv4(bytes);

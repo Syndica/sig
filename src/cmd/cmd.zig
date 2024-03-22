@@ -16,10 +16,33 @@ const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
 const Registry = @import("../prometheus/registry.zig").Registry;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
+const IpAddr = @import("../lib.zig").net.IpAddr;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
 const base58Encoder = base58.Encoder.init(.{});
+
+const gossip_host = struct {
+    // TODO: support domain names and ipv6 addresses
+    var option = cli.Option{
+        .long_name = "gossip-host",
+        .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
+        .value = cli.OptionValue{ .string = null },
+        .required = false,
+        .value_name = "Gossip Host",
+    };
+
+    fn get() !?IpAddr {
+        if (option.value.string) |str| {
+            var buf: [15]u8 = undefined;
+            @memcpy(buf[0..str.len], str);
+            @memcpy(buf[str.len .. str.len + 2], ":0");
+            const sa = try SocketAddr.parseIpv4(buf[0 .. str.len + 2]);
+            return .{ .ipv4 = sa.V4.ip };
+        }
+        return null;
+    }
+};
 
 var gossip_port_option = cli.Option{
     .long_name = "gossip-port",
@@ -117,13 +140,7 @@ fn gossip(_: []const []const u8) !void {
     var my_keypair = try getOrInitIdentity(gpa_allocator, logger);
 
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
-    var gossip_address = SocketAddr.initIpv4(.{ 0, 0, 0, 0 }, gossip_port);
     logger.infof("gossip port: {d}", .{gossip_port});
-
-    // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
-    var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_address);
 
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     defer entrypoints.deinit();
@@ -148,10 +165,12 @@ fn gossip(_: []const []const u8) !void {
     }
     logger.infof("entrypoints: {s}", .{entrypoint_string[0..stream.pos]});
 
-    // determine our shred version. in the solana-labs client, this approach is only
-    // used for validation. normally, shred version comes from the snapshot.
-    contact_info.shred_version = loop: for (entrypoints.items) |entrypoint| {
+    // determine our shred version and ip. in the solana-labs client, the shred version
+    // comes from the snapshot, and ip echo is only used to validate it.
+    var my_ip_from_entrypoint: ?IpAddr = null;
+    const my_shred_version = loop: for (entrypoints.items) |entrypoint| {
         if (echo.requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
+            if (my_ip_from_entrypoint == null) my_ip_from_entrypoint = response.address;
             if (response.shred_version) |shred_version| {
                 var addr_str = entrypoint.toString();
                 logger.infof(
@@ -165,6 +184,15 @@ fn gossip(_: []const []const u8) !void {
         logger.warn("could not get a shred version from an entrypoint");
         break :loop 0;
     };
+    const my_ip = try gossip_host.get() orelse my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1);
+    logger.infof("my ip: {}", .{my_ip});
+
+    // setup contact info
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
+    contact_info.shred_version = my_shred_version;
+    var gossip_address = SocketAddr.init(my_ip, gossip_port);
+    try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_address);
 
     var exit = std.atomic.Atomic(bool).init(false);
     var gossip_service = try GossipService.init(
