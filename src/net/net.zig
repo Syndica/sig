@@ -237,6 +237,17 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
+    pub fn jsonStringify(
+        self: *const Self,
+        jw: anytype,
+    ) !void {
+        var buff = [_]u8{0} ** 24;
+        _ = self;
+        _ = jw;
+        _ = buff;
+        // try jw.write(self.toString(&buff) catch unreachable);
+    }
+
     pub fn sanitize(socket: *const Self) !void {
         if (socket.port() == 0) {
             return error.InvalidPort;

@@ -475,6 +475,15 @@ pub const GossipTable = struct {
         return buf[0..tgt_idx];
     }
 
+    pub fn getAllContactInfos(self: *const Self) error{OutOfMemory}!std.ArrayList(ContactInfo) {
+        const n_contact_infos = self.contact_infos.count();
+        var contact_infos = try std.ArrayList(ContactInfo).initCapacity(self.allocator, n_contact_infos);
+        contact_infos.items.len = n_contact_infos;
+
+        _ = self.getContactInfos(contact_infos.items, 0);
+        return contact_infos;
+    }
+
     // ** shard getter fcns **
     pub fn getBitmaskMatches(
         self: *const Self,
@@ -1027,7 +1036,7 @@ test "gossip.table: insert and get votes" {
     var kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk, true);
+    var id = Pubkey.fromPublicKey(&pk);
 
     var vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     var gossip_value = try SignedGossipData.initSigned(GossipData{
@@ -1050,7 +1059,7 @@ test "gossip.table: insert and get votes" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    id = Pubkey.random(rng, .{});
+    id = Pubkey.random(rng);
     vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
     gossip_value = try SignedGossipData.initSigned(GossipData{
         .Vote = .{ 0, vote },
@@ -1067,7 +1076,7 @@ test "gossip.table: insert and get votes" {
 
 test "gossip.table: insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
-    var id = Pubkey.fromPublicKey(&kp.public_key, true);
+    var id = Pubkey.fromPublicKey(&kp.public_key);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
     var gossip_value = try SignedGossipData.initSigned(GossipData{
@@ -1086,6 +1095,12 @@ test "gossip.table: insert and get contact_info" {
     var nodes = table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
     try std.testing.expect(nodes[0].pubkey.equals(&id));
+
+    // test getting all
+    var nodes2 = try table.getAllContactInfos();
+    defer nodes2.deinit();
+    try std.testing.expect(nodes2.items.len == 1);
+    try std.testing.expect(nodes2.items[0].pubkey.equals(&id));
 
     // test re-insertion
     const result = table.insert(gossip_value, 0);

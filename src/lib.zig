@@ -1,10 +1,3 @@
-pub const rpc = struct {
-    pub usingnamespace @import("rpc/client.zig");
-    pub const types = struct {
-        pub usingnamespace @import("rpc/types.zig");
-    };
-};
-
 pub const core = struct {
     pub usingnamespace @import("core/pubkey.zig");
     pub usingnamespace @import("core/account.zig");
@@ -61,6 +54,7 @@ pub const trace = struct {
 
 pub const common = struct {
     pub usingnamespace @import("common/lru.zig");
+    pub usingnamespace @import("common/uuid.zig");
 };
 
 pub const bincode = struct {
@@ -75,6 +69,13 @@ pub const net = struct {
     pub usingnamespace @import("net/net.zig");
     pub usingnamespace @import("net/echo.zig");
     pub usingnamespace @import("net/socket_utils.zig");
+};
+
+pub const rpc = struct {
+    pub usingnamespace @import("rpc/client.zig");
+    pub usingnamespace @import("rpc/processor.zig");
+    pub usingnamespace @import("rpc/server.zig");
+    pub usingnamespace @import("rpc/types.zig");
 };
 
 pub const prometheus = struct {
