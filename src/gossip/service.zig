@@ -1738,37 +1738,26 @@ pub const GossipService = struct {
         if (my_shred_version == 0) {
             return gossip_values_array.items.len;
         }
-        if (gossip_table.checkMatchingShredVersion(from_pubkey, my_shred_version)) {
-            for (gossip_values, 0..) |*gossip_value, i| {
-                switch (gossip_value.data) {
-                    // always allow contact info + node instance to update shred versions
-                    .ContactInfo => {},
-                    .LegacyContactInfo => {},
-                    .NodeInstance => {},
-                    else => {
-                        // only allow other values with matching shred versions
-                        if (!gossip_table.checkMatchingShredVersion(
-                            gossip_value.id(),
-                            my_shred_version,
-                        )) {
-                            _ = gossip_values_array.swapRemove(i);
-                        }
-                    },
-                }
-            }
-        } else {
-            for (gossip_values, 0..) |*gossip_value, i| {
-                switch (gossip_value.data) {
-                    // always allow contact info + node instance to update shred versions
-                    .ContactInfo => {},
-                    .LegacyContactInfo => {},
-                    .NodeInstance => {},
-                    else => {
-                        // dont update any other values
+        var i: usize = 0;
+        const sender_matches = gossip_table.checkMatchingShredVersion(from_pubkey, my_shred_version);
+        while (i < gossip_values_array.items.len) {
+            const gossip_value = &gossip_values[i];
+            switch (gossip_value.data) {
+                // always allow contact info + node instance to update shred versions
+                .ContactInfo => {},
+                .LegacyContactInfo => {},
+                .NodeInstance => {},
+                else => {
+                    // only allow values where both the sender and origin match our shred version
+                    if (!sender_matches or
+                        !gossip_table.checkMatchingShredVersion(gossip_value.id(), my_shred_version))
+                    {
                         _ = gossip_values_array.swapRemove(i);
-                    },
-                }
+                        continue; // do not incrememnt `i`. it has a new value we need to inspect.
+                    }
+                },
             }
+            i += 1;
         }
         return gossip_values_array.items.len;
     }
