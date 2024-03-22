@@ -48,6 +48,10 @@ const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
 
+const Registry = @import("../prometheus/registry.zig").Registry;
+const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
+const Gauge = @import("../prometheus/gauge.zig").Gauge;
+
 const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
 
@@ -78,7 +82,58 @@ pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 // TODO: replace with get_epoch_duration when BankForks is supported
 const DEFAULT_EPOCH_DURATION: u64 = 172800000;
 
-const Config = struct { mode: enum { normal, tests, bench } = .normal };
+pub const PUB_GOSSIP_STATS_INTERVAL_MS = 2 * std.time.ms_per_s;
+pub const GOSSIP_TRIM_INTERVAL_MS = 10 * std.time.ms_per_s;
+
+const StatU64 = struct {
+    v: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
+
+    pub fn add(self: *StatU64, value: u64) void {
+        _ = self.v.fetchAdd(value, .Monotonic);
+    }
+
+    pub fn getAndClear(self: *StatU64) u64 {
+        return self.v.swap(0, .Monotonic);
+    }
+};
+
+/// we use this local struct so we can publish the results every N seconds.
+/// otherwise the values would continually increases.
+/// note: when publishing, the name will match the field name
+pub const GossipStats = struct {
+    gossip_packets_received: StatU64 = .{},
+    gossip_packets_verified: StatU64 = .{},
+    gossip_packets_processed: StatU64 = .{},
+
+    ping_messages_recv: StatU64 = .{},
+    pong_messages_recv: StatU64 = .{},
+    push_messages_recv: StatU64 = .{},
+    pull_requests_recv: StatU64 = .{},
+    pull_responses_recv: StatU64 = .{},
+    prune_messages_recv: StatU64 = .{},
+
+    ping_messages_dropped: StatU64 = .{},
+    pull_requests_dropped: StatU64 = .{},
+    prune_messages_dropped: StatU64 = .{},
+
+    ping_messages_sent: StatU64 = .{},
+    pong_messages_sent: StatU64 = .{},
+    push_messages_sent: StatU64 = .{},
+    pull_requests_sent: StatU64 = .{},
+    pull_responses_sent: StatU64 = .{},
+    prune_messages_sent: StatU64 = .{},
+
+    handle_batch_ping_time: StatU64 = .{},
+    handle_batch_pong_time: StatU64 = .{},
+    handle_batch_push_time: StatU64 = .{},
+    handle_batch_pull_req_time: StatU64 = .{},
+    handle_batch_pull_resp_time: StatU64 = .{},
+    handle_batch_prune_time: StatU64 = .{},
+    handle_trim_table_time: StatU64 = .{},
+
+    table_n_values: StatU64 = .{},
+    table_n_pubkeys: StatU64 = .{},
+};
 
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
@@ -112,6 +167,8 @@ pub const GossipService = struct {
     logger: Logger,
     thread_pool: *ThreadPool,
     echo_server: echo.Server,
+
+    stats: *GossipStats,
 
     // used for benchmarking
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
@@ -170,6 +227,9 @@ pub const GossipService = struct {
             for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
+        const stats = try allocator.create(GossipStats);
+        stats.* = .{};
+
         return Self{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
@@ -197,6 +257,7 @@ pub const GossipService = struct {
             .echo_server = echo_server,
             .logger = logger,
             .thread_pool = thread_pool,
+            .stats = stats,
         };
     }
 
@@ -235,6 +296,7 @@ pub const GossipService = struct {
 
         self.entrypoints.deinit();
 
+        self.allocator.destroy(self.stats);
         self.allocator.destroy(self.thread_pool);
 
         deinitRwMux(&self.gossip_table_rw);
@@ -381,6 +443,13 @@ pub const GossipService = struct {
                 self.packet_incoming_channel.allocator.free(packet_batches);
             }
 
+            // count number of packets
+            var n_packets_drained: usize = 0;
+            for (packet_batches) |*packet_batch| {
+                n_packets_drained += packet_batch.items.len;
+            }
+            self.stats.gossip_packets_received.add(n_packets_drained);
+
             // verify in parallel using the threadpool
             var count: usize = 0;
             for (packet_batches) |*packet_batch| {
@@ -437,6 +506,7 @@ pub const GossipService = struct {
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self) !void {
         var timer = std.time.Timer.start() catch unreachable;
+        var last_table_trim_ts: u64 = 0;
         var msg_count: usize = 0;
 
         // we batch messages bc:
@@ -535,6 +605,7 @@ pub const GossipService = struct {
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
+                                    self.stats.pull_requests_dropped.add(1);
                                     continue;
                                 }
                             },
@@ -546,16 +617,21 @@ pub const GossipService = struct {
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
+                                    self.stats.pull_requests_dropped.add(1);
                                     continue;
                                 }
                             },
                             // only contact info supported
-                            else => continue,
+                            else => {
+                                self.stats.pull_requests_dropped.add(1);
+                                continue;
+                            },
                         }
 
                         const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
+                            self.stats.pull_requests_dropped.add(1);
                             continue;
                         }
 
@@ -573,6 +649,7 @@ pub const GossipService = struct {
                         const too_old = prune_wallclock < now -| GOSSIP_PRUNE_MSG_TIMEOUT_MS;
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
+                            self.stats.prune_messages_dropped.add(1);
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -581,6 +658,7 @@ pub const GossipService = struct {
                         const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
+                            self.stats.ping_messages_dropped.add(1);
                             continue;
                         }
 
@@ -598,85 +676,115 @@ pub const GossipService = struct {
                 }
             }
 
+            // track metrics
+            self.stats.gossip_packets_verified.add(messages.len);
+            self.stats.ping_messages_recv.add(ping_messages.items.len);
+            self.stats.pong_messages_recv.add(pong_messages.items.len);
+            self.stats.push_messages_recv.add(push_messages.items.len);
+            self.stats.pull_requests_recv.add(pull_requests.items.len);
+            self.stats.pull_responses_recv.add(pull_responses.items.len);
+            self.stats.prune_messages_recv.add(prune_messages.items.len);
+
+            var gossip_packets_processed: usize = 0;
+            gossip_packets_processed += ping_messages.items.len;
+            gossip_packets_processed += pong_messages.items.len;
+            gossip_packets_processed += push_messages.items.len;
+            gossip_packets_processed += pull_requests.items.len;
+            gossip_packets_processed += pull_responses.items.len;
+            gossip_packets_processed += prune_messages.items.len;
+            self.stats.gossip_packets_processed.add(gossip_packets_processed);
+
             // handle batch messages
             if (push_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = push_messages.items.len;
                 self.handleBatchPushMessages(&push_messages) catch |err| {
                     self.logger.errf("handleBatchPushMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch push took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_push_time.add(elapsed);
+
                 push_messages.clearRetainingCapacity();
             }
 
             if (prune_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = prune_messages.items.len;
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch prune took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_prune_time.add(elapsed);
+
                 prune_messages.clearRetainingCapacity();
             }
 
             if (pull_requests.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = pull_requests.items.len;
                 self.handleBatchPullRequest(pull_requests) catch |err| {
                     self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_req took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_pull_req_time.add(elapsed);
+
                 pull_requests.clearRetainingCapacity();
             }
 
             if (pull_responses.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = pull_responses.items.len;
                 self.handleBatchPullResponses(&pull_responses) catch |err| {
                     self.logger.errf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_resp took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_pull_resp_time.add(elapsed);
+
                 pull_responses.clearRetainingCapacity();
             }
 
             if (ping_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const n_ping_messages = ping_messages.items.len;
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
                     self.logger.errf("handleBatchPingMessages failed: {}", .{err});
                 };
-                self.logger.debugf("handle batch ping took {} with {} items @{}", .{ x_timer.read(), n_ping_messages, msg_count });
+                const elapsed = x_timer.read();
+                self.stats.handle_batch_ping_time.add(elapsed);
+
                 ping_messages.clearRetainingCapacity();
             }
 
             if (pong_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const n_pong_messages = pong_messages.items.len;
                 self.handleBatchPongMessages(&pong_messages);
-                self.logger.debugf("handle batch pong took {} with {} items @{}", .{ x_timer.read(), n_pong_messages, msg_count });
+                const elapsed = x_timer.read();
+                self.stats.handle_batch_pong_time.add(elapsed);
+
                 pong_messages.clearRetainingCapacity();
             }
 
             // TRIM gossip-table
-            {
-                var gossip_table_lock = self.gossip_table_rw.write();
-                defer gossip_table_lock.unlock();
-                var gossip_table: *GossipTable = gossip_table_lock.mut();
+            const trim_elapsed_ts = getWallclockMs() - last_table_trim_ts;
+            if (trim_elapsed_ts > GOSSIP_TRIM_INTERVAL_MS) {
+                // first check with a read lock
+                const should_trim = blk: {
+                    var gossip_table_lock = self.gossip_table_rw.read();
+                    defer gossip_table_lock.unlock();
+                    var gossip_table: *const GossipTable = gossip_table_lock.get();
 
-                var x_timer = std.time.Timer.start() catch unreachable;
-                gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
-                    self.logger.warnf("error trimming gossip table: {s}", .{@errorName(err)});
+                    const should_trim = gossip_table.shouldTrim(UNIQUE_PUBKEY_CAPACITY);
+                    break :blk should_trim;
                 };
-                const elapsed = x_timer.read();
-                self.logger.debugf("handle batch gossip_trim took {} with {} items @{}", .{ elapsed, 1, msg_count });
-            }
 
-            const elapsed = timer.read();
-            self.logger.debugf("{} messages processed in {}ns", .{ msg_count, elapsed });
-            // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
-            self.messages_processed.store(msg_count, std.atomic.Ordering.Release);
+                // then trim with write lock
+                if (should_trim) {
+                    var gossip_table_lock = self.gossip_table_rw.write();
+                    defer gossip_table_lock.unlock();
+                    var gossip_table: *GossipTable = gossip_table_lock.mut();
+
+                    var x_timer = std.time.Timer.start() catch unreachable;
+                    gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                        self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
+                    };
+                    const elapsed = x_timer.read();
+                    self.stats.handle_trim_table_time.add(elapsed);
+                }
+                last_table_trim_ts = getWallclockMs();
+            }
         }
 
         self.logger.debugf("process_messages loop closed", .{});
@@ -689,6 +797,7 @@ pub const GossipService = struct {
         self: *Self,
     ) !void {
         var last_push_ts: u64 = 0;
+        var last_stats_publish_ts: u64 = 0;
         var push_cursor: u64 = 0;
         var should_send_pull_requests = true;
         var entrypoints_identified = false;
@@ -705,6 +814,7 @@ pub const GossipService = struct {
                     self.logger.errf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
+                self.stats.pull_requests_sent.add(packets.items.len);
                 try self.packet_outgoing_channel.send(packets);
             }
             // every other loop
@@ -717,12 +827,13 @@ pub const GossipService = struct {
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
+                self.stats.push_messages_sent.add(push_packets.items.len);
                 try self.packet_outgoing_channel.sendBatch(push_packets);
                 push_packets.deinit();
             }
 
             // trim data
-            self.trimMemory(getWallclockMs()) catch @panic("out of memory");
+            try self.trimMemory(getWallclockMs());
 
             // initialize cluster data from gossip values
             entrypoints_identified = entrypoints_identified or try self.populateEntrypointsFromGossipTable();
@@ -749,8 +860,15 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
-                self.rotateActiveSet() catch @panic("out of memory");
+                try self.rotateActiveSet();
                 last_push_ts = getWallclockMs();
+            }
+
+            // publish metrics
+            const stats_publish_elapsed_ts = getWallclockMs() - last_stats_publish_ts;
+            if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL_MS) {
+                try self.publishMetrics();
+                last_stats_publish_ts = getWallclockMs();
             }
 
             // sleep
@@ -761,6 +879,31 @@ pub const GossipService = struct {
             }
         }
         self.logger.infof("build_messages loop closed", .{});
+    }
+
+    /// publishes metrics in self.stats to the prometheus registry
+    pub fn publishMetrics(self: *Self) !void {
+        // collect gossip table metrics
+        {
+            var gossip_table_lock = self.gossip_table_rw.read();
+            defer gossip_table_lock.unlock();
+
+            var gossip_table: *const GossipTable = gossip_table_lock.get();
+            const n_entries = gossip_table.store.count();
+            const n_pubkeys = gossip_table.pubkey_to_values.count();
+
+            self.stats.table_n_values.add(n_entries);
+            self.stats.table_n_pubkeys.add(n_pubkeys);
+        }
+
+        // publish all metrics
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(GossipStats).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            var field_counter: *Gauge(u64) = try registry.getOrCreateGauge(field.name, u64);
+            const stats_value = @field(self.stats, field.name).getAndClear();
+            _ = field_counter.set(stats_value);
+        }
     }
 
     pub fn rotateActiveSet(
@@ -1193,6 +1336,7 @@ pub const GossipService = struct {
 
         for (tasks) |*task| {
             if (task.output.items.len > 0) {
+                self.stats.pull_responses_sent.add(1);
                 // TODO: should only need one mux lock in this loop
                 try self.packet_outgoing_channel.send(task.output);
             }
@@ -1250,6 +1394,7 @@ pub const GossipService = struct {
                 .field("from_pubkey", &ping_message.ping.from.string())
                 .debug("gossip: recv ping");
         }
+        self.stats.pong_messages_sent.add(n_ping_messages);
         try self.packet_outgoing_channel.send(ping_packet_batch);
     }
 
@@ -1540,6 +1685,7 @@ pub const GossipService = struct {
             count += 1;
         }
 
+        self.stats.prune_messages_sent.add(n_packets);
         try self.packet_outgoing_channel.send(prune_packet_batch);
     }
 
@@ -1660,6 +1806,8 @@ pub const GossipService = struct {
             packet.size = serialized_ping.len;
             packet.addr = ping_and_addr.socket.toEndpoint();
         }
+
+        self.stats.ping_messages_sent.add(n_pings);
         try self.packet_outgoing_channel.send(packet_batch);
     }
 
