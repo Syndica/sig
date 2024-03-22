@@ -456,7 +456,9 @@ pub const GossipTable = struct {
     ) []ContactInfo {
         const store_values = self.store.values();
         const contact_indexs = self.contact_infos.iterator().keys;
-        const size = @min(self.contact_infos.count(), buf.len);
+        const size = self.contact_infos.count();
+
+        var output_index: usize = 0;
 
         for (0..size) |i| {
             const index = contact_indexs[i];
@@ -467,10 +469,15 @@ pub const GossipTable = struct {
                     .ContactInfo => |ci| ci,
                     else => unreachable,
                 };
-                buf[i] = contact_info;
+                buf[output_index] = contact_info;
+                output_index += 1;
+
+                if (output_index == buf.len) {
+                    break;
+                }
             }
         }
-        return buf[0..size];
+        return buf[0..output_index];
     }
 
     // ** shard getter fcns **

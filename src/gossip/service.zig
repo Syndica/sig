@@ -48,6 +48,10 @@ const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
 
+const Registry = @import("../prometheus/registry.zig").Registry;
+const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
+const Counter = @import("../prometheus/counter.zig").Counter;
+
 const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
 
@@ -68,7 +72,8 @@ pub const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
 pub const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
 pub const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
 
-pub const MAX_NUM_VALUES_PULL_RESPONSE = 20; // TODO: this is approx the rust one -- should tune
+// TODO: this is approx the rust one -- should tune
+pub const MAX_NUM_VALUES_PULL_RESPONSE = 20;
 
 /// Maximum number of origin nodes that a PruneData may contain, such that the
 /// serialized size of the PruneMessage stays below PACKET_DATA_SIZE.
@@ -78,7 +83,39 @@ pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 // TODO: replace with get_epoch_duration when BankForks is supported
 const DEFAULT_EPOCH_DURATION: u64 = 172800000;
 
-const Config = struct { mode: enum { normal, tests, bench } = .normal };
+pub const PUB_GOSSIP_STATS_INTERVAL = 2 * std.time.ns_per_s;
+
+const StatUsize = struct {
+    v: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
+
+    pub fn add(self: *StatUsize, value: usize) void {
+        _ = self.v.fetchAdd(value, .Monotonic);
+    }
+
+    pub fn getAndClear(self: *StatUsize) usize {
+        return self.v.swap(0, .Monotonic);
+    }
+};
+
+/// note: when publishing, the name will match the field name
+pub const GossipStats = struct {
+    gossip_packets_received: StatUsize = .{},
+    gossip_packets_verified: StatUsize = .{},
+
+    ping_messages_recv: StatUsize = .{},
+    pong_messages_recv: StatUsize = .{},
+    push_messages_recv: StatUsize = .{},
+    pull_requests_recv: StatUsize = .{},
+    pull_responses_recv: StatUsize = .{},
+    prune_messages_recv: StatUsize = .{},
+
+    ping_messages_sent: StatUsize = .{},
+    pong_messages_sent: StatUsize = .{},
+    push_messages_sent: StatUsize = .{},
+    pull_requests_sent: StatUsize = .{},
+    pull_responses_sent: StatUsize = .{},
+    prune_messages_sent: StatUsize = .{},
+};
 
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
@@ -114,6 +151,7 @@ pub const GossipService = struct {
     echo_server: echo.Server,
 
     // used for benchmarking
+    stats: GossipStats = .{},
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
 
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
@@ -381,6 +419,13 @@ pub const GossipService = struct {
                 self.packet_incoming_channel.allocator.free(packet_batches);
             }
 
+            // count number of packets
+            var n_packets_drained: usize = 0;
+            for (packet_batches) |*packet_batch| {
+                n_packets_drained += packet_batch.items.len;
+            }
+            self.stats.gossip_packets_received.add(n_packets_drained);
+
             // verify in parallel using the threadpool
             var count: usize = 0;
             for (packet_batches) |*packet_batch| {
@@ -473,6 +518,7 @@ pub const GossipService = struct {
             }
 
             const messages = maybe_messages.?;
+            msg_count += messages.len;
             defer {
                 for (messages) |*msg| {
                     // Important: this uses shallowFree instead of bincode.free
@@ -504,8 +550,6 @@ pub const GossipService = struct {
                 }
                 self.verified_incoming_channel.allocator.free(messages);
             }
-
-            msg_count += messages.len;
 
             for (messages) |*message| {
                 var from_endpoint: EndPoint = message.from_endpoint;
@@ -598,6 +642,15 @@ pub const GossipService = struct {
                 }
             }
 
+            // track metrics
+            self.stats.gossip_packets_verified.add(messages.len);
+            self.stats.ping_messages_recv.add(ping_messages.items.len);
+            self.stats.pong_messages_recv.add(pong_messages.items.len);
+            self.stats.push_messages_recv.add(push_messages.items.len);
+            self.stats.pull_requests_recv.add(pull_requests.items.len);
+            self.stats.pull_responses_recv.add(pull_responses.items.len);
+            self.stats.prune_messages_recv.add(prune_messages.items.len);
+
             // handle batch messages
             if (push_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
@@ -688,6 +741,7 @@ pub const GossipService = struct {
     fn buildMessages(
         self: *Self,
     ) !void {
+        var last_stats_publish_ts: u64 = 0;
         var last_push_ts: u64 = 0;
         var push_cursor: u64 = 0;
         var should_send_pull_requests = true;
@@ -705,6 +759,7 @@ pub const GossipService = struct {
                     self.logger.errf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
                 };
+                self.stats.pull_requests_sent.add(packets.items.len);
                 try self.packet_outgoing_channel.send(packets);
             }
             // every other loop
@@ -717,12 +772,13 @@ pub const GossipService = struct {
                 break :blk null;
             };
             if (maybe_push_packets) |push_packets| {
+                self.stats.push_messages_sent.add(push_packets.items.len);
                 try self.packet_outgoing_channel.sendBatch(push_packets);
                 push_packets.deinit();
             }
 
             // trim data
-            self.trimMemory(getWallclockMs()) catch @panic("out of memory");
+            try self.trimMemory(getWallclockMs());
 
             // initialize cluster data from gossip values
             entrypoints_identified = entrypoints_identified or try self.populateEntrypointsFromGossipTable();
@@ -749,8 +805,15 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
-                self.rotateActiveSet() catch @panic("out of memory");
+                try self.rotateActiveSet();
                 last_push_ts = getWallclockMs();
+            }
+
+            // publish metrics
+            const stats_publish_elapsed_ts = getWallclockMs() - last_stats_publish_ts;
+            if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL) {
+                try self.publishMetrics();
+                last_stats_publish_ts = getWallclockMs();
             }
 
             // sleep
@@ -761,6 +824,17 @@ pub const GossipService = struct {
             }
         }
         self.logger.infof("build_messages loop closed", .{});
+    }
+
+    pub fn publishMetrics(self: *Self) !void {
+        const reg = globalRegistry();
+
+        const info = @typeInfo(GossipStats).Struct;
+        inline for (info.fields) |field| {
+            var field_counter: *Counter = try reg.getOrCreateCounter(field.name);
+            const stats_value = @field(self.stats, field.name).getAndClear();
+            _ = field_counter.set(stats_value);
+        }
     }
 
     pub fn rotateActiveSet(
@@ -1193,6 +1267,7 @@ pub const GossipService = struct {
 
         for (tasks) |*task| {
             if (task.output.items.len > 0) {
+                self.stats.pull_responses_sent.add(1);
                 // TODO: should only need one mux lock in this loop
                 try self.packet_outgoing_channel.send(task.output);
             }
@@ -1250,6 +1325,8 @@ pub const GossipService = struct {
                 .field("from_pubkey", &ping_message.ping.from.string())
                 .info("gossip: recv ping");
         }
+
+        self.stats.pong_messages_sent.add(n_ping_messages);
         try self.packet_outgoing_channel.send(ping_packet_batch);
     }
 
@@ -1540,6 +1617,7 @@ pub const GossipService = struct {
             count += 1;
         }
 
+        self.stats.prune_messages_sent.add(n_packets);
         try self.packet_outgoing_channel.send(prune_packet_batch);
     }
 
@@ -1660,6 +1738,8 @@ pub const GossipService = struct {
             packet.size = serialized_ping.len;
             packet.addr = ping_and_addr.socket.toEndpoint();
         }
+
+        self.stats.ping_messages_sent.add(n_pings);
         try self.packet_outgoing_channel.send(packet_batch);
     }
 

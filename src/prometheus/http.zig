@@ -3,7 +3,7 @@ const std = @import("std");
 const httpz = @import("httpz");
 
 const Registry = @import("registry.zig").Registry;
-const global_registry = @import("registry.zig").global_registry;
+const globalRegistry = @import("registry.zig").globalRegistry;
 const default_buckets = @import("histogram.zig").default_buckets;
 
 pub fn servePrometheus(
@@ -41,13 +41,12 @@ pub fn getMetrics(
 /// Runs a test prometheus endpoint with dummy data.
 pub fn main() !void {
     const alloc = std.heap.page_allocator;
-    _ = try global_registry.initialize(Registry(.{}).init, .{alloc});
 
     _ = try std.Thread.spawn(
         .{},
         struct {
             fn run() !void {
-                const reg = try global_registry.get();
+                const reg = globalRegistry();
                 var secs_counter = try reg.getOrCreateCounter("seconds_since_start");
                 var gauge = try reg.getOrCreateGauge("seconds_hand", u64);
                 var hist = try reg.getOrCreateHistogram("hist", &default_buckets);
@@ -62,9 +61,11 @@ pub fn main() !void {
         }.run,
         .{},
     );
+
+    var reg = globalRegistry();
     try servePrometheus(
         alloc,
-        try global_registry.get(),
+        reg,
         12345,
     );
 }
