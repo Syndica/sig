@@ -50,7 +50,7 @@ const echo = @import("../net/echo.zig");
 
 const Registry = @import("../prometheus/registry.zig").Registry;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
-const Counter = @import("../prometheus/counter.zig").Counter;
+const Gauge = @import("../prometheus/gauge.zig").Gauge;
 
 const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
@@ -85,14 +85,14 @@ const DEFAULT_EPOCH_DURATION: u64 = 172800000;
 pub const PUB_GOSSIP_STATS_INTERVAL_MS = 2 * std.time.ms_per_s;
 pub const GOSSIP_TRIM_INTERVAL_MS = 10 * std.time.ms_per_s;
 
-const StatUsize = struct {
-    v: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
+const StatU64 = struct {
+    v: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
 
-    pub fn add(self: *StatUsize, value: usize) void {
+    pub fn add(self: *StatU64, value: u64) void {
         _ = self.v.fetchAdd(value, .Monotonic);
     }
 
-    pub fn getAndClear(self: *StatUsize) usize {
+    pub fn getAndClear(self: *StatU64) u64 {
         return self.v.swap(0, .Monotonic);
     }
 };
@@ -101,38 +101,38 @@ const StatUsize = struct {
 /// otherwise the values would continually increases.
 /// note: when publishing, the name will match the field name
 pub const GossipStats = struct {
-    gossip_packets_received: StatUsize = .{},
-    gossip_packets_verified: StatUsize = .{},
-    gossip_packets_processed: StatUsize = .{},
+    gossip_packets_received: StatU64 = .{},
+    gossip_packets_verified: StatU64 = .{},
+    gossip_packets_processed: StatU64 = .{},
 
-    ping_messages_recv: StatUsize = .{},
-    pong_messages_recv: StatUsize = .{},
-    push_messages_recv: StatUsize = .{},
-    pull_requests_recv: StatUsize = .{},
-    pull_responses_recv: StatUsize = .{},
-    prune_messages_recv: StatUsize = .{},
+    ping_messages_recv: StatU64 = .{},
+    pong_messages_recv: StatU64 = .{},
+    push_messages_recv: StatU64 = .{},
+    pull_requests_recv: StatU64 = .{},
+    pull_responses_recv: StatU64 = .{},
+    prune_messages_recv: StatU64 = .{},
 
-    ping_messages_dropped: StatUsize = .{},
-    pull_requests_dropped: StatUsize = .{},
-    prune_messages_dropped: StatUsize = .{},
+    ping_messages_dropped: StatU64 = .{},
+    pull_requests_dropped: StatU64 = .{},
+    prune_messages_dropped: StatU64 = .{},
 
-    ping_messages_sent: StatUsize = .{},
-    pong_messages_sent: StatUsize = .{},
-    push_messages_sent: StatUsize = .{},
-    pull_requests_sent: StatUsize = .{},
-    pull_responses_sent: StatUsize = .{},
-    prune_messages_sent: StatUsize = .{},
+    ping_messages_sent: StatU64 = .{},
+    pong_messages_sent: StatU64 = .{},
+    push_messages_sent: StatU64 = .{},
+    pull_requests_sent: StatU64 = .{},
+    pull_responses_sent: StatU64 = .{},
+    prune_messages_sent: StatU64 = .{},
 
-    handle_batch_ping_time: StatUsize = .{},
-    handle_batch_pong_time: StatUsize = .{},
-    handle_batch_push_time: StatUsize = .{},
-    handle_batch_pull_req_time: StatUsize = .{},
-    handle_batch_pull_resp_time: StatUsize = .{},
-    handle_batch_prune_time: StatUsize = .{},
-    handle_trim_table_time: StatUsize = .{},
+    handle_batch_ping_time: StatU64 = .{},
+    handle_batch_pong_time: StatU64 = .{},
+    handle_batch_push_time: StatU64 = .{},
+    handle_batch_pull_req_time: StatU64 = .{},
+    handle_batch_pull_resp_time: StatU64 = .{},
+    handle_batch_prune_time: StatU64 = .{},
+    handle_trim_table_time: StatU64 = .{},
 
-    table_n_values: StatUsize = .{},
-    table_n_pubkeys: StatUsize = .{},
+    table_n_values: StatU64 = .{},
+    table_n_pubkeys: StatU64 = .{},
 };
 
 pub const GossipService = struct {
@@ -900,7 +900,7 @@ pub const GossipService = struct {
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(GossipStats).Struct;
         inline for (stats_struct_info.fields) |field| {
-            var field_counter: *Counter = try registry.getOrCreateCounter(field.name);
+            var field_counter: *Gauge(u64) = try registry.getOrCreateGauge(field.name, u64);
             const stats_value = @field(self.stats, field.name).getAndClear();
             _ = field_counter.set(stats_value);
         }
