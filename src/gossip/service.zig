@@ -1248,7 +1248,7 @@ pub const GossipService = struct {
             self.logger
                 .field("from_endpoint", endpoint_str.items)
                 .field("from_pubkey", &ping_message.ping.from.string())
-                .info("gossip: recv ping");
+                .debug("gossip: recv ping");
         }
         try self.packet_outgoing_channel.send(ping_packet_batch);
     }
