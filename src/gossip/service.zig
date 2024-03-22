@@ -83,7 +83,8 @@ pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 // TODO: replace with get_epoch_duration when BankForks is supported
 const DEFAULT_EPOCH_DURATION: u64 = 172800000;
 
-pub const PUB_GOSSIP_STATS_INTERVAL = 2 * std.time.ns_per_s;
+pub const PUB_GOSSIP_STATS_INTERVAL_MS = 2 * std.time.ms_per_s;
+pub const GOSSIP_TRIM_INTERVAL_MS = 10 * std.time.ms_per_s;
 
 const StatUsize = struct {
     v: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
@@ -101,6 +102,7 @@ const StatUsize = struct {
 pub const GossipStats = struct {
     gossip_packets_received: StatUsize = .{},
     gossip_packets_verified: StatUsize = .{},
+    gossip_packets_processed: StatUsize = .{},
 
     ping_messages_recv: StatUsize = .{},
     pong_messages_recv: StatUsize = .{},
@@ -115,6 +117,17 @@ pub const GossipStats = struct {
     pull_requests_sent: StatUsize = .{},
     pull_responses_sent: StatUsize = .{},
     prune_messages_sent: StatUsize = .{},
+
+    handle_batch_ping_time: StatUsize = .{},
+    handle_batch_pong_time: StatUsize = .{},
+    handle_batch_push_time: StatUsize = .{},
+    handle_batch_pull_req_time: StatUsize = .{},
+    handle_batch_pull_resp_time: StatUsize = .{},
+    handle_batch_prune_time: StatUsize = .{},
+    handle_trim_table_time: StatUsize = .{},
+
+    table_n_values: StatUsize = .{},
+    table_n_pubkeys: StatUsize = .{},
 };
 
 pub const GossipService = struct {
@@ -483,6 +496,7 @@ pub const GossipService = struct {
     pub fn processMessages(self: *Self) !void {
         var timer = std.time.Timer.start() catch unreachable;
         var msg_count: usize = 0;
+        var last_table_trim_ts: usize = 0;
 
         // we batch messages bc:
         // 1) less lock contention
@@ -651,85 +665,109 @@ pub const GossipService = struct {
             self.stats.pull_responses_recv.add(pull_responses.items.len);
             self.stats.prune_messages_recv.add(prune_messages.items.len);
 
+            var gossip_packets_processed: usize = 0;
+            gossip_packets_processed += ping_messages.items.len;
+            gossip_packets_processed += pong_messages.items.len;
+            gossip_packets_processed += push_messages.items.len;
+            gossip_packets_processed += pull_requests.items.len;
+            gossip_packets_processed += pull_responses.items.len;
+            gossip_packets_processed += prune_messages.items.len;
+            self.stats.gossip_packets_processed.add(gossip_packets_processed);
+
             // handle batch messages
             if (push_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = push_messages.items.len;
                 self.handleBatchPushMessages(&push_messages) catch |err| {
                     self.logger.errf("handleBatchPushMessages failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch push took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_push_time.add(elapsed);
+
                 push_messages.clearRetainingCapacity();
             }
 
             if (prune_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = prune_messages.items.len;
                 self.handleBatchPruneMessages(&prune_messages);
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch prune took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_prune_time.add(elapsed);
+
                 prune_messages.clearRetainingCapacity();
             }
 
             if (pull_requests.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = pull_requests.items.len;
                 self.handleBatchPullRequest(pull_requests) catch |err| {
                     self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_req took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_pull_req_time.add(elapsed);
+
                 pull_requests.clearRetainingCapacity();
             }
 
             if (pull_responses.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const length = pull_responses.items.len;
                 self.handleBatchPullResponses(&pull_responses) catch |err| {
                     self.logger.errf("handleBatchPullResponses failed: {}", .{err});
                 };
                 const elapsed = x_timer.read();
-                self.logger.debugf("handle batch pull_resp took {} with {} items @{}", .{ elapsed, length, msg_count });
+                self.stats.handle_batch_pull_resp_time.add(elapsed);
+
                 pull_responses.clearRetainingCapacity();
             }
 
             if (ping_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const n_ping_messages = ping_messages.items.len;
                 self.handleBatchPingMessages(&ping_messages) catch |err| {
                     self.logger.errf("handleBatchPingMessages failed: {}", .{err});
                 };
-                self.logger.debugf("handle batch ping took {} with {} items @{}", .{ x_timer.read(), n_ping_messages, msg_count });
+                const elapsed = x_timer.read();
+                self.stats.handle_batch_ping_time.add(elapsed);
+
                 ping_messages.clearRetainingCapacity();
             }
 
             if (pong_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
-                const n_pong_messages = pong_messages.items.len;
                 self.handleBatchPongMessages(&pong_messages);
-                self.logger.debugf("handle batch pong took {} with {} items @{}", .{ x_timer.read(), n_pong_messages, msg_count });
+                const elapsed = x_timer.read();
+                self.stats.handle_batch_pong_time.add(elapsed);
+
                 pong_messages.clearRetainingCapacity();
             }
 
             // TRIM gossip-table
-            {
-                var gossip_table_lock = self.gossip_table_rw.write();
-                defer gossip_table_lock.unlock();
-                var gossip_table: *GossipTable = gossip_table_lock.mut();
+            const trim_elapsed_ts = getWallclockMs() - last_table_trim_ts;
+            if (trim_elapsed_ts > GOSSIP_TRIM_INTERVAL_MS) {
+                // first check with a read lock
+                var should_trim = true;
+                {
+                    var gossip_table_lock = self.gossip_table_rw.read();
+                    defer gossip_table_lock.unlock();
+                    var gossip_table: *const GossipTable = gossip_table_lock.get();
+                    if (!gossip_table.shouldTrim(UNIQUE_PUBKEY_CAPACITY)) {
+                        should_trim = false;
+                    }
+                }
 
-                var x_timer = std.time.Timer.start() catch unreachable;
-                gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
-                    self.logger.warnf("error trimming gossip table: {s}", .{@errorName(err)});
-                };
-                const elapsed = x_timer.read();
-                self.logger.debugf("handle batch gossip_trim took {} with {} items @{}", .{ elapsed, 1, msg_count });
+                // then trim with write lock
+                if (should_trim) {
+                    var gossip_table_lock = self.gossip_table_rw.write();
+                    defer gossip_table_lock.unlock();
+                    var gossip_table: *GossipTable = gossip_table_lock.mut();
+
+                    var x_timer = std.time.Timer.start() catch unreachable;
+                    gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                        self.logger.warnf("error trimming gossip table: {s}", .{@errorName(err)});
+                    };
+                    const elapsed = x_timer.read();
+                    self.stats.handle_trim_table_time.add(elapsed);
+
+                    // self.logger.debugf("handle batch gossip_trim took {} with {} items @{}", .{ elapsed, 1, msg_count });
+                }
+                last_table_trim_ts = getWallclockMs();
             }
-
-            const elapsed = timer.read();
-            self.logger.debugf("{} messages processed in {}ns", .{ msg_count, elapsed });
-            // std.debug.print("{} messages processed in {}ns\n", .{ msg_count, elapsed });
-            self.messages_processed.store(msg_count, std.atomic.Ordering.Release);
         }
 
         self.logger.debugf("process_messages loop closed", .{});
@@ -811,7 +849,7 @@ pub const GossipService = struct {
 
             // publish metrics
             const stats_publish_elapsed_ts = getWallclockMs() - last_stats_publish_ts;
-            if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL) {
+            if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL_MS) {
                 try self.publishMetrics();
                 last_stats_publish_ts = getWallclockMs();
             }
@@ -829,6 +867,20 @@ pub const GossipService = struct {
     pub fn publishMetrics(self: *Self) !void {
         const reg = globalRegistry();
 
+        // collect gossip table metrics
+        {
+            var gossip_table_lock = self.gossip_table_rw.read();
+            defer gossip_table_lock.unlock();
+
+            var gossip_table: *const GossipTable = gossip_table_lock.get();
+            const n_entries = gossip_table.store.count();
+            const n_pubkeys = gossip_table.pubkey_to_values.count();
+
+            self.stats.table_n_values.add(n_entries);
+            self.stats.table_n_pubkeys.add(n_pubkeys);
+        }
+
+        // publish all metrics
         const info = @typeInfo(GossipStats).Struct;
         inline for (info.fields) |field| {
             var field_counter: *Counter = try reg.getOrCreateCounter(field.name);
