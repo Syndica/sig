@@ -761,15 +761,14 @@ pub const GossipService = struct {
             const trim_elapsed_ts = getWallclockMs() - last_table_trim_ts;
             if (trim_elapsed_ts > GOSSIP_TRIM_INTERVAL_MS) {
                 // first check with a read lock
-                var should_trim = true;
-                {
+                const should_trim = blk: {
                     var gossip_table_lock = self.gossip_table_rw.read();
                     defer gossip_table_lock.unlock();
                     var gossip_table: *const GossipTable = gossip_table_lock.get();
-                    if (!gossip_table.shouldTrim(UNIQUE_PUBKEY_CAPACITY)) {
-                        should_trim = false;
-                    }
-                }
+
+                    const should_trim = gossip_table.shouldTrim(UNIQUE_PUBKEY_CAPACITY);
+                    break :blk should_trim;
+                };
 
                 // then trim with write lock
                 if (should_trim) {
@@ -783,8 +782,6 @@ pub const GossipService = struct {
                     };
                     const elapsed = x_timer.read();
                     self.stats.handle_trim_table_time.add(elapsed);
-
-                    // self.logger.debugf("handle batch gossip_trim took {} with {} items @{}", .{ elapsed, 1, msg_count });
                 }
                 last_table_trim_ts = getWallclockMs();
             }
@@ -884,9 +881,8 @@ pub const GossipService = struct {
         self.logger.infof("build_messages loop closed", .{});
     }
 
+    /// publishes metrics in self.stats to the prometheus registry
     pub fn publishMetrics(self: *Self) !void {
-        const reg = globalRegistry();
-
         // collect gossip table metrics
         {
             var gossip_table_lock = self.gossip_table_rw.read();
@@ -901,9 +897,10 @@ pub const GossipService = struct {
         }
 
         // publish all metrics
-        const info = @typeInfo(GossipStats).Struct;
-        inline for (info.fields) |field| {
-            var field_counter: *Counter = try reg.getOrCreateCounter(field.name);
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(GossipStats).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            var field_counter: *Counter = try registry.getOrCreateCounter(field.name);
             const stats_value = @field(self.stats, field.name).getAndClear();
             _ = field_counter.set(stats_value);
         }
