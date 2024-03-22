@@ -111,6 +111,10 @@ pub const GossipStats = struct {
     pull_responses_recv: StatUsize = .{},
     prune_messages_recv: StatUsize = .{},
 
+    ping_messages_dropped: StatUsize = .{},
+    pull_requests_dropped: StatUsize = .{},
+    prune_messages_dropped: StatUsize = .{},
+
     ping_messages_sent: StatUsize = .{},
     pong_messages_sent: StatUsize = .{},
     push_messages_sent: StatUsize = .{},
@@ -164,7 +168,7 @@ pub const GossipService = struct {
     echo_server: echo.Server,
 
     // used for benchmarking
-    stats: GossipStats = .{},
+    stats: *GossipStats,
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
 
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
@@ -221,6 +225,9 @@ pub const GossipService = struct {
             for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
+        const stats = try allocator.create(GossipStats);
+        stats.* = GossipStats{};
+
         return Self{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
@@ -248,6 +255,7 @@ pub const GossipService = struct {
             .echo_server = echo_server,
             .logger = logger,
             .thread_pool = thread_pool,
+            .stats = stats,
         };
     }
 
@@ -287,6 +295,7 @@ pub const GossipService = struct {
         self.entrypoints.deinit();
 
         self.allocator.destroy(self.thread_pool);
+        self.allocator.destroy(self.stats);
 
         deinitRwMux(&self.gossip_table_rw);
         deinitRwMux(&self.active_set_rw);
@@ -593,6 +602,7 @@ pub const GossipService = struct {
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
+                                    self.stats.pull_requests_dropped.add(1);
                                     continue;
                                 }
                             },
@@ -604,16 +614,21 @@ pub const GossipService = struct {
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.Monotonic)) {
                                     // non-matching shred version
+                                    self.stats.pull_requests_dropped.add(1);
                                     continue;
                                 }
                             },
                             // only contact info supported
-                            else => continue,
+                            else => {
+                                self.stats.pull_requests_dropped.add(1);
+                                continue;
+                            },
                         }
 
                         const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
+                            self.stats.pull_requests_dropped.add(1);
                             continue;
                         }
 
@@ -631,6 +646,7 @@ pub const GossipService = struct {
                         const too_old = prune_wallclock < now -| GOSSIP_PRUNE_MSG_TIMEOUT_MS;
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
+                            self.stats.prune_messages_dropped.add(1);
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -639,6 +655,7 @@ pub const GossipService = struct {
                         const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
+                            self.stats.ping_messages_dropped.add(1);
                             continue;
                         }
 
