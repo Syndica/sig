@@ -6,7 +6,7 @@ const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
 const GossipData = _gossip_data.GossipData;
 const ContactInfo = _gossip_data.ContactInfo;
-const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const socket_tag = _gossip_data.socket_tag;
 const getWallclockMs = _gossip_data.getWallclockMs;
 
 const DefaultPrng = std.rand.DefaultPrng;
@@ -53,7 +53,7 @@ pub const Ping = struct {
         };
     }
 
-    pub fn verify(self: *Self) !void {
+    pub fn verify(self: *const Self) !void {
         if (!self.signature.verify(self.from, &self.token)) {
             return error.InvalidSignature;
         }
@@ -79,7 +79,7 @@ pub const Pong = struct {
         };
     }
 
-    pub fn verify(self: *Self) !void {
+    pub fn verify(self: *const Self) error{InvalidSignature}!void {
         if (!self.signature.verify(self.from, &self.hash.data)) {
             return error.InvalidSignature;
         }
@@ -88,6 +88,12 @@ pub const Pong = struct {
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         const ping = try Ping.random(rng, keypair);
         return try Pong.init(&ping, keypair);
+    }
+
+    pub fn eql(self: *const @This(), other: *const @This()) bool {
+        return std.mem.eql(u8, &self.from.data, &other.from.data) and
+            std.mem.eql(u8, &self.hash.data, &other.hash.data) and
+            std.mem.eql(u8, &self.signature.data, &other.signature.data);
     }
 };
 
@@ -218,7 +224,7 @@ pub const PingCache = struct {
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (peer.getSocket(SOCKET_TAG_GOSSIP)) |gossip_addr| {
+            if (peer.getSocket(socket_tag.GOSSIP)) |gossip_addr| {
                 var result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);

@@ -12,7 +12,7 @@ const GossipVersionedData = _gossip_data.GossipVersionedData;
 const GossipKey = _gossip_data.GossipKey;
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const ContactInfo = _gossip_data.ContactInfo;
-const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const socket_tag = _gossip_data.socket_tag;
 const getWallclockMs = _gossip_data.getWallclockMs;
 const Vote = _gossip_data.Vote;
 
@@ -26,7 +26,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const RwLock = std.Thread.RwLock;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
-const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8192;
 pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this
@@ -127,7 +127,6 @@ pub const GossipTable = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.store.deinit();
         self.contact_infos.deinit();
         self.shred_versions.deinit();
         self.votes.deinit();
@@ -148,6 +147,12 @@ pub const GossipTable = struct {
             entry.value_ptr.deinit();
         }
         self.converted_contact_infos.deinit();
+
+        var store_iter = self.store.iterator();
+        while (store_iter.next()) |entry| {
+            bincode.free(self.allocator, entry.value_ptr.value.data);
+        }
+        self.store.deinit();
     }
 
     pub fn insert(self: *Self, value: SignedGossipData, now: u64) !void {
@@ -449,31 +454,64 @@ pub const GossipTable = struct {
         );
     }
 
+    /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.
+    /// You must provide a buffer to fill with the contact infos. If you want all contact
+    /// infos, the buffer should be at least `self.contact_infos.count()` in size.
     pub fn getContactInfos(
         self: *const Self,
         buf: []ContactInfo,
         minimum_insertion_timestamp: u64,
     ) []ContactInfo {
-        const store_values = self.store.values();
-        const contact_indexs = self.contact_infos.iterator().keys;
-
-        var tgt_idx: usize = 0;
-        for (0..self.contact_infos.count()) |src_idx| {
-            if (tgt_idx >= buf.len) break;
-            const index = contact_indexs[src_idx];
-            const entry = store_values[index];
-            if (entry.timestamp_on_insertion >= minimum_insertion_timestamp) {
-                const contact_info = switch (entry.value.data) {
-                    .LegacyContactInfo => |lci| self.converted_contact_infos.get(lci.id) orelse unreachable,
-                    .ContactInfo => |ci| ci,
-                    else => unreachable,
-                };
-                buf[tgt_idx] = contact_info;
-                tgt_idx += 1;
-            }
+        var infos = self.contactInfoIterator(minimum_insertion_timestamp);
+        var i: usize = 0;
+        while (infos.next()) |info| {
+            if (i >= buf.len) break;
+            buf[i] = info.*;
+            i += 1;
         }
-        return buf[0..tgt_idx];
+        return buf[0..i];
     }
+
+    /// Similar to getContactInfos, but returns an iterator instead
+    /// of a slice. This allows you to avoid an allocation and avoid
+    /// copying every value.
+    pub fn contactInfoIterator(
+        self: *const Self,
+        minimum_insertion_timestamp: u64,
+    ) ContactInfoIterator {
+        return .{
+            .values = self.store.values(),
+            .converted_contact_infos = &self.converted_contact_infos,
+            .indices = self.contact_infos.iterator().keys,
+            .count = self.contact_infos.count(),
+            .minimum_insertion_timestamp = minimum_insertion_timestamp,
+        };
+    }
+
+    pub const ContactInfoIterator = struct {
+        values: []const GossipVersionedData,
+        converted_contact_infos: *const AutoArrayHashMap(Pubkey, ContactInfo),
+        indices: [*]usize,
+        count: usize,
+        minimum_insertion_timestamp: u64,
+        index_cursor: usize = 0,
+
+        pub fn next(self: *@This()) ?*const ContactInfo {
+            while (self.index_cursor < self.count) {
+                const index = self.indices[self.index_cursor];
+                self.index_cursor += 1;
+                const value = &self.values[index];
+                if (value.timestamp_on_insertion >= self.minimum_insertion_timestamp) {
+                    return switch (value.value.data) {
+                        .LegacyContactInfo => |*lci| self.converted_contact_infos.getPtr(lci.id) orelse unreachable,
+                        .ContactInfo => |*ci| ci,
+                        else => unreachable,
+                    };
+                }
+            }
+            return null;
+        }
+    };
 
     // ** shard getter fcns **
     pub fn getBitmaskMatches(
@@ -787,7 +825,7 @@ pub const GossipTable = struct {
         for (contact_indexs) |index| {
             const entry: GossipVersionedData = self.store.values()[index];
             switch (entry.value.data) {
-                .ContactInfo => |ci| if (ci.getSocket(SOCKET_TAG_GOSSIP)) |addr| {
+                .ContactInfo => |ci| if (ci.getSocket(socket_tag.GOSSIP)) |addr| {
                     if (addr.eql(&gossip_addr)) return try ci.clone();
                 },
                 .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {
