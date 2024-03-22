@@ -627,12 +627,17 @@ pub const GossipTable = struct {
         bincode.free(self.allocator, versioned_value.value.data);
     }
 
-    pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
+    pub fn shouldTrim(self: *const Self, max_pubkey_capacity: usize) bool {
         const n_pubkeys = self.pubkey_to_values.count();
         // 90% close to capacity
         const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
-        if (!should_trim) return;
+        return should_trim;
+    }
 
+    pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
+        if (!self.shouldTrim(max_pubkey_capacity)) return;
+
+        const n_pubkeys = self.pubkey_to_values.count();
         const drop_size = n_pubkeys -| max_pubkey_capacity;
         // TODO: drop based on stake weight
         const drop_pubkeys = self.pubkey_to_values.keys()[0..drop_size];
