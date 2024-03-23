@@ -1,6 +1,7 @@
 const std = @import("std");
 const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
+const dns = @import("zigdig");
 const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
 const ContactInfo = @import("../gossip/data.zig").ContactInfo;
@@ -146,11 +147,41 @@ fn gossip(_: []const []const u8) !void {
     defer entrypoints.deinit();
     if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
         for (entrypoints_strs) |entrypoint| {
-            var value = SocketAddr.parse(entrypoint) catch {
-                std.debug.print("Invalid entrypoint: {s}\n", .{entrypoint});
-                return;
+            var socket_addr = SocketAddr.parse(entrypoint) catch brk: {
+                // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
+                var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
+                const domain_str = domain_and_port.next() orelse {
+                    logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
+                    return error.EntrypointDomainMissing;
+                };
+                const port_str = domain_and_port.next() orelse {
+                    logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+                    return error.EntrypointPortMissing;
+                };
+
+                // get dns address lists
+                var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+                defer addr_list.deinit();
+                if (addr_list.addrs.len == 0) {
+                    logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
+                    return error.EntrypointDnsResolutionFailure;
+                }
+
+                // use first A record address
+                var ipv4_addr = addr_list.addrs[0];
+
+                // parse port from string
+                var port = std.fmt.parseInt(u16, port_str, 10) catch {
+                    logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
+                    return error.EntrypointPortNotValid;
+                };
+
+                var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+                socket_addr.setPort(port);
+                break :brk socket_addr;
             };
-            try entrypoints.append(value);
+
+            try entrypoints.append(socket_addr);
         }
     }
 
