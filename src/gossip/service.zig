@@ -1186,12 +1186,15 @@ pub const GossipService = struct {
         gossip_table: *const GossipTable,
         output: ArrayList(Packet),
         output_limit: *std.atomic.Atomic(i64),
+        output_consumed: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
 
         task: Task,
         done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
 
         pub fn deinit(this: *PullRequestTask) void {
-            this.output.deinit();
+            if (!this.output_consumed.load(.Acquire)) {
+                this.output.deinit();
+            }
         }
 
         pub fn callback(task: *Task) void {
@@ -1339,6 +1342,7 @@ pub const GossipService = struct {
                 self.stats.pull_responses_sent.add(1);
                 // TODO: should only need one mux lock in this loop
                 try self.packet_outgoing_channel.send(task.output);
+                task.output_consumed.store(true, .Release);
             }
         }
     }
