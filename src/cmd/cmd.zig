@@ -147,34 +147,41 @@ fn gossip(_: []const []const u8) !void {
     defer entrypoints.deinit();
     if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
         for (entrypoints_strs) |entrypoint| {
-            var socket_addr = brk: {
-                var value = SocketAddr.parse(entrypoint) catch {
-                    // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
-                    var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
-                    const domain_str = domain_and_port.next() orelse return error.EntrypointDomainMissing;
-                    const port_str = domain_and_port.next() orelse return error.EntrypointPortMissing;
-
-                    // get dns address lists
-                    var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
-                    defer addr_list.deinit();
-                    if (addr_list.addrs.len == 0) {
-                        return error.EntrypointDnsResolutionFailure;
-                    }
-
-                    // use first A record address
-                    var ipv4_addr: u32 = addr_list.addrs[0].in.sa.addr;
-
-                    // parse port from string
-                    var port = std.fmt.parseInt(u16, port_str, 10) catch return error.EntrypointPortNotValid;
-
-                    break :brk SocketAddr.initIpv4(.{
-                        @as(u8, @intCast(ipv4_addr & 0xFF)),
-                        @as(u8, @intCast(ipv4_addr >> 8 & 0xFF)),
-                        @as(u8, @intCast(ipv4_addr >> 16 & 0xFF)),
-                        @as(u8, @intCast(ipv4_addr >> 24 & 0xFF)),
-                    }, port);
+            var socket_addr = SocketAddr.parse(entrypoint) catch brk: {
+                // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
+                var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
+                const domain_str = domain_and_port.next() orelse {
+                    logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
+                    return error.EntrypointDomainMissing;
                 };
-                break :brk value;
+                const port_str = domain_and_port.next() orelse {
+                    logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+                    return error.EntrypointPortMissing;
+                };
+
+                // get dns address lists
+                var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+                defer addr_list.deinit();
+                if (addr_list.addrs.len == 0) {
+                    logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
+                    return error.EntrypointDnsResolutionFailure;
+                }
+
+                // use first A record address
+                var ipv4_addr: u32 = addr_list.addrs[0].in.sa.addr;
+
+                // parse port from string
+                var port = std.fmt.parseInt(u16, port_str, 10) catch {
+                    logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
+                    return error.EntrypointPortNotValid;
+                };
+
+                break :brk SocketAddr.initIpv4(.{
+                    @as(u8, @intCast(ipv4_addr & 0xFF)),
+                    @as(u8, @intCast(ipv4_addr >> 8 & 0xFF)),
+                    @as(u8, @intCast(ipv4_addr >> 16 & 0xFF)),
+                    @as(u8, @intCast(ipv4_addr >> 24 & 0xFF)),
+                }, port);
             };
 
             try entrypoints.append(socket_addr);

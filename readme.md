@@ -71,15 +71,15 @@ To run the debugger, you need a run configuration. This launch.json includes an 
       "args": [
         "gossip",
         "--entrypoint",
-        "34.83.231.102:8001",
+        "entrypoint.mainnet-beta.solana.com:8001",
         "--entrypoint",
-        "145.40.67.83:8001",
+        "entrypoint2.mainnet-beta.solana.com:8001",
         "--entrypoint",
-        "147.75.38.117:8001",
+        "entrypoint3.mainnet-beta.solana.com:8001",
         "--entrypoint",
-        "145.40.93.177:8001",
+        "entrypoint4.mainnet-beta.solana.com:8001",
         "--entrypoint",
-        "86.109.15.59:8001"
+        "entrypoint5.mainnet-beta.solana.com:8001"
       ],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "zig build"
