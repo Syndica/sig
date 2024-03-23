@@ -276,6 +276,7 @@ pub const GossipData = union(enum(u32)) {
             .LegacySnapshotHashes,
             .SnapshotHashes,
             .NodeInstance,
+            .Version,
             => |*v| {
                 try v.sanitize();
             },
@@ -751,6 +752,10 @@ pub const Version = struct {
             .wallclock = getWallclockMs(),
             .version = LegacyVersion2.random(rng),
         };
+    }
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
     }
 };
 
