@@ -1,6 +1,7 @@
 const std = @import("std");
 const cli = @import("zig-cli");
 const base58 = @import("base58-zig");
+const dns = @import("zigdig");
 const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = @import("./helpers.zig").getOrInitIdentity;
 const ContactInfo = @import("../gossip/data.zig").ContactInfo;
@@ -146,11 +147,37 @@ fn gossip(_: []const []const u8) !void {
     defer entrypoints.deinit();
     if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
         for (entrypoints_strs) |entrypoint| {
-            var value = SocketAddr.parse(entrypoint) catch {
-                std.debug.print("Invalid entrypoint: {s}\n", .{entrypoint});
-                return;
+            var socket_addr = brk: {
+                var value = SocketAddr.parse(entrypoint) catch {
+                    // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
+                    var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
+                    const domain_str = domain_and_port.next() orelse return error.EntrypointDomainMissing;
+                    const port_str = domain_and_port.next() orelse return error.EntrypointPortMissing;
+
+                    // get dns address lists
+                    var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+                    defer addr_list.deinit();
+                    if (addr_list.addrs.len == 0) {
+                        return error.EntrypointDnsResolutionFailure;
+                    }
+
+                    // use first A record address
+                    var ipv4_addr: u32 = addr_list.addrs[0].in.sa.addr;
+
+                    // parse port from string
+                    var port = std.fmt.parseInt(u16, port_str, 10) catch return error.EntrypointPortNotValid;
+
+                    break :brk SocketAddr.initIpv4(.{
+                        @as(u8, @intCast(ipv4_addr & 0xFF)),
+                        @as(u8, @intCast(ipv4_addr >> 8 & 0xFF)),
+                        @as(u8, @intCast(ipv4_addr >> 16 & 0xFF)),
+                        @as(u8, @intCast(ipv4_addr >> 24 & 0xFF)),
+                    }, port);
+                };
+                break :brk value;
             };
-            try entrypoints.append(value);
+
+            try entrypoints.append(socket_addr);
         }
     }
 

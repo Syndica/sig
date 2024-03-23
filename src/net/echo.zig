@@ -259,10 +259,10 @@ pub fn handleRequest(
 
         // convert a u32 to Ipv4
         var socket_addr = SocketAddr.initIpv4(.{
-            @as(u8, @intCast(addr.sa.addr >> 24 & 0xFF)),
-            @as(u8, @intCast(addr.sa.addr >> 16 & 0xFF)),
-            @as(u8, @intCast(addr.sa.addr >> 8 & 0xFF)),
             @as(u8, @intCast(addr.sa.addr & 0xFF)),
+            @as(u8, @intCast(addr.sa.addr >> 8 & 0xFF)),
+            @as(u8, @intCast(addr.sa.addr >> 16 & 0xFF)),
+            @as(u8, @intCast(addr.sa.addr >> 24 & 0xFF)),
         }, addr.getPort());
 
         std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, buffer.writer()) catch |err| {
