@@ -255,15 +255,9 @@ pub fn handleRequest(
 
         var buff = [_]u8{0} ** 1024;
         var buffer = std.io.fixedBufferStream(&buff);
-        var addr: std.net.Ip4Address = resp.address.in;
 
         // convert a u32 to Ipv4
-        var socket_addr = SocketAddr.initIpv4(.{
-            @as(u8, @intCast(addr.sa.addr & 0xFF)),
-            @as(u8, @intCast(addr.sa.addr >> 8 & 0xFF)),
-            @as(u8, @intCast(addr.sa.addr >> 16 & 0xFF)),
-            @as(u8, @intCast(addr.sa.addr >> 24 & 0xFF)),
-        }, addr.getPort());
+        var socket_addr = SocketAddr.fromIpV4Address(resp.address);
 
         std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, buffer.writer()) catch |err| {
             logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
@@ -380,6 +374,7 @@ test "net.echo: Server works" {
     var resp = try std.json.parseFromSlice(IpEchoServerResponse, testing.allocator, body, .{});
     defer resp.deinit();
 
+    try testing.expectEqual([4]u8{ 127, 0, 0, 1 }, resp.value.address.asV4());
     try testing.expectEqual(@as(u16, 0), resp.value.shred_version.?.value);
 
     server.kill();

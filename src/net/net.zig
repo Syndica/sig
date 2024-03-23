@@ -218,6 +218,22 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
+    pub fn fromIpV4Address(address: std.net.Address) Self {
+        return Self.initIpv4(.{
+            @as(u8, @intCast(address.in.sa.addr & 0xFF)),
+            @as(u8, @intCast(address.in.sa.addr >> 8 & 0xFF)),
+            @as(u8, @intCast(address.in.sa.addr >> 16 & 0xFF)),
+            @as(u8, @intCast(address.in.sa.addr >> 24 & 0xFF)),
+        }, address.getPort());
+    }
+
+    pub fn setPort(self: *Self, portt: u16) void {
+        switch (self.*) {
+            .V4 => |*v4| v4.port = portt,
+            .V6 => |*v6| v6.port = portt,
+        }
+    }
+
     /// returns:
     /// - array: the string, plus some extra bytes at the end
     /// - integer: length of the string within the array
@@ -355,7 +371,7 @@ pub fn endpointToString(allocator: std.mem.Allocator, endpoint: *const network.E
     return endpoint_buf;
 }
 
-test "gossip.net: invalid ipv4 socket parsing" {
+test "net.net: invalid ipv4 socket parsing" {
     {
         var addr = "127.0.0.11234";
         var result = SocketAddr.parseIpv4(addr);
@@ -368,7 +384,7 @@ test "gossip.net: invalid ipv4 socket parsing" {
     }
 }
 
-test "gossip.net: valid ipv4 socket parsing" {
+test "net.net: valid ipv4 socket parsing" {
     var addr = "127.0.0.1:1234";
     var expected_addr = SocketAddr{ .V4 = SocketAddrV4{
         .ip = Ipv4Addr.init(127, 0, 0, 1),
@@ -378,8 +394,14 @@ test "gossip.net: valid ipv4 socket parsing" {
     try std.testing.expectEqual(expected_addr, actual_addr);
 }
 
-test "gossip.net: test random" {
+test "net.net: test random" {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
     var addr = SocketAddr.random(rng.random());
     _ = addr;
+}
+
+test "net.net: set port works" {
+    var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
+    sa1.setPort(1001);
+    try std.testing.expectEqual(@as(u16, 1001), sa1.port());
 }

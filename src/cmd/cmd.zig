@@ -168,7 +168,7 @@ fn gossip(_: []const []const u8) !void {
                 }
 
                 // use first A record address
-                var ipv4_addr: u32 = addr_list.addrs[0].in.sa.addr;
+                var ipv4_addr = addr_list.addrs[0];
 
                 // parse port from string
                 var port = std.fmt.parseInt(u16, port_str, 10) catch {
@@ -176,12 +176,9 @@ fn gossip(_: []const []const u8) !void {
                     return error.EntrypointPortNotValid;
                 };
 
-                break :brk SocketAddr.initIpv4(.{
-                    @as(u8, @intCast(ipv4_addr & 0xFF)),
-                    @as(u8, @intCast(ipv4_addr >> 8 & 0xFF)),
-                    @as(u8, @intCast(ipv4_addr >> 16 & 0xFF)),
-                    @as(u8, @intCast(ipv4_addr >> 24 & 0xFF)),
-                }, port);
+                var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+                socket_addr.setPort(port);
+                break :brk socket_addr;
             };
 
             try entrypoints.append(socket_addr);
