@@ -55,10 +55,38 @@ pub const Message = struct {
         };
     }
 
-    pub fn sanitize(self: *const Message) !void {
-        // TODO:
-        std.debug.print("NOTE: sanitize not implemented for type: Message\n", .{});
-        _ = self;
+    pub const MessageSanitizeError = error{
+        NotEnoughAccounts,
+        MissingWritableFeePayer,
+        ProgramIdAccountMissing,
+        ProgramIdCannotBePayer,
+        AccountIndexOutOfBounds,
+    };
+
+    pub fn sanitize(self: *const Message) MessageSanitizeError!void {
+        // number of accounts should match spec in header. signed and unsigned should not overlap.
+        if (self.header.num_required_signatures +| self.header.num_readonly_unsigned_accounts > self.account_keys.len) {
+            return error.NotEnoughAccounts;
+        }
+        // there should be at least 1 RW fee-payer account.
+        if (self.header.num_readonly_signed_accounts >= self.header.num_required_signatures) {
+            return error.MissingWritableFeePayer;
+        }
+
+        for (self.instructions) |ci| {
+            if (ci.program_id_index >= self.account_keys.len) {
+                return error.ProgramIdAccountMissing;
+            }
+            // A program cannot be a payer.
+            if (ci.program_id_index == 0) {
+                return error.ProgramIdCannotBePayer;
+            }
+            for (ci.accounts) |ai| {
+                if (ai >= self.account_keys.len) {
+                    return error.AccountIndexOutOfBounds;
+                }
+            }
+        }
     }
 };
 
@@ -93,4 +121,129 @@ pub const CompiledInstruction = struct {
 test "core.transaction: tmp" {
     const msg = Message.default();
     try std.testing.expect(msg.account_keys.len == 0);
+}
+
+test "core.transaction: blank Message fails to sanitize" {
+    try std.testing.expect(error.MissingWritableFeePayer == Message.default().sanitize());
+}
+
+test "core.transaction: minimal valid Message sanitizes" {
+    var pubkeys = [_]Pubkey{Pubkey.default()};
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 1,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &[_]CompiledInstruction{},
+    };
+    try message.sanitize();
+}
+
+test "core.transaction: Message sanitize fails if missing signers" {
+    var pubkeys = [_]Pubkey{Pubkey.default()};
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 2,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &[_]CompiledInstruction{},
+    };
+    try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
+}
+
+test "core.transaction: Message sanitize fails if missing unsigned" {
+    var pubkeys = [_]Pubkey{Pubkey.default()};
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 1,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 1,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &[_]CompiledInstruction{},
+    };
+    try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
+}
+
+test "core.transaction: Message sanitize fails if no writable signed" {
+    var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 1,
+            .num_readonly_signed_accounts = 1,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &[_]CompiledInstruction{},
+    };
+    try std.testing.expect(error.MissingWritableFeePayer == message.sanitize());
+}
+
+test "core.transaction: Message sanitize fails if missing program id" {
+    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var instructions = [_]CompiledInstruction{.{
+        .program_id_index = 1,
+        .accounts = &[_]u8{},
+        .data = &[_]u8{},
+    }};
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 1,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &instructions,
+    };
+    try std.testing.expect(error.ProgramIdAccountMissing == message.sanitize());
+}
+
+test "core.transaction: Message sanitize fails if program id has index 0" {
+    var pubkeys = [_]Pubkey{Pubkey.default()};
+    var instructions = [_]CompiledInstruction{.{
+        .program_id_index = 0,
+        .accounts = &[_]u8{},
+        .data = &[_]u8{},
+    }};
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 1,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 0,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &instructions,
+    };
+    try std.testing.expect(error.ProgramIdCannotBePayer == message.sanitize());
+}
+
+test "core.transaction: Message sanitize fails if account index is out of bounds" {
+    var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
+    var accounts = [_]u8{2};
+    var instructions = [_]CompiledInstruction{.{
+        .program_id_index = 1,
+        .accounts = &accounts,
+        .data = &[_]u8{},
+    }};
+    const message = Message{
+        .header = MessageHeader{
+            .num_required_signatures = 1,
+            .num_readonly_signed_accounts = 0,
+            .num_readonly_unsigned_accounts = 1,
+        },
+        .account_keys = &pubkeys,
+        .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
+        .instructions = &instructions,
+    };
+    try std.testing.expect(error.AccountIndexOutOfBounds == message.sanitize());
 }

@@ -2,3 +2,4 @@ zig-cache/
 zig-out/
 data/
 gossip-dump*
+.DS_Store

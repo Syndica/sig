@@ -31,6 +31,14 @@ pub const Counter = struct {
         _ = self.value.store(0, .Monotonic);
     }
 
+    pub fn set(self: *Self, value: anytype) void {
+        switch (@typeInfo(@TypeOf(value))) {
+            .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
+            else => @compileError("can't set a non-number"),
+        }
+        self.value.store(@intCast(value), .Monotonic);
+    }
+
     fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
         const self = @fieldParentPtr(Self, "metric", metric);
         return Metric.Result{ .counter = self.get() };
