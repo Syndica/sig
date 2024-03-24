@@ -450,9 +450,6 @@ pub const GossipService = struct {
 
             const packet_batches = maybe_packets.?;
             defer {
-                // for (packet_batches) |*packet_batch| {
-                //     packet_batch.deinit();
-                // }
                 self.packet_incoming_channel.allocator.free(packet_batches);
             }
 
@@ -483,9 +480,6 @@ pub const GossipService = struct {
             }
         }
 
-        // for (tasks) |*task| {
-        //     task.awaitAndReset();
-        // }
         self.logger.debugf("verify_packets loop closed", .{});
     }
 
