@@ -321,6 +321,41 @@ pub const GossipTable = struct {
         };
     }
 
+    /// Like insertValues, but it minimizes the number of memory allocations.
+    ///
+    /// This is optimized to minimize the number of times that allocations occur.
+    /// It is *not* optimized to minimize overall memory usage.
+    ///
+    /// It accepts an arraylist of failures instead of returning an InsertResults, so it
+    /// can reuse the arraylist from a previous execution rather than allocating a new one.
+    ///
+    /// For simplicity and performance, only tracks failures without `inserted` and `timeouts`,
+    pub fn insertValuesMinAllocs(
+        self: *Self,
+        values: []SignedGossipData,
+        timeout: u64,
+        failed_indexes: *std.ArrayList(usize),
+    ) error{OutOfMemory}!void {
+        var now = getWallclockMs();
+
+        failed_indexes.clearRetainingCapacity();
+        try failed_indexes.ensureTotalCapacity(values.len);
+
+        for (values, 0..) |value, index| {
+            const value_time = value.wallclock();
+            const is_too_new = value_time > now +| timeout;
+            const is_too_old = value_time < now -| timeout;
+            if (is_too_new or is_too_old) {
+                continue;
+            }
+
+            self.insert(value, now) catch {
+                failed_indexes.appendAssumeCapacity(index);
+                continue;
+            };
+        }
+    }
+
     pub fn len(self: *const Self) usize {
         return self.store.count();
     }

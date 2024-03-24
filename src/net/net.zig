@@ -1,5 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
+const builtin = @import("builtin");
 
 pub const SocketAddr = union(enum(u8)) {
     V4: SocketAddrV4,
@@ -278,11 +279,29 @@ pub const SocketAddr = union(enum(u8)) {
             return error.MulticastAddress;
         }
     }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            .V4 => |sav4| try sav4.format(fmt, options, writer),
+            .V6 => |sav6| try sav6.format(fmt, options, writer),
+        }
+    }
 };
 
 pub const SocketAddrV4 = struct {
     ip: Ipv4Addr,
     port: u16,
+
+    const Self = @This();
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{}:{d}", .{
+            self.ip,
+            self.port,
+        });
+    }
 };
 
 pub const SocketAddrV6 = struct {
@@ -290,6 +309,17 @@ pub const SocketAddrV6 = struct {
     port: u16,
     flowinfo: u32,
     scope_id: u32,
+
+    const Self = @This();
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{}:{d}", .{
+            self.ip,
+            self.port,
+        });
+    }
 };
 
 pub const Ipv4Addr = struct {
@@ -305,6 +335,17 @@ pub const Ipv4Addr = struct {
 
     pub fn eql(self: *const Self, other: *const Self) bool {
         return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{}.{}.{}.{}", .{
+            self.octets[0],
+            self.octets[1],
+            self.octets[2],
+            self.octets[3],
+        });
     }
 };
 
@@ -326,6 +367,48 @@ pub const Ipv6Addr = struct {
     /// defined in https://tools.ietf.org/html/rfc4291
     pub fn isMulticast(self: *const Self) bool {
         return self.octets[0] == 255;
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        if (std.mem.eql(u8, self.octets[0..12], &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
+            try std.fmt.format(writer, "[::ffff:{}.{}.{}.{}]", .{
+                self.octets[12],
+                self.octets[13],
+                self.octets[14],
+                self.octets[15],
+            });
+            return;
+        }
+        const big_endian_parts: *align(1) const [8]u16 = @ptrCast(&self.octets);
+        const native_endian_parts = switch (builtin.target.cpu.arch.endian()) {
+            .Big => big_endian_parts.*,
+            .Little => blk: {
+                var buf: [8]u16 = undefined;
+                for (big_endian_parts, 0..) |part, i| {
+                    buf[i] = std.mem.bigToNative(u16, part);
+                }
+                break :blk buf;
+            },
+        };
+        try writer.writeAll("[");
+        var i: usize = 0;
+        var abbrv = false;
+        while (i < native_endian_parts.len) : (i += 1) {
+            if (native_endian_parts[i] == 0) {
+                if (!abbrv) {
+                    try writer.writeAll(if (i == 0) "::" else ":");
+                    abbrv = true;
+                }
+                continue;
+            }
+            try std.fmt.format(writer, "{x}", .{native_endian_parts[i]});
+            if (i != native_endian_parts.len - 1) {
+                try writer.writeAll(":");
+            }
+        }
+        try writer.writeAll("]");
     }
 };
 
@@ -361,6 +444,13 @@ pub const IpAddr = union(enum(u32)) {
                     else => return false,
                 }
             },
+        }
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            .ipv4 => |ipv4| try ipv4.format(fmt, options, writer),
+            .ipv6 => |ipv6| try ipv6.format(fmt, options, writer),
         }
     }
 };
