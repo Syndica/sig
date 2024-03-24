@@ -702,6 +702,19 @@ pub const GossipService = struct {
             gossip_packets_processed += prune_messages.items.len;
             self.stats.gossip_packets_processed.add(gossip_packets_processed);
 
+            self.logger.infof(
+                "gossip: recv {} messages: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+                .{
+                    messages.len,
+                    ping_messages.items.len,
+                    pong_messages.items.len,
+                    push_messages.items.len,
+                    pull_requests.items.len,
+                    pull_responses.items.len,
+                    prune_messages.items.len,
+                },
+            );
+
             // handle batch messages
             if (push_messages.items.len > 0) {
                 var x_timer = std.time.Timer.start() catch unreachable;
@@ -1593,6 +1606,15 @@ pub const GossipService = struct {
             pubkey_to_endpoint.deinit();
         }
 
+        // pre-allocate memory to track insertion failures
+        var max_inserts_per_push: usize = 0;
+        for (batch_push_messages.items) |*push_message| {
+            max_inserts_per_push = @max(max_inserts_per_push, push_message.gossip_values.len);
+        }
+        var failed_insert_indexs = try std.ArrayList(usize)
+            .initCapacity(self.allocator, max_inserts_per_push);
+        defer failed_insert_indexs.deinit();
+
         // insert values and track the failed origins per pubkey
         {
             var timer = try std.time.Timer.start();
@@ -1619,21 +1641,19 @@ pub const GossipService = struct {
                 );
                 n_invalid_data += push_message.gossip_values.len - valid_len;
 
-                var result = try gossip_table.insertValues(
+                try gossip_table.insertValuesMinAllocs(
                     push_message.gossip_values[0..valid_len],
                     GOSSIP_PUSH_MSG_TIMEOUT_MS,
-                    false,
-                    false,
+                    &failed_insert_indexs,
                 );
-                const failed_insert_indexs = result.failed.?;
-                defer failed_insert_indexs.deinit();
                 n_failed_inserts += failed_insert_indexs.items.len;
 
-                self.logger
-                    .field("n_values", valid_len)
-                    .field("from_addr", &push_message.from_pubkey.string())
-                    .field("n_failed_inserts", failed_insert_indexs.items.len)
-                    .info("gossip: recv push_message");
+                // logging this message takes too long and causes a bottleneck
+                // self.logger
+                //     .field("n_values", valid_len)
+                //     .field("from_addr", &push_message.from_pubkey.string())
+                //     .field("n_failed_inserts", failed_insert_indexs.items.len)
+                //     .debug("gossip: recv push_message");
 
                 if (failed_insert_indexs.items.len == 0) {
                     // dont need to build prune messages
@@ -1710,7 +1730,7 @@ pub const GossipService = struct {
             self.logger
                 .field("n_pruned_origins", prune_size)
                 .field("to_addr", &from_pubkey.string())
-                .info("gossip: send prune_message");
+                .debug("gossip: send prune_message");
 
             var packet = &prune_packet_batch.items[count];
             var written_slice = bincode.writeToSlice(&packet.data, msg, bincode.Params{}) catch unreachable;
