@@ -12,4 +12,4 @@ scrape_configs:
 - job_name: prometheus
   static_configs:
   - targets:
-    - host.docker.internal:12345
+    - localhost:12345
