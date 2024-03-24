@@ -322,13 +322,13 @@ pub const GossipTable = struct {
     }
 
     /// Like insertValues, but it minimizes the number of memory allocations.
-    /// 
+    ///
     /// This is optimized to minimize the number of times that allocations occur.
     /// It is *not* optimized to minimize overall memory usage.
-    /// 
+    ///
     /// It accepts an arraylist of failures instead of returning an InsertResults, so it
     /// can reuse the arraylist from a previous execution rather than allocating a new one.
-    /// 
+    ///
     /// For simplicity and performance, only tracks failures without `inserted` and `timeouts`,
     pub fn insertValuesMinAllocs(
         self: *Self,
