@@ -334,12 +334,12 @@ pub const GossipTable = struct {
         self: *Self,
         values: []SignedGossipData,
         timeout: u64,
-        failed: *std.ArrayList(usize),
+        failed_indexes: *std.ArrayList(usize),
     ) error{OutOfMemory}!void {
         var now = getWallclockMs();
 
-        failed.clearRetainingCapacity();
-        try failed.ensureTotalCapacity(values.len);
+        failed_indexes.clearRetainingCapacity();
+        try failed_indexes.ensureTotalCapacity(values.len);
 
         for (values, 0..) |value, index| {
             const value_time = value.wallclock();
@@ -350,7 +350,7 @@ pub const GossipTable = struct {
             }
 
             self.insert(value, now) catch {
-                failed.appendAssumeCapacity(index);
+                failed_indexes.appendAssumeCapacity(index);
                 continue;
             };
         }
