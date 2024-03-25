@@ -427,7 +427,7 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(self: *Self) !void {
-        var tasks = try self.allocator.alloc(VerifyMessageTask, socket_utils.PACKETS_PER_BATCH);
+        var tasks = try self.allocator.alloc(VerifyMessageTask, 4);
         defer self.allocator.free(tasks);
 
         // pre-allocate all the tasks
