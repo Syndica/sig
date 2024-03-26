@@ -163,7 +163,7 @@ fn testSender(chan: *BlockChannel, total_send: usize) void {
     chan.close();
 }
 
-const Packet = @import("../gossip/packet.zig").Packet;
+const Packet = @import("../net/packet.zig").Packet;
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {

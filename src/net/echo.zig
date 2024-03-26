@@ -317,7 +317,7 @@ test "net.echo: Server works" {
     const port: u16 = 34333;
 
     // initialize logger
-    var logger = Logger.init(testing.allocator, .info);
+    var logger = Logger.init(testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 

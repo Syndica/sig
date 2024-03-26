@@ -11,7 +11,7 @@ const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const getWallclockMs = _gossip_data.getWallclockMs;
 
 const GossipPullFilter = @import("pull_request.zig").GossipPullFilter;
-const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
@@ -231,7 +231,7 @@ test "gossip.message: push message serialization is predictable" {
         msg_with_value,
         bincode.Params{},
     );
-    std.debug.print("value_size, empty_size, msg_value_size: {d} {d} {d}\n", .{ value_size, empty_size, msg_value_size });
+    // std.debug.print("value_size, empty_size, msg_value_size: {d} {d} {d}\n", .{ value_size, empty_size, msg_value_size });
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
 

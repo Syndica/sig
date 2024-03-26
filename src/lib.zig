@@ -21,7 +21,6 @@ pub const gossip = struct {
     pub usingnamespace @import("gossip/data.zig");
     pub usingnamespace @import("gossip/table.zig");
     pub usingnamespace @import("gossip/service.zig");
-    pub usingnamespace @import("gossip/packet.zig");
     pub usingnamespace @import("gossip/message.zig");
     pub usingnamespace @import("gossip/pull_request.zig");
     pub usingnamespace @import("gossip/pull_response.zig");
@@ -55,6 +54,7 @@ pub const utils = struct {
 };
 
 pub const trace = struct {
+    pub usingnamespace @import("trace/level.zig");
     pub usingnamespace @import("trace/log.zig");
     pub usingnamespace @import("trace/entry.zig");
 };
@@ -74,6 +74,7 @@ pub const cmd = struct {
 pub const net = struct {
     pub usingnamespace @import("net/net.zig");
     pub usingnamespace @import("net/echo.zig");
+    pub usingnamespace @import("net/packet.zig");
     pub usingnamespace @import("net/socket_utils.zig");
 };
 
@@ -85,4 +86,13 @@ pub const prometheus = struct {
     pub usingnamespace @import("prometheus/histogram.zig");
     pub usingnamespace @import("prometheus/metric.zig");
     pub usingnamespace @import("prometheus/registry.zig");
+};
+
+pub const tvu = struct {
+    usingnamespace repair;
+    pub const repair = struct {
+        pub usingnamespace @import("tvu/repair/message.zig");
+        pub usingnamespace @import("tvu/repair/service.zig");
+    };
+    pub usingnamespace @import("tvu/shred_receiver.zig");
 };

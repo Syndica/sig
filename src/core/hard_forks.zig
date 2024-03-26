@@ -62,7 +62,11 @@ pub const HardForks = struct {
 };
 
 test "core.hard_forks: test hardforks" {
+    const Logger = @import("../trace/log.zig").Logger;
     const testing_alloc = std.testing.allocator;
+    var logger = Logger.init(testing_alloc, Logger.TEST_DEFAULT_LEVEL);
+    defer logger.deinit();
+    logger.spawn();
 
     var hard_forks = HardForks.default(testing_alloc);
     defer hard_forks.deinit();
@@ -78,13 +82,13 @@ test "core.hard_forks: test hardforks" {
     var hash_data_one = hard_forks.get_hash_data(9, 0);
     try expect(hash_data_one == null);
 
-    std.debug.print("hash_data_one: {any}\n", .{hash_data_one});
+    logger.debugf("hash_data_one: {any}", .{hash_data_one});
 
     var hash_data_two = hard_forks.get_hash_data(10, 0);
     try expect(hash_data_two != null);
     try expect(std.mem.eql(u8, &hash_data_two.?, &[8]u8{ 1, 0, 0, 0, 0, 0, 0, 0 }));
 
-    std.debug.print("hard_forks_two: {any}\n", .{hash_data_two});
+    logger.debugf("hard_forks_two: {any}", .{hash_data_two});
 
     try expect(eql(u8, &hard_forks.get_hash_data(19, 0).?, &[8]u8{ 1, 0, 0, 0, 0, 0, 0, 0 }));
     try expect(eql(u8, &hard_forks.get_hash_data(20, 0).?, &[8]u8{ 2, 0, 0, 0, 0, 0, 0, 0 }));

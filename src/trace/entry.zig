@@ -216,5 +216,5 @@ test "trace.entry: should info log correctly" {
         .field("possible_value", anull)
         .logf(.info, "hello, {s}", .{"world!"});
 
-    std.debug.print("{any}\n\n", .{logger});
+    // std.debug.print("{any}\n\n", .{logger});
 }

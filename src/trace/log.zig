@@ -121,6 +121,9 @@ pub const Logger = union(enum) {
             .noop => {},
         }
     }
+
+    /// Can be used in tests to minimize the amount of logging during tests.
+    pub const TEST_DEFAULT_LEVEL: Level = .warn;
 };
 
 pub const StandardErrLogger = struct {
@@ -248,7 +251,8 @@ pub const StdErrSink = struct {
 };
 
 test "trace.logger: works" {
-    var logger = Logger.init(testing.allocator, .info);
+    var logger: Logger = .noop; // uncomment below to run visual test
+    // var logger = Logger.init(testing.allocator, .info);
     logger.spawn();
     defer logger.deinit();
 
