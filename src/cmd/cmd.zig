@@ -1,6 +1,7 @@
 const std = @import("std");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
+const dns = @import("zigdig");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
 const helpers = @import("helpers.zig");
@@ -40,19 +41,21 @@ const gossip_host = struct {
     // TODO: support domain names and ipv6 addresses
     var option = cli.Option{
         .long_name = "gossip-host",
-        .help = "IPv4 address for the validator to advertise in gossip - default: 127.0.0.1",
-        .value = cli.OptionValue{ .string = "127.0.0.1" },
+        .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
+        .value = cli.OptionValue{ .string = null },
         .required = false,
         .value_name = "Gossip Host",
     };
 
-    fn get() ![4]u8 {
-        const str = option.value.string.?;
-        var buf: [15]u8 = undefined;
-        @memcpy(buf[0..str.len], str);
-        @memcpy(buf[str.len .. str.len + 2], ":0");
-        const sa = try SocketAddr.parseIpv4(buf[0 .. str.len + 2]);
-        return sa.V4.ip.octets;
+    fn get() !?IpAddr {
+        if (option.value.string) |str| {
+            var buf: [15]u8 = undefined;
+            @memcpy(buf[0..str.len], str);
+            @memcpy(buf[str.len .. str.len + 2], ":0");
+            const sa = try SocketAddr.parseIpv4(buf[0 .. str.len + 2]);
+            return .{ .ipv4 = sa.V4.ip };
+        }
+        return null;
     }
 };
 
@@ -169,9 +172,17 @@ fn gossip(_: []const []const u8) !void {
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
-    const shred_version = getShredVersionFromIpEcho(logger, entrypoints.items);
+    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
-    var gossip_service = try initGossip(logger, my_keypair, &exit, entrypoints, shred_version, &.{});
+    var gossip_service = try initGossip(
+        logger,
+        my_keypair,
+        &exit,
+        entrypoints,
+        my_data.shred_version,
+        my_data.ip,
+        &.{},
+    );
     defer gossip_service.deinit();
 
     var handle = try spawnGossip(&gossip_service);
@@ -190,7 +201,7 @@ fn validator(_: []const []const u8) !void {
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
-    const shred_version = getShredVersionFromIpEcho(logger, entrypoints.items); // TODO atomic owned here? or owned by gossip is good?
+    const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
     const repair_port: u16 = @intCast(repair_port_option.value.int.?);
 
@@ -199,7 +210,8 @@ fn validator(_: []const []const u8) !void {
         my_keypair,
         &exit,
         entrypoints,
-        shred_version,
+        ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
+        ip_echo_data.ip,
         &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
     );
     defer gossip_service.deinit();
@@ -234,9 +246,9 @@ fn initGossip(
     exit: *Atomic(bool),
     entrypoints: std.ArrayList(SocketAddr),
     shred_version: u16,
+    gossip_host_ip: IpAddr,
     sockets: []const struct { tag: u8, port: u16 },
 ) !GossipService {
-    const gossip_host_ip = try gossip_host.get();
     var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     logger.infof("gossip host: {any}", .{gossip_host_ip});
     logger.infof("gossip port: {d}", .{gossip_port});
@@ -244,10 +256,8 @@ fn initGossip(
     // setup contact info
     var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.initIpv4(gossip_host_ip, gossip_port));
-    for (sockets) |socket| {
-        try contact_info.setSocket(socket.tag, SocketAddr.initIpv4(gossip_host_ip, socket.port));
-    }
+    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.init(gossip_host_ip, gossip_port));
+    for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
     contact_info.shred_version = shred_version;
 
     return try GossipService.init(
@@ -300,35 +310,76 @@ fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread 
     );
 }
 
-/// determine our shred version. in the solana-labs client, this approach is only
-/// used for validation. normally, shred version comes from the snapshot.
-fn getShredVersionFromIpEcho(logger: Logger, entrypoints: []SocketAddr) u16 {
-    for (entrypoints) |entrypoint| {
+/// determine our shred version and ip. in the solana-labs client, the shred version
+/// comes from the snapshot, and ip echo is only used to validate it.
+fn getMyDataFromIpEcho(
+    logger: Logger,
+    entrypoints: []SocketAddr,
+) !struct { shred_version: u16, ip: IpAddr } {
+    var my_ip_from_entrypoint: ?IpAddr = null;
+    const my_shred_version = loop: for (entrypoints) |entrypoint| {
         if (requestIpEcho(gpa_allocator, entrypoint.toAddress(), .{})) |response| {
+            if (my_ip_from_entrypoint == null) my_ip_from_entrypoint = response.address;
             if (response.shred_version) |shred_version| {
                 var addr_str = entrypoint.toString();
                 logger.infof(
                     "shred version: {} - from entrypoint ip echo: {s}",
                     .{ shred_version.value, addr_str[0][0..addr_str[1]] },
                 );
-                return shred_version.value;
+                break shred_version.value;
             }
         } else |_| {}
     } else {
         logger.warn("could not get a shred version from an entrypoint");
-        return 0;
-    }
+        break :loop 0;
+    };
+    const my_ip = try gossip_host.get() orelse my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1);
+    logger.infof("my ip: {}", .{my_ip});
+    return .{
+        .shred_version = my_shred_version,
+        .ip = my_ip,
+    };
 }
 
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
         for (entrypoints_strs) |entrypoint| {
-            var value = SocketAddr.parse(entrypoint) catch {
-                std.debug.print("Invalid entrypoint: {s}\n", .{entrypoint});
-                return error.InvalidEntrypoint;
+            var socket_addr = SocketAddr.parse(entrypoint) catch brk: {
+                // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
+                var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
+                const domain_str = domain_and_port.next() orelse {
+                    logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
+                    return error.EntrypointDomainMissing;
+                };
+                const port_str = domain_and_port.next() orelse {
+                    logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+                    return error.EntrypointPortMissing;
+                };
+
+                // get dns address lists
+                var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+                defer addr_list.deinit();
+                if (addr_list.addrs.len == 0) {
+                    logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
+                    return error.EntrypointDnsResolutionFailure;
+                }
+
+                // use first A record address
+                var ipv4_addr = addr_list.addrs[0];
+
+                // parse port from string
+                var port = std.fmt.parseInt(u16, port_str, 10) catch {
+                    logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
+                    return error.EntrypointPortNotValid;
+                };
+
+                var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+                socket_addr.setPort(port);
+                break :brk socket_addr;
             };
-            try entrypoints.append(value);
+
+            try entrypoints.append(socket_addr);
         }
     }
 

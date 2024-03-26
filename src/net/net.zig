@@ -1,5 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
+const builtin = @import("builtin");
 
 pub const SocketAddr = union(enum(u8)) {
     V4: SocketAddrV4,
@@ -15,6 +16,20 @@ pub const SocketAddr = union(enum(u8)) {
             .port = 0,
         },
     };
+
+    pub fn init(addr: IpAddr, portt: u16) Self {
+        return switch (addr) {
+            .ipv4 => |ipv4| .{ .V4 = .{ .ip = ipv4, .port = portt } },
+            .ipv6 => |ipv6| .{
+                .V6 = .{
+                    .ip = ipv6,
+                    .port = portt,
+                    .flowinfo = 0,
+                    .scope_id = 0,
+                },
+            },
+        };
+    }
 
     pub fn parse(bytes: []const u8) !Self {
         // TODO: parse v6 if v4 fails
@@ -204,6 +219,22 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
+    pub fn fromIpV4Address(address: std.net.Address) Self {
+        return Self.initIpv4(.{
+            @as(u8, @intCast(address.in.sa.addr & 0xFF)),
+            @as(u8, @intCast(address.in.sa.addr >> 8 & 0xFF)),
+            @as(u8, @intCast(address.in.sa.addr >> 16 & 0xFF)),
+            @as(u8, @intCast(address.in.sa.addr >> 24 & 0xFF)),
+        }, address.getPort());
+    }
+
+    pub fn setPort(self: *Self, portt: u16) void {
+        switch (self.*) {
+            .V4 => |*v4| v4.port = portt,
+            .V6 => |*v6| v6.port = portt,
+        }
+    }
+
     /// returns:
     /// - array: the string, plus some extra bytes at the end
     /// - integer: length of the string within the array
@@ -248,11 +279,29 @@ pub const SocketAddr = union(enum(u8)) {
             return error.MulticastAddress;
         }
     }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            .V4 => |sav4| try sav4.format(fmt, options, writer),
+            .V6 => |sav6| try sav6.format(fmt, options, writer),
+        }
+    }
 };
 
 pub const SocketAddrV4 = struct {
     ip: Ipv4Addr,
     port: u16,
+
+    const Self = @This();
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{}:{d}", .{
+            self.ip,
+            self.port,
+        });
+    }
 };
 
 pub const SocketAddrV6 = struct {
@@ -260,6 +309,17 @@ pub const SocketAddrV6 = struct {
     port: u16,
     flowinfo: u32,
     scope_id: u32,
+
+    const Self = @This();
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{}:{d}", .{
+            self.ip,
+            self.port,
+        });
+    }
 };
 
 pub const Ipv4Addr = struct {
@@ -275,6 +335,17 @@ pub const Ipv4Addr = struct {
 
     pub fn eql(self: *const Self, other: *const Self) bool {
         return std.mem.eql(u8, self.octets[0..], other.octets[0..]);
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        try writer.print("{}.{}.{}.{}", .{
+            self.octets[0],
+            self.octets[1],
+            self.octets[2],
+            self.octets[3],
+        });
     }
 };
 
@@ -296,6 +367,48 @@ pub const Ipv6Addr = struct {
     /// defined in https://tools.ietf.org/html/rfc4291
     pub fn isMulticast(self: *const Self) bool {
         return self.octets[0] == 255;
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        if (std.mem.eql(u8, self.octets[0..12], &[_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff })) {
+            try std.fmt.format(writer, "[::ffff:{}.{}.{}.{}]", .{
+                self.octets[12],
+                self.octets[13],
+                self.octets[14],
+                self.octets[15],
+            });
+            return;
+        }
+        const big_endian_parts: *align(1) const [8]u16 = @ptrCast(&self.octets);
+        const native_endian_parts = switch (builtin.target.cpu.arch.endian()) {
+            .Big => big_endian_parts.*,
+            .Little => blk: {
+                var buf: [8]u16 = undefined;
+                for (big_endian_parts, 0..) |part, i| {
+                    buf[i] = std.mem.bigToNative(u16, part);
+                }
+                break :blk buf;
+            },
+        };
+        try writer.writeAll("[");
+        var i: usize = 0;
+        var abbrv = false;
+        while (i < native_endian_parts.len) : (i += 1) {
+            if (native_endian_parts[i] == 0) {
+                if (!abbrv) {
+                    try writer.writeAll(if (i == 0) "::" else ":");
+                    abbrv = true;
+                }
+                continue;
+            }
+            try std.fmt.format(writer, "{x}", .{native_endian_parts[i]});
+            if (i != native_endian_parts.len - 1) {
+                try writer.writeAll(":");
+            }
+        }
+        try writer.writeAll("]");
     }
 };
 
@@ -333,6 +446,13 @@ pub const IpAddr = union(enum(u32)) {
             },
         }
     }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            .ipv4 => |ipv4| try ipv4.format(fmt, options, writer),
+            .ipv6 => |ipv6| try ipv6.format(fmt, options, writer),
+        }
+    }
 };
 
 pub fn endpointToString(allocator: std.mem.Allocator, endpoint: *const network.EndPoint) error{OutOfMemory}!std.ArrayList(u8) {
@@ -341,7 +461,7 @@ pub fn endpointToString(allocator: std.mem.Allocator, endpoint: *const network.E
     return endpoint_buf;
 }
 
-test "gossip.net: invalid ipv4 socket parsing" {
+test "net.net: invalid ipv4 socket parsing" {
     {
         var addr = "127.0.0.11234";
         var result = SocketAddr.parseIpv4(addr);
@@ -354,7 +474,7 @@ test "gossip.net: invalid ipv4 socket parsing" {
     }
 }
 
-test "gossip.net: valid ipv4 socket parsing" {
+test "net.net: valid ipv4 socket parsing" {
     var addr = "127.0.0.1:1234";
     var expected_addr = SocketAddr{ .V4 = SocketAddrV4{
         .ip = Ipv4Addr.init(127, 0, 0, 1),
@@ -364,8 +484,14 @@ test "gossip.net: valid ipv4 socket parsing" {
     try std.testing.expectEqual(expected_addr, actual_addr);
 }
 
-test "gossip.net: test random" {
+test "net.net: test random" {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
     var addr = SocketAddr.random(rng.random());
     _ = addr;
+}
+
+test "net.net: set port works" {
+    var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
+    sa1.setPort(1001);
+    try std.testing.expectEqual(@as(u16, 1001), sa1.port());
 }
