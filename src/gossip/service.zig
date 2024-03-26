@@ -431,16 +431,6 @@ pub const GossipService = struct {
         defer if (dump_handle) |*h| self.joinAndExit(h);
     }
 
-    fn sortSlices(slices: anytype) void {
-        const InnerSlice = @typeInfo(@TypeOf(slices)).Pointer.child;
-        const InnerType = @typeInfo(InnerSlice).Pointer.child;
-        std.mem.sort(InnerSlice, slices, {}, struct {
-            fn cmp(_: void, lhs: InnerSlice, rhs: InnerSlice) bool {
-                return std.mem.lessThan(InnerType, lhs, rhs);
-            }
-        }.cmp);
-    }
-
     const VerifyMessageTask = struct {
         allocator: std.mem.Allocator,
         packet_batch: ArrayList(Packet),
