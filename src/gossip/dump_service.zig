@@ -17,7 +17,7 @@ pub const GossipDumpService = struct {
 
     const Self = @This();
 
-    pub fn run(self: *Self) !void {
+    pub fn run(self: Self) !void {
         const start_time = std.time.timestamp();
         const dir = try std.fmt.allocPrint(self.allocator, "gossip-dumps/{}", .{start_time});
         defer self.allocator.free(dir);
@@ -29,7 +29,7 @@ pub const GossipDumpService = struct {
         }
     }
 
-    fn dumpGossip(self: *Self, dir: []const u8, start_time: i64) !void {
+    fn dumpGossip(self: *const Self, dir: []const u8, start_time: i64) !void {
         const data = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();

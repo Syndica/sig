@@ -364,15 +364,13 @@ pub const GossipService = struct {
         });
         defer self.joinAndExit(&responder_handle);
 
-        if (dump) {
-            var dump_svc = GossipDumpService{
-                .allocator = self.allocator,
-                .logger = self.logger,
-                .gossip_table_rw = &self.gossip_table_rw,
-                .exit = self.exit,
-            };
-            try dump_svc.run();
-        }
+        var dump_handle = if (dump) try Thread.spawn(.{}, GossipDumpService.run, .{.{
+            .allocator = self.allocator,
+            .logger = self.logger,
+            .gossip_table_rw = &self.gossip_table_rw,
+            .exit = self.exit,
+        }}) else null;
+        defer if (dump_handle) |*h| self.joinAndExit(h);
     }
 
     fn sortSlices(slices: anytype) void {
