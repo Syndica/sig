@@ -143,6 +143,64 @@ pub const GossipStats = struct {
     table_n_pubkeys: StatU64 = .{},
 };
 
+// TODO when using prometheus counters, this could potentially be
+// merged with the above struct, since they will share state.
+const GossipStatsLogger = struct {
+    logger: Logger,
+    log_interval_micros: i64 = 10_000_000,
+    last_log: i64 = 0,
+    current_stats: StatsToLog = .{}, // TODO replace with prometheus counters
+    last_logged_snapshot: StatsToLog = .{},
+    updates_since_last: u64 = 0,
+
+    const StatsToLog = struct {
+        gossip_packets_received: u64 = 0,
+        ping_messages_recv: u64 = 0,
+        pong_messages_recv: u64 = 0,
+        push_messages_recv: u64 = 0,
+        pull_requests_recv: u64 = 0,
+        pull_responses_recv: u64 = 0,
+        prune_messages_recv: u64 = 0,
+    };
+
+    const Self = @This();
+
+    /// If log_interval_millis has passed since the last log,
+    /// then log the number of events since then.
+    fn maybeLog(
+        self: *Self,
+        lastest_events: StatsToLog, // TODO remove when prometheus counters are used
+    ) !void {
+        self.update(lastest_events);
+        const now = std.time.microTimestamp();
+        const interval = @as(u64, @intCast(now -| self.last_log));
+        if (interval < self.log_interval_micros) return;
+        self.last_log = now;
+        self.logger.infof(
+            "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            .{
+                self.current_stats.gossip_packets_received - self.last_logged_snapshot.gossip_packets_received,
+                self.current_stats.ping_messages_recv - self.last_logged_snapshot.ping_messages_recv,
+                self.current_stats.pong_messages_recv - self.last_logged_snapshot.pong_messages_recv,
+                self.current_stats.push_messages_recv - self.last_logged_snapshot.push_messages_recv,
+                self.current_stats.pull_requests_recv - self.last_logged_snapshot.pull_requests_recv,
+                self.current_stats.pull_responses_recv - self.last_logged_snapshot.pull_responses_recv,
+                self.current_stats.prune_messages_recv - self.last_logged_snapshot.prune_messages_recv,
+            },
+        );
+        self.last_logged_snapshot = self.current_stats;
+        self.updates_since_last = 0;
+    }
+
+    // TODO remove when prometheus counters are used
+    fn update(self: *Self, latest_events: StatsToLog) void {
+        inline for (@typeInfo(StatsToLog).Struct.fields) |field| {
+            @field(self.current_stats, field.name) +|= @field(latest_events, field.name);
+        }
+        self.updates_since_last += 1;
+    }
+};
+
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
 
@@ -538,6 +596,7 @@ pub const GossipService = struct {
             pull_responses.deinit();
             prune_messages.deinit();
         }
+        var stats_logger: GossipStatsLogger = .{ .logger = self.logger };
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_messages = try self.verified_incoming_channel.try_drain();
@@ -702,18 +761,15 @@ pub const GossipService = struct {
             gossip_packets_processed += prune_messages.items.len;
             self.stats.gossip_packets_processed.add(gossip_packets_processed);
 
-            self.logger.infof(
-                "gossip: recv {} messages: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
-                .{
-                    messages.len,
-                    ping_messages.items.len,
-                    pong_messages.items.len,
-                    push_messages.items.len,
-                    pull_requests.items.len,
-                    pull_responses.items.len,
-                    prune_messages.items.len,
-                },
-            );
+            try stats_logger.maybeLog(.{
+                .gossip_packets_received = messages.len,
+                .ping_messages_recv = ping_messages.items.len,
+                .pong_messages_recv = pong_messages.items.len,
+                .push_messages_recv = push_messages.items.len,
+                .pull_requests_recv = pull_requests.items.len,
+                .pull_responses_recv = pull_responses.items.len,
+                .prune_messages_recv = prune_messages.items.len,
+            });
 
             // handle batch messages
             if (push_messages.items.len > 0) {
