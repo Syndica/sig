@@ -1,5 +1,5 @@
 zig-cache/
 zig-out/
 data/
-gossip-dump*
+/gossip-dumps
 .DS_Store

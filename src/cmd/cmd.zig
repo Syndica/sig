@@ -72,8 +72,8 @@ var gossip_spy_node_option = cli.Option{
 };
 
 var gossip_dump_option = cli.Option{
-    .long_name = "dump",
-    .help = "periodically dump gossip table to csv files",
+    .long_name = "dump-gossip",
+    .help = "periodically dump gossip table to csv files and logs",
     .value = cli.OptionValue{ .bool = false },
     .required = false,
     .value_name = "Gossip Table Dump",
