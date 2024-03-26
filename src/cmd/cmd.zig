@@ -71,6 +71,14 @@ var gossip_spy_node_option = cli.Option{
     .value_name = "Spy Node",
 };
 
+var gossip_dump_option = cli.Option{
+    .long_name = "dump-gossip",
+    .help = "periodically dump gossip table to csv files and logs",
+    .value = cli.OptionValue{ .bool = false },
+    .required = false,
+    .value_name = "Gossip Table Dump",
+};
+
 var log_level_option = cli.Option{
     .long_name = "log-level",
     .help = "The amount of detail to log (default = debug)",
@@ -112,6 +120,7 @@ var app = &cli.App{
             &gossip_port_option,
             &gossip_entrypoints_option,
             &gossip_spy_node_option,
+            &gossip_dump_option,
         } },
     },
 };
@@ -240,7 +249,7 @@ fn gossip(_: []const []const u8) !void {
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, spy_node },
+        .{ &gossip_service, spy_node, gossip_dump_option.value.bool },
     );
 
     handle.join();
