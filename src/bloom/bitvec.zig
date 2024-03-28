@@ -43,6 +43,36 @@ pub const BitVec = struct {
     }
 };
 
+pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            var bitset: DynamicBitSet = data;
+            var bitvec = BitVec.initFromBitSet(bitset);
+            try bincode.write(null, writer, bitvec, params);
+        }
+
+        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !DynamicBitSet {
+            var ally = allocator.?;
+            var bitvec = try bincode.read(ally, BitVec, reader, params);
+            defer bincode.free(ally, bitvec);
+
+            var dynamic_bitset = try bitvec.toBitSet(ally);
+            return dynamic_bitset;
+        }
+
+        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
+            _ = allocator;
+            data.deinit();
+        }
+    };
+
+    return bincode.FieldConfig(DynamicBitSet){
+        .serializer = S.serialize,
+        .deserializer = S.deserialize,
+        .free = S.free,
+    };
+}
+
 test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec" {
     var rust_bit_vec_serialized = [_]u8{
         1,   2,   0,   0,   0,   0,   0, 0, 0, 255, 255, 239, 191, 255, 255, 255, 255, 255, 255, 255,

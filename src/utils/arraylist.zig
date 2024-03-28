@@ -35,3 +35,21 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
         .free = S.free,
     };
 }
+
+pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayList(T)) {
+    const S = struct {
+        fn defaultEOF(allocator: std.mem.Allocator) std.ArrayList(T) {
+            return std.ArrayList(T).init(allocator);
+        }
+
+        fn free(_: std.mem.Allocator, data: anytype) void {
+            data.deinit();
+        }
+    };
+
+    return bincode.FieldConfig(std.ArrayList(T)){
+        .default_on_eof = true,
+        .free = S.free,
+        .default_fn = S.defaultEOF,
+    };
+}

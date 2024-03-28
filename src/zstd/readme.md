@@ -1,0 +1,1 @@
+thank you https://github.com/alichraghi/zstd.zig/tree/master for the original repo

@@ -1,9 +1,10 @@
 const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
-pub const HASH_SIZE: usize = 32;
-
+const base58 = @import("base58-zig");
 const CompareOperator = std.math.CompareOperator;
+
+pub const HASH_SIZE: usize = 32;
 
 pub const Hash = struct {
     data: [HASH_SIZE]u8,
@@ -46,7 +47,7 @@ pub const Hash = struct {
         return .eq;
     }
 
-    pub fn extend_and_hash(
+    pub fn extendAndHash(
         alloc: Allocator,
         id: Hash,
         val: []u8,
@@ -57,5 +58,12 @@ pub const Hash = struct {
         hash_data.appendSliceAssumeCapacity(val);
         const hash = generateSha256Hash(hash_data.items);
         return hash;
+    }
+
+    pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const b58_encoder = base58.Encoder.init(.{});
+        var buf: [44]u8 = undefined;
+        const size = b58_encoder.encode(&self.data, &buf) catch unreachable;
+        return writer.print("{s}", .{buf[0..size]});
     }
 };
