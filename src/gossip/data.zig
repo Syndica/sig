@@ -410,6 +410,22 @@ pub const GossipData = union(enum(u32)) {
             },
         }
     }
+
+    pub fn gossipAddr(self: *const @This()) ?SocketAddr {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| if (v.gossip.isUnspecified()) null else v.gossip,
+            .ContactInfo => |*v| v.getSocket(socket_tag.GOSSIP),
+            else => null,
+        };
+    }
+
+    pub fn shredVersion(self: *const @This()) ?u16 {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| v.shred_version,
+            .ContactInfo => |*v| v.shred_version,
+            else => null,
+        };
+    }
 };
 
 pub const LegacyContactInfo = struct {

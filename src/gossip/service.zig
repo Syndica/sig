@@ -47,6 +47,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
+const GossipDumpService = @import("../gossip/dump_service.zig").GossipDumpService;
 
 const Registry = @import("../prometheus/registry.zig").Registry;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
@@ -387,7 +388,7 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message) (only active if not a spy node)
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
-    pub fn run(self: *Self, spy_node: bool) !void {
+    pub fn run(self: *Self, spy_node: bool, dump: bool) !void {
         var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
         defer self.joinAndExit(&ip_echo_server_listener_handle);
 
@@ -420,6 +421,14 @@ pub const GossipService = struct {
             self.logger,
         });
         defer self.joinAndExit(&responder_handle);
+
+        var dump_handle = if (dump) try Thread.spawn(.{}, GossipDumpService.run, .{.{
+            .allocator = self.allocator,
+            .logger = self.logger,
+            .gossip_table_rw = &self.gossip_table_rw,
+            .exit = self.exit,
+        }}) else null;
+        defer if (dump_handle) |*h| self.joinAndExit(h);
     }
 
     const VerifyMessageTask = struct {
@@ -2823,7 +2832,7 @@ test "gossip.gossip_service: init, exit, and deinit" {
     var handle = try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ &gossip_service, true },
+        .{ &gossip_service, true, false },
     );
 
     gossip_service.echo_server.kill();
@@ -2878,7 +2887,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         gossip_service.echo_server.kill(); // we dont need this rn
         defer gossip_service.deinit();
 
-        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{ &gossip_service, true });
+        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{ &gossip_service, true, false });
 
         // send incomign packets/messages
         var outgoing_channel = Channel(ArrayList(Packet)).init(allocator, 10_000);
