@@ -249,7 +249,7 @@ pub const AccountIndex = struct {
         account_refs: *ArrayList(AccountRef),
     ) !void {
         var offset: usize = 0;
-        var n_accounts: usize = 0;
+        var number_of_accounts: usize = 0;
 
         if (bin_counts.len != self.numberOfBins()) {
             return error.BinCountMismatch;
@@ -275,14 +275,14 @@ pub const AccountIndex = struct {
             bin_counts[bin_index] += 1;
 
             offset = offset + account.len;
-            n_accounts += 1;
+            number_of_accounts += 1;
         }
 
         if (offset != std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64))) {
             return error.InvalidAccountFileLength;
         }
 
-        accounts_file.n_accounts = n_accounts;
+        accounts_file.number_of_accounts = number_of_accounts;
     }
 };
 
@@ -411,8 +411,8 @@ pub fn FastMap(
             value_ptr: *Value,
         };
 
-        pub fn init(allocator: std.mem.Allocator) @This() {
-            return @This(){
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return Self{
                 .allocator = allocator,
                 .groups = undefined,
                 .states = undefined,
@@ -427,7 +427,7 @@ pub fn FastMap(
             return self;
         }
 
-        pub fn ensureTotalCapacity(self: *@This(), n: usize) !void {
+        pub fn ensureTotalCapacity(self: *Self, n: usize) !void {
             if (n == 0) {
                 // something is wrong
                 return error.ZeroCapacityNotSupported;
@@ -496,7 +496,7 @@ pub fn FastMap(
             }
         }
 
-        pub fn deinit(self: *@This()) void {
+        pub fn deinit(self: *Self) void {
             if (self._capacity > 0)
                 self.allocator.free(self.memory);
         }
@@ -596,7 +596,7 @@ pub fn FastMap(
             return null;
         }
 
-        pub fn putAssumeCapacity(self: *@This(), key: Key, value: Value) void {
+        pub fn putAssumeCapacity(self: *Self, key: Key, value: Value) void {
             var hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
             std.debug.assert(self._capacity > self._count);
@@ -636,7 +636,7 @@ pub fn FastMap(
             unreachable;
         }
 
-        pub fn getOrPutAssumeCapacity(self: *@This(), key: Key) GetOrPutResult {
+        pub fn getOrPutAssumeCapacity(self: *Self, key: Key) GetOrPutResult {
             var hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
 

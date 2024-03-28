@@ -54,7 +54,9 @@ pub const AccountInFile = struct {
         break :blk size;
     };
 
-    pub fn validate(self: *const @This()) !void {
+    pub const Self = @This();
+
+    pub fn validate(self: *const Self) !void {
         // make sure upper bits are zero
         const exec_byte = @as(*u8, @ptrCast(self.executable()));
         const valid_exec = exec_byte.* & ~@as(u8, 1) == 0;
@@ -73,27 +75,27 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub inline fn pubkey(self: *const @This()) *Pubkey {
+    pub inline fn pubkey(self: *const Self) *Pubkey {
         return &self.store_info.pubkey;
     }
 
-    pub inline fn lamports(self: *const @This()) *u64 {
+    pub inline fn lamports(self: *const Self) *u64 {
         return &self.account_info.lamports;
     }
 
-    pub inline fn owner(self: *const @This()) *Pubkey {
+    pub inline fn owner(self: *const Self) *Pubkey {
         return &self.account_info.owner;
     }
 
-    pub inline fn executable(self: *const @This()) *bool {
+    pub inline fn executable(self: *const Self) *bool {
         return &self.account_info.executable;
     }
 
-    pub inline fn rent_epoch(self: *const @This()) *Epoch {
+    pub inline fn rent_epoch(self: *const Self) *Epoch {
         return &self.account_info.rent_epoch;
     }
 
-    pub inline fn hash(self: *const @This()) *Hash {
+    pub inline fn hash(self: *const Self) *Hash {
         return self.hash_ptr;
     }
 };
@@ -110,7 +112,7 @@ pub const AccountFile = struct {
     file: std.fs.File,
 
     // number of accounts stored in the file
-    n_accounts: usize = 0,
+    number_of_accounts: usize = 0,
 
     const Self = @This();
 
@@ -146,23 +148,23 @@ pub const AccountFile = struct {
 
     pub fn validate(self: *Self) !void {
         var offset: usize = 0;
-        var n_accounts: usize = 0;
+        var number_of_accounts: usize = 0;
 
         while (true) {
             const account = self.readAccount(offset) catch break;
             try account.validate();
             offset = offset + account.len;
-            n_accounts += 1;
+            number_of_accounts += 1;
         }
 
         if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
             return error.InvalidAccountFileLength;
         }
 
-        self.n_accounts = n_accounts;
+        self.number_of_accounts = number_of_accounts;
     }
 
-    /// get account without parsing data (a lot faster if the data field isnt used anyway)
+    /// get account without reading data (a lot faster if the data field isnt used anyway)
     /// (used when computing account hashes for snapshot validation)
     pub fn getAccountHashAndLamports(self: *const Self, start_offset: usize) error{EOF}!struct { hash: *Hash, lamports: *u64 } {
         var offset = start_offset;

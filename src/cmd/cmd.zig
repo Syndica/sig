@@ -228,7 +228,7 @@ fn gossip(_: []const []const u8) !void {
     logger.infof("my ip: {}", .{my_ip});
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     contact_info.shred_version = my_shred_version;
     var gossip_address = SocketAddr.init(my_ip, gossip_port);
