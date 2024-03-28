@@ -93,9 +93,9 @@ pub const AccountsDB = struct {
         );
 
         var disk_index_config: ?DiskMemoryConfig = null;
-        if (config.disk_index_dir != null) {
+        if (config.disk_index_dir) |disk_index_dir| {
             disk_index_config = DiskMemoryConfig{
-                .dir_path = config.disk_index_dir.?,
+                .dir_path = disk_index_dir,
                 .capacity = config.index_disk_capacity,
             };
         }
@@ -126,7 +126,7 @@ pub const AccountsDB = struct {
 
     /// used to build AccountsDB from a snapshot in parallel
     pub const LoadingThreadAccountsDB = struct {
-        index: AccountIndex,
+        account_index: AccountIndex,
         file_map: std.AutoArrayHashMap(FileId, AccountFile),
 
         pub fn init(
@@ -136,7 +136,7 @@ pub const AccountsDB = struct {
             disk_config: ?DiskMemoryConfig,
         ) !@This() {
             var self = @This(){
-                .index = try AccountIndex.init(allocator, n_bins, ram_config, disk_config),
+                .account_index = try AccountIndex.init(allocator, n_bins, ram_config, disk_config),
                 .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
             };
             return self;
@@ -145,7 +145,7 @@ pub const AccountsDB = struct {
         pub fn deinit(self: *@This()) void {
             self.file_map.deinit();
             // underlying ref memory will be tracked in main index
-            self.index.deinit(false);
+            self.account_index.deinit(false);
         }
     };
 
@@ -302,7 +302,7 @@ pub const AccountsDB = struct {
         file_names: [][]const u8,
         accounts_per_file_est: usize,
     ) !void {
-        const thread_index = &thread_db.index;
+        const thread_index = &thread_db.account_index;
         const file_map = &thread_db.file_map;
 
         try file_map.ensureTotalCapacity(file_names.len);
@@ -414,7 +414,7 @@ pub const AccountsDB = struct {
             // sum size across threads
             var bin_n_accounts: usize = 0;
             for (thread_dbs) |*t_db| {
-                bin_n_accounts += t_db.index.bins[i].getRefs().count();
+                bin_n_accounts += t_db.account_index.bins[i].getRefs().count();
             }
             // prealloc
             if (bin_n_accounts > 0) {
@@ -440,12 +440,12 @@ pub const AccountsDB = struct {
         const index_allocator = self.index.allocator;
         var head = try index_allocator.create(RefMemoryLinkedList);
         head.* = .{
-            .memory = thread_dbs[0].index.memory_linked_list.?.memory,
+            .memory = thread_dbs[0].account_index.memory_linked_list.?.memory,
         };
         var curr = head;
         for (1..thread_dbs.len) |i| {
             // sometimes not all threads are spawned
-            if (thread_dbs[i].index.memory_linked_list) |memory_linked_list| {
+            if (thread_dbs[i].account_index.memory_linked_list) |memory_linked_list| {
                 var ref = try index_allocator.create(RefMemoryLinkedList);
                 ref.* = .{ .memory = memory_linked_list.memory };
                 curr.next_ptr = ref;
@@ -484,22 +484,22 @@ pub const AccountsDB = struct {
         const total_bins = bin_end_index - bin_start_index;
         var timer = try std.time.Timer.start();
 
-        for (bin_start_index..bin_end_index, 1..) |bin_index, count| {
+        for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
             const index_bin = index.getBin(bin_index);
             const index_bin_refs = index_bin.getRefs();
 
             // sum size across threads
             var bin_n_accounts: usize = 0;
-            for (thread_dbs) |*t_db| {
-                bin_n_accounts += t_db.index.bins[bin_index].getRefs().count();
+            for (thread_dbs) |*thread_db| {
+                bin_n_accounts += thread_db.account_index.bins[bin_index].getRefs().count();
             }
             // prealloc
             if (bin_n_accounts > 0) {
                 try index_bin_refs.ensureTotalCapacity(@intCast(bin_n_accounts));
             }
 
-            for (thread_dbs) |*t_db| {
-                const thread_bin = t_db.index.getBin(bin_index);
+            for (thread_dbs) |*thread_db| {
+                const thread_bin = thread_db.account_index.getBin(bin_index);
                 const thread_refs = thread_bin.getRefs();
                 var iter = thread_refs.iterator();
 
@@ -510,7 +510,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            printTimeEstimate(&timer, total_bins, count, "combining thread indexes", null);
+            printTimeEstimate(&timer, total_bins, iteration_count, "combining thread indexes", null);
         }
     }
 
