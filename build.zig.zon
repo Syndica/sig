@@ -22,5 +22,9 @@
             .url = "https://github.com/karlseguin/http.zig/archive/7a751549a751d9b45952037abdb127b3225b2ac1.tar.gz",
             .hash = "122004f74adf46001fe9129d8cec54bd4a98895ce89f0897790e13b60fa99e527b99",
         },
+        .zigdig = .{
+            .url = "https://github.com/lun-4/zigdig/archive/2ec407ec3c7f347e747717977958e9ba339eb82f.tar.gz",
+            .hash = "1220dfdb3089dfe9a4e4bc1226fcff08d91d0c0853f287d98d8b81270da251790331",
+        },
     },
 }

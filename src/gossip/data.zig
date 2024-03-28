@@ -270,7 +270,14 @@ pub const GossipData = union(enum(u32)) {
 
     pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
-            .LegacyContactInfo => |*v| {
+            inline .LegacyContactInfo,
+            .ContactInfo,
+            .AccountsHashes,
+            .LegacySnapshotHashes,
+            .SnapshotHashes,
+            .NodeInstance,
+            .Version,
+            => |*v| {
                 try v.sanitize();
             },
             .Vote => |*v| {
@@ -308,12 +315,6 @@ pub const GossipData = union(enum(u32)) {
 
                 const value: LowestSlot = v[1];
                 try value.sanitize();
-            },
-            .LegacySnapshotHashes => |*v| {
-                try v.sanitize();
-            },
-            .AccountsHashes => |*v| {
-                try v.sanitize();
             },
             else => {
                 std.debug.print("sanitize not implemented for type: {s}\n", .{@tagName(self.*)});
@@ -408,6 +409,22 @@ pub const GossipData = union(enum(u32)) {
                 return .{ .DuplicateShred = .{ rng.intRangeAtMost(u16, 0, MAX_DUPLICATE_SHREDS - 1), DuplicateShred.random(rng) } };
             },
         }
+    }
+
+    pub fn gossipAddr(self: *const @This()) ?SocketAddr {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| if (v.gossip.isUnspecified()) null else v.gossip,
+            .ContactInfo => |*v| v.getSocket(SOCKET_TAG_GOSSIP),
+            else => null,
+        };
+    }
+
+    pub fn shredVersion(self: *const @This()) ?u16 {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| v.shred_version,
+            .ContactInfo => |*v| v.shred_version,
+            else => null,
+        };
     }
 };
 
@@ -752,6 +769,10 @@ pub const Version = struct {
             .version = LegacyVersion2.random(rng),
         };
     }
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
+    }
 };
 
 pub const LegacyVersion2 = struct {
@@ -820,6 +841,10 @@ pub const NodeInstance = struct {
             .timestamp = self.timestamp,
             .token = self.token,
         };
+    }
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
     }
 };
 
@@ -894,6 +919,21 @@ pub const SnapshotHashes = struct {
             .incremental = &slice,
             .wallclock = getWallclockMs(),
         };
+    }
+
+    pub fn sanitize(self: *const @This()) !void {
+        try sanitizeWallclock(self.wallclock);
+        if (self.full[0] >= MAX_SLOT) {
+            return error.ValueOutOfBounds;
+        }
+        for (self.incremental) |inc| {
+            if (inc[0] >= MAX_SLOT) {
+                return error.ValueOutOfBounds;
+            }
+            if (self.full[0] >= inc[0]) {
+                return error.InvalidValue;
+            }
+        }
     }
 };
 
@@ -995,6 +1035,10 @@ pub const ContactInfo = struct {
             .sockets = sockets,
             .extensions = ArrayList(Extension).init(allocator),
         };
+    }
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
     }
 
     pub fn getSocket(self: *const Self, key: u8) ?SocketAddr {
@@ -1334,7 +1378,10 @@ test "gossip.data: pubkey matches rust" {
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk);
 
-    const rust_bytes = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92 };
+    const rust_bytes = [_]u8{
+        138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45, 60,  186, 93,  114,
+        202, 103, 9,   191, 29,  148, 18,  27,  243, 116, 136, 1,  180, 15,  111, 92,
+    };
     var buf = [_]u8{0} ** 1024;
     var bytes = try bincode.writeToSlice(buf[0..], id, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes[0..bytes.len]);
@@ -1358,7 +1405,17 @@ test "gossip.data: contact info serialization matches rust" {
     legacy_contact_info.id = id;
     legacy_contact_info.wallclock = 0;
 
-    var contact_info_rust = [_]u8{ 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var contact_info_rust = [_]u8{
+        138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45, 60,  186, 93,  114,
+        202, 103, 9,   191, 29,  148, 18,  27,  243, 116, 136, 1,  180, 15,  111, 92,
+        0,   0,   0,   0,   127, 0,   0,   1,   210, 4,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,  0,   0,
+    };
     var bytes = try bincode.writeToSlice(buf[0..], legacy_contact_info, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], &contact_info_rust);
 }
@@ -1380,7 +1437,17 @@ test "gossip.data: gossip data serialization matches rust" {
     };
 
     var buf = [_]u8{0} ** 1024;
-    var rust_gossip_data = [_]u8{ 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    var rust_gossip_data = [_]u8{
+        0,   0,  0,   0,   138, 136, 227, 221, 116, 9,  241, 149, 253, 82,  219, 45,  60,
+        186, 93, 114, 202, 103, 9,   191, 29,  148, 18, 27,  243, 116, 136, 1,   180, 15,
+        111, 92, 0,   0,   0,   0,   127, 0,   0,   1,  210, 4,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,  0,   0,   0,   0,   0,   0,   0,
+        0,   0,  0,   0,   0,   0,   0,   0,   0,   0,
+    };
     var bytes = try bincode.writeToSlice(buf[0..], gossip_data, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, bytes[0..bytes.len], rust_gossip_data[0..bytes.len]);
 }
@@ -1430,4 +1497,78 @@ test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
     const end = LegacyContactInfo.fromContactInfo(&ci);
 
     try std.testing.expect(std.meta.eql(start, end));
+}
+
+test "gossip.data: sanitize valid ContactInfo works" {
+    var rand = std.rand.DefaultPrng.init(871329);
+    const rng = rand.random();
+    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 100, 123, 246);
+    defer info.deinit();
+    const data = GossipData{ .ContactInfo = info };
+    try data.sanitize();
+}
+
+test "gossip.data: sanitize invalid ContactInfo has error" {
+    var rand = std.rand.DefaultPrng.init(3414214);
+    const rng = rand.random();
+    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 1_000_000_000_000_000, 123, 246);
+    defer info.deinit();
+    const data = GossipData{ .ContactInfo = info };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
+}
+
+test "gossip.data: sanitize valid NodeInstance works" {
+    var rand = std.rand.DefaultPrng.init(23523413);
+    const rng = rand.random();
+    const instance = NodeInstance.random(rng);
+    const data = GossipData{ .NodeInstance = instance };
+    try data.sanitize();
+}
+
+test "gossip.data: sanitize invalid NodeInstance has error" {
+    var rand = std.rand.DefaultPrng.init(524145234);
+    const rng = rand.random();
+    var instance = NodeInstance.random(rng);
+    instance.wallclock = 1_000_000_000_487_283;
+    const data = GossipData{ .NodeInstance = instance };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
+}
+
+test "gossip.data: sanitize valid SnapshotHashes works" {
+    var rand = std.rand.DefaultPrng.init(23523413);
+    const rng = rand.random();
+    var instance = SnapshotHashes.random(rng);
+    instance.full[0] = 1000;
+    const data = GossipData{ .SnapshotHashes = instance };
+    try data.sanitize();
+}
+
+test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
+    var rand = std.rand.DefaultPrng.init(524145234);
+    const rng = rand.random();
+    var instance = SnapshotHashes.random(rng);
+    instance.full[0] = 1_000_000_000_487_283;
+    const data = GossipData{ .SnapshotHashes = instance };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
+}
+
+test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
+    var rand = std.rand.DefaultPrng.init(524145234);
+    const rng = rand.random();
+    var incremental: [1]struct { Slot, Hash } = .{.{ 1_000_000_000_487_283, Hash.default() }};
+    var instance = SnapshotHashes.random(rng);
+    instance.incremental = &incremental;
+    const data = GossipData{ .SnapshotHashes = instance };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
+}
+
+test "gossip.data: sanitize SnapshotHashes full > incremental has error" {
+    var rand = std.rand.DefaultPrng.init(524145234);
+    const rng = rand.random();
+    var incremental: [1]struct { Slot, Hash } = .{.{ 1, Hash.default() }};
+    var instance = SnapshotHashes.random(rng);
+    instance.full[0] = 2;
+    instance.incremental = &incremental;
+    const data = GossipData{ .SnapshotHashes = instance };
+    if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }

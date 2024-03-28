@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
     const zig_cli_module = b.dependency("zig-cli", opts).module("zig-cli");
     const getty_mod = b.dependency("getty", opts).module("getty");
     const httpz_mod = b.dependency("httpz", opts).module("httpz");
+    const zigdig_mod = b.dependency("zigdig", opts).module("dns");
 
     const lib = b.addStaticLibrary(.{
         .name = "sig",
@@ -58,6 +59,10 @@ pub fn build(b: *std.Build) void {
                 .name = "httpz",
                 .module = httpz_mod,
             },
+            .{
+                .name = "zigdig",
+                .module = zigdig_mod,
+            },
         },
     });
 
@@ -66,6 +71,7 @@ pub fn build(b: *std.Build) void {
     lib.addModule("zig-cli", zig_cli_module);
     lib.addModule("getty", getty_mod);
     lib.addModule("httpz", httpz_mod);
+    lib.addModule("zigdig", zigdig_mod);
 
     // ZSTD
     const ZSTD_C_PATH = "src/zstd/c/lib";
@@ -139,6 +145,7 @@ pub fn build(b: *std.Build) void {
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
     tests.addModule("httpz", httpz_mod);
+    tests.addModule("zigdig", zigdig_mod);
     tests.linkLibrary(zstd_lib);
 
     const run_tests = b.addRunArtifact(tests);
@@ -159,6 +166,7 @@ pub fn build(b: *std.Build) void {
     exe.addModule("zig-cli", zig_cli_module);
     exe.addModule("getty", getty_mod);
     exe.addModule("httpz", httpz_mod);
+    exe.addModule("zigdig", zigdig_mod);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -226,6 +234,8 @@ pub fn build(b: *std.Build) void {
         exec.addModule("zig-network", zig_network_module);
         exec.addModule("zig-cli", zig_cli_module);
         exec.addModule("getty", getty_mod);
+        fuzz_exe.addModule("httpz", httpz_mod);
+        fuzz_exe.addModule("zigdig", zigdig_mod);
 
         // this lets us run it as an exec
         b.installArtifact(exec);
