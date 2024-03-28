@@ -21,7 +21,7 @@ pub const sysvars = @import("sysvars.zig");
 const ZstdReader = @import("../zstd/reader.zig").Reader;
 const parallelUntarToFileSystem = @import("../utils/tar.zig").parallelUntarToFileSystem;
 
-pub const MAXIMUM_APPEND_VEC_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
+pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 const CACHED_KEY_SIZE: usize = 20;
@@ -250,7 +250,7 @@ pub const AccountFileInfo = struct {
     pub fn validate(self: *const AccountFileInfo, file_size: usize) !void {
         if (file_size == 0) {
             return error.FileSizeTooSmall;
-        } else if (file_size > @as(usize, MAXIMUM_APPEND_VEC_FILE_SIZE)) {
+        } else if (file_size > @as(usize, MAXIMUM_ACCOUNT_FILE_SIZE)) {
             return error.FileSizeTooLarge;
         } else if (self.length > file_size) {
             return error.OffsetOutOfBounds;

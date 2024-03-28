@@ -54,6 +54,9 @@ const AccountIndexBin = _accounts_index.AccountIndexBin;
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 
+// NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
+pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
+
 pub const AccountsDBConfig = struct {
     // number of Accounts to preallocate for cache
     storage_cache_size: usize = 10_000,
@@ -227,9 +230,10 @@ pub const AccountsDB = struct {
             // 1) the account references (AccountRef)
             // 2) the hashmap of referecnes (Map(Pubkey, *AccountRef))
             // and 3) the file maps Map(FileId, AccountFile)
+            // each loading thread will have its own copy of these
             // what happens:
-            // 2 and 3 will be copied into the main index thread and so we can deinit them
-            // 1 will continue to exist on the heap and its ownership is given
+            // 2) and 3) will be copied into the main index thread and so we can deinit them
+            // 1) will continue to exist on the heap and its ownership is given
             // the the main accounts-db index
             for (loading_threads.items) |*loading_thread| {
                 loading_thread.deinit();
@@ -250,7 +254,7 @@ pub const AccountsDB = struct {
         self.logger.infof("reading and indexing accounts...", .{});
         var handles = try spawnThreadTasks(
             self.allocator,
-            parseAndBinAccountFilesMultiThread,
+            loadAndVerifyAccountsFilesMultiThread,
             .{
                 &fields,
                 accounts_path,
@@ -277,52 +281,59 @@ pub const AccountsDB = struct {
     }
 
     /// multithread entrypoint into parseAndBinAccountFiles
-    pub fn parseAndBinAccountFilesMultiThread(
+    pub fn loadAndVerifyAccountsFilesMultiThread(
         fields: *const AccountsDbFields,
         accounts_dir_path: []const u8,
-        thread_dbs: []SnapshotLoader,
-        file_names: [][]const u8,
+        loading_threads: []SnapshotLoader,
+        filenames: [][]const u8,
         // task specific
         start_index: usize,
         end_index: usize,
         thread_id: usize,
     ) !void {
-        const thread_db = &thread_dbs[thread_id];
-        const thread_filenames = file_names[start_index..end_index];
-        try parseAndBinAccountFiles(
+        const loading_thread = &loading_threads[thread_id];
+        const thread_filenames = filenames[start_index..end_index];
+        // TODO: fix this
+        const ref_allocator = loading_thread.account_index.getBin(0).getRefs().allocator;
+
+        try loadAndVerifyAccountsFiles(
+            loading_thread.allocator,
+            ref_allocator,
             fields,
+            &loading_thread.account_index,
+            &loading_thread.file_map,
             accounts_dir_path,
-            thread_db,
             thread_filenames,
-            // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
-            1_500,
+            ACCOUNTS_PER_FILE_EST,
         );
     }
 
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
-    pub fn parseAndBinAccountFiles(
+    pub fn loadAndVerifyAccountsFiles(
+        // this allocator is used for normal operations
+        allocator: std.mem.Allocator,
+        // this allocator is specific to references (ie, disk or ram)
+        reference_allocator: std.mem.Allocator,
         fields: *const AccountsDbFields,
+        accounts_index: *AccountIndex,
+        file_map: *std.AutoArrayHashMap(FileId, AccountFile),
         accounts_dir_path: []const u8,
-        thread_db: *SnapshotLoader,
         file_names: [][]const u8,
         accounts_per_file_est: usize,
     ) !void {
-        const thread_index = &thread_db.account_index;
-        const file_map = &thread_db.file_map;
-
         try file_map.ensureTotalCapacity(file_names.len);
-        var bin_counts = try thread_db.allocator.alloc(usize, thread_index.numberOfBins());
-        defer thread_db.allocator.free(bin_counts);
+
+        var bin_counts = try allocator.alloc(usize, accounts_index.numberOfBins());
+        defer allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        const ref_allocator = thread_index.getBin(0).getRefs().allocator;
         var n_accounts_est = file_names.len * accounts_per_file_est;
-        thread_index.memory_linked_list = try thread_index.allocator.create(RefMemoryLinkedList);
-        thread_index.memory_linked_list.?.* = .{
-            .memory = try ArrayList(AccountRef).initCapacity(ref_allocator, n_accounts_est),
+        accounts_index.memory_linked_list = try accounts_index.allocator.create(RefMemoryLinkedList);
+        accounts_index.memory_linked_list.?.* = .{
+            .memory = try ArrayList(AccountRef).initCapacity(reference_allocator, n_accounts_est),
         };
-        const refs_ptr = &thread_index.memory_linked_list.?.memory;
+        const refs_ptr = &accounts_index.memory_linked_list.?.memory;
 
         // NOTE: might need to be longer depending on abs path length
         var buf: [1024]u8 = undefined;
@@ -359,7 +370,7 @@ pub const AccountsDB = struct {
             };
 
             // validate and count here for prealloc
-            thread_index.validateAccountFile(&accounts_file, bin_counts, refs_ptr) catch |err| {
+            accounts_index.validateAccountFile(&accounts_file, bin_counts, refs_ptr) catch |err| {
                 std.debug.panic("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
             };
 
@@ -378,7 +389,7 @@ pub const AccountsDB = struct {
         var total_accounts: usize = 0;
         for (bin_counts, 0..) |count, bin_index| {
             if (count > 0) {
-                try thread_index.getBin(bin_index).getRefs().ensureTotalCapacity(@intCast(count));
+                try accounts_index.getBin(bin_index).getRefs().ensureTotalCapacity(@intCast(count));
                 total_accounts += count;
             }
         }
@@ -392,7 +403,7 @@ pub const AccountsDB = struct {
         timer.reset();
         // compute how many account_references for each pubkey
         for (refs_ptr.items, 1..) |*ref, ref_count| {
-            thread_index.indexRefIfNotDuplicate(ref);
+            accounts_index.indexRefIfNotDuplicate(ref);
             // NOTE: PERF: make sure this doesnt lead to degration due to stderr locks
             if (ref_count % 1_000_000 == 0 or (refs_ptr.items.len - ref_count) < 50_000) {
                 printTimeEstimate(&timer, refs_ptr.items.len, ref_count, "generating accounts index", null);
