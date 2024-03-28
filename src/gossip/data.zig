@@ -1502,7 +1502,7 @@ test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
 test "gossip.data: sanitize valid ContactInfo works" {
     var rand = std.rand.DefaultPrng.init(871329);
     const rng = rand.random();
-    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 100, 123, 246);
+    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng), 100, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     try data.sanitize();
@@ -1511,7 +1511,7 @@ test "gossip.data: sanitize valid ContactInfo works" {
 test "gossip.data: sanitize invalid ContactInfo has error" {
     var rand = std.rand.DefaultPrng.init(3414214);
     const rng = rand.random();
-    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng, .{}), 1_000_000_000_000_000, 123, 246);
+    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng), 1_000_000_000_000_000, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}

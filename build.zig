@@ -234,8 +234,8 @@ pub fn build(b: *std.Build) void {
         exec.addModule("zig-network", zig_network_module);
         exec.addModule("zig-cli", zig_cli_module);
         exec.addModule("getty", getty_mod);
-        fuzz_exe.addModule("httpz", httpz_mod);
-        fuzz_exe.addModule("zigdig", zigdig_mod);
+        exec.addModule("httpz", httpz_mod);
+        exec.addModule("zigdig", zigdig_mod);
 
         // this lets us run it as an exec
         b.installArtifact(exec);
