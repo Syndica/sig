@@ -50,10 +50,10 @@ const RamMemoryConfig = _accounts_index.RamMemoryConfig;
 const RefMemoryLinkedList = _accounts_index.RefMemoryLinkedList;
 const AccountRef = _accounts_index.AccountRef;
 const AccountIndexBin = _accounts_index.AccountIndexBin;
+const DiskMemoryAllocator = _accounts_index.DiskMemoryAllocator;
 
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
-
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 
@@ -95,13 +95,13 @@ pub const AccountsDB = struct {
             config.storage_cache_size,
         );
 
-        var disk_index_config: ?DiskMemoryConfig = null;
-        if (config.disk_index_dir) |disk_index_dir| {
-            disk_index_config = DiskMemoryConfig{
-                .dir_path = disk_index_dir,
-                .capacity = config.index_disk_capacity,
-            };
-        }
+        // var disk_index_config: ?DiskMemoryConfig = null;
+        // if (config.disk_index_dir) |disk_index_dir| {
+        //     disk_index_config = DiskMemoryConfig{
+        //         .dir_path = disk_index_dir,
+        //         .capacity = config.index_disk_capacity,
+        //     };
+        // }
 
         const index = try AccountIndex.init(
             allocator,
@@ -109,7 +109,7 @@ pub const AccountsDB = struct {
             RamMemoryConfig{
                 .capacity = config.index_ram_capacity,
             },
-            disk_index_config,
+            null,
         );
 
         return Self{
@@ -130,17 +130,20 @@ pub const AccountsDB = struct {
     /// used to build AccountsDB from a snapshot in parallel
     pub const SnapshotLoader = struct {
         allocator: std.mem.Allocator,
+        reference_allocator: std.mem.Allocator,
         account_index: AccountIndex,
         file_map: std.AutoArrayHashMap(FileId, AccountFile),
 
         pub fn init(
             allocator: std.mem.Allocator,
+            reference_allocator: std.mem.Allocator,
             n_bins: usize,
             ram_config: RamMemoryConfig,
             disk_config: ?DiskMemoryConfig,
         ) !@This() {
             var self = @This(){
                 .allocator = allocator,
+                .reference_allocator = reference_allocator,
                 .account_index = try AccountIndex.init(allocator, n_bins, ram_config, disk_config),
                 .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
             };
@@ -206,22 +209,29 @@ pub const AccountsDB = struct {
         );
         var thread_disk_dirs = ArrayList([]const u8).init(self.allocator);
         for (0..n_parse_threads) |thread_i| {
-            var disk_config: ?DiskMemoryConfig = null;
+
+            var reference_allocator = std.heap.page_allocator;
             if (use_disk_index) {
-                const thread_disk_dir = try std.fmt.allocPrint(
+                const thread_disk_path = try std.fmt.allocPrint(
                     self.allocator,
                     "{s}/thread_{d}",
                     .{ self.config.disk_index_dir.?, thread_i },
                 );
-                try thread_disk_dirs.append(thread_disk_dir);
-                disk_config = DiskMemoryConfig{ .dir_path = thread_disk_dir, .capacity = 0 };
+                try thread_disk_dirs.append(thread_disk_path);
+
+                // need to store on heap so `ptr.allocator()` is always correct
+                var ptr = try self.allocator.create(DiskMemoryAllocator);
+                ptr.* = try DiskMemoryAllocator.init(thread_disk_path);
+
+                reference_allocator = ptr.allocator();
             }
 
             const loading_thread = try SnapshotLoader.init(
                 per_thread_allocator,
+                reference_allocator,
                 n_bins,
                 .{},
-                disk_config,
+                null,
             );
             loading_threads.appendAssumeCapacity(loading_thread);
         }
@@ -293,12 +303,10 @@ pub const AccountsDB = struct {
     ) !void {
         const loading_thread = &loading_threads[thread_id];
         const thread_filenames = filenames[start_index..end_index];
-        // TODO: fix this
-        const ref_allocator = loading_thread.account_index.getBin(0).getRefs().allocator;
 
         try loadAndVerifyAccountsFiles(
             loading_thread.allocator,
-            ref_allocator,
+            loading_thread.reference_allocator,
             fields,
             &loading_thread.account_index,
             &loading_thread.file_map,
@@ -926,15 +934,15 @@ pub const AccountsDB = struct {
         // check ram
         var ref = bin.getInMemRefs().get(pubkey.*);
         if (ref == null) {
-            // check disk
-            if (bin.getDiskRefs()) |disk_refs| {
-                ref = disk_refs.get(pubkey.*);
-                if (ref == null) {
-                    return error.PubkeyNotInIndex;
-                }
-            } else {
-                return error.PubkeyNotInIndex;
-            }
+            // // check disk
+            // if (bin.getDiskRefs()) |disk_refs| {
+            //     ref = disk_refs.get(pubkey.*);
+            //     if (ref == null) {
+            //         return error.PubkeyNotInIndex;
+            //     }
+            // } else {
+            return error.PubkeyNotInIndex;
+            // }
         }
 
         const max_ref = slotListMaxWithinBounds(ref.?, null, null).?;
@@ -1100,6 +1108,9 @@ pub fn main() !void {
         // if accounts/ doesnt exist then we unpack the found snapshots
         var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
         defer snapshot_dir_iter.close();
+        
+        // TODO: delete old accounts/ dir if it exists
+
 
         timer.reset();
         std.debug.print("unpacking {s}...", .{snapshot_paths.full_snapshot.path});

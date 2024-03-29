@@ -288,13 +288,13 @@ pub const AccountIndex = struct {
 
 pub const AccountIndexBin = struct {
     account_refs: RefMap,
-    disk_memory: ?DiskMemory,
+    // disk_memory: ?DiskMemory,
     allocator: std.mem.Allocator,
 
-    pub const DiskMemory = struct {
-        account_refs: RefMap,
-        allocator: *DiskMemoryAllocator,
-    };
+    // pub const DiskMemory = struct {
+    //     account_refs: RefMap,
+    //     allocator: *DiskMemoryAllocator,
+    // };
 
     const RefMap = FastMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
 
@@ -304,74 +304,78 @@ pub const AccountIndexBin = struct {
         maybe_disk_memory_config: ?DiskMemoryConfig,
         bin_index: usize,
     ) !AccountIndexBin {
+        _ = maybe_disk_memory_config; 
+        _ = bin_index;
+
         // setup ram references
         var account_refs = RefMap.init(ram_memory_config.allocator);
         if (ram_memory_config.capacity > 0) {
             try account_refs.ensureTotalCapacity(ram_memory_config.capacity);
         }
 
-        // setup disk references
-        var disk_memory: ?DiskMemory = null;
-        if (maybe_disk_memory_config) |*disk_memory_config| {
-            std.fs.cwd().access(disk_memory_config.dir_path, .{}) catch {
-                try std.fs.cwd().makeDir(disk_memory_config.dir_path);
-            };
+        // // setup disk references
+        // var disk_memory: ?DiskMemory = null;
+        // if (maybe_disk_memory_config) |*disk_memory_config| {
+        //     std.fs.cwd().access(disk_memory_config.dir_path, .{}) catch {
+        //         try std.fs.cwd().makeDir(disk_memory_config.dir_path);
+        //     };
 
-            const disk_filepath = try std.fmt.allocPrint(
-                allocator,
-                "{s}/bin{d}_index_data",
-                .{ disk_memory_config.dir_path, bin_index },
-            );
+        //     const disk_filepath = try std.fmt.allocPrint(
+        //         allocator,
+        //         "{s}/bin{d}_index_data",
+        //         .{ disk_memory_config.dir_path, bin_index },
+        //     );
 
-            // need to store on heap so `ptr.allocator()` is always correct
-            var ptr = try allocator.create(DiskMemoryAllocator);
-            ptr.* = try DiskMemoryAllocator.init(disk_filepath);
+        //     // need to store on heap so `ptr.allocator()` is always correct
+        //     var ptr = try allocator.create(DiskMemoryAllocator);
+        //     ptr.* = try DiskMemoryAllocator.init(disk_filepath);
 
-            var disk_account_refs = RefMap.init(ptr.allocator());
-            if (disk_memory_config.capacity > 0) {
-                try account_refs.ensureTotalCapacity(disk_memory_config.capacity);
-            }
+        //     var disk_account_refs = RefMap.init(ptr.allocator());
+        //     if (disk_memory_config.capacity > 0) {
+        //         try account_refs.ensureTotalCapacity(disk_memory_config.capacity);
+        //     }
 
-            disk_memory = .{
-                .account_refs = disk_account_refs,
-                .allocator = ptr,
-            };
-        }
+        //     disk_memory = .{
+        //         .account_refs = disk_account_refs,
+        //         .allocator = ptr,
+        //     };
+        // }
 
         return AccountIndexBin{
             .account_refs = account_refs,
-            .disk_memory = disk_memory,
+            // .disk_memory = disk_memory,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *AccountIndexBin) void {
         self.account_refs.deinit();
-        if (self.disk_memory) |*disk_memory| {
-            disk_memory.account_refs.deinit();
-            disk_memory.allocator.deinit(self.allocator);
-            self.allocator.destroy(disk_memory.allocator);
-        }
+
+        // if (self.disk_memory) |*disk_memory| {
+        //     disk_memory.account_refs.deinit();
+        //     disk_memory.allocator.deinit(self.allocator);
+        //     self.allocator.destroy(disk_memory.allocator);
+        // }
     }
 
     pub inline fn getInMemRefs(self: *AccountIndexBin) *RefMap {
         return &self.account_refs;
     }
 
-    pub inline fn getDiskRefs(self: *AccountIndexBin) ?*RefMap {
-        if (self.disk_memory) |*disk_memory| {
-            return &disk_memory.account_refs;
-        } else {
-            return null;
-        }
-    }
+    // pub inline fn getDiskRefs(self: *AccountIndexBin) ?*RefMap {
+    //     if (self.disk_memory) |*disk_memory| {
+    //         return &disk_memory.account_refs;
+    //     } else {
+    //         return null;
+    //     }
+    // }
 
     pub inline fn getRefs(self: *AccountIndexBin) *RefMap {
-        if (self.disk_memory) |*disk_memory| {
-            return &disk_memory.account_refs;
-        } else {
-            return &self.account_refs;
-        }
+        // if (self.disk_memory) |*disk_memory| {
+        //     return &disk_memory.account_refs;
+        // } else {
+        return &self.account_refs;
+        // }
     }
 };
 
