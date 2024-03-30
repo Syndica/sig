@@ -95,13 +95,13 @@ pub const AccountsDB = struct {
             config.storage_cache_size,
         );
 
-        // var disk_index_config: ?DiskMemoryConfig = null;
-        // if (config.disk_index_dir) |disk_index_dir| {
-        //     disk_index_config = DiskMemoryConfig{
-        //         .dir_path = disk_index_dir,
-        //         .capacity = config.index_disk_capacity,
-        //     };
-        // }
+        var disk_index_config: ?DiskMemoryConfig = null;
+        if (config.disk_index_dir) |disk_index_dir| {
+            disk_index_config = DiskMemoryConfig{
+                .dir_path = disk_index_dir,
+                .capacity = config.index_disk_capacity,
+            };
+        }
 
         const index = try AccountIndex.init(
             allocator,
@@ -109,7 +109,7 @@ pub const AccountsDB = struct {
             RamMemoryConfig{
                 .capacity = config.index_ram_capacity,
             },
-            null,
+            disk_index_config,
         );
 
         return Self{
@@ -200,6 +200,11 @@ pub const AccountsDB = struct {
         std.debug.assert(n_account_files > 0);
 
         const use_disk_index = self.index.use_disk;
+        if (use_disk_index) {
+            self.logger.info("using disk index");
+        } else { 
+            self.logger.info("using ram index");
+        }
 
         // setup the parallel indexing
         const n_bins = self.index.bins.len;
@@ -807,6 +812,7 @@ pub const AccountsDB = struct {
         }
 
         // update index
+        // TODO: FIX and re-run
         var refs = try ArrayList(AccountRef).initCapacity(self.allocator, accounts.len);
         for (0..accounts.len) |i| {
             const account_ref = AccountRef{
@@ -1060,8 +1066,8 @@ pub fn main() !void {
     const n_threads_snapshot_unpack = 20;
     const disk_index_dir: ?[]const u8 = "test_data/tmp";
     // const disk_index_dir: ?[]const u8 = null;
-    // const force_unpack_snapshot = false;
-    const force_unpack_snapshot = true;
+    const force_unpack_snapshot = false;
+    // const force_unpack_snapshot = true;
     const snapshot_dir = "../snapshots/";
     // const snapshot_dir = "test_data/";
 
