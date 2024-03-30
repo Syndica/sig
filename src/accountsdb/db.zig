@@ -812,8 +812,8 @@ pub const AccountsDB = struct {
         }
 
         // update index
-        // TODO: FIX and re-run
-        var refs = try ArrayList(AccountRef).initCapacity(self.allocator, accounts.len);
+        const reference_allocator = self.index.getBin(0).getRefs().allocator;
+        var refs = try ArrayList(AccountRef).initCapacity(reference_allocator, accounts.len);
         for (0..accounts.len) |i| {
             const account_ref = AccountRef{
                 .pubkey = pubkeys[i],
@@ -980,7 +980,8 @@ pub const AccountsDB = struct {
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        var refs = try ArrayList(AccountRef).initCapacity(self.allocator, n_accounts);
+        const reference_allocator = self.index.getBin(0).getRefs().allocator;
+        var refs = try ArrayList(AccountRef).initCapacity(reference_allocator, n_accounts);
         try self.index.validateAccountFile(account_file, bin_counts, &refs);
         try self.storage.file_map.put(@as(u32, @intCast(account_file.id)), account_file.*);
         try self.index.addMemoryBlock(refs);
