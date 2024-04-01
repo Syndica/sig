@@ -22,61 +22,89 @@ fn stripComponents(path: []const u8, count: u32) ![]const u8 {
     return path[i..];
 }
 
-pub const TarEntry = struct {
-    contents: []u8,
+pub const UnTarEntry = struct {
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
     file_name: []const u8,
     filename_buf: []u8,
     header_buf: []u8,
-};
+    contents: []u8,
 
-const UnTarTask = struct {
-    entry: TarEntry,
-    task: Task,
-    dir: std.fs.Dir,
-    has_run: bool = false,
-    done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
+    pub fn callback(self: *UnTarEntry) !void {
+        defer {
+            self.allocator.free(self.filename_buf);
+            self.allocator.free(self.header_buf);
+            self.allocator.free(self.contents);
+        }
 
-    pub fn callback(task: *Task) void {
-        var self = @fieldParentPtr(@This(), "task", task);
-        std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
-        defer self.has_run = true;
-        defer self.done.store(true, std.atomic.Ordering.Release);
-
-        // std.debug.print("filename: {s}\n", .{self.entry.file_name});
-        var file = self.dir.createFile(self.entry.file_name, .{ .read = true }) catch |err| {
-            std.debug.print("UnTarTask error: {}\n", .{err});
-            return;
-        };
+        var file = try self.dir.createFile(self.file_name, .{ .read = true });
         defer file.close();
 
-        const file_size = self.entry.contents.len;
-        file.seekTo(file_size - 1) catch |err| {
-            std.debug.print("UnTarTask error: {}\n", .{err});
-            return;
-        };
-        _ = file.write(&[_]u8{1}) catch |err| {
-            std.debug.print("UnTarTask error: {}\n", .{err});
-            return;
-        };
-        file.seekTo(0) catch |err| {
-            std.debug.print("UnTarTask error: {}\n", .{err});
-            return;
-        };
+        const file_size = self.contents.len;
+        try file.seekTo(file_size - 1);
+        _ = try file.write(&[_]u8{1});
+        try file.seekTo(0);
 
-        var memory = std.os.mmap(
+        var memory = try std.os.mmap(
             null,
             file_size,
             std.os.PROT.WRITE,
             std.os.MAP.SHARED,
             file.handle,
             0,
-        ) catch |err| {
-            std.debug.print("UnTarTask error: {}\n", .{err});
-            return;
-        };
-        @memcpy(memory, self.entry.contents);
+        );
+        @memcpy(memory, self.contents);
     }
 };
+
+pub const UnTarTask = ThreadPoolTask(UnTarEntry);
+
+pub fn ThreadPoolTask(
+    comptime EntryType: type,
+) type {
+    return struct {
+        task: Task,
+        entry: EntryType,
+        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
+
+        pub fn init(allocator: std.mem.Allocator, capacity: usize) ![]@This() {
+            var tasks = try allocator.alloc(@This(), capacity);
+            for (tasks) |*t| {
+                t.* = .{
+                    .entry = undefined,
+                    .task = .{ .callback = @This().callback },
+                };
+            }
+            return tasks;
+        }
+
+        fn callback(task: *Task) void {
+            var self = @fieldParentPtr(@This(), "task", task);
+            std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
+            defer {
+                self.done.store(true, std.atomic.Ordering.Release);
+            }
+            self.entry.callback() catch |err| {
+                std.debug.print("{s} error: {}\n", .{ @typeName(EntryType), err });
+                return;
+            };
+        }
+
+        pub fn queue(thread_pool: *ThreadPool, tasks: []@This(), entry: EntryType) void {
+            var task_i: usize = 0;
+            var task_ptr = &tasks[task_i];
+            while (!task_ptr.done.load(std.atomic.Ordering.Acquire)) {
+                task_i = (task_i + 1) % tasks.len;
+                task_ptr = &tasks[task_i];
+            }
+            task_ptr.done.store(false, std.atomic.Ordering.Release);
+            task_ptr.entry = entry;
+
+            const batch = Batch.from(&task_ptr.task);
+            thread_pool.schedule(batch);
+        }
+    };
+}
 
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
@@ -94,15 +122,11 @@ pub fn parallelUntarToFileSystem(
     }
 
     std.debug.print("using {d} threads to unpack snapshot\n", .{n_threads});
-    var tasks = try allocator.alloc(UnTarTask, n_threads);
+    var tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
-    for (tasks) |*t| {
-        t.* = .{ .entry = undefined, .dir = dir, .task = .{ .callback = UnTarTask.callback } };
-    }
 
     var timer = try std.time.Timer.start();
     var file_count: usize = 0;
-    var task_i: usize = 0;
     const strip_components: u32 = 0;
     loop: while (true) {
         var header_buf = try allocator.alloc(u8, 512);
@@ -148,31 +172,16 @@ pub fn parallelUntarToFileSystem(
 
                 try reader.skipBytes(pad_len, .{});
 
-                const entry = TarEntry{
+                const entry = UnTarEntry{
+                    .allocator = allocator,
                     .contents = contents,
+                    .dir = dir,
                     .file_name = file_name,
                     .filename_buf = file_name_buf,
                     .header_buf = header_buf,
                 };
 
-                // find a free task
-                var task_ptr = &tasks[task_i];
-                while (!task_ptr.done.load(std.atomic.Ordering.Acquire)) {
-                    task_i = (task_i + 1) % n_threads;
-                    task_ptr = &tasks[task_i];
-                }
-                if (task_ptr.has_run) {
-                    allocator.free(task_ptr.entry.filename_buf);
-                    allocator.free(task_ptr.entry.header_buf);
-                    allocator.free(task_ptr.entry.contents);
-                    task_ptr.has_run = false;
-                }
-
-                task_ptr.entry = entry;
-                task_ptr.done.store(false, std.atomic.Ordering.Release);
-
-                const batch = Batch.from(&task_ptr.task);
-                thread_pool.schedule(batch);
+                UnTarTask.queue(&thread_pool, tasks, entry);
             },
             .global_extended_header, .extended_header => {
                 try reader.skipBytes(rounded_file_size, .{});
@@ -189,11 +198,6 @@ pub fn parallelUntarToFileSystem(
     for (tasks) |*task| {
         while (!task.done.load(std.atomic.Ordering.Acquire)) {
             // wait
-        }
-        if (task.has_run) {
-            allocator.free(task.entry.filename_buf);
-            allocator.free(task.entry.contents);
-            allocator.free(task.entry.header_buf);
         }
     }
 }
