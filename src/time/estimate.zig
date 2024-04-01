@@ -1,5 +1,6 @@
 const std = @import("std");
 
+// TODO: change to writer interface when logger has improved
 pub fn printTimeEstimate(
     // timer should be started at the beginning of the loop
     timer: *std.time.Timer,

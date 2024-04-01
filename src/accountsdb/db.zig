@@ -191,7 +191,7 @@ pub const AccountsDB = struct {
         for (0..n_parse_threads) |_| {
             var thread_db = try AccountsDB.init(
                 per_thread_allocator,
-                .noop,
+                self.logger,
                 .{ .n_index_bins = self.config.n_index_bins },
             );
 
@@ -295,7 +295,7 @@ pub const AccountsDB = struct {
             // parse "{slot}.{id}" from the file_name
             var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
             const slot = std.fmt.parseInt(Slot, fiter.next().?, 10) catch |err| {
-                std.debug.print("failed to parse slot from {s}", .{file_name});
+                self.logger.warnf("failed to parse slot from {s}", .{file_name});
                 return err;
             };
             const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
@@ -305,7 +305,7 @@ pub const AccountsDB = struct {
                 // dont read account files which are not in the file_map
                 // note: this can happen when we load from a snapshot and there are extra account files
                 // in the directory which dont correspond to the snapshot were loading
-                std.debug.print("failed to read metadata for slot {d}", .{slot});
+                self.logger.warnf("failed to read metadata for slot {d}", .{slot});
                 continue;
             };
             // if this is hit, its likely an old snapshot
