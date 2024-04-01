@@ -287,6 +287,9 @@ pub const AccountsDbFields = struct {
     pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotHash);
 };
 
+/// contains all the metadata from a snapshot.
+/// this includes fields for accounts-db and the bank of the snapshots slots.
+/// this does not include account-specific data.
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,

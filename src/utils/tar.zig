@@ -29,7 +29,7 @@ pub const TarEntry = struct {
     header_buf: []u8,
 };
 
-const TarTask = struct {
+const UnTarTask = struct {
     entry: TarEntry,
     task: Task,
     dir: std.fs.Dir,
@@ -44,34 +44,34 @@ const TarTask = struct {
 
         // std.debug.print("filename: {s}\n", .{self.entry.file_name});
         var file = self.dir.createFile(self.entry.file_name, .{ .read = true }) catch |err| {
-            std.debug.print("TarTask error: {}\n", .{err});
+            std.debug.print("UnTarTask error: {}\n", .{err});
             return;
         };
         defer file.close();
 
-        const aligned_file_size = std.mem.alignForward(u64, self.entry.contents.len, std.mem.page_size);
-        file.seekTo(aligned_file_size - 1) catch |err| {
-            std.debug.print("TarTask error: {}\n", .{err});
+        const file_size = self.entry.contents.len;
+        file.seekTo(file_size - 1) catch |err| {
+            std.debug.print("UnTarTask error: {}\n", .{err});
             return;
         };
         _ = file.write(&[_]u8{1}) catch |err| {
-            std.debug.print("TarTask error: {}\n", .{err});
+            std.debug.print("UnTarTask error: {}\n", .{err});
             return;
         };
         file.seekTo(0) catch |err| {
-            std.debug.print("TarTask error: {}\n", .{err});
+            std.debug.print("UnTarTask error: {}\n", .{err});
             return;
         };
 
         var memory = std.os.mmap(
             null,
-            self.entry.contents.len,
+            file_size,
             std.os.PROT.WRITE,
             std.os.MAP.SHARED,
             file.handle,
             0,
         ) catch |err| {
-            std.debug.print("TarTask error: {}\n", .{err});
+            std.debug.print("UnTarTask error: {}\n", .{err});
             return;
         };
         @memcpy(memory, self.entry.contents);
@@ -94,10 +94,10 @@ pub fn parallelUntarToFileSystem(
     }
 
     std.debug.print("using {d} threads to unpack snapshot\n", .{n_threads});
-    var tasks = try allocator.alloc(TarTask, n_threads);
+    var tasks = try allocator.alloc(UnTarTask, n_threads);
     defer allocator.free(tasks);
     for (tasks) |*t| {
-        t.* = .{ .entry = undefined, .dir = dir, .task = .{ .callback = TarTask.callback } };
+        t.* = .{ .entry = undefined, .dir = dir, .task = .{ .callback = UnTarTask.callback } };
     }
 
     var timer = try std.time.Timer.start();
