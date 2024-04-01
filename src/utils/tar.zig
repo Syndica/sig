@@ -184,9 +184,7 @@ pub fn parallelUntarToFileSystem(
                 UnTarTask.queue(&thread_pool, tasks, entry);
             },
             .global_extended_header, .extended_header => {
-                try reader.skipBytes(rounded_file_size, .{});
-                allocator.free(header_buf);
-                allocator.free(file_name_buf);
+                return error.TarUnsupportedFileType;
             },
             .hard_link => return error.TarUnsupportedFileType,
             .symbolic_link => return error.TarUnsupportedFileType,
