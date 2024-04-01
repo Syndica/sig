@@ -67,40 +67,36 @@ pub const AccountRef = struct {
 
 /// stores the mapping from Pubkey to the account location (AccountRef)
 pub const AccountIndex = struct {
-    bins: []AccountIndexBin,
-    calculator: PubkeyBinCalculator,
     allocator: std.mem.Allocator,
-    use_disk: bool,
+    reference_allocator: std.mem.Allocator,
+    bins: []RefMap,
+    calculator: PubkeyBinCalculator,
+    // TODO: use arena allocator ontop of reference allocator ...
     memory_linked_list: ?*RefMemoryLinkedList = null,
+
+    pub const RefMap = FastMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
 
     const Self = @This();
 
     pub fn init(
-        // used to allocate the bin slice and other bin metadata
+        // used to allocate the hashmap data
         allocator: std.mem.Allocator,
-        // number of bins to shard pubkeys across
+        // used to allocate the references
+        reference_allocator: std.mem.Allocator,
+        // number of bins to shard across
         n_bins: usize,
-        ram_config: RamMemoryConfig,
-        disk_config: ?DiskMemoryConfig,
     ) !Self {
+        var bins = try allocator.alloc(RefMap, n_bins);
+        for (bins) |*bin| {
+            bin.* = RefMap.init(allocator);
+        }
         const calculator = PubkeyBinCalculator.init(n_bins);
 
-        var bins = try allocator.alloc(AccountIndexBin, n_bins);
-        for (bins, 0..) |*bin, bin_i| {
-            bin.* = try AccountIndexBin.initCapacity(
-                allocator,
-                ram_config,
-                disk_config,
-                bin_i,
-            );
-        }
-        const use_disk = disk_config != null;
-
         return Self{
+            .allocator = allocator,
+            .reference_allocator = reference_allocator,
             .bins = bins,
             .calculator = calculator,
-            .allocator = allocator,
-            .use_disk = use_disk,
         };
     }
 
@@ -120,7 +116,7 @@ pub const AccountIndex = struct {
         }
     }
 
-    pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !void {
+    pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !*ArrayList(AccountRef) {
         var node = try self.allocator.create(RefMemoryLinkedList);
         node.* = .{
             .memory = refs,
@@ -134,20 +130,22 @@ pub const AccountIndex = struct {
             }
             tail.next_ptr = node;
         }
+
+        return &node.memory;
     }
 
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
         return self.calculator.binIndex(pubkey);
     }
 
-    pub inline fn getBin(self: *const Self, index: usize) *AccountIndexBin {
+    pub inline fn getBin(self: *const Self, index: usize) *RefMap {
         return &self.bins[index];
     }
 
     pub inline fn getBinFromPubkey(
         self: *const Self,
         pubkey: *const Pubkey,
-    ) *AccountIndexBin {
+    ) *RefMap {
         const bin_index = self.calculator.binIndex(pubkey);
         return &self.bins[bin_index];
     }
@@ -157,20 +155,20 @@ pub const AccountIndex = struct {
     }
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot)
-    pub fn indexRefIfNotDuplicate(self: *Self, account_ref: *AccountRef) void {
+    pub fn indexRefIfNotDuplicateSlot(self: *Self, account_ref: *AccountRef) bool {
         const bin = self.getBinFromPubkey(&account_ref.pubkey);
-        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey);
+        var result = bin.getOrPutAssumeCapacity(account_ref.pubkey);
         if (result.found_existing) {
             // traverse until you find the end
             var curr: *AccountRef = result.value_ptr.*;
             while (true) {
                 if (curr.slot == account_ref.slot) {
                     // found a duplicate => dont do the insertion
-                    break;
+                    return false;
                 } else if (curr.next_ptr == null) {
                     // end of the list => insert it here
                     curr.next_ptr = account_ref;
-                    break;
+                    return true;
                 } else {
                     // keep traversing
                     curr = curr.next_ptr.?;
@@ -178,13 +176,14 @@ pub const AccountIndex = struct {
             }
         } else {
             result.value_ptr.* = account_ref;
+            return true;
         }
     }
 
     /// adds a reference to the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
         const bin = self.getBinFromPubkey(&account_ref.pubkey);
-        var result = bin.getRefs().getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+        var result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
         if (result.found_existing) {
             // traverse until you find the end
             var curr: *AccountRef = result.value_ptr.*;
@@ -198,47 +197,6 @@ pub const AccountIndex = struct {
             }
         } else {
             result.value_ptr.* = account_ref;
-        }
-    }
-
-    /// indexes and accounts file by parsing out the accounts.
-    pub fn indexAccountFile(self: *Self, allocator: std.mem.Allocator, accounts_file: *AccountFile) !void {
-        var offset: usize = 0;
-
-        while (true) {
-            var account = accounts_file.readAccount(offset) catch break;
-            const pubkey = account.store_info.pubkey;
-
-            const hash_is_missing = std.mem.eql(u8, &account.hash().data, &Hash.default().data);
-            if (hash_is_missing) {
-                const hash = hashAccount(
-                    account.account_info.lamports,
-                    account.data,
-                    &account.account_info.owner.data,
-                    account.account_info.executable,
-                    account.account_info.rent_epoch,
-                    &pubkey.data,
-                );
-                account.hash_ptr.* = hash;
-            }
-
-            const account_ref = AccountRef{
-                .pubkey = pubkey,
-                .slot = accounts_file.slot,
-                .location = .{
-                    .File = .{
-                        .file_id = @as(u32, @intCast(accounts_file.id)),
-                        .offset = offset,
-                    },
-                },
-            };
-
-            // put this in a per bin vector []Vec(AccountRef)
-            const index_bin = self.getBinFromPubkey(&pubkey);
-            const refs = index_bin.getRefs();
-            try AccountIndexBin.put(refs, allocator, account_ref);
-
-            offset = offset + account.len;
         }
     }
 
@@ -283,99 +241,6 @@ pub const AccountIndex = struct {
         }
 
         accounts_file.number_of_accounts = number_of_accounts;
-    }
-};
-
-pub const AccountIndexBin = struct {
-    account_refs: RefMap,
-    disk_memory: ?DiskMemory,
-    allocator: std.mem.Allocator,
-
-    pub const DiskMemory = struct {
-        account_refs: RefMap,
-        allocator: *DiskMemoryAllocator,
-    };
-
-    const RefMap = FastMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
-
-    pub fn initCapacity(
-        allocator: std.mem.Allocator,
-        ram_memory_config: RamMemoryConfig,
-        maybe_disk_memory_config: ?DiskMemoryConfig,
-        bin_index: usize,
-    ) !AccountIndexBin {
-        // _ = maybe_disk_memory_config; 
-        // _ = bin_index;
-
-        // setup ram references
-        var account_refs = RefMap.init(ram_memory_config.allocator);
-        if (ram_memory_config.capacity > 0) {
-            try account_refs.ensureTotalCapacity(ram_memory_config.capacity);
-        }
-
-        // setup disk references
-        var disk_memory: ?DiskMemory = null;
-        if (maybe_disk_memory_config) |*disk_memory_config| {
-            std.fs.cwd().access(disk_memory_config.dir_path, .{}) catch {
-                try std.fs.cwd().makeDir(disk_memory_config.dir_path);
-            };
-
-            const disk_filepath = try std.fmt.allocPrint(
-                allocator,
-                "{s}/bin{d}_index_data",
-                .{ disk_memory_config.dir_path, bin_index },
-            );
-
-            // need to store on heap so `ptr.allocator()` is always correct
-            var ptr = try allocator.create(DiskMemoryAllocator);
-            ptr.* = try DiskMemoryAllocator.init(disk_filepath);
-
-            var disk_account_refs = RefMap.init(ptr.allocator());
-            if (disk_memory_config.capacity > 0) {
-                try account_refs.ensureTotalCapacity(disk_memory_config.capacity);
-            }
-
-            disk_memory = .{
-                .account_refs = disk_account_refs,
-                .allocator = ptr,
-            };
-        }
-
-        return AccountIndexBin{
-            .account_refs = account_refs,
-            .disk_memory = disk_memory,
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *AccountIndexBin) void {
-        self.account_refs.deinit();
-
-        if (self.disk_memory) |*disk_memory| {
-            disk_memory.account_refs.deinit();
-            disk_memory.allocator.deinit(self.allocator);
-            self.allocator.destroy(disk_memory.allocator);
-        }
-    }
-
-    pub inline fn getInMemRefs(self: *AccountIndexBin) *RefMap {
-        return &self.account_refs;
-    }
-
-    pub inline fn getDiskRefs(self: *AccountIndexBin) ?*RefMap {
-        if (self.disk_memory) |*disk_memory| {
-            return &disk_memory.account_refs;
-        } else {
-            return null;
-        }
-    }
-
-    pub inline fn getRefs(self: *AccountIndexBin) *RefMap {
-        if (self.disk_memory) |*disk_memory| {
-            return &disk_memory.account_refs;
-        } else {
-            return &self.account_refs;
-        }
     }
 };
 
@@ -432,10 +297,6 @@ pub fn FastMap(
         }
 
         pub fn ensureTotalCapacity(self: *Self, n: usize) !void {
-            if (n == 0) {
-                // something is wrong
-                return error.ZeroCapacityNotSupported;
-            }
             if (n <= self._capacity) {
                 return;
             }
@@ -501,8 +362,9 @@ pub fn FastMap(
         }
 
         pub fn deinit(self: *Self) void {
-            if (self._capacity > 0)
+            if (self._capacity > 0) {
                 self.allocator.free(self.memory);
+            }
         }
 
         pub const Iterator = struct {
@@ -769,9 +631,11 @@ pub const PubkeyBinCalculator = struct {
     }
 };
 
+/// thread safe disk memory allocator
 pub const DiskMemoryAllocator = struct {
     filepath: []const u8,
     count: usize = 0,
+    mux: std.Thread.Mutex = .{},
 
     const Self = @This();
 
@@ -783,6 +647,9 @@ pub const DiskMemoryAllocator = struct {
 
     /// deletes all allocated files + optionally frees the filepath
     pub fn deinit(self: *Self, str_allocator: ?std.mem.Allocator) void {
+        self.mux.lock();
+        defer self.mux.unlock();
+
         // delete all files
         var buf: [1024]u8 = undefined;
         for (0..self.count) |i| {
@@ -792,6 +659,7 @@ pub const DiskMemoryAllocator = struct {
                 std.debug.print("Disk Memory Allocator deinit: error: {}\n", .{err});
             };
         }
+        // TODO: remove
         if (str_allocator) |a| {
             a.free(self.filepath);
         }
@@ -814,8 +682,16 @@ pub const DiskMemoryAllocator = struct {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
 
+        const count = blk: {
+            self.mux.lock();
+            defer self.mux.unlock();
+            const c = self.count;
+            self.count += 1;
+            break :blk c;
+        };
+
         var buf: [1024]u8 = undefined;
-        const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, self.count }) catch |err| {
+        const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, count }) catch |err| {
             std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
@@ -825,7 +701,6 @@ pub const DiskMemoryAllocator = struct {
             return null;
         };
         defer file.close();
-        self.count += 1;
 
         const aligned_size = std.mem.alignForward(usize, n, std.mem.page_size);
         const file_size = (file.stat() catch |err| {
