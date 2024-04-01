@@ -552,10 +552,6 @@ pub const AccountsDB = struct {
             },
         });
 
-        // std.mem.doNotOptimizeAway(full_result);
-        // _ = expected_full_lamports;
-        // _ = expected_accounts_hash;
-
         const total_lamports = full_result.total_lamports;
         const accounts_hash = full_result.accounts_hash;
 
