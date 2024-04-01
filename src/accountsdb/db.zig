@@ -303,6 +303,8 @@ pub const AccountsDB = struct {
             // read metadata
             const file_infos: ArrayList(AccountFileInfo) = self.fields.file_map.get(slot) orelse {
                 // dont read account files which are not in the file_map
+                // note: this can happen when we load from a snapshot and there are extra account files
+                // in the directory which dont correspond to the snapshot were loading
                 std.debug.print("failed to read metadata for slot {d}", .{slot});
                 continue;
             };
