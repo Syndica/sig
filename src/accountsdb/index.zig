@@ -44,7 +44,7 @@ pub const AccountIndex = struct {
     // TODO: use arena allocator ontop of reference allocator ...
     memory_linked_list: ?*RefMemoryLinkedList = null,
 
-    pub const RefMap = FastMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
+    pub const RefMap = SwissMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
 
     const Self = @This();
 
@@ -215,7 +215,8 @@ pub const AccountIndex = struct {
 };
 
 /// custom hashmap used for the index's map
-pub fn FastMap(
+/// based on google's swissmap
+pub fn SwissMap(
     comptime Key: type,
     comptime Value: type,
     comptime hash_fn: fn (Key) callconv(.Inline) u64,

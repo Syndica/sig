@@ -1,9 +1,7 @@
 const std = @import("std");
 
+const ThreadPoolTask = @import("../utils/thread.zig").ThreadPoolTask;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const Task = ThreadPool.Task;
-const Batch = ThreadPool.Batch;
-
 const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
 
 const Options = std.tar.Options;
@@ -57,54 +55,8 @@ pub const UnTarEntry = struct {
     }
 };
 
+/// interface struct for queueing untar tasks
 pub const UnTarTask = ThreadPoolTask(UnTarEntry);
-
-pub fn ThreadPoolTask(
-    comptime EntryType: type,
-) type {
-    return struct {
-        task: Task,
-        entry: EntryType,
-        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
-
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) ![]@This() {
-            var tasks = try allocator.alloc(@This(), capacity);
-            for (tasks) |*t| {
-                t.* = .{
-                    .entry = undefined,
-                    .task = .{ .callback = @This().callback },
-                };
-            }
-            return tasks;
-        }
-
-        fn callback(task: *Task) void {
-            var self = @fieldParentPtr(@This(), "task", task);
-            std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
-            defer {
-                self.done.store(true, std.atomic.Ordering.Release);
-            }
-            self.entry.callback() catch |err| {
-                std.debug.print("{s} error: {}\n", .{ @typeName(EntryType), err });
-                return;
-            };
-        }
-
-        pub fn queue(thread_pool: *ThreadPool, tasks: []@This(), entry: EntryType) void {
-            var task_i: usize = 0;
-            var task_ptr = &tasks[task_i];
-            while (!task_ptr.done.load(std.atomic.Ordering.Acquire)) {
-                task_i = (task_i + 1) % tasks.len;
-                task_ptr = &tasks[task_i];
-            }
-            task_ptr.done.store(false, std.atomic.Ordering.Release);
-            task_ptr.entry = entry;
-
-            const batch = Batch.from(&task_ptr.task);
-            thread_pool.schedule(batch);
-        }
-    };
-}
 
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
@@ -180,7 +132,6 @@ pub fn parallelUntarToFileSystem(
                     .filename_buf = file_name_buf,
                     .header_buf = header_buf,
                 };
-
                 UnTarTask.queue(&thread_pool, tasks, entry);
             },
             .global_extended_header, .extended_header => {
