@@ -171,11 +171,6 @@ pub fn build(b: *std.Build) void {
             .path = "src/benchmarks.zig",
             .description = "benchmark client",
         },
-        ExecCommand{
-            .name = "db",
-            .path = "src/accountsdb/db.zig",
-            .description = "run accounts-db code",
-        },
     };
 
     for (exec_commands) |command_info| {
