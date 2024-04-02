@@ -321,6 +321,41 @@ pub const GossipTable = struct {
         };
     }
 
+    /// Like insertValues, but it minimizes the number of memory allocations.
+    ///
+    /// This is optimized to minimize the number of times that allocations occur.
+    /// It is *not* optimized to minimize overall memory usage.
+    ///
+    /// It accepts an arraylist of failures instead of returning an InsertResults, so it
+    /// can reuse the arraylist from a previous execution rather than allocating a new one.
+    ///
+    /// For simplicity and performance, only tracks failures without `inserted` and `timeouts`,
+    pub fn insertValuesMinAllocs(
+        self: *Self,
+        values: []SignedGossipData,
+        timeout: u64,
+        failed_indexes: *std.ArrayList(usize),
+    ) error{OutOfMemory}!void {
+        var now = getWallclockMs();
+
+        failed_indexes.clearRetainingCapacity();
+        try failed_indexes.ensureTotalCapacity(values.len);
+
+        for (values, 0..) |value, index| {
+            const value_time = value.wallclock();
+            const is_too_new = value_time > now +| timeout;
+            const is_too_old = value_time < now -| timeout;
+            if (is_too_new or is_too_old) {
+                continue;
+            }
+
+            self.insert(value, now) catch {
+                failed_indexes.appendAssumeCapacity(index);
+                continue;
+            };
+        }
+    }
+
     pub fn len(self: *const Self) usize {
         return self.store.count();
     }
@@ -456,11 +491,11 @@ pub const GossipTable = struct {
     ) []ContactInfo {
         const store_values = self.store.values();
         const contact_indexs = self.contact_infos.iterator().keys;
-        const size = self.contact_infos.count();
 
-        var output_index: usize = 0;
-        for (0..size) |i| {
-            const index = contact_indexs[i];
+        var tgt_idx: usize = 0;
+        for (0..self.contact_infos.count()) |src_idx| {
+            if (tgt_idx >= buf.len) break;
+            const index = contact_indexs[src_idx];
             const entry = store_values[index];
             if (entry.timestamp_on_insertion >= minimum_insertion_timestamp) {
                 const contact_info = switch (entry.value.data) {
@@ -468,15 +503,11 @@ pub const GossipTable = struct {
                     .ContactInfo => |ci| ci,
                     else => unreachable,
                 };
-                buf[output_index] = contact_info;
-                output_index += 1;
-
-                if (output_index == buf.len) {
-                    break;
-                }
+                buf[tgt_idx] = contact_info;
+                tgt_idx += 1;
             }
         }
-        return buf[0..output_index];
+        return buf[0..tgt_idx];
     }
 
     // ** shard getter fcns **
@@ -631,12 +662,17 @@ pub const GossipTable = struct {
         bincode.free(self.allocator, versioned_value.value.data);
     }
 
-    pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
+    pub fn shouldTrim(self: *const Self, max_pubkey_capacity: usize) bool {
         const n_pubkeys = self.pubkey_to_values.count();
         // 90% close to capacity
         const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
-        if (!should_trim) return;
+        return should_trim;
+    }
 
+    pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
+        if (!self.shouldTrim(max_pubkey_capacity)) return;
+
+        const n_pubkeys = self.pubkey_to_values.count();
         const drop_size = n_pubkeys -| max_pubkey_capacity;
         // TODO: drop based on stake weight
         const drop_pubkeys = self.pubkey_to_values.keys()[0..drop_size];

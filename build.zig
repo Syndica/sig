@@ -24,6 +24,11 @@ pub fn build(b: *std.Build) void {
     const zig_cli_module = b.dependency("zig-cli", opts).module("zig-cli");
     const getty_mod = b.dependency("getty", opts).module("getty");
     const httpz_mod = b.dependency("httpz", opts).module("httpz");
+    const zigdig_mod = b.dependency("zigdig", opts).module("dns");
+
+    const zstd_dep = b.dependency("zstd", opts);
+    const zstd_mod = zstd_dep.module("zstd");
+    const zstd_c_lib = zstd_dep.artifact("zstd");
 
     const lib = b.addStaticLibrary(.{
         .name = "sig",
@@ -58,6 +63,14 @@ pub fn build(b: *std.Build) void {
                 .name = "httpz",
                 .module = httpz_mod,
             },
+            .{
+                .name = "zigdig",
+                .module = zigdig_mod,
+            },
+            .{
+                .name = "zstd",
+                .module = zstd_mod,
+            },
         },
     });
 
@@ -66,61 +79,9 @@ pub fn build(b: *std.Build) void {
     lib.addModule("zig-cli", zig_cli_module);
     lib.addModule("getty", getty_mod);
     lib.addModule("httpz", httpz_mod);
-
-    // ZSTD
-    const ZSTD_C_PATH = "src/zstd/c/lib";
-    const zstd_lib = b.addStaticLibrary(.{
-        .name = "zstd",
-        .target = target,
-        .optimize = optimize,
-    });
-    zstd_lib.linkLibC();
-    zstd_lib.addIncludePath(.{ .path = ZSTD_C_PATH });
-    zstd_lib.installHeader(ZSTD_C_PATH ++ "/zstd.h", "zstd.h");
-    zstd_lib.installHeader(ZSTD_C_PATH ++ "/zstd_errors.h", "zstd_errors.h");
-
-    // TODO: make sure we compile with -03
-    const config_header = b.addConfigHeader(
-        .{
-            .style = .{ .autoconf = .{ .path = "src/zstd/c/config.h.in" } },
-        },
-        .{
-            .ZSTD_MULTITHREAD_SUPPORT_DEFAULT = null,
-            .ZSTD_LEGACY_SUPPORT = null,
-        },
-    );
-    zstd_lib.addConfigHeader(config_header);
-    zstd_lib.addCSourceFiles(&.{
-        ZSTD_C_PATH ++ "/common/debug.c",
-        ZSTD_C_PATH ++ "/common/entropy_common.c",
-        ZSTD_C_PATH ++ "/common/error_private.c",
-        ZSTD_C_PATH ++ "/common/fse_decompress.c",
-        ZSTD_C_PATH ++ "/common/pool.c",
-        ZSTD_C_PATH ++ "/common/threading.c",
-        ZSTD_C_PATH ++ "/common/xxhash.c",
-        ZSTD_C_PATH ++ "/common/zstd_common.c",
-
-        ZSTD_C_PATH ++ "/compress/zstd_double_fast.c",
-        ZSTD_C_PATH ++ "/compress/zstd_compress_literals.c",
-        ZSTD_C_PATH ++ "/compress/zstdmt_compress.c",
-        ZSTD_C_PATH ++ "/compress/zstd_opt.c",
-        ZSTD_C_PATH ++ "/compress/zstd_compress_sequences.c",
-        ZSTD_C_PATH ++ "/compress/zstd_lazy.c",
-        ZSTD_C_PATH ++ "/compress/hist.c",
-        ZSTD_C_PATH ++ "/compress/zstd_ldm.c",
-        ZSTD_C_PATH ++ "/compress/huf_compress.c",
-        ZSTD_C_PATH ++ "/compress/zstd_compress_superblock.c",
-        ZSTD_C_PATH ++ "/compress/zstd_compress.c",
-        ZSTD_C_PATH ++ "/compress/fse_compress.c",
-        ZSTD_C_PATH ++ "/compress/zstd_fast.c",
-
-        ZSTD_C_PATH ++ "/decompress/zstd_decompress.c",
-        ZSTD_C_PATH ++ "/decompress/zstd_ddict.c",
-        ZSTD_C_PATH ++ "/decompress/zstd_decompress_block.c",
-        ZSTD_C_PATH ++ "/decompress/huf_decompress.c",
-    }, &.{});
-    zstd_lib.addAssemblyFile(.{ .path = ZSTD_C_PATH ++ "/decompress/huf_decompress_amd64.S" });
-    b.installArtifact(zstd_lib);
+    lib.addModule("zigdig", zigdig_mod);
+    lib.addModule("zstd", zstd_mod);
+    lib.linkLibrary(zstd_c_lib);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -139,7 +100,9 @@ pub fn build(b: *std.Build) void {
     tests.addModule("zig-cli", zig_cli_module);
     tests.addModule("getty", getty_mod);
     tests.addModule("httpz", httpz_mod);
-    tests.linkLibrary(zstd_lib);
+    tests.addModule("zigdig", zigdig_mod);
+    tests.addModule("zstd", zstd_mod);
+    tests.linkLibrary(zstd_c_lib);
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run library tests");
@@ -159,6 +122,9 @@ pub fn build(b: *std.Build) void {
     exe.addModule("zig-cli", zig_cli_module);
     exe.addModule("getty", getty_mod);
     exe.addModule("httpz", httpz_mod);
+    exe.addModule("zigdig", zigdig_mod);
+    exe.addModule("zstd", zstd_mod);
+    exe.linkLibrary(zstd_c_lib);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -205,11 +171,6 @@ pub fn build(b: *std.Build) void {
             .path = "src/benchmarks.zig",
             .description = "benchmark client",
         },
-        ExecCommand{
-            .name = "db",
-            .path = "src/accountsdb/db.zig",
-            .description = "run accounts-db code",
-        },
     };
 
     for (exec_commands) |command_info| {
@@ -226,10 +187,13 @@ pub fn build(b: *std.Build) void {
         exec.addModule("zig-network", zig_network_module);
         exec.addModule("zig-cli", zig_cli_module);
         exec.addModule("getty", getty_mod);
+        exec.addModule("httpz", httpz_mod);
+        exec.addModule("zigdig", zigdig_mod);
+        exec.addModule("zstd", zstd_mod);
+        exec.linkLibrary(zstd_c_lib);
 
         // this lets us run it as an exec
         b.installArtifact(exec);
-        exec.linkLibrary(zstd_lib);
 
         const cmd = b.addRunArtifact(exec);
         if (b.args) |args| cmd.addArgs(args);

@@ -21,6 +21,7 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 ## 📋 Setup
 
 ### Build Dependencies
+
 - Zig 0.11.0 - Choose one:
   - [Binary Releases](https://ziglang.org/download/) (extract and add to PATH)
   - [Install with a package manager](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
@@ -46,40 +47,12 @@ You can use [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadim
 <details><summary>tasks.json</summary>
 
 ```yaml
-{
-    // See https://go.microsoft.com/fwlink/?LinkId=733558
+{ ? // See https://go.microsoft.com/fwlink/?LinkId=733558
     // for the documentation about the tasks.json format
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "zig build",
-            "type": "shell",
-            "command": "zig",
-            "args": [
-                "build",
-                "--summary",
-                "all"
-            ],
-            "options": {
-                "cwd": "${workspaceRoot}"
-            },
-            "presentation": {
-                "echo": true,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": true,
-                "clear": false
-            },
-            "problemMatcher": [],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            }
-        }
-    ]
-}
+    "version"
+  : "2.0.0", "tasks": [{ "label": "zig build", "type": "shell", "command": "zig", "args": ["build", "--summary", "all"], "options": { "cwd": "${workspaceRoot}" }, "presentation": { "echo": true, "reveal": "always", "focus": false, "panel": "shared", "showReuseMessage": true, "clear": false }, "problemMatcher": [], "group": { "kind": "build", "isDefault": true } }] }
 ```
+
 </details>
 
 To run the debugger, you need a run configuration. This launch.json includes an example for debugging gossip. Customize the args as desired.
@@ -88,24 +61,36 @@ To run the debugger, you need a run configuration. This launch.json includes an 
 
 ```json
 {
-    "version": "0.2.0",
-    "configurations": [
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug Gossip Mainnet",
-            "program": "${workspaceFolder}/zig-out/bin/sig",
-            "args": ["gossip", "--entrypoint", "34.83.231.102:8001", "--entrypoint", "145.40.67.83:8001", "--entrypoint", "147.75.38.117:8001", "--entrypoint", "145.40.93.177:8001", "--entrypoint", "86.109.15.59:8001"],
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "zig build"
-        },
-    ]
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Gossip Mainnet",
+      "program": "${workspaceFolder}/zig-out/bin/sig",
+      "args": [
+        "gossip",
+        "--entrypoint",
+        "entrypoint.mainnet-beta.solana.com:8001",
+        "--entrypoint",
+        "entrypoint2.mainnet-beta.solana.com:8001",
+        "--entrypoint",
+        "entrypoint3.mainnet-beta.solana.com:8001",
+        "--entrypoint",
+        "entrypoint4.mainnet-beta.solana.com:8001",
+        "--entrypoint",
+        "entrypoint5.mainnet-beta.solana.com:8001"
+      ],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "zig build"
+    }
+  ]
 }
 ```
-</details>
 
 </details>
 
+</details>
 
 ## 🔧 Build
 
@@ -116,9 +101,11 @@ zig build
 ## 🚀 Run
 
 Run Sig with `zig` or execute the binary you already built:
+
 ```bash
 zig build run -- --help
 ```
+
 ```bash
 ./zig-out/bin/sig --help
 ```
@@ -128,6 +115,7 @@ These commands will be abbreviated as `sig` in the rest of this document.
 ### 👤 Identity
 
 Sig stores its private key in `~/.sig/identity.key`. On its first run, Sig will automatically generate a key if no key exists. To see the public key, use the `identity` subcommand.
+
 ```bash
 sig identity
 ```
@@ -135,6 +123,7 @@ sig identity
 ### 📞 Gossip
 
 To run Sig as a Solana gossip client, use the `gossip` subcommand. Specify entrypoints to connect to a cluster. Optionally use `-p` to specify a custom listening port (default is 8001). For more info about gossip, see the [readme](src/gossip/readme.md).
+
 ```bash
 sig gossip -p <PORT> --entrypoint <IP>:<PORT>
 ```
@@ -144,31 +133,35 @@ The following IP addresses were resolved from domains found at https://docs.sola
 <details><summary>mainnet</summary>
 
 ```bash
-sig gossip --entrypoint 34.83.231.102:8001 \
-    --entrypoint 145.40.67.83:8001 \
-    --entrypoint 147.75.38.117:8001 \
-    --entrypoint 145.40.93.177:8001 \
-    --entrypoint 86.109.15.59:8001
+sig gossip --entrypoint entrypoint.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint2.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint3.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint4.mainnet-beta.solana.com:8001 \
+    --entrypoint entrypoint5.mainnet-beta.solana.com:8001
 ```
+
 </details>
 
 <details><summary>devnet</summary>
 
 ```bash
-sig gossip --entrypoint 35.197.53.105:8001 \
-    --entrypoint 147.75.55.147:8001 \
-    --entrypoint 136.144.49.15:8001 \
-    --entrypoint 145.40.71.85:8001 \
-    --entrypoint 147.75.105.51:8001
+sig gossip --entrypoint entrypoint.devnet.solana.com:8001 \
+    --entrypoint entrypoint2.devnet.solana.com:8001 \
+    --entrypoint entrypoint3.devnet.solana.com:8001 \
+    --entrypoint entrypoint4.devnet.solana.com:8001 \
+    --entrypoint entrypoint5.devnet.solana.com:8001
 ```
+
 </details>
 
 <details><summary>testnet</summary>
 
 ```bash
-sig gossip --entrypoint 35.203.170.30:8001 \
-    --entrypoint 139.178.68.207:8001
+sig gossip --entrypoint entrypoint.testnet.solana.com:8001 \
+    --entrypoint entrypoint2.testnet.solana.com:8001 \
+    --entrypoint entrypoint3.testnet.solana.com:8001
 ```
+
 </details><br>
 
 ## Develop
@@ -176,7 +169,9 @@ sig gossip --entrypoint 35.203.170.30:8001 \
 See [Setup](#-setup) to get your environment set up. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
 
 ### 🧪 Test
+
 Run all tests.
+
 ```bash
 zig build test
 ```
@@ -184,24 +179,28 @@ zig build test
 Include `--summary all` with any test command to see a summary of the test results.
 
 Include a filter to limit which tests are run. Sig tests include their module name. For example, you can run all tests in `gossip.table` like this:
+
 ```bash
 zig build test --summary all -- gossip.table
 ```
 
 ### 📊 Benchmark
+
 Run all benchmarks.
+
 ```bash
 zig build benchmark
 ```
 
 Run a benchmark group: socket_utils, gossip, or sync.
+
 ```bash
 zig build benchmark -- gossip
 ```
+
 <br>
 
-
-## 📦 Import Sig 
+## 📦 Import Sig
 
 Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.11). See the [API documentation](docs/api.md) to learn more about how to use Sig as a library.
 
@@ -272,8 +271,8 @@ Sig can be included as a dependency in your Zig project using `build.zig.zon` fi
    }
    ```
 
-   </details>
-<br>
+      </details>
+   <br>
 
 ## 🤔 Why Zig?
 
@@ -296,7 +295,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 - Zig is still an evolving language.
 - Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.11`.
 - Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests, fix is in works.
-<br><br>
+  <br><br>
 
 ## 🧩 Modules
 
@@ -305,19 +304,23 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 - **[Core](src/core)** - Core data structures shared across modules.
 
 - **[RPC Client](src/rpc)** ([docs](docs/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
-<br><br>
+  <br><br>
 
 ## 📚 Learn More
+
 [Zig](https://ziglang.org/)
+
 - [Official Documentation](https://ziglang.org/documentation/0.11.0/)
 - [Ziglearn Book](https://ziglearn.org/)
 - [Ziglings Exercises](https://github.com/ratfactor/ziglings)
 
 [Solana](https://solana.com/)
+
 - [Validator Anatomy](https://docs.solana.com/validator/anatomy)
 - [RPC API](https://docs.solana.com/api)
 - [Code](https://github.com/solana-labs/solana)
 
 Sig
+
 - [Introduction](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/)
 - [Gossip Deep Dive](https://blog.syndica.io/sig-engineering-1-gossip-protocol/)
