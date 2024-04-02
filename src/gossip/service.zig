@@ -51,7 +51,8 @@ const GossipDumpService = @import("../gossip/dump_service.zig").GossipDumpServic
 
 const Registry = @import("../prometheus/registry.zig").Registry;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
-const Gauge = @import("../prometheus/gauge.zig").Gauge;
+const GetMetricError = @import("../prometheus/registry.zig").GetMetricError;
+const Counter = @import("../prometheus/counter.zig").Counter;
 
 const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
@@ -86,62 +87,64 @@ const DEFAULT_EPOCH_DURATION: u64 = 172800000;
 pub const PUB_GOSSIP_STATS_INTERVAL_MS = 2 * std.time.ms_per_s;
 pub const GOSSIP_TRIM_INTERVAL_MS = 10 * std.time.ms_per_s;
 
-const StatU64 = struct {
-    v: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
-
-    pub fn add(self: *StatU64, value: u64) void {
-        _ = self.v.fetchAdd(value, .Monotonic);
-    }
-
-    pub fn getAndClear(self: *StatU64) u64 {
-        return self.v.swap(0, .Monotonic);
-    }
-};
-
 /// we use this local struct so we can publish the results every N seconds.
 /// otherwise the values would continually increases.
 /// note: when publishing, the name will match the field name
 pub const GossipStats = struct {
-    gossip_packets_received: StatU64 = .{},
-    gossip_packets_verified: StatU64 = .{},
-    gossip_packets_processed: StatU64 = .{},
+    gossip_packets_received: *Counter,
+    gossip_packets_verified: *Counter,
+    gossip_packets_processed: *Counter,
 
-    ping_messages_recv: StatU64 = .{},
-    pong_messages_recv: StatU64 = .{},
-    push_messages_recv: StatU64 = .{},
-    pull_requests_recv: StatU64 = .{},
-    pull_responses_recv: StatU64 = .{},
-    prune_messages_recv: StatU64 = .{},
+    ping_messages_recv: *Counter,
+    pong_messages_recv: *Counter,
+    push_messages_recv: *Counter,
+    pull_requests_recv: *Counter,
+    pull_responses_recv: *Counter,
+    prune_messages_recv: *Counter,
 
-    ping_messages_dropped: StatU64 = .{},
-    pull_requests_dropped: StatU64 = .{},
-    prune_messages_dropped: StatU64 = .{},
+    ping_messages_dropped: *Counter,
+    pull_requests_dropped: *Counter,
+    prune_messages_dropped: *Counter,
 
-    ping_messages_sent: StatU64 = .{},
-    pong_messages_sent: StatU64 = .{},
-    push_messages_sent: StatU64 = .{},
-    pull_requests_sent: StatU64 = .{},
-    pull_responses_sent: StatU64 = .{},
-    prune_messages_sent: StatU64 = .{},
+    ping_messages_sent: *Counter,
+    pong_messages_sent: *Counter,
+    push_messages_sent: *Counter,
+    pull_requests_sent: *Counter,
+    pull_responses_sent: *Counter,
+    prune_messages_sent: *Counter,
 
-    handle_batch_ping_time: StatU64 = .{},
-    handle_batch_pong_time: StatU64 = .{},
-    handle_batch_push_time: StatU64 = .{},
-    handle_batch_pull_req_time: StatU64 = .{},
-    handle_batch_pull_resp_time: StatU64 = .{},
-    handle_batch_prune_time: StatU64 = .{},
-    handle_trim_table_time: StatU64 = .{},
+    handle_batch_ping_time: *Counter,
+    handle_batch_pong_time: *Counter,
+    handle_batch_push_time: *Counter,
+    handle_batch_pull_req_time: *Counter,
+    handle_batch_pull_resp_time: *Counter,
+    handle_batch_prune_time: *Counter,
+    handle_trim_table_time: *Counter,
 
-    push_message_n_values: StatU64 = .{},
-    push_message_n_failed_inserts: StatU64 = .{},
-    push_message_n_invalid_values: StatU64 = .{},
-    push_messages_time_to_insert: StatU64 = .{},
-    push_messages_time_build_prune: StatU64 = .{},
+    push_message_n_values: *Counter,
+    push_message_n_failed_inserts: *Counter,
+    push_message_n_invalid_values: *Counter,
+    push_messages_time_to_insert: *Counter,
+    push_messages_time_build_prune: *Counter,
 
-    packets_verified_loop_time: StatU64 = .{},
+    packets_verified_loop_time: *Counter,
 
-    table_n_values: StatU64 = .{},
-    table_n_pubkeys: StatU64 = .{},
+    table_n_values: *Counter,
+    table_n_pubkeys: *Counter,
+
+    const Self = @This();
+
+    pub fn init() GetMetricError!Self {
+        var self: Self = undefined;
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(GossipStats).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            var field_counter: *Counter = try registry.getOrCreateCounter(field.name);
+            @field(self, field.name) = field_counter;
+        }
+
+        return self;
+    }
 };
 
 // TODO when using prometheus counters, this could potentially be
@@ -235,7 +238,7 @@ pub const GossipService = struct {
     thread_pool: *ThreadPool,
     echo_server: echo.Server,
 
-    stats: *GossipStats,
+    stats: GossipStats,
 
     // used for benchmarking
     messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
@@ -251,7 +254,7 @@ pub const GossipService = struct {
         entrypoints: ?ArrayList(SocketAddr),
         exit: *AtomicBool,
         logger: Logger,
-    ) error{ OutOfMemory, GossipAddrUnspecified, SocketCreateFailed, SocketBindFailed, SocketSetTimeoutFailed }!Self {
+    ) !Self {
         var packet_incoming_channel = Channel(PacketBatch).init(allocator, 10000);
         var packet_outgoing_channel = Channel(PacketBatch).init(allocator, 10000);
         var verified_incoming_channel = Channel(GossipMessageWithEndpoint).init(allocator, 10000);
@@ -294,8 +297,7 @@ pub const GossipService = struct {
             for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
-        const stats = try allocator.create(GossipStats);
-        stats.* = .{};
+        var stats = try GossipStats.init();
 
         return Self{
             .my_contact_info = my_contact_info,
@@ -362,8 +364,6 @@ pub const GossipService = struct {
         }
 
         self.entrypoints.deinit();
-
-        self.allocator.destroy(self.stats);
         self.allocator.destroy(self.thread_pool);
 
         deinitRwMux(&self.gossip_table_rw);
@@ -953,7 +953,7 @@ pub const GossipService = struct {
             // publish metrics
             const stats_publish_elapsed_ts = getWallclockMs() - last_stats_publish_ts;
             if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL_MS) {
-                try self.publishMetrics();
+                try self.collectGossipTableMetrics();
                 last_stats_publish_ts = getWallclockMs();
             }
 
@@ -967,29 +967,17 @@ pub const GossipService = struct {
         self.logger.infof("build_messages loop closed", .{});
     }
 
-    /// publishes metrics in self.stats to the prometheus registry
-    pub fn publishMetrics(self: *Self) !void {
-        // collect gossip table metrics
-        {
-            var gossip_table_lock = self.gossip_table_rw.read();
-            defer gossip_table_lock.unlock();
+    // collect gossip table metrics and pushes them to stats
+    pub fn collectGossipTableMetrics(self: *Self) !void {
+        var gossip_table_lock = self.gossip_table_rw.read();
+        defer gossip_table_lock.unlock();
 
-            var gossip_table: *const GossipTable = gossip_table_lock.get();
-            const n_entries = gossip_table.store.count();
-            const n_pubkeys = gossip_table.pubkey_to_values.count();
+        var gossip_table: *const GossipTable = gossip_table_lock.get();
+        const n_entries = gossip_table.store.count();
+        const n_pubkeys = gossip_table.pubkey_to_values.count();
 
-            self.stats.table_n_values.add(n_entries);
-            self.stats.table_n_pubkeys.add(n_pubkeys);
-        }
-
-        // publish all metrics
-        const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(GossipStats).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            var field_counter: *Gauge(u64) = try registry.getOrCreateGauge(field.name, u64);
-            const stats_value = @field(self.stats, field.name).getAndClear();
-            _ = field_counter.set(stats_value);
-        }
+        self.stats.table_n_values.add(n_entries);
+        self.stats.table_n_pubkeys.add(n_pubkeys);
     }
 
     pub fn rotateActiveSet(
