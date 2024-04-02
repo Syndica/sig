@@ -18,7 +18,7 @@ const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
 pub const sysvars = @import("sysvars.zig");
-const ZstdReader = @import("../zstd/reader.zig").Reader;
+const ZstdReader = @import("zstd").Reader;
 const parallelUntarToFileSystem = @import("../utils/tar.zig").parallelUntarToFileSystem;
 
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
