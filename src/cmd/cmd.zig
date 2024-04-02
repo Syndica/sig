@@ -328,8 +328,6 @@ fn gossip(_: []const []const u8) !void {
         .{ &gossip_service, spy_node, gossip_dump_option.value.bool },
     );
 
-    try downloadSnapshotsFromGossip(gpa_allocator, &gossip_service);
-
     handle.join();
     metrics_thread.detach();
 }
