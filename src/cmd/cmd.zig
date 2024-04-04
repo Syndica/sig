@@ -19,6 +19,16 @@ const Registry = @import("../prometheus/registry.zig").Registry;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
 const IpAddr = @import("../lib.zig").net.IpAddr;
 
+const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
+const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
+const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
+const AccountsDB = @import("../accountsdb/db.zig").AccountsDB;
+const AccountsDBConfig = @import("../accountsdb/db.zig").AccountsDBConfig;
+const GenesisConfig = @import("../accountsdb/genesis_config.zig").GenesisConfig;
+const StatusCache = @import("../accountsdb/snapshots.zig").StatusCache;
+const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
+const Bank = @import("../accountsdb/bank.zig").Bank;
+
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
 const base58Encoder = base58.Encoder.init(.{});
@@ -97,6 +107,52 @@ var metrics_port_option = cli.Option{
     .value_name = "port_number",
 };
 
+// accounts-db options
+var n_threads_snapshot_load_option = cli.Option{
+    .long_name = "n-threads-snapshot-load",
+    .help = "number of threads to load incremental snapshots",
+    .short_alias = 't',
+    .value = cli.OptionValue{ .int = 0 },
+    .required = false,
+    .value_name = "n_threads_snapshot_load",
+};
+
+var n_threads_snapshot_unpack_option = cli.Option{
+    .long_name = "n-threads-snapshot-unpack",
+    .help = "number of threads to unpack incremental snapshots",
+    .short_alias = 'u',
+    .value = cli.OptionValue{ .int = 0 },
+    .required = false,
+    .value_name = "n_threads_snapshot_unpack",
+};
+
+var disk_index_path_option = cli.Option{
+    .long_name = "disk-index-path",
+    .help = "path to disk index",
+    .short_alias = 'd',
+    .value = cli.OptionValue{ .string = null },
+    .required = false,
+    .value_name = "disk_index_path",
+};
+
+var force_unpack_snapshot_option = cli.Option{
+    .long_name = "force-unpack-snapshot",
+    .help = "force unpack snapshot even if it exists",
+    .short_alias = 'f',
+    .value = cli.OptionValue{ .bool = false },
+    .required = false,
+    .value_name = "force_unpack_snapshot",
+};
+
+var snapshot_dir_option = cli.Option{
+    .long_name = "snapshot-dir",
+    .help = "path to snapshot directory",
+    .short_alias = 's',
+    .value = cli.OptionValue{ .string = "test_data/" },
+    .required = false,
+    .value_name = "snapshot_dir",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
@@ -114,14 +170,35 @@ var app = &cli.App{
             ,
             .action = identity,
         },
-        &cli.Command{ .name = "gossip", .help = "Run gossip client", .description = 
-        \\Start Solana gossip client on specified port.
-        , .action = gossip, .options = &.{
-            &gossip_port_option,
-            &gossip_entrypoints_option,
-            &gossip_spy_node_option,
-            &gossip_dump_option,
-        } },
+        &cli.Command{
+            .name = "gossip",
+            .help = "Run gossip client",
+            .description =
+            \\Start Solana gossip client on specified port.
+            ,
+            .action = gossip,
+            .options = &.{
+                &gossip_port_option,
+                &gossip_entrypoints_option,
+                &gossip_spy_node_option,
+                &gossip_dump_option,
+            },
+        },
+        &cli.Command{
+            .name = "accounts_db",
+            .help = "run accounts_db",
+            .description =
+            \\starts accounts db
+            ,
+            .action = accountsDb,
+            .options = &.{
+                &n_threads_snapshot_load_option,
+                &n_threads_snapshot_unpack_option,
+                &disk_index_path_option,
+                &force_unpack_snapshot_option,
+                &snapshot_dir_option,
+            },
+        },
     },
 };
 
@@ -228,7 +305,7 @@ fn gossip(_: []const []const u8) !void {
     logger.infof("my ip: {}", .{my_ip});
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key, false);
+    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     contact_info.shred_version = my_shred_version;
     var gossip_address = SocketAddr.init(my_ip, gossip_port);
@@ -264,6 +341,178 @@ fn spawnMetrics(allocator: std.mem.Allocator, logger: Logger) !std.Thread {
     logger.infof("metrics port: {d}", .{metrics_port});
     const registry = globalRegistry();
     return try std.Thread.spawn(.{}, servePrometheus, .{ allocator, registry, metrics_port });
+}
+
+fn accountsDb(_: []const []const u8) !void {
+    var allocator = gpa.allocator();
+
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
+    defer logger.deinit();
+    logger.spawn();
+
+    // arg parsing
+    const disk_index_path: ?[]const u8 = disk_index_path_option.value.string;
+    const force_unpack_snapshot = force_unpack_snapshot_option.value.bool;
+    const snapshot_dir_str = snapshot_dir_option.value.string.?;
+
+    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
+    var n_threads_snapshot_load: u32 = @intCast(n_threads_snapshot_load_option.value.int.?);
+    if (n_threads_snapshot_load == 0) {
+        n_threads_snapshot_load = n_cpus;
+    }
+
+    var n_threads_snapshot_unpack: u32 = @intCast(n_threads_snapshot_load_option.value.int.?);
+    if (n_threads_snapshot_unpack == 0) {
+        n_threads_snapshot_unpack = n_cpus * 2;
+    }
+
+    // this should exist before we start to unpack
+    const genesis_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/genesis.bin",
+        .{snapshot_dir_str},
+    );
+    defer allocator.free(genesis_path);
+
+    std.fs.cwd().access(genesis_path, .{}) catch {
+        logger.errf("genesis.bin not found: {s}", .{genesis_path});
+        return error.GenesisNotFound;
+    };
+
+    // if this exists, we wont look for a .tar.zstd
+    const accounts_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/accounts/",
+        .{snapshot_dir_str},
+    );
+    defer allocator.free(accounts_path);
+
+    var accounts_path_exists = true;
+    std.fs.cwd().access(accounts_path, .{}) catch {
+        accounts_path_exists = false;
+    };
+    const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
+
+    var snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir_str);
+    defer snapshot_files.deinit(allocator);
+    if (snapshot_files.incremental_snapshot == null) {
+        logger.infof("no incremental snapshot found", .{});
+    }
+
+    var full_timer = try std.time.Timer.start();
+    var timer = try std.time.Timer.start();
+
+    if (should_unpack_snapshot) {
+        logger.infof("unpacking snapshots...", .{});
+        // if accounts/ doesnt exist then we unpack the found snapshots
+        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
+        defer snapshot_dir.close();
+
+        // TODO: delete old accounts/ dir if it exists
+
+        timer.reset();
+        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.filename});
+        try parallelUnpackZstdTarBall(
+            allocator,
+            snapshot_files.full_snapshot.filename,
+            snapshot_dir,
+            n_threads_snapshot_unpack,
+            true,
+        );
+        logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+
+        // TODO: can probs do this in parallel with full snapshot
+        if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
+            timer.reset();
+            logger.infof("unpacking {s}...", .{incremental_snapshot.filename});
+            try parallelUnpackZstdTarBall(
+                allocator,
+                incremental_snapshot.filename,
+                snapshot_dir,
+                n_threads_snapshot_unpack,
+                false,
+            );
+            logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        }
+    } else {
+        logger.infof("not unpacking snapshot...", .{});
+    }
+
+    timer.reset();
+    logger.infof("reading snapshot metadata...", .{});
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_files);
+    defer {
+        snapshots.all_fields.deinit(allocator);
+        allocator.free(snapshots.full_path);
+        if (snapshots.incremental_path) |inc_path| {
+            allocator.free(inc_path);
+        }
+    }
+    logger.infof("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
+    const full_snapshot = snapshots.all_fields.full;
+
+    logger.infof("full snapshot: {s}", .{snapshots.full_path});
+    if (snapshots.incremental_path) |inc_path| {
+        logger.infof("incremental snapshot: {s}", .{inc_path});
+    }
+
+    // load and validate
+    logger.infof("initializing accounts-db...", .{});
+    var accounts_db = try AccountsDB.init(allocator, logger, AccountsDBConfig{
+        .disk_index_path = disk_index_path,
+        .storage_cache_size = 10_000,
+    });
+    defer accounts_db.deinit();
+    logger.infof("initialized in {s}", .{std.fmt.fmtDuration(timer.read())});
+    timer.reset();
+
+    const snapshot = try snapshots.all_fields.collapse();
+    timer.reset();
+
+    logger.infof("loading from snapshot...", .{});
+    try accounts_db.loadFromSnapshot(
+        snapshot.accounts_db_fields,
+        accounts_path,
+        n_threads_snapshot_load,
+        std.heap.page_allocator,
+    );
+    logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+
+    try accounts_db.validateLoadFromSnapshot(
+        snapshot.bank_fields.incremental_snapshot_persistence,
+        full_snapshot.bank_fields.slot,
+        full_snapshot.bank_fields.capitalization,
+    );
+    logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+    logger.infof("full timer: {s}", .{std.fmt.fmtDuration(full_timer.read())});
+
+    // use the genesis to validate the bank
+    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    defer genesis_config.deinit(allocator);
+
+    logger.infof("validating bank...", .{});
+    const bank = Bank.init(&accounts_db, &snapshot.bank_fields);
+    try Bank.validateBankFields(bank.bank_fields, &genesis_config);
+
+    // validate the status cache
+    logger.infof("validating status cache...", .{});
+    const status_cache_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/{s}",
+        .{ snapshot_dir_str, "snapshots/status_cache" },
+    );
+    defer allocator.free(status_cache_path);
+
+    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    defer status_cache.deinit();
+
+    var slot_history = try accounts_db.getSlotHistory();
+    defer slot_history.deinit(accounts_db.allocator);
+
+    const bank_slot = snapshot.bank_fields.slot;
+    try status_cache.validate(allocator, bank_slot, &slot_history);
+
+    logger.infof("done!", .{});
 }
 
 pub fn run() !void {

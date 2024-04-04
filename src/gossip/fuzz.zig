@@ -91,12 +91,12 @@ pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
 
 pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
     var keypair = try KeyPair.create(null);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     // will have random id
     // var value = try SignedGossipData.random(rng, &keypair);
     var value = try SignedGossipData.randomWithIndex(rng, &keypair, 0);
-    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false));
+    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key));
     try value.sign(&keypair);
 
     const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
@@ -120,7 +120,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PushMessage,
@@ -140,7 +140,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PullResponse,
@@ -156,7 +156,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     defer bloom.deinit();
 
     var value = try SignedGossipData.initSigned(.{
-        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
+        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key)),
     }, keypair);
 
     var filter = GossipPullFilter{
@@ -276,7 +276,7 @@ pub fn main() !void {
     var fuzz_keypair = try KeyPair.create(null);
     var fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
 
-    var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
+    var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
     try fuzz_contact_info.setSocket(SOCKET_TAG_GOSSIP, fuzz_address);
 
