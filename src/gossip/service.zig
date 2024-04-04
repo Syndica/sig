@@ -87,121 +87,6 @@ const DEFAULT_EPOCH_DURATION: u64 = 172800000;
 pub const PUB_GOSSIP_STATS_INTERVAL_MS = 2 * std.time.ms_per_s;
 pub const GOSSIP_TRIM_INTERVAL_MS = 10 * std.time.ms_per_s;
 
-/// we use this local struct so we can publish the results every N seconds.
-/// otherwise the values would continually increases.
-/// note: when publishing, the name will match the field name
-pub const GossipStats = struct {
-    gossip_packets_received: *Counter,
-    gossip_packets_verified: *Counter,
-    gossip_packets_processed: *Counter,
-
-    ping_messages_recv: *Counter,
-    pong_messages_recv: *Counter,
-    push_messages_recv: *Counter,
-    pull_requests_recv: *Counter,
-    pull_responses_recv: *Counter,
-    prune_messages_recv: *Counter,
-
-    ping_messages_dropped: *Counter,
-    pull_requests_dropped: *Counter,
-    prune_messages_dropped: *Counter,
-
-    ping_messages_sent: *Counter,
-    pong_messages_sent: *Counter,
-    push_messages_sent: *Counter,
-    pull_requests_sent: *Counter,
-    pull_responses_sent: *Counter,
-    prune_messages_sent: *Counter,
-
-    handle_batch_ping_time: *Counter,
-    handle_batch_pong_time: *Counter,
-    handle_batch_push_time: *Counter,
-    handle_batch_pull_req_time: *Counter,
-    handle_batch_pull_resp_time: *Counter,
-    handle_batch_prune_time: *Counter,
-    handle_trim_table_time: *Counter,
-
-    push_message_n_values: *Counter,
-    push_message_n_failed_inserts: *Counter,
-    push_message_n_invalid_values: *Counter,
-    push_messages_time_to_insert: *Counter,
-    push_messages_time_build_prune: *Counter,
-
-    table_n_values: *Counter,
-    table_n_pubkeys: *Counter,
-
-    const Self = @This();
-
-    pub fn init() GetMetricError!Self {
-        var self: Self = undefined;
-        const registry = globalRegistry();
-        const stats_struct_info = @typeInfo(GossipStats).Struct;
-        inline for (stats_struct_info.fields) |field| {
-            var field_counter: *Counter = try registry.getOrCreateCounter(field.name);
-            @field(self, field.name) = field_counter;
-        }
-        return self;
-    }
-};
-
-// TODO when using prometheus counters, this could potentially be
-// merged with the above struct, since they will share state.
-const GossipStatsLogger = struct {
-    logger: Logger,
-    log_interval_micros: i64 = 10_000_000,
-    last_log: i64 = 0,
-    current_stats: StatsToLog = .{}, // TODO replace with prometheus counters
-    last_logged_snapshot: StatsToLog = .{},
-    updates_since_last: u64 = 0,
-
-    const StatsToLog = struct {
-        gossip_packets_received: u64 = 0,
-        ping_messages_recv: u64 = 0,
-        pong_messages_recv: u64 = 0,
-        push_messages_recv: u64 = 0,
-        pull_requests_recv: u64 = 0,
-        pull_responses_recv: u64 = 0,
-        prune_messages_recv: u64 = 0,
-    };
-
-    const Self = @This();
-
-    /// If log_interval_millis has passed since the last log,
-    /// then log the number of events since then.
-    fn maybeLog(
-        self: *Self,
-        lastest_events: StatsToLog, // TODO remove when prometheus counters are used
-    ) !void {
-        self.update(lastest_events);
-        const now = std.time.microTimestamp();
-        const interval = @as(u64, @intCast(now -| self.last_log));
-        if (interval < self.log_interval_micros) return;
-        self.last_log = now;
-        self.logger.infof(
-            "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
-            .{
-                self.current_stats.gossip_packets_received - self.last_logged_snapshot.gossip_packets_received,
-                self.current_stats.ping_messages_recv - self.last_logged_snapshot.ping_messages_recv,
-                self.current_stats.pong_messages_recv - self.last_logged_snapshot.pong_messages_recv,
-                self.current_stats.push_messages_recv - self.last_logged_snapshot.push_messages_recv,
-                self.current_stats.pull_requests_recv - self.last_logged_snapshot.pull_requests_recv,
-                self.current_stats.pull_responses_recv - self.last_logged_snapshot.pull_responses_recv,
-                self.current_stats.prune_messages_recv - self.last_logged_snapshot.prune_messages_recv,
-            },
-        );
-        self.last_logged_snapshot = self.current_stats;
-        self.updates_since_last = 0;
-    }
-
-    // TODO remove when prometheus counters are used
-    fn update(self: *Self, latest_events: StatsToLog) void {
-        inline for (@typeInfo(StatsToLog).Struct.fields) |field| {
-            @field(self.current_stats, field.name) +|= @field(latest_events, field.name);
-        }
-        self.updates_since_last += 1;
-    }
-};
-
 pub const GossipService = struct {
     allocator: std.mem.Allocator,
 
@@ -294,7 +179,7 @@ pub const GossipService = struct {
             for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
-        var stats = try GossipStats.init();
+        var stats = try GossipStats.init(logger);
 
         return Self{
             .my_contact_info = my_contact_info,
@@ -602,7 +487,6 @@ pub const GossipService = struct {
             pull_responses.deinit();
             prune_messages.deinit();
         }
-        var stats_logger: GossipStatsLogger = .{ .logger = self.logger };
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const maybe_messages = try self.verified_incoming_channel.try_drain();
@@ -767,15 +651,7 @@ pub const GossipService = struct {
             gossip_packets_processed += prune_messages.items.len;
             self.stats.gossip_packets_processed.add(gossip_packets_processed);
 
-            try stats_logger.maybeLog(.{
-                .gossip_packets_received = messages.len,
-                .ping_messages_recv = ping_messages.items.len,
-                .pong_messages_recv = pong_messages.items.len,
-                .push_messages_recv = push_messages.items.len,
-                .pull_requests_recv = pull_requests.items.len,
-                .pull_responses_recv = pull_responses.items.len,
-                .prune_messages_recv = prune_messages.items.len,
-            });
+            self.stats.maybeLog();
 
             // handle batch messages
             if (push_messages.items.len > 0) {
@@ -2013,6 +1889,120 @@ pub const GossipService = struct {
             i += 1;
         }
         return gossip_values_array.items.len;
+    }
+};
+
+/// stats that we publish to prometheus
+pub const GossipStats = struct {
+    gossip_packets_received: *Counter,
+    gossip_packets_verified: *Counter,
+    gossip_packets_processed: *Counter,
+
+    ping_messages_recv: *Counter,
+    pong_messages_recv: *Counter,
+    push_messages_recv: *Counter,
+    pull_requests_recv: *Counter,
+    pull_responses_recv: *Counter,
+    prune_messages_recv: *Counter,
+
+    ping_messages_dropped: *Counter,
+    pull_requests_dropped: *Counter,
+    prune_messages_dropped: *Counter,
+
+    ping_messages_sent: *Counter,
+    pong_messages_sent: *Counter,
+    push_messages_sent: *Counter,
+    pull_requests_sent: *Counter,
+    pull_responses_sent: *Counter,
+    prune_messages_sent: *Counter,
+
+    handle_batch_ping_time: *Counter,
+    handle_batch_pong_time: *Counter,
+    handle_batch_push_time: *Counter,
+    handle_batch_pull_req_time: *Counter,
+    handle_batch_pull_resp_time: *Counter,
+    handle_batch_prune_time: *Counter,
+    handle_trim_table_time: *Counter,
+
+    push_message_n_values: *Counter,
+    push_message_n_failed_inserts: *Counter,
+    push_message_n_invalid_values: *Counter,
+    push_messages_time_to_insert: *Counter,
+    push_messages_time_build_prune: *Counter,
+
+    table_n_values: *Counter,
+    table_n_pubkeys: *Counter,
+
+    // logging details
+    _logging_fields: struct {
+        logger: Logger,
+        log_interval_micros: i64 = 10_000_000,
+        last_log: i64 = 0,
+        last_logged_snapshot: StatsToLog = .{},
+        updates_since_last: u64 = 0,
+    },
+
+    const StatsToLog = struct {
+        gossip_packets_received: u64 = 0,
+        ping_messages_recv: u64 = 0,
+        pong_messages_recv: u64 = 0,
+        push_messages_recv: u64 = 0,
+        pull_requests_recv: u64 = 0,
+        pull_responses_recv: u64 = 0,
+        prune_messages_recv: u64 = 0,
+    };
+
+    const Self = @This();
+
+    pub fn init(logger: Logger) GetMetricError!Self {
+        var self: Self = undefined;
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(GossipStats).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            if (field.name[0] != '_') {
+                var field_counter: *Counter = try registry.getOrCreateCounter(field.name);
+                @field(self, field.name) = field_counter;
+            }
+        }
+
+        self._logging_fields = .{ .logger = logger };
+        return self;
+    }
+
+    /// If log_interval_millis has passed since the last log,
+    /// then log the number of events since then.
+    fn maybeLog(
+        self: *Self,
+    ) void {
+        const now = std.time.microTimestamp();
+        const logging_fields = self._logging_fields;
+        const interval = @as(u64, @intCast(now -| logging_fields.last_log));
+        if (interval < logging_fields.log_interval_micros) return;
+
+        const current_stats = StatsToLog{
+            .gossip_packets_received = self.gossip_packets_received.get(),
+            .ping_messages_recv = self.ping_messages_recv.get(),
+            .pong_messages_recv = self.pong_messages_recv.get(),
+            .push_messages_recv = self.push_messages_recv.get(),
+            .pull_requests_recv = self.pull_requests_recv.get(),
+            .pull_responses_recv = self.pull_responses_recv.get(),
+            .prune_messages_recv = self.prune_messages_recv.get(),
+        };
+        logging_fields.logger.infof(
+            "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            .{
+                current_stats.gossip_packets_received - logging_fields.last_logged_snapshot.gossip_packets_received,
+                current_stats.ping_messages_recv - logging_fields.last_logged_snapshot.ping_messages_recv,
+                current_stats.pong_messages_recv - logging_fields.last_logged_snapshot.pong_messages_recv,
+                current_stats.push_messages_recv - logging_fields.last_logged_snapshot.push_messages_recv,
+                current_stats.pull_requests_recv - logging_fields.last_logged_snapshot.pull_requests_recv,
+                current_stats.pull_responses_recv - logging_fields.last_logged_snapshot.pull_responses_recv,
+                current_stats.prune_messages_recv - logging_fields.last_logged_snapshot.prune_messages_recv,
+            },
+        );
+        self._logging_fields.last_logged_snapshot = current_stats;
+        self._logging_fields.last_log = now;
+        self._logging_fields.updates_since_last = 0;
     }
 };
 
