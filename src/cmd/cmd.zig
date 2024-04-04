@@ -393,8 +393,9 @@ fn accountsDb(_: []const []const u8) !void {
     };
     const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
 
-    var snapshot_paths = try SnapshotFiles.find(allocator, snapshot_dir_str);
-    if (snapshot_paths.incremental_snapshot == null) {
+    var snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir_str);
+    defer snapshot_files.deinit(allocator);
+    if (snapshot_files.incremental_snapshot == null) {
         logger.infof("no incremental snapshot found", .{});
     }
 
@@ -410,10 +411,10 @@ fn accountsDb(_: []const []const u8) !void {
         // TODO: delete old accounts/ dir if it exists
 
         timer.reset();
-        logger.infof("unpacking {s}...", .{snapshot_paths.full_snapshot.filename});
+        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.filename});
         try parallelUnpackZstdTarBall(
             allocator,
-            snapshot_paths.full_snapshot.filename,
+            snapshot_files.full_snapshot.filename,
             snapshot_dir,
             n_threads_snapshot_unpack,
             true,
@@ -421,7 +422,7 @@ fn accountsDb(_: []const []const u8) !void {
         logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
-        if (snapshot_paths.incremental_snapshot) |incremental_snapshot| {
+        if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
             logger.infof("unpacking {s}...", .{incremental_snapshot.filename});
             try parallelUnpackZstdTarBall(
@@ -439,7 +440,7 @@ fn accountsDb(_: []const []const u8) !void {
 
     timer.reset();
     logger.infof("reading snapshot metadata...", .{});
-    var snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_paths);
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_files);
     defer {
         snapshots.all_fields.deinit(allocator);
         allocator.free(snapshots.full_path);
