@@ -25,7 +25,7 @@ const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
 const BankIncrementalSnapshotPersistence = @import("../accountsdb/snapshots.zig").BankIncrementalSnapshotPersistence;
 const Bank = @import("bank.zig").Bank;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
-const SnapshotPaths = @import("../accountsdb/snapshots.zig").SnapshotPaths;
+const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
 const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const Logger = @import("../trace/log.zig").Logger;
@@ -962,8 +962,10 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
         true,
     );
 
-    var snapshot_paths = try SnapshotPaths.find(allocator, dir_path);
-    var snapshots = try AllSnapshotFields.fromPaths(allocator, dir_path, snapshot_paths);
+    var snapshot_files = try SnapshotFiles.find(allocator, dir_path);
+    defer snapshot_files.deinit(allocator);
+
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, dir_path, snapshot_files);
     defer {
         allocator.free(snapshots.full_path);
         if (snapshots.incremental_path) |inc_path| {

@@ -19,7 +19,7 @@ const Registry = @import("../prometheus/registry.zig").Registry;
 const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
 const IpAddr = @import("../lib.zig").net.IpAddr;
 
-const SnapshotPaths = @import("../accountsdb/snapshots.zig").SnapshotPaths;
+const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
 const AccountsDB = @import("../accountsdb/db.zig").AccountsDB;
@@ -353,7 +353,7 @@ fn accountsDb(_: []const []const u8) !void {
     // arg parsing
     const disk_index_path: ?[]const u8 = disk_index_path_option.value.string;
     const force_unpack_snapshot = force_unpack_snapshot_option.value.bool;
-    const snapshot_dir = snapshot_dir_option.value.string.?;
+    const snapshot_dir_str = snapshot_dir_option.value.string.?;
 
     const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
     var n_threads_snapshot_load: u32 = @intCast(n_threads_snapshot_load_option.value.int.?);
@@ -370,7 +370,7 @@ fn accountsDb(_: []const []const u8) !void {
     const genesis_path = try std.fmt.allocPrint(
         allocator,
         "{s}/genesis.bin",
-        .{snapshot_dir},
+        .{snapshot_dir_str},
     );
     defer allocator.free(genesis_path);
 
@@ -383,7 +383,7 @@ fn accountsDb(_: []const []const u8) !void {
     const accounts_path = try std.fmt.allocPrint(
         allocator,
         "{s}/accounts/",
-        .{snapshot_dir},
+        .{snapshot_dir_str},
     );
     defer allocator.free(accounts_path);
 
@@ -393,7 +393,7 @@ fn accountsDb(_: []const []const u8) !void {
     };
     const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
 
-    var snapshot_paths = try SnapshotPaths.find(allocator, snapshot_dir);
+    var snapshot_paths = try SnapshotFiles.find(allocator, snapshot_dir_str);
     if (snapshot_paths.incremental_snapshot == null) {
         logger.infof("no incremental snapshot found", .{});
     }
@@ -404,18 +404,17 @@ fn accountsDb(_: []const []const u8) !void {
     if (should_unpack_snapshot) {
         logger.infof("unpacking snapshots...", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
-        var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
-        defer snapshot_dir_iter.close();
+        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
+        defer snapshot_dir.close();
 
         // TODO: delete old accounts/ dir if it exists
 
         timer.reset();
-        std.debug.print("unpacking {s}...", .{snapshot_paths.full_snapshot.path});
-        logger.infof("unpacking {s}...", .{snapshot_paths.full_snapshot.path});
+        logger.infof("unpacking {s}...", .{snapshot_paths.full_snapshot.filename});
         try parallelUnpackZstdTarBall(
             allocator,
-            snapshot_paths.full_snapshot.path,
-            snapshot_dir_iter.dir,
+            snapshot_paths.full_snapshot.filename,
+            snapshot_dir,
             n_threads_snapshot_unpack,
             true,
         );
@@ -424,11 +423,11 @@ fn accountsDb(_: []const []const u8) !void {
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_paths.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
-            logger.infof("unpacking {s}...", .{incremental_snapshot.path});
+            logger.infof("unpacking {s}...", .{incremental_snapshot.filename});
             try parallelUnpackZstdTarBall(
                 allocator,
-                incremental_snapshot.path,
-                snapshot_dir_iter.dir,
+                incremental_snapshot.filename,
+                snapshot_dir,
                 n_threads_snapshot_unpack,
                 false,
             );
@@ -440,7 +439,7 @@ fn accountsDb(_: []const []const u8) !void {
 
     timer.reset();
     logger.infof("reading snapshot metadata...", .{});
-    var snapshots = try AllSnapshotFields.fromPaths(allocator, snapshot_dir, snapshot_paths);
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_paths);
     defer {
         snapshots.all_fields.deinit(allocator);
         allocator.free(snapshots.full_path);
@@ -499,7 +498,7 @@ fn accountsDb(_: []const []const u8) !void {
     const status_cache_path = try std.fmt.allocPrint(
         allocator,
         "{s}/{s}",
-        .{ snapshot_dir, "snapshots/status_cache" },
+        .{ snapshot_dir_str, "snapshots/status_cache" },
     );
     defer allocator.free(status_cache_path);
 
