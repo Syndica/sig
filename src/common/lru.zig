@@ -24,7 +24,6 @@ pub fn LruCache(
 /// to call on a node's data when the node is removed.
 ///
 /// TODO: allow for passing custom hash context to use in std.ArrayHashMap for performance.
-/// FIXME the locks have no effect since they are released at the end of the if statements
 pub fn LruCacheCustom(
     comptime kind: Kind,
     comptime K: type,

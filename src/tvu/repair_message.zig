@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../lib.zig");
+const sig = @import("../lib.zig");
 
 const bincode = sig.bincode;
 
@@ -192,7 +192,7 @@ pub const RepairRequestHeader = struct {
     }
 };
 
-test "tvu.repair.message: signed/serialized RepairRequest is valid" {
+test "tvu.repair_message: signed/serialized RepairRequest is valid" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(392138);
     const rng = rand.random();
@@ -228,7 +228,7 @@ test "tvu.repair.message: signed/serialized RepairRequest is valid" {
     }
 }
 
-test "tvu.repair.message: RepairRequestHeader serialization round trip" {
+test "tvu.repair_message: RepairRequestHeader serialization round trip" {
     var rng = std.rand.DefaultPrng.init(5224);
     var signature: [sig.core.SIGNATURE_LENGTH]u8 = undefined;
     rng.fill(&signature);
@@ -267,7 +267,7 @@ test "tvu.repair.message: RepairRequestHeader serialization round trip" {
     try std.testing.expect(header.eql(&roundtripped));
 }
 
-test "tvu.repair.message: RepairProtocolMessage.Pong serialization round trip" {
+test "tvu.repair_message: RepairProtocolMessage.Pong serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(57340, .Pong, &[_]u8{
         7,   0,   0,   0,   252, 143, 181, 36,  240, 87,  69,  104, 157, 159, 242, 94,  101,
         48,  187, 120, 173, 241, 68,  167, 217, 67,  141, 46,  105, 85,  179, 69,  249, 140,
@@ -280,7 +280,7 @@ test "tvu.repair.message: RepairProtocolMessage.Pong serialization round trip" {
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.WindowIndex serialization round trip" {
+test "tvu.repair_message: RepairProtocolMessage.WindowIndex serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(4823794, .WindowIndex, &[_]u8{
         8,   0,   0,   0,   100, 7,   241, 74,  194, 88,  24,  128, 85,  15,  149, 108, 142,
         133, 234, 217, 3,   79,  124, 171, 68,  30,  189, 219, 173, 11,  184, 159, 208, 104,
@@ -295,7 +295,7 @@ test "tvu.repair.message: RepairProtocolMessage.WindowIndex serialization round 
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.HighestWindowIndex serialization round trip" {
+test "tvu.repair_message: RepairProtocolMessage.HighestWindowIndex serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(636345, .HighestWindowIndex, &[_]u8{
         9,   0,   0,   0,   44,  123, 16,  108, 173, 151, 229, 132, 4,  0,   5,   215, 25,
         179, 235, 166, 181, 42,  30,  231, 218, 43,  166, 238, 92,  80, 234, 87,  30,  123,
@@ -310,7 +310,7 @@ test "tvu.repair.message: RepairProtocolMessage.HighestWindowIndex serialization
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.Orphan serialization round trip" {
+test "tvu.repair_message: RepairProtocolMessage.Orphan serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(734566, .Orphan, &[_]u8{
         10,  0,   0,   0,   52,  54,  182, 49,  197, 238, 253, 118, 145, 61,  198, 235, 42,
         211, 229, 42,  2,   33,  5,   161, 179, 171, 26,  243, 51,  240, 82,  98,  121, 90,
@@ -324,7 +324,7 @@ test "tvu.repair.message: RepairProtocolMessage.Orphan serialization round trip"
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage.AncestorHashes serialization round trip" {
+test "tvu.repair_message: RepairProtocolMessage.AncestorHashes serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(6236757, .AncestorHashes, &[_]u8{
         11,  0,   0,   0,   192, 86,  218, 156, 168, 139, 216, 200, 30,  181, 244, 121, 90,
         41,  177, 117, 55,  40,  199, 207, 62,  118, 56,  134, 73,  88,  74,  2,   139, 189,
@@ -338,7 +338,7 @@ test "tvu.repair.message: RepairProtocolMessage.AncestorHashes serialization rou
     });
 }
 
-test "tvu.repair.message: RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
+test "tvu.repair_message: RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
     var rng = std.rand.DefaultPrng.init(184837);
     for (0..10) |_| {
         inline for (@typeInfo(RepairMessage.Tag).Enum.fields) |enum_field| {

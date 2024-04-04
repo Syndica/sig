@@ -1,6 +1,6 @@
 const std = @import("std");
 const zig_network = @import("zig-network");
-const sig = @import("../../lib.zig");
+const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Atomic;
@@ -18,12 +18,8 @@ const RwMux = sig.sync.RwMux;
 const SocketAddr = sig.net.SocketAddr;
 const Slot = sig.core.Slot;
 
-const RepairRequest = sig.tvu.repair.RepairRequest;
-const serializeRepairRequest = sig.tvu.repair.serializeRepairRequest;
-
-fn getLatestSlot() u64 {
-    return 255043752;
-}
+const RepairRequest = sig.tvu.RepairRequest;
+const serializeRepairRequest = sig.tvu.serializeRepairRequest;
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
@@ -34,12 +30,15 @@ pub const RepairService = struct {
     peer_provider: RepairPeerProvider,
     logger: Logger,
     exit: *Atomic(bool),
+    slot_to_request: ?u64,
 
     pub fn deinit(self: *@This()) void {
         self.peer_provider.deinit();
     }
 
     pub fn run(self: *@This()) !void {
+        self.logger.info("starting repair service");
+        defer self.logger.info("exiting repair service");
         while (!self.exit.load(.Unordered)) {
             if (try self.initialSnapshotRepair()) |request| {
                 try self.requester.sendRepairRequest(request);
@@ -50,9 +49,9 @@ pub const RepairService = struct {
     }
 
     fn initialSnapshotRepair(self: *@This()) !?AddressedRepairRequest {
-        const slot = getLatestSlot();
-        const request: RepairRequest = .{ .HighestShred = .{ slot, 0 } };
-        const maybe_peer = try self.peer_provider.getRandomPeer(slot);
+        if (self.slot_to_request == null) return null;
+        const request: RepairRequest = .{ .HighestShred = .{ self.slot_to_request.?, 0 } };
+        const maybe_peer = try self.peer_provider.getRandomPeer(self.slot_to_request.?);
 
         if (maybe_peer) |peer| return .{
             .request = request,
@@ -232,7 +231,7 @@ pub const RepairPeerProvider = struct {
     }
 };
 
-test "tvu.repair.service: RepairService sends repair request to gossip peer" {
+test "tvu.repair_service: RepairService sends repair request to gossip peer" {
     const SignedGossipData = sig.gossip.SignedGossipData;
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
@@ -292,6 +291,7 @@ test "tvu.repair.service: RepairService sends repair request to gossip peer" {
         .peer_provider = peers,
         .logger = logger,
         .exit = &exit,
+        .slot_to_request = 13579,
     };
     defer service.deinit();
 
@@ -302,9 +302,9 @@ test "tvu.repair.service: RepairService sends repair request to gossip peer" {
 
     // assertions
     try std.testing.expect(160 == size);
-    const msg = try sig.bincode.readFromSlice(allocator, sig.tvu.repair.RepairMessage, buf[0..160], .{});
+    const msg = try sig.bincode.readFromSlice(allocator, sig.tvu.RepairMessage, buf[0..160], .{});
     try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key, true), @intCast(std.time.milliTimestamp()));
-    try std.testing.expect(msg.HighestWindowIndex.slot == getLatestSlot());
+    try std.testing.expect(msg.HighestWindowIndex.slot == 13579);
     try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);
 
     // exit
@@ -312,7 +312,7 @@ test "tvu.repair.service: RepairService sends repair request to gossip peer" {
     handle.join();
 }
 
-test "tvu.repair.service: RepairPeerProvider selects correct peers" {
+test "tvu.repair_service: RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
@@ -331,7 +331,7 @@ test "tvu.repair.service: RepairPeerProvider selects correct peers" {
         .gossip = &gossip,
         .random = random,
         .shred_version = my_shred_version.load(.Unordered),
-        .slot = getLatestSlot(),
+        .slot = 13579,
     };
     const good_peers = .{
         try peer_generator.addPeerToGossip(.HasSlot),
@@ -359,7 +359,7 @@ test "tvu.repair.service: RepairPeerProvider selects correct peers" {
     var observed_peers = std.AutoHashMap(RepairPeer, void).init(allocator);
     defer observed_peers.deinit();
     for (0..10) |_| {
-        try observed_peers.put(try peers.getRandomPeer(getLatestSlot()) orelse unreachable, {});
+        try observed_peers.put(try peers.getRandomPeer(13579) orelse unreachable, {});
     }
 
     // assertions

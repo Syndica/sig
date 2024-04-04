@@ -15,7 +15,7 @@ const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
-const RepairMessage = sig.tvu.repair.RepairMessage;
+const RepairMessage = sig.tvu.RepairMessage;
 const SocketThread = sig.net.SocketThread;
 
 /// Analogous to `ShredFetchStage`

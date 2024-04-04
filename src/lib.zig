@@ -90,10 +90,7 @@ pub const prometheus = struct {
 };
 
 pub const tvu = struct {
-    usingnamespace repair;
-    pub const repair = struct {
-        pub usingnamespace @import("tvu/repair/message.zig");
-        pub usingnamespace @import("tvu/repair/service.zig");
-    };
+    pub usingnamespace @import("tvu/repair_message.zig");
+    pub usingnamespace @import("tvu/repair_service.zig");
     pub usingnamespace @import("tvu/shred_receiver.zig");
 };

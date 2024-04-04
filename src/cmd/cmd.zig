@@ -18,9 +18,9 @@ const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const Registry = sig.prometheus.Registry;
-const RepairService = sig.tvu.repair.RepairService;
-const RepairPeerProvider = sig.tvu.repair.RepairPeerProvider;
-const RepairRequester = sig.tvu.repair.RepairRequester;
+const RepairService = sig.tvu.RepairService;
+const RepairPeerProvider = sig.tvu.RepairPeerProvider;
+const RepairRequester = sig.tvu.RepairRequester;
 const ShredReceiver = sig.tvu.ShredReceiver;
 const SocketAddr = sig.net.SocketAddr;
 
@@ -71,10 +71,17 @@ var gossip_port_option = cli.Option{
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
     .help = "The port to run tvu repair listener - default: 8002",
-    .short_alias = 'p',
     .value = cli.OptionValue{ .int = 8002 },
     .required = false,
     .value_name = "Repair Port",
+};
+
+var test_repair_option = cli.Option{
+    .long_name = "test-repair-for-slot",
+    .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
+    .value = cli.OptionValue{ .int = null },
+    .required = false,
+    .value_name = "slot number",
 };
 
 var gossip_entrypoints_option = cli.Option{
@@ -153,7 +160,9 @@ var app = &cli.App{
             &gossip_port_option,
             &gossip_entrypoints_option,
             &gossip_spy_node_option,
+            &gossip_dump_option,
             &repair_port_option,
+            &test_repair_option,
         } },
     },
 };
@@ -306,6 +315,7 @@ fn initRepair(
         .peer_provider = peer_provider,
         .logger = logger,
         .exit = exit,
+        .slot_to_request = if (test_repair_option.value.int) |n| @intCast(n) else null,
     };
 }
 
