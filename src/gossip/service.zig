@@ -127,8 +127,6 @@ pub const GossipStats = struct {
     push_messages_time_to_insert: *Counter,
     push_messages_time_build_prune: *Counter,
 
-    packets_verified_loop_time: *Counter,
-
     table_n_values: *Counter,
     table_n_pubkeys: *Counter,
 
@@ -142,7 +140,6 @@ pub const GossipStats = struct {
             var field_counter: *Counter = try registry.getOrCreateCounter(field.name);
             @field(self, field.name) = field_counter;
         }
-
         return self;
     }
 };
