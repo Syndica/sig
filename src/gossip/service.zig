@@ -233,7 +233,6 @@ pub const GossipService = struct {
             buff_lock.unlock();
             self.packet_incoming_channel.deinit();
         }
-        self.verified_incoming_channel.deinit();
         {
             var buff_lock = self.packet_outgoing_channel.buffer.lock();
             var buff: *std.ArrayList(PacketBatch) = buff_lock.mut();
@@ -241,6 +240,7 @@ pub const GossipService = struct {
             buff_lock.unlock();
             self.packet_outgoing_channel.deinit();
         }
+        self.verified_incoming_channel.deinit();
 
         self.entrypoints.deinit();
         self.allocator.destroy(self.thread_pool);
@@ -424,6 +424,10 @@ pub const GossipService = struct {
                 const batch = Batch.from(&task_ptr.task);
                 self.thread_pool.schedule(batch);
             }
+        }
+
+        for (tasks) |*task| {
+            task.awaitAndReset();
         }
 
         self.logger.debugf("verify_packets loop closed", .{});
@@ -1941,12 +1945,20 @@ pub const GossipStats = struct {
 
     const StatsToLog = struct {
         gossip_packets_received: u64 = 0,
+
         ping_messages_recv: u64 = 0,
         pong_messages_recv: u64 = 0,
         push_messages_recv: u64 = 0,
         pull_requests_recv: u64 = 0,
         pull_responses_recv: u64 = 0,
         prune_messages_recv: u64 = 0,
+
+        ping_messages_sent: u64 = 0,
+        pong_messages_sent: u64 = 0,
+        push_messages_sent: u64 = 0,
+        pull_requests_sent: u64 = 0,
+        pull_responses_sent: u64 = 0,
+        prune_messages_sent: u64 = 0,
     };
 
     const Self = @This();
@@ -1964,6 +1976,14 @@ pub const GossipStats = struct {
 
         self._logging_fields = .{ .logger = logger };
         return self;
+    }
+
+    pub fn reset(self: *Self) void {
+        inline for (@typeInfo(GossipStats).Struct.fields) |field| {
+            if (field.name[0] != '_') {
+                @field(self, field.name).reset();
+            }
+        }
     }
 
     /// If log_interval_millis has passed since the last log,
@@ -1984,7 +2004,15 @@ pub const GossipStats = struct {
             .pull_requests_recv = self.pull_requests_recv.get(),
             .pull_responses_recv = self.pull_responses_recv.get(),
             .prune_messages_recv = self.prune_messages_recv.get(),
+
+            .ping_messages_sent = self.ping_messages_sent.get(),
+            .pong_messages_sent = self.pong_messages_sent.get(),
+            .push_messages_sent = self.push_messages_sent.get(),
+            .pull_requests_sent = self.pull_requests_sent.get(),
+            .pull_responses_sent = self.pull_responses_sent.get(),
+            .prune_messages_sent = self.prune_messages_sent.get(),
         };
+
         logging_fields.logger.infof(
             "gossip: recv {}: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
             .{
@@ -1995,6 +2023,17 @@ pub const GossipStats = struct {
                 current_stats.pull_requests_recv - logging_fields.last_logged_snapshot.pull_requests_recv,
                 current_stats.pull_responses_recv - logging_fields.last_logged_snapshot.pull_responses_recv,
                 current_stats.prune_messages_recv - logging_fields.last_logged_snapshot.prune_messages_recv,
+            },
+        );
+        logging_fields.logger.infof(
+            "gossip: sent: {} ping, {} pong, {} push, {} pull request, {} pull response, {} prune",
+            .{
+                current_stats.ping_messages_sent - logging_fields.last_logged_snapshot.ping_messages_sent,
+                current_stats.pong_messages_sent - logging_fields.last_logged_snapshot.pong_messages_sent,
+                current_stats.push_messages_sent - logging_fields.last_logged_snapshot.push_messages_sent,
+                current_stats.pull_requests_sent - logging_fields.last_logged_snapshot.pull_requests_sent,
+                current_stats.pull_responses_sent - logging_fields.last_logged_snapshot.pull_responses_sent,
+                current_stats.prune_messages_sent - logging_fields.last_logged_snapshot.prune_messages_sent,
             },
         );
         self._logging_fields.last_logged_snapshot = current_stats;
@@ -2820,45 +2859,44 @@ pub const BenchmarkGossipServiceGeneral = struct {
     pub const max_iterations = 1;
 
     pub const MessageTypes = struct {
-        ping: bool = true,
-        pong: bool = true,
-        push_message: bool = true,
-        pull_request: bool = true,
-        pull_response: bool = true,
-        prune_message: bool = true,
+        n_ping: usize,
+        n_push_message: usize,
+        n_pull_response: usize,
     };
 
     pub const BenchmarkArgs = struct {
-        num_message_iterations: usize,
         name: []const u8 = "",
-        message_types: MessageTypes,
+        message_counts: MessageTypes,
     };
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .num_message_iterations = 1_000,
-            .name = "1k_msgs",
-            .message_types = .{
-                .ping = true,
-                .pong = false,
-                .push_message = false,
-                .pull_request = false,
-                .pull_response = false,
-                .prune_message = false,
+            .name = "10k_ping_msgs",
+            .message_counts = .{
+                .n_ping = 10_000,
+                .n_push_message = 0,
+                .n_pull_response = 0,
             },
         },
-        // .{
-        //     .num_message_iterations = 5_000,
-        //     .name = "5k_msgs",
-        // },
-        // .{
-        //     .num_message_iterations = 10_000,
-        //     .name = "10k_msgs",
-        // },
+        .{
+            .name = "10k_push_msgs",
+            .message_counts = .{
+                .n_ping = 0,
+                .n_push_message = 10_000,
+                .n_pull_response = 0,
+            },
+        },
+        .{
+            .name = "10k_pull_resp_msgs",
+            .message_counts = .{
+                .n_ping = 0,
+                .n_push_message = 0,
+                .n_pull_response = 10_000,
+            },
+        },
     };
 
     pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !usize {
-        const num_message_iterations = bench_args.num_message_iterations;
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
@@ -2871,6 +2909,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         // var logger = Logger.init(allocator, .debug);
         // defer logger.deinit();
         // logger.spawn();
+
         var logger: Logger = .noop;
 
         // process incoming packets/messsages
@@ -2885,95 +2924,114 @@ pub const BenchmarkGossipServiceGeneral = struct {
         );
         gossip_service.echo_server.kill(); // we dont need this rn
         defer gossip_service.deinit();
+        // reset stats
+        defer gossip_service.stats.reset();
 
-        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{ &gossip_service, true, false });
-
-        // send incomign packets/messages
-        var outgoing_channel = Channel(ArrayList(Packet)).init(allocator, 10_000);
-        defer outgoing_channel.deinit();
-
-        var socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
-        socket.bindToPort(8889) catch return error.SocketBindFailed;
-        socket.setReadTimeout(1000000) catch return error.SocketSetTimeoutFailed; // 1 second
-        defer {
-            socket.close();
-        }
-
-        var sender_exit = AtomicBool.init(false);
-        var outgoing_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
-            &socket,
-            outgoing_channel,
-            &sender_exit,
-            logger,
+        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{
+            &gossip_service,
+            true, // dont build any outgoing messages
+            false,
         });
+
+        const outgoing_channel = gossip_service.packet_incoming_channel;
 
         // generate messages
         var rand = std.rand.DefaultPrng.init(19);
         var rng = rand.random();
-        var sender_keypair = try KeyPair.create(null);
 
         var msg_sent: usize = 0;
+        msg_sent += bench_args.message_counts.n_ping;
 
-        while (msg_sent < num_message_iterations) {
-            var packet_batch = try ArrayList(Packet).initCapacity(allocator, 10);
+        var packet_batch = try ArrayList(Packet).initCapacity(
+            allocator,
+            bench_args.message_counts.n_ping +
+                bench_args.message_counts.n_push_message +
+                bench_args.message_counts.n_pull_response,
+        );
 
-            if (bench_args.message_types.ping) {
-                // send a ping message
-                var packet = try fuzz.randomPingPacket(rng, &keypair, endpoint);
-                try packet_batch.append(packet);
-                msg_sent += 1;
-            }
-
-            if (bench_args.message_types.pong) {
-                // send a pong message
-                var packet = try fuzz.randomPongPacket(rng, &keypair, endpoint);
-                try packet_batch.append(packet);
-                msg_sent += 1;
-            }
-
-            if (bench_args.message_types.push_message) {
-                // send a push message
-                var packets = try fuzz.randomPushMessage(rng, &keypair, address.toEndpoint());
-                try outgoing_channel.send(packets);
-                msg_sent += packets.items.len;
-            }
-
-            if (bench_args.message_types.pull_response) {
-                // send a pull response
-                var packets = try fuzz.randomPullResponse(rng, &keypair, address.toEndpoint());
-                try outgoing_channel.send(packets);
-                msg_sent += packets.items.len;
-            }
-
-            if (bench_args.message_types.prune_message) {
-                // send a pull request
-                var packet = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
-                try packet_batch.append(packet);
-                msg_sent += 1;
-            }
-
-            try outgoing_channel.send(packet_batch);
+        for (0..bench_args.message_counts.n_ping) |_| {
+            // send a ping message
+            var packet = try fuzz.randomPingPacket(rng, &keypair, endpoint);
+            try packet_batch.append(packet);
         }
+
+        for (0..bench_args.message_counts.n_push_message) |_| {
+            // send a push message
+            var packets = try fuzz.randomPushMessage(
+                rng,
+                &keypair,
+                address.toEndpoint(),
+            );
+            defer packets.deinit();
+            msg_sent += packets.items.len;
+            try packet_batch.appendSlice(packets.items);
+        }
+
+        for (0..bench_args.message_counts.n_pull_response) |_| {
+            // send a pull response
+            var packets = try fuzz.randomPullResponse(
+                rng,
+                &keypair,
+                address.toEndpoint(),
+            );
+            defer packets.deinit();
+            msg_sent += packets.items.len;
+            try packet_batch.appendSlice(packets.items);
+        }
+
+        // send all messages in one go
+        try outgoing_channel.send(packet_batch);
 
         // wait for all messages to be processed
         var timer = try std.time.Timer.start();
         while (true) {
-            const v = gossip_service.messages_processed.load(std.atomic.Ordering.Acquire);
+            const v = gossip_service.stats.gossip_packets_processed.get();
             if (v >= msg_sent) {
                 break;
             }
+            std.debug.print("{d} messages processed\r", .{v});
         }
         const elapsed = timer.read();
+        std.debug.print("\r", .{});
 
         exit.store(true, std.atomic.Ordering.Unordered);
         packet_handle.join();
 
-        sender_exit.store(true, std.atomic.Ordering.Unordered);
-        outgoing_handle.join();
-
         return elapsed;
     }
 };
+
+// // send incomign packets/messages
+// var sender_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8889);
+// const sender_keypair = try KeyPair.create(null);
+// var sender_contact_info_lg = LegacyContactInfo.default(
+//     Pubkey.fromPublicKey(&sender_keypair.public_key),
+// );
+// sender_contact_info_lg.gossip = sender_address;
+// sender_contact_info_lg.shred_version = 0; // !
+
+// const sender_contact_info = try sender_contact_info_lg.toContactInfo(allocator);
+// var gossip_service_sender = try GossipService.init(
+//     allocator,
+//     sender_contact_info,
+//     sender_keypair,
+//     null,
+//     &exit,
+//     logger,
+// );
+// defer gossip_service_sender.deinit();
+
+// var outgoing_channel = gossip_service_sender.packet_outgoing_channel;
+
+// var sender_handle = try Thread.spawn(.{}, GossipService.run, .{
+//     &gossip_service_sender,
+//     true, // dont build any outgoing messages
+//     false,
+// });
+
+// var sender_contact_info_value = try SignedGossipData.initSigned(.{
+//     .LegacyContactInfo = sender_contact_info_lg,
+// }, &sender_keypair);
 
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);

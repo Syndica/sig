@@ -178,7 +178,7 @@ pub fn build(b: *std.Build) void {
             .name = command_info.name,
             .root_source_file = .{ .path = command_info.path },
             .target = target,
-            .optimize = optimize,
+            .optimize = std.builtin.Mode.ReleaseSafe,
             .main_pkg_path = .{ .path = "src" },
         });
 
