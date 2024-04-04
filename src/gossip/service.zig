@@ -237,9 +237,6 @@ pub const GossipService = struct {
 
     stats: *GossipStats,
 
-    // used for benchmarking
-    messages_processed: std.atomic.Atomic(usize) = std.atomic.Atomic(usize).init(0),
-
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
 
     const Self = @This();
@@ -2847,23 +2844,45 @@ pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
 
+    pub const MessageTypes = struct {
+        ping: bool = true,
+        pong: bool = true,
+        push_message: bool = true,
+        pull_request: bool = true,
+        pull_response: bool = true,
+        prune_message: bool = true,
+    };
+
     pub const BenchmarkArgs = struct {
         num_message_iterations: usize,
         name: []const u8 = "",
+        message_types: MessageTypes,
     };
 
-    pub const args = [_]BenchmarkArgs{ .{
-        .num_message_iterations = 1_000,
-        .name = "1k_msgs",
-    }, .{
-        .num_message_iterations = 5_000,
-        .name = "5k_msgs",
-    }, .{
-        .num_message_iterations = 10_000,
-        .name = "10k_msgs",
-    } };
+    pub const args = [_]BenchmarkArgs{
+        .{
+            .num_message_iterations = 1_000,
+            .name = "1k_msgs",
+            .message_types = .{
+                .ping = true,
+                .pong = false,
+                .push_message = false,
+                .pull_request = false,
+                .pull_response = false,
+                .prune_message = false,
+            },
+        },
+        // .{
+        //     .num_message_iterations = 5_000,
+        //     .name = "5k_msgs",
+        // },
+        // .{
+        //     .num_message_iterations = 10_000,
+        //     .name = "10k_msgs",
+        // },
+    };
 
-    pub fn benchmarkGossipServiceProcessMessages(bench_args: BenchmarkArgs) !usize {
+    pub fn benchmarkGossipService(bench_args: BenchmarkArgs) !usize {
         const num_message_iterations = bench_args.num_message_iterations;
         const allocator = std.heap.page_allocator;
         var keypair = try KeyPair.create(null);
@@ -2923,32 +2942,36 @@ pub const BenchmarkGossipServiceGeneral = struct {
         while (msg_sent < num_message_iterations) {
             var packet_batch = try ArrayList(Packet).initCapacity(allocator, 10);
 
-            // send a ping message
-            {
+            if (bench_args.message_types.ping) {
+                // send a ping message
                 var packet = try fuzz.randomPingPacket(rng, &keypair, endpoint);
                 try packet_batch.append(packet);
                 msg_sent += 1;
             }
-            // send a pong message
-            {
+
+            if (bench_args.message_types.pong) {
+                // send a pong message
                 var packet = try fuzz.randomPongPacket(rng, &keypair, endpoint);
                 try packet_batch.append(packet);
                 msg_sent += 1;
             }
-            // send a push message
-            {
+
+            if (bench_args.message_types.push_message) {
+                // send a push message
                 var packets = try fuzz.randomPushMessage(rng, &keypair, address.toEndpoint());
                 try outgoing_channel.send(packets);
                 msg_sent += packets.items.len;
             }
-            // send a pull response
-            {
+
+            if (bench_args.message_types.pull_response) {
+                // send a pull response
                 var packets = try fuzz.randomPullResponse(rng, &keypair, address.toEndpoint());
                 try outgoing_channel.send(packets);
                 msg_sent += packets.items.len;
             }
-            // send a pull request
-            {
+
+            if (bench_args.message_types.prune_message) {
+                // send a pull request
                 var packet = try fuzz.randomPullRequest(allocator, rng, &sender_keypair, address.toEndpoint());
                 try packet_batch.append(packet);
                 msg_sent += 1;
