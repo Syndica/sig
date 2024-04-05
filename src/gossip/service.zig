@@ -70,7 +70,7 @@ pub const MAX_BYTES_PER_PUSH: u64 = PACKET_DATA_SIZE * @as(u64, MAX_PACKETS_PER_
 pub const MAX_PUSH_MESSAGE_PAYLOAD_SIZE: usize = PACKET_DATA_SIZE - 44;
 
 pub const GOSSIP_SLEEP_MILLIS: u64 = 100;
-pub const GOSSIP_PING_CACHE_CAPACITY: usize = 65536;
+pub const GOSSIP_PING_CACHE_CAPACITY: usize = 65_536;
 pub const GOSSIP_PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
 pub const GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
 
@@ -115,7 +115,7 @@ pub const GossipService = struct {
     /// This contact info is mutated by the buildMessages thread, so it must
     /// only be read by that thread, or it needs a synchronization mechanism.
     entrypoints: ArrayList(Entrypoint),
-    ping_cache_rw: RwMux(PingCache),
+    ping_cache_rw: RwMux(*PingCache),
     logger: Logger,
     thread_pool: *ThreadPool,
     echo_server: echo.Server,
@@ -178,6 +178,14 @@ pub const GossipService = struct {
 
         var stats = try GossipStats.init(logger);
 
+        var ping_cache_ptr = try allocator.create(PingCache);
+        ping_cache_ptr.* = try PingCache.init(
+            allocator,
+            GOSSIP_PING_CACHE_TTL_NS,
+            GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS,
+            GOSSIP_PING_CACHE_CAPACITY,
+        );
+
         return Self{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
@@ -194,14 +202,7 @@ pub const GossipService = struct {
             .active_set_rw = RwMux(ActiveSet).init(active_set),
             .failed_pull_hashes_mux = Mux(HashTimeQueue).init(failed_pull_hashes),
             .entrypoints = entrypoint_list,
-            .ping_cache_rw = RwMux(PingCache).init(
-                try PingCache.init(
-                    allocator,
-                    GOSSIP_PING_CACHE_TTL_NS,
-                    GOSSIP_PING_CACHE_RATE_LIMIT_DELAY_NS,
-                    GOSSIP_PING_CACHE_CAPACITY,
-                ),
-            ),
+            .ping_cache_rw = RwMux(*PingCache).init(ping_cache_ptr),
             .echo_server = echo_server,
             .logger = logger,
             .thread_pool = thread_pool,
@@ -3001,37 +3002,143 @@ pub const BenchmarkGossipServiceGeneral = struct {
     }
 };
 
-// // send incomign packets/messages
-// var sender_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8889);
-// const sender_keypair = try KeyPair.create(null);
-// var sender_contact_info_lg = LegacyContactInfo.default(
-//     Pubkey.fromPublicKey(&sender_keypair.public_key),
-// );
-// sender_contact_info_lg.gossip = sender_address;
-// sender_contact_info_lg.shred_version = 0; // !
+/// pull requests require some additional setup to work
+pub const BenchmarkGossipServicePullRequests = struct {
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
 
-// const sender_contact_info = try sender_contact_info_lg.toContactInfo(allocator);
-// var gossip_service_sender = try GossipService.init(
-//     allocator,
-//     sender_contact_info,
-//     sender_keypair,
-//     null,
-//     &exit,
-//     logger,
-// );
-// defer gossip_service_sender.deinit();
+    pub const BenchmarkArgs = struct {
+        name: []const u8 = "",
+        n_data_populated: usize,
+        n_pull_requests: usize,
+    };
 
-// var outgoing_channel = gossip_service_sender.packet_outgoing_channel;
+    pub const args = [_]BenchmarkArgs{
+        .{
+            .name = "1kdata_1k_pull_reqs",
+            .n_data_populated = 1_000,
+            .n_pull_requests = 1_000,
+        },
+        .{
+            .name = "10kdata_1k_pull_reqs",
+            .n_data_populated = 10_000,
+            .n_pull_requests = 1_000,
+        },
+    };
 
-// var sender_handle = try Thread.spawn(.{}, GossipService.run, .{
-//     &gossip_service_sender,
-//     true, // dont build any outgoing messages
-//     false,
-// });
+    pub fn benchmarkPullRequests(bench_args: BenchmarkArgs) !usize {
+        const allocator = std.heap.page_allocator;
+        var keypair = try KeyPair.create(null);
+        var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
 
-// var sender_contact_info_value = try SignedGossipData.initSigned(.{
-//     .LegacyContactInfo = sender_contact_info_lg,
-// }, &sender_keypair);
+        var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
+        try contact_info.setSocket(SOCKET_TAG_GOSSIP, address);
+
+        // var logger = Logger.init(allocator, .debug);
+        // defer logger.deinit();
+        // logger.spawn();
+
+        var logger: Logger = .noop;
+
+        // process incoming packets/messsages
+        var exit = AtomicBool.init(false);
+
+        var gossip_service = try GossipService.init(
+            allocator,
+            contact_info,
+            keypair,
+            null,
+            &exit,
+            logger,
+        );
+        gossip_service.echo_server.kill(); // we dont need this rn
+        defer gossip_service.deinit();
+        // reset stats
+        defer gossip_service.stats.reset();
+
+        // setup recv peer
+        var recv_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8889);
+        var recv_keypair = try KeyPair.create(null);
+        const recv_pubkey = Pubkey.fromPublicKey(&recv_keypair.public_key);
+
+        var contact_info_recv = ContactInfo.init(allocator, recv_pubkey, 0, 19);
+        try contact_info_recv.setSocket(SOCKET_TAG_GOSSIP, recv_address);
+        var signed_contact_info_recv = try SignedGossipData.initSigned(.{
+            .ContactInfo = contact_info_recv,
+        }, &recv_keypair);
+
+        const now = getWallclockMs();
+        var random = std.rand.DefaultPrng.init(19);
+        var rng = random.random();
+
+        {
+            var ping_cache_rw = gossip_service.ping_cache_rw;
+            var ping_cache_lock = ping_cache_rw.write();
+            var ping_cache: *PingCache = ping_cache_lock.mut();
+            ping_cache._setPong(recv_pubkey, recv_address);
+            ping_cache_lock.unlock();
+        }
+
+        {
+            var table_lock = gossip_service.gossip_table_rw.write();
+            var table: *GossipTable = table_lock.mut();
+            // insert contact info of pull request
+            try table.insert(signed_contact_info_recv, now);
+            // insert all other values
+            for (0..bench_args.n_data_populated) |_| {
+                var value = try SignedGossipData.random(rng, &recv_keypair);
+                try table.insert(value, now);
+            }
+            table_lock.unlock();
+        }
+
+        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{
+            &gossip_service,
+            true, // dont build any outgoing messages
+            false,
+        });
+
+        const outgoing_channel = gossip_service.packet_incoming_channel;
+
+        // generate messages
+        var packet_batch = try ArrayList(Packet).initCapacity(
+            allocator,
+            bench_args.n_pull_requests,
+        );
+        for (0..bench_args.n_pull_requests) |_| {
+            // send a push message
+            var packet = try fuzz.randomPullRequest(
+                allocator,
+                rng,
+                &recv_keypair,
+                address.toEndpoint(),
+            );
+            packet_batch.appendAssumeCapacity(packet);
+        }
+
+        // // send all messages in one go
+        try outgoing_channel.send(packet_batch);
+
+        // wait for all messages to be processed
+        const msg_sent = bench_args.n_pull_requests;
+        var timer = try std.time.Timer.start();
+        while (true) {
+            const v = gossip_service.stats.gossip_packets_processed.get();
+            if (v >= msg_sent) {
+                break;
+            }
+            std.debug.print("{d} messages processed\r", .{v});
+        }
+        const elapsed = timer.read();
+        std.debug.print("\r", .{});
+
+        exit.store(true, std.atomic.Ordering.Unordered);
+        packet_handle.join();
+
+        return elapsed;
+    }
+};
 
 fn localhostTestContactInfo(id: Pubkey) !ContactInfo {
     var contact_info = try LegacyContactInfo.default(id).toContactInfo(std.testing.allocator);

@@ -170,6 +170,7 @@ pub fn build(b: *std.Build) void {
             .name = "benchmark",
             .path = "src/benchmarks.zig",
             .description = "benchmark client",
+            // note: we dont want this in ReleaseSafe always because its harder to debug
         },
     };
 
@@ -178,7 +179,7 @@ pub fn build(b: *std.Build) void {
             .name = command_info.name,
             .root_source_file = .{ .path = command_info.path },
             .target = target,
-            .optimize = std.builtin.Mode.ReleaseSafe,
+            .optimize = optimize,
             .main_pkg_path = .{ .path = "src" },
         });
 
