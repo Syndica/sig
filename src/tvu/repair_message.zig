@@ -47,7 +47,7 @@ pub fn serializeRepairRequest(
 ) ![]u8 {
     const header = RepairRequestHeader{
         .signature = Signature.init(undefined),
-        .sender = try Pubkey.fromBytes(&keypair.public_key.bytes, .{}),
+        .sender = try Pubkey.fromBytes(&keypair.public_key.bytes),
         .recipient = recipient,
         .timestamp = timestamp,
         .nonce = nonce,
@@ -205,7 +205,7 @@ test "tvu.repair_message: signed/serialized RepairRequest is valid" {
         var kp_noise: [32]u8 = undefined;
         rng.bytes(&kp_noise);
         const keypair = try KeyPair.create(kp_noise);
-        const recipient = Pubkey.random(rng, .{ .skip_encoding = true });
+        const recipient = Pubkey.random(rng);
         const timestamp = rng.int(u64);
         const nonce = rng.int(Nonce);
 
@@ -235,8 +235,8 @@ test "tvu.repair_message: RepairRequestHeader serialization round trip" {
 
     const header = RepairRequestHeader{
         .signature = Signature.init(signature),
-        .sender = Pubkey.random(rng.random(), .{ .skip_encoding = true }),
-        .recipient = Pubkey.random(rng.random(), .{ .skip_encoding = true }),
+        .sender = Pubkey.random(rng.random()),
+        .recipient = Pubkey.random(rng.random()),
         .timestamp = 5924,
         .nonce = 123,
     };
@@ -402,8 +402,8 @@ const testHelpers = struct {
 
         return RepairRequestHeader{
             .signature = Signature.init(signature),
-            .sender = Pubkey.random(rng, .{ .skip_encoding = true }),
-            .recipient = Pubkey.random(rng, .{ .skip_encoding = true }),
+            .sender = Pubkey.random(rng),
+            .recipient = Pubkey.random(rng),
             .timestamp = rng.int(u64),
             .nonce = rng.int(u32),
         };
