@@ -26,5 +26,9 @@
             .url = "https://github.com/lun-4/zigdig/archive/2ec407ec3c7f347e747717977958e9ba339eb82f.tar.gz",
             .hash = "1220dfdb3089dfe9a4e4bc1226fcff08d91d0c0853f287d98d8b81270da251790331",
         },
+        .zstd = .{
+            .url = "https://github.com/Syndica/zstd.zig/archive/164d0f8edcf981c5d070f0b6fd0e343ba3abeb92.tar.gz",
+            .hash = "122065be99695710b821bc8d886062ee69e9f97e5673e2a44f4faf00e2cf4b5911db",
+        },
     },
 }

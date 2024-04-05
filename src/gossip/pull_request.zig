@@ -270,7 +270,7 @@ test "gossip.pull_request: test building filters" {
     const rng = rand.random();
 
     for (0..64) |_| {
-        var id = Pubkey.random(rng, .{});
+        var id = Pubkey.random(rng);
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
         var gossip_value = try SignedGossipData.initSigned(.{

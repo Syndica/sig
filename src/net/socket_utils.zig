@@ -185,15 +185,20 @@ pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 3;
     pub const max_iterations = 5;
 
-    pub const args = [_]usize{
-        100_000,
+    pub const BenchmarkArgs = struct {
+        n_packets: usize,
+        name: []const u8 = "",
     };
 
-    pub const arg_names = [_][]const u8{
-        "100k_msgs",
+    pub const args = [_]BenchmarkArgs{
+        BenchmarkArgs{
+            .n_packets = 100_000,
+            .name = "100k_msgs",
+        },
     };
 
-    pub fn benchmarkReadSocket(n_packets: usize) !void {
+    pub fn benchmarkReadSocket(bench_args: BenchmarkArgs) !u64 {
+        const n_packets = bench_args.n_packets;
         const allocator = std.heap.page_allocator;
 
         var channel = Channel(std.ArrayList(Packet)).init(allocator, n_packets);
@@ -212,7 +217,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
-        var timer = std.time.Timer.start() catch unreachable;
+        var timer = try std.time.Timer.start();
 
         for (1..(n_packets * 2 + 1)) |i| {
             rand.fill(&packet_buf);
@@ -230,8 +235,12 @@ pub const BenchmarkPacketProcessing = struct {
         }
 
         recv_handle.join();
+        const elapsed = timer.read();
+
         exit.store(true, std.atomic.Ordering.Unordered);
         handle.join();
+
+        return elapsed;
     }
 };
 

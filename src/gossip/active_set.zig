@@ -160,7 +160,7 @@ test "gossip.active_set: init/deinit" {
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
-    const origin = Pubkey.random(rng.random(), .{});
+    const origin = Pubkey.random(rng.random());
 
     var fanout = try active_set.getFanoutPeers(alloc, origin, &table);
     defer fanout.deinit();

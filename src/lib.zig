@@ -11,10 +11,19 @@ pub const core = struct {
     pub usingnamespace @import("core/transaction.zig");
     pub usingnamespace @import("core/hash.zig");
     pub usingnamespace @import("core/signature.zig");
-    pub usingnamespace @import("core/clock.zig");
+    pub usingnamespace @import("core/time.zig");
     pub usingnamespace @import("core/hard_forks.zig");
     pub usingnamespace @import("core/shred.zig");
-    pub usingnamespace @import("core/genesis_config.zig");
+};
+
+pub const accounts_db = struct {
+    pub usingnamespace @import("accountsdb/db.zig");
+    pub usingnamespace @import("accountsdb/bank.zig");
+    pub usingnamespace @import("accountsdb/accounts_file.zig");
+    pub usingnamespace @import("accountsdb/genesis_config.zig");
+    pub usingnamespace @import("accountsdb/index.zig");
+    pub usingnamespace @import("accountsdb/snapshots.zig");
+    pub usingnamespace @import("accountsdb/sysvars.zig");
 };
 
 pub const gossip = struct {
@@ -62,6 +71,7 @@ pub const trace = struct {
 
 pub const common = struct {
     pub usingnamespace @import("common/lru.zig");
+    pub usingnamespace @import("common/merkle_tree.zig");
 };
 
 pub const bincode = struct {

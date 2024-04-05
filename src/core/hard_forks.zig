@@ -1,7 +1,7 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const allocator = std.mem.Allocator;
-const Slot = @import("clock.zig").Slot;
+const Slot = @import("time.zig").Slot;
 const expect = std.testing.expect;
 const eql = std.mem.eql;
 
