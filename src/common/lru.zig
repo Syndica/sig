@@ -10,8 +10,27 @@ pub const Kind = enum {
     non_locking,
 };
 
-// TODO: allow for passing custom hash context to use in std.ArrayHashMap for performance.
-pub fn LruCache(comptime kind: Kind, comptime K: type, comptime V: type) type {
+pub fn LruCache(
+    comptime kind: Kind,
+    comptime K: type,
+    comptime V: type,
+) type {
+    return LruCacheCustom(kind, K, V, void, struct {
+        fn noop(_: *V, _: void) void {}
+    }.noop);
+}
+
+/// LruCache that allows you to specify a custom deinit function
+/// to call on a node's data when the node is removed.
+///
+/// TODO: allow for passing custom hash context to use in std.ArrayHashMap for performance.
+pub fn LruCacheCustom(
+    comptime kind: Kind,
+    comptime K: type,
+    comptime V: type,
+    comptime DeinitContext: type,
+    comptime deinitFn: fn (*V, DeinitContext) void,
+) type {
     return struct {
         mux: if (kind == .locking) Mutex else void,
         allocator: Allocator,
@@ -19,6 +38,7 @@ pub fn LruCache(comptime kind: Kind, comptime K: type, comptime V: type) type {
         dbl_link_list: TailQueue(LruEntry),
         max_items: usize,
         len: usize = 0,
+        deinit_context: DeinitContext,
 
         const Self = @This();
 
@@ -47,10 +67,21 @@ pub fn LruCache(comptime kind: Kind, comptime K: type, comptime V: type) type {
 
         fn deinitNode(self: *Self, node: *Node) void {
             self.len -= 1;
+            deinitFn(&node.data.value, self.deinit_context);
             self.allocator.destroy(node);
         }
 
-        pub fn init(allocator: Allocator, max_items: usize) error{OutOfMemory}!Self {
+        /// Use if DeinitContext is void.
+        pub fn init(allocator: Allocator, max_items: usize) error{OutOfMemory}!LruCache(kind, K, V) {
+            return LruCache(kind, K, V).initWithContext(allocator, max_items, void{});
+        }
+
+        /// Use if DeinitContext is not void.
+        pub fn initWithContext(
+            allocator: Allocator,
+            max_items: usize,
+            deinit_context: DeinitContext,
+        ) error{OutOfMemory}!Self {
             var hashmap = if (K == []const u8) std.StringArrayHashMap(*Node).init(allocator) else std.AutoArrayHashMap(K, *Node).init(allocator);
             var self = Self{
                 .allocator = allocator,
@@ -58,6 +89,7 @@ pub fn LruCache(comptime kind: Kind, comptime K: type, comptime V: type) type {
                 .dbl_link_list = TailQueue(LruEntry){},
                 .max_items = max_items,
                 .mux = if (kind == .locking) Mutex{} else undefined,
+                .deinit_context = deinit_context,
             };
 
             // pre allocate enough capacity for max items since we will use

@@ -10,7 +10,7 @@ const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const sanitizeWallclock = @import("./message.zig").sanitizeWallclock;
-const PACKET_DATA_SIZE = @import("./packet.zig").PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 
 const network = @import("zig-network");
 const var_int = @import("../utils/varint.zig");
@@ -414,7 +414,7 @@ pub const GossipData = union(enum(u32)) {
     pub fn gossipAddr(self: *const @This()) ?SocketAddr {
         return switch (self.*) {
             .LegacyContactInfo => |*v| if (v.gossip.isUnspecified()) null else v.gossip,
-            .ContactInfo => |*v| v.getSocket(SOCKET_TAG_GOSSIP),
+            .ContactInfo => |*v| v.getSocket(socket_tag.GOSSIP),
             else => null,
         };
     }
@@ -501,32 +501,32 @@ pub const LegacyContactInfo = struct {
     /// call ContactInfo.deinit to free
     pub fn toContactInfo(self: *const LegacyContactInfo, allocator: std.mem.Allocator) !ContactInfo {
         var ci = ContactInfo.init(allocator, self.id, self.wallclock, self.shred_version);
-        try ci.setSocket(SOCKET_TAG_GOSSIP, self.gossip);
-        try ci.setSocket(SOCKET_TAG_TVU, self.tvu);
-        try ci.setSocket(SOCKET_TAG_TVU_FORWARDS, self.tvu_forwards);
-        try ci.setSocket(SOCKET_TAG_REPAIR, self.repair);
-        try ci.setSocket(SOCKET_TAG_TPU, self.tpu);
-        try ci.setSocket(SOCKET_TAG_TPU_FORWARDS, self.tpu_forwards);
-        try ci.setSocket(SOCKET_TAG_TPU_VOTE, self.tpu_vote);
-        try ci.setSocket(SOCKET_TAG_RPC, self.rpc);
-        try ci.setSocket(SOCKET_TAG_RPC_PUBSUB, self.rpc_pubsub);
-        try ci.setSocket(SOCKET_TAG_SERVE_REPAIR, self.serve_repair);
+        try ci.setSocket(socket_tag.GOSSIP, self.gossip);
+        try ci.setSocket(socket_tag.TVU, self.tvu);
+        try ci.setSocket(socket_tag.TVU_FORWARDS, self.tvu_forwards);
+        try ci.setSocket(socket_tag.REPAIR, self.repair);
+        try ci.setSocket(socket_tag.TPU, self.tpu);
+        try ci.setSocket(socket_tag.TPU_FORWARDS, self.tpu_forwards);
+        try ci.setSocket(socket_tag.TPU_VOTE, self.tpu_vote);
+        try ci.setSocket(socket_tag.RPC, self.rpc);
+        try ci.setSocket(socket_tag.RPC_PUBSUB, self.rpc_pubsub);
+        try ci.setSocket(socket_tag.SERVE_REPAIR, self.serve_repair);
         return ci;
     }
 
     pub fn fromContactInfo(ci: *const ContactInfo) LegacyContactInfo {
         return .{
             .id = ci.pubkey,
-            .gossip = ci.getSocket(SOCKET_TAG_GOSSIP) orelse SocketAddr.UNSPECIFIED,
-            .tvu = ci.getSocket(SOCKET_TAG_TVU) orelse SocketAddr.UNSPECIFIED,
-            .tvu_forwards = ci.getSocket(SOCKET_TAG_TVU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
-            .repair = ci.getSocket(SOCKET_TAG_REPAIR) orelse SocketAddr.UNSPECIFIED,
-            .tpu = ci.getSocket(SOCKET_TAG_TPU) orelse SocketAddr.UNSPECIFIED,
-            .tpu_forwards = ci.getSocket(SOCKET_TAG_TPU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
-            .tpu_vote = ci.getSocket(SOCKET_TAG_TPU_VOTE) orelse SocketAddr.UNSPECIFIED,
-            .rpc = ci.getSocket(SOCKET_TAG_RPC) orelse SocketAddr.UNSPECIFIED,
-            .rpc_pubsub = ci.getSocket(SOCKET_TAG_RPC_PUBSUB) orelse SocketAddr.UNSPECIFIED,
-            .serve_repair = ci.getSocket(SOCKET_TAG_SERVE_REPAIR) orelse SocketAddr.UNSPECIFIED,
+            .gossip = ci.getSocket(socket_tag.GOSSIP) orelse SocketAddr.UNSPECIFIED,
+            .tvu = ci.getSocket(socket_tag.TVU) orelse SocketAddr.UNSPECIFIED,
+            .tvu_forwards = ci.getSocket(socket_tag.TVU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .repair = ci.getSocket(socket_tag.REPAIR) orelse SocketAddr.UNSPECIFIED,
+            .tpu = ci.getSocket(socket_tag.TPU) orelse SocketAddr.UNSPECIFIED,
+            .tpu_forwards = ci.getSocket(socket_tag.TPU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .tpu_vote = ci.getSocket(socket_tag.TPU_VOTE) orelse SocketAddr.UNSPECIFIED,
+            .rpc = ci.getSocket(socket_tag.RPC) orelse SocketAddr.UNSPECIFIED,
+            .rpc_pubsub = ci.getSocket(socket_tag.RPC_PUBSUB) orelse SocketAddr.UNSPECIFIED,
+            .serve_repair = ci.getSocket(socket_tag.SERVE_REPAIR) orelse SocketAddr.UNSPECIFIED,
             .wallclock = ci.wallclock,
             .shred_version = ci.shred_version,
         };
@@ -938,20 +938,22 @@ pub const SnapshotHashes = struct {
     }
 };
 
-pub const SOCKET_TAG_GOSSIP: u8 = 0;
-pub const SOCKET_TAG_REPAIR: u8 = 1;
-pub const SOCKET_TAG_RPC: u8 = 2;
-pub const SOCKET_TAG_RPC_PUBSUB: u8 = 3;
-pub const SOCKET_TAG_SERVE_REPAIR: u8 = 4;
-pub const SOCKET_TAG_TPU: u8 = 5;
-pub const SOCKET_TAG_TPU_FORWARDS: u8 = 6;
-pub const SOCKET_TAG_TPU_FORWARDS_QUIC: u8 = 7;
-pub const SOCKET_TAG_TPU_QUIC: u8 = 8;
-pub const SOCKET_TAG_TPU_VOTE: u8 = 9;
-pub const SOCKET_TAG_TVU: u8 = 10;
-pub const SOCKET_TAG_TVU_FORWARDS: u8 = 11;
-pub const SOCKET_TAG_TVU_QUIC: u8 = 12;
-pub const SOCKET_CACHE_SIZE: usize = SOCKET_TAG_TVU_QUIC + 1;
+pub const socket_tag = struct {
+    pub const GOSSIP: u8 = 0;
+    pub const REPAIR: u8 = 1;
+    pub const RPC: u8 = 2;
+    pub const RPC_PUBSUB: u8 = 3;
+    pub const SERVE_REPAIR: u8 = 4;
+    pub const TPU: u8 = 5;
+    pub const TPU_FORWARDS: u8 = 6;
+    pub const TPU_FORWARDS_QUIC: u8 = 7;
+    pub const TPU_QUIC: u8 = 8;
+    pub const TPU_VOTE: u8 = 9;
+    pub const TVU: u8 = 10;
+    pub const TVU_FORWARDS: u8 = 11;
+    pub const TVU_QUIC: u8 = 12;
+};
+pub const SOCKET_CACHE_SIZE: usize = socket_tag.TVU_QUIC + 1;
 
 pub const ContactInfo = struct {
     pubkey: Pubkey,
@@ -984,7 +986,7 @@ pub const ContactInfo = struct {
 
     pub fn initSpy(allocator: std.mem.Allocator, id: Pubkey, gossip_socket_addr: SocketAddr, shred_version: u16) !Self {
         var contact_info = Self.init(allocator, id, @intCast(std.time.microTimestamp()), shred_version);
-        try contact_info.setSocket(SOCKET_TAG_GOSSIP, gossip_socket_addr);
+        try contact_info.setSocket(socket_tag.GOSSIP, gossip_socket_addr);
         return contact_info;
     }
 
@@ -1254,12 +1256,12 @@ test "gossip.data: set & get socket on contact info" {
 
     var ci = ContactInfo.init(testing.allocator, Pubkey.random(rng), @as(u64, @intCast(std.time.microTimestamp())), 0);
     defer ci.deinit();
-    try ci.setSocket(SOCKET_TAG_RPC, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
+    try ci.setSocket(socket_tag.RPC, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899));
 
-    var set_socket = ci.getSocket(SOCKET_TAG_RPC);
+    var set_socket = ci.getSocket(socket_tag.RPC);
     try testing.expect(set_socket.?.eql(&SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899)));
     try testing.expect(ci.addrs.items[0].eql(&IpAddr.newIpv4(127, 0, 0, 1)));
-    try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(SOCKET_TAG_RPC, 0, 8899)));
+    try testing.expect(ci.sockets.items[0].eql(&SocketEntry.init(socket_tag.RPC, 0, 8899)));
 }
 
 test "gossip.data: contact info bincode serialize matches rust bincode" {
