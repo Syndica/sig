@@ -15,7 +15,7 @@ const _gossip_data = @import("data.zig");
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const SignedGossipData = _gossip_data.SignedGossipData;
 const ContactInfo = _gossip_data.ContactInfo;
-const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const socket_tag = _gossip_data.socket_tag;
 const AtomicBool = std.atomic.Atomic(bool);
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -26,8 +26,8 @@ const getWallclockMs = @import("data.zig").getWallclockMs;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
-const Packet = @import("packet.zig").Packet;
-const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
+const Packet = @import("../net/packet.zig").Packet;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;
@@ -299,7 +299,7 @@ pub fn main() !void {
 
     var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
-    try fuzz_contact_info.setSocket(SOCKET_TAG_GOSSIP, fuzz_address);
+    try fuzz_contact_info.setSocket(socket_tag.GOSSIP, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(
