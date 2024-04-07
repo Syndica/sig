@@ -248,7 +248,12 @@ pub const GossipService = struct {
 
         deinitRwMux(&self.gossip_table_rw);
         deinitRwMux(&self.active_set_rw);
-        deinitRwMux(&self.ping_cache_rw);
+        {
+            var lg = self.ping_cache_rw.write();
+            lg.mut().deinit();
+            self.allocator.destroy(lg.mut());
+            lg.unlock();
+        }
         deinitMux(&self.push_msg_queue_mux);
         deinitMux(&self.failed_pull_hashes_mux);
     }
