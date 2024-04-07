@@ -163,7 +163,7 @@ fn testSender(chan: *BlockChannel, total_send: usize) void {
     chan.close();
 }
 
-const Packet = @import("../gossip/packet.zig").Packet;
+const Packet = @import("../net/packet.zig").Packet;
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
@@ -199,30 +199,38 @@ test "sync.channel: channel works properly" {
 pub const BenchmarkChannel = struct {
     pub const min_iterations = 5;
     pub const max_iterations = 5;
+
     const send_count: usize = 500_000;
 
-    pub fn benchmarkChannel() !void {
+    pub fn benchmarkChannel() !u64 {
         const allocator = std.heap.page_allocator;
         var channel = BlockChannel.init(allocator, send_count / 2);
         defer channel.deinit();
 
         var recv_count: Atomic(usize) = Atomic(usize).init(0);
 
+        var timer = try std.time.Timer.start();
         var join2 = try std.Thread.spawn(.{}, testSender, .{ channel, send_count });
         var join1 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 1 });
-        join1.join();
+
         join2.join();
+        join1.join();
+
+        return timer.read();
     }
 
-    pub fn benchmarkPacketChannel() !void {
+    pub fn benchmarkPacketChannel() !u64 {
         const allocator = std.heap.page_allocator;
         var channel = Channel(Packet).init(allocator, send_count / 2);
         defer channel.deinit();
 
+        var timer = try std.time.Timer.start();
         var join1 = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, send_count });
         var join2 = try std.Thread.spawn(.{}, testPacketSender, .{ channel, send_count });
 
         join1.join();
         join2.join();
+
+        return timer.read();
     }
 };
