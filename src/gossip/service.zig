@@ -3038,7 +3038,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
 
         var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
-        try contact_info.setSocket(SOCKET_TAG_GOSSIP, address);
+        try contact_info.setSocket(socket_tag.GOSSIP, address);
 
         // var logger = Logger.init(allocator, .debug);
         // defer logger.deinit();
@@ -3068,7 +3068,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         const recv_pubkey = Pubkey.fromPublicKey(&recv_keypair.public_key);
 
         var contact_info_recv = ContactInfo.init(allocator, recv_pubkey, 0, 19);
-        try contact_info_recv.setSocket(SOCKET_TAG_GOSSIP, recv_address);
+        try contact_info_recv.setSocket(socket_tag.GOSSIP, recv_address);
         var signed_contact_info_recv = try SignedGossipData.initSigned(.{
             .ContactInfo = contact_info_recv,
         }, &recv_keypair);
