@@ -321,7 +321,7 @@ pub const AccountsDB = struct {
             file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
 
             if (file_count % 100 == 0 or (file_names.len - file_count) < 100) {
-                printTimeEstimate(&timer, file_names.len, file_count, "reading account files", null);
+                printTimeEstimate(self.logger, &timer, file_names.len, file_count, "reading account files", null);
             }
         }
 
@@ -349,7 +349,7 @@ pub const AccountsDB = struct {
             _ = self.account_index.indexRefIfNotDuplicateSlot(ref);
             // NOTE: PERF: make sure this doesnt lead to degration due to stderr locks
             if (ref_count % 1_000_000 == 0 or (refs_ptr.items.len - ref_count) < 50_000) {
-                printTimeEstimate(&timer, refs_ptr.items.len, ref_count, "generating accounts index", null);
+                printTimeEstimate(self.logger, &timer, refs_ptr.items.len, ref_count, "generating accounts index", null);
             }
         }
     }
@@ -365,6 +365,7 @@ pub const AccountsDB = struct {
             self.allocator,
             combineThreadIndexesMultiThread,
             .{
+                self.logger,
                 &self.account_index,
                 thread_dbs,
             },
@@ -409,6 +410,7 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn combineThreadIndexesMultiThread(
+        logger: Logger,
         index: *AccountIndex,
         thread_dbs: []AccountsDB,
         // task specific
@@ -445,7 +447,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            printTimeEstimate(&timer, total_bins, iteration_count, "combining thread indexes", null);
+            printTimeEstimate(logger, &timer, total_bins, iteration_count, "combining thread indexes", null);
         }
     }
 
@@ -681,7 +683,7 @@ pub const AccountsDB = struct {
                 local_total_lamports += lamports;
             }
 
-            printTimeEstimate(&timer, thread_bins.len, count, "gathering account hashes", null);
+            printTimeEstimate(self.logger, &timer, thread_bins.len, count, "gathering account hashes", null);
         }
         total_lamports.* = local_total_lamports;
     }
@@ -942,6 +944,7 @@ pub const AccountStorage = struct {
 fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
     var allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
 
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{});
@@ -949,6 +952,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     // unpack both snapshots to get the acccount files
     try parallelUnpackZstdTarBall(
         allocator,
+        logger,
         "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
         dir,
         1,
@@ -956,6 +960,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     );
     try parallelUnpackZstdTarBall(
         allocator,
+        logger,
         "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
         dir,
         1,
@@ -982,7 +987,6 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     }
 
     const snapshot = try snapshots.all_fields.collapse();
-    var logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .n_index_bins = 4,
@@ -1096,7 +1100,7 @@ test "core.accounts_db: load clock sysvar" {
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1702587915,
     };
-    std.debug.print("clock: {}\n", .{clock});
+    // std.debug.print("clock: {}\n", .{clock});
     try std.testing.expectEqual(clock, expected_clock);
 }
 

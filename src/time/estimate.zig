@@ -1,7 +1,11 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
+
+const Logger = sig.trace.Logger;
 
 // TODO: change to writer interface when logger has improved
 pub fn printTimeEstimate(
+    logger: Logger,
     // timer should be started at the beginning of the loop
     timer: *std.time.Timer,
     total: usize,
@@ -11,7 +15,7 @@ pub fn printTimeEstimate(
 ) void {
     if (i == 0 or total == 0) return;
     if (i > total) {
-        std.debug.print("{s}: {d}/{d} (?%) (time left: ...) (elp: {s})\r", .{
+        logger.infof("{s}: {d}/{d} (?%) (time left: ...) (elp: {s})\r", .{
             name,
             i,
             total,
@@ -28,7 +32,7 @@ pub fn printTimeEstimate(
     const ns_left = ns_per_vec * left;
 
     if (other_info) |info| {
-        std.debug.print("{s}: {d}/{d} ({d}%) {s} (time left: {s}) (elp: {s})\r", .{
+        logger.infof("{s}: {d}/{d} ({d}%) {s} (time left: {s}) (elp: {s})\r", .{
             name,
             i,
             total,
@@ -38,7 +42,7 @@ pub fn printTimeEstimate(
             std.fmt.fmtDuration(timer.read()),
         });
     } else {
-        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {s}) (elp: {s})\r", .{
+        logger.infof("{s}: {d}/{d} ({d}%) (time left: {s}) (elp: {s})\r", .{
             name,
             i,
             total,

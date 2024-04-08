@@ -14,6 +14,7 @@ const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/time.zig").Slot;
 const Epoch = @import("../core/time.zig").Epoch;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const Logger = @import("../trace/log.zig").Logger;
 const bincode = @import("../bincode/bincode.zig");
 const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
@@ -981,6 +982,7 @@ pub const AllSnapshotFields = struct {
 /// unpacks a .tar.zstd file into the given directory
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
+    logger: Logger,
     path: []const u8,
     output_dir: std.fs.Dir,
     n_threads: usize,
@@ -1003,6 +1005,7 @@ pub fn parallelUnpackZstdTarBall(
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
     try parallelUntarToFileSystem(
         allocator,
+        logger,
         output_dir,
         tar_stream.reader(),
         n_threads,
