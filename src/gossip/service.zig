@@ -2864,7 +2864,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
 
-    pub const MessageTypes = struct {
+    pub const MessageCounts = struct {
         n_ping: usize,
         n_push_message: usize,
         n_pull_response: usize,
@@ -2872,7 +2872,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
     pub const BenchmarkArgs = struct {
         name: []const u8 = "",
-        message_counts: MessageTypes,
+        message_counts: MessageCounts,
     };
 
     pub const args = [_]BenchmarkArgs{
@@ -3020,12 +3020,12 @@ pub const BenchmarkGossipServicePullRequests = struct {
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "1kdata_1k_pull_reqs",
+            .name = "1k_data_1k_pull_reqs",
             .n_data_populated = 1_000,
             .n_pull_requests = 1_000,
         },
         .{
-            .name = "10kdata_1k_pull_reqs",
+            .name = "10k_data_1k_pull_reqs",
             .n_data_populated = 10_000,
             .n_pull_requests = 1_000,
         },
@@ -3112,7 +3112,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
             bench_args.n_pull_requests,
         );
         for (0..bench_args.n_pull_requests) |_| {
-            // send a push message
             var packet = try fuzz.randomPullRequest(
                 allocator,
                 rng,
@@ -3122,7 +3121,6 @@ pub const BenchmarkGossipServicePullRequests = struct {
             packet_batch.appendAssumeCapacity(packet);
         }
 
-        // // send all messages in one go
         try outgoing_channel.send(packet_batch);
 
         // wait for all messages to be processed
