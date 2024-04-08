@@ -296,6 +296,19 @@ const DownloadProgress = struct {
     }
 };
 
+fn checkCode(code: curl.libcurlc.CURLcode) !void {
+    if (code == curl.libcurlc.CURLE_OK) {
+        return;
+    }
+    // https://curl.se/libcurl/c/libcurl-errors.html
+    std.log.debug("curl err code:{d}, msg:{s}\n", .{ code, curl.libcurlc.curl_easy_strerror(code) });
+    return error.Unexpected;
+}
+
+pub fn setNoBody(self: curl.Easy, no_body: bool) !void {
+    try checkCode(curl.libcurlc.curl_easy_setopt(self.handle, curl.libcurlc.CURLOPT_NOBODY, @as(c_long, @intFromBool(no_body))));
+}
+
 pub fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -308,7 +321,7 @@ pub fn downloadFile(
 
     try easy.setUrl(url);
     try easy.setMethod(.HEAD);
-    try easy.setNoBody(true);
+    try setNoBody(easy, true);
     var head_resp = easy.perform() catch {
         return error.HeaderRequestFailed;
     };
@@ -329,7 +342,8 @@ pub fn downloadFile(
         download_size,
         min_mb_per_second,
     );
-    try easy.setNoBody(false); // full download
+    
+    try setNoBody(easy, false); // full download
     try easy.setUrl(url);
     try easy.setMethod(.GET);
     try easy.setWritedata(&download_progress);
