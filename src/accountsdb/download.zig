@@ -296,17 +296,17 @@ const DownloadProgress = struct {
     }
 };
 
-fn checkCode(code: curl.libcurlc.CURLcode) !void {
-    if (code == curl.libcurlc.CURLE_OK) {
+fn checkCode(code: curl.libcurl.CURLcode) !void {
+    if (code == curl.libcurl.CURLE_OK) {
         return;
     }
     // https://curl.se/libcurl/c/libcurl-errors.html
-    std.log.debug("curl err code:{d}, msg:{s}\n", .{ code, curl.libcurlc.curl_easy_strerror(code) });
+    std.log.debug("curl err code:{d}, msg:{s}\n", .{ code, curl.libcurl.curl_easy_strerror(code) });
     return error.Unexpected;
 }
 
 pub fn setNoBody(self: curl.Easy, no_body: bool) !void {
-    try checkCode(curl.libcurlc.curl_easy_setopt(self.handle, curl.libcurlc.CURLOPT_NOBODY, @as(c_long, @intFromBool(no_body))));
+    try checkCode(curl.libcurl.curl_easy_setopt(self.handle, curl.libcurl.CURLOPT_NOBODY, @as(c_long, @intFromBool(no_body))));
 }
 
 pub fn downloadFile(
