@@ -1541,7 +1541,7 @@ test "gossip.data: sanitize valid SnapshotHashes works" {
     var rand = std.rand.DefaultPrng.init(23523413);
     const rng = rand.random();
     var instance = SnapshotHashes.random(rng);
-    instance.full[0] = 1000;
+    instance.full.slot = 1000;
     const data = GossipData{ .SnapshotHashes = instance };
     try data.sanitize();
 }
@@ -1550,7 +1550,7 @@ test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
     var instance = SnapshotHashes.random(rng);
-    instance.full[0] = 1_000_000_000_487_283;
+    instance.full.slot = 1_000_000_000_487_283;
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
@@ -1558,7 +1558,7 @@ test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
 test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
-    var incremental: [1]struct { Slot, Hash } = .{.{ 1_000_000_000_487_283, Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.default() }};
     var instance = SnapshotHashes.random(rng);
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
@@ -1568,9 +1568,9 @@ test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
 test "gossip.data: sanitize SnapshotHashes full > incremental has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
-    var incremental: [1]struct { Slot, Hash } = .{.{ 1, Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.default() }};
     var instance = SnapshotHashes.random(rng);
-    instance.full[0] = 2;
+    instance.full.slot = 2;
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
