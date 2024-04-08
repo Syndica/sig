@@ -10,9 +10,6 @@ const setReadTimeout = lib.net.setReadTimeout;
 const Logger = lib.trace.Logger;
 const socket_tag = lib.gossip.socket_tag;
 
-// TODO: make cli flag
-const MIN_MB_PER_SEC: usize = 10;
-
 const PeerSnapshotHash = struct {
     contact_info: ContactInfo,
     full_snapshot: SlotAndHash,
@@ -25,7 +22,10 @@ pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
     logger: Logger,
     gossip_service: *GossipService,
+    min_mb_per_sec: usize,
 ) !void {
+    logger.infof("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
+
     const my_contact_info = gossip_service.my_contact_info;
     const my_pubkey = my_contact_info.pubkey;
 
@@ -136,9 +136,10 @@ pub fn downloadSnapshotsFromGossip(
             logger.infof("downloading full_snapshot from: {s}", .{snapshot_url});
             var success = downloadFile(
                 allocator,
+                logger,
                 snapshot_url,
                 snapshot_filename,
-                MIN_MB_PER_SEC,
+                min_mb_per_sec,
             ) catch |err| {
                 logger.infof("failed to download full_snapshot: {s}", .{@errorName(err)});
                 try slow_peer_pubkeys.append(peer.contact_info.pubkey);
@@ -170,7 +171,7 @@ pub fn downloadSnapshotsFromGossip(
                 logger.infof("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
                 _ = downloadFile(
                     allocator,
-                    // try std.Uri.parse(inc_snapshot_url),
+                    logger,
                     inc_snapshot_url,
                     inc_snapshot_filename,
                     // NOTE: no min limit (we already downloaded the full snapshot at a good speed so this should be ok)
@@ -195,16 +196,24 @@ const DownloadProgress = struct {
     mmap: []align(std.mem.page_size) u8,
     download_size: usize,
     min_mb_per_second: ?usize,
+    logger: Logger,
 
     total_timer: std.time.Timer,
     mb_timer: std.time.Timer,
+    progress_timer: std.time.Timer,
     bytes_read: usize = 0,
     file_memory_index: usize = 0,
     has_checked_speed: bool = false,
+    last_log_ts: usize = 0,
 
     const Self = @This();
 
-    pub fn init(filename: []const u8, download_size: usize, min_mb_per_second: ?usize) !Self {
+    pub fn init(
+        logger: Logger,
+        filename: []const u8,
+        download_size: usize,
+        min_mb_per_second: ?usize,
+    ) !Self {
         var file = try std.fs.cwd().createFile(filename, .{ .read = true });
         defer file.close();
 
@@ -223,11 +232,13 @@ const DownloadProgress = struct {
         );
 
         return .{
+            .logger = logger,
             .mmap = file_memory,
             .download_size = download_size,
             .min_mb_per_second = min_mb_per_second,
             .total_timer = try std.time.Timer.start(),
             .mb_timer = try std.time.Timer.start(),
+            .progress_timer = try std.time.Timer.start(),
         };
     }
 
@@ -258,11 +269,14 @@ const DownloadProgress = struct {
             const time_left_ns = mb_left * ns_per_mb;
             const mb_per_second = mb_read / elapsed_sec;
 
-            std.debug.print("{d}% done ({d} mb/s) (time left: {d})\r", .{
-                self.bytes_read * 100 / self.download_size,
-                mb_per_second,
-                std.fmt.fmtDuration(time_left_ns),
-            });
+            if (self.progress_timer.read() > 30 * std.time.ns_per_s) {
+                self.logger.infof("[download progress]: {d}% done ({d} MB/s) (time left: {d})", .{
+                    self.bytes_read * 100 / self.download_size,
+                    mb_per_second,
+                    std.fmt.fmtDuration(time_left_ns),
+                });
+                self.progress_timer.reset();
+            }
 
             const total_time_seconds = self.total_timer.read() / std.time.ns_per_s;
             const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed and total_time_seconds > 15;
@@ -271,9 +285,10 @@ const DownloadProgress = struct {
                 self.has_checked_speed = true;
                 if (mb_per_second < self.min_mb_per_second.?) {
                     // not fast enough => abort
+                    self.logger.infof("download speed is too slow ({d} MB/s) -- disconnecting", .{mb_per_second});
                     return 0;
                 } else {
-                    std.debug.print("download speed is ok -- maintaining connection\r", .{});
+                    self.logger.infof("download speed is ok ({d} MB/s) -- maintaining connection\r", .{mb_per_second});
                 }
             }
         }
@@ -283,6 +298,7 @@ const DownloadProgress = struct {
 
 pub fn downloadFile(
     allocator: std.mem.Allocator,
+    logger: Logger,
     url: [:0]const u8,
     filename: []const u8,
     min_mb_per_second: ?usize,
@@ -293,18 +309,22 @@ pub fn downloadFile(
     try easy.setUrl(url);
     try easy.setMethod(.HEAD);
     try easy.setNoBody(true);
-    var head_resp = try easy.perform();
+    var head_resp = easy.perform() catch {
+        return error.HeaderRequestFailed;
+    };
 
     var download_size: usize = 0;
     if (try head_resp.getHeader("content-length")) |content_length| {
         download_size = try std.fmt.parseInt(usize, content_length.get(), 10);
     } else {
+        logger.debugf("header request didnt have content-length...", .{});
         return error.NoContentLength;
     }
 
     // timeout will need to be larger
-    easy.timeout_ms = std.time.ms_per_hour;
+    easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
+        logger,
         filename,
         download_size,
         min_mb_per_second,

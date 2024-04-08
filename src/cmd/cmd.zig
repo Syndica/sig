@@ -184,6 +184,14 @@ var snapshot_dir_option = cli.Option{
     .value_name = "snapshot_dir",
 };
 
+var min_snapshot_download_speed_mb_option = cli.Option{
+    .long_name = "min-snapshot-download-speed",
+    .help = "minimum download speed of full snapshots in megabytes per second",
+    .value = cli.OptionValue{ .int = 20 },
+    .required = false,
+    .value_name = "min_snapshot_download_speed_mb",
+};
+
 var app = &cli.App{
     .name = "sig",
     .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
@@ -247,6 +255,7 @@ var app = &cli.App{
                 &gossip_host.option,
                 &gossip_port_option,
                 &gossip_entrypoints_option,
+                &min_snapshot_download_speed_mb_option,
             },
         },
         &cli.Command{
@@ -266,38 +275,6 @@ var app = &cli.App{
         },
     },
 };
-
-fn downloadSnapshot(_: []const []const u8) !void {
-    var logger = try spawnLogger();
-    defer logger.deinit();
-
-    var exit = std.atomic.Atomic(bool).init(false);
-    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
-    const entrypoints = try getEntrypoints(logger);
-    defer entrypoints.deinit();
-
-    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
-
-    var gossip_service = try initGossip(
-        .noop,
-        my_keypair,
-        &exit,
-        entrypoints,
-        my_data.shred_version,
-        my_data.ip,
-        &.{},
-    );
-    defer gossip_service.deinit();
-    var handle = try spawnGossip(&gossip_service);
-
-    try downloadSnapshotsFromGossip(
-        gpa_allocator,
-        logger,
-        &gossip_service,
-    );
-
-    handle.join();
-}
 
 /// entrypoint to print (and create if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {
@@ -561,6 +538,41 @@ fn spawnLogger() !Logger {
     var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     logger.spawn();
     return logger;
+}
+
+/// entrypoint to download snapshot
+fn downloadSnapshot(_: []const []const u8) !void {
+    var logger = try spawnLogger();
+    defer logger.deinit();
+
+    var exit = std.atomic.Atomic(bool).init(false);
+    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
+    const entrypoints = try getEntrypoints(logger);
+    defer entrypoints.deinit();
+
+    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+
+    var gossip_service = try initGossip(
+        .noop,
+        my_keypair,
+        &exit,
+        entrypoints,
+        my_data.shred_version,
+        my_data.ip,
+        &.{},
+    );
+    defer gossip_service.deinit();
+    var handle = try spawnGossip(&gossip_service);
+
+    const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
+    try downloadSnapshotsFromGossip(
+        gpa_allocator,
+        logger,
+        &gossip_service,
+        @intCast(min_mb_per_sec),
+    );
+
+    handle.join();
 }
 
 fn accountsDb(_: []const []const u8) !void {
