@@ -106,11 +106,12 @@ pub const RepairMessage = union(enum(u8)) {
         slot: Slot,
     },
 
-    pub const Tag: type = @typeInfo(@This()).Union.tag_type.?;
+    pub const Tag: type = @typeInfo(Self).Union.tag_type.?;
+    const Self = @This();
 
     const MAX_SERIALIZED_SIZE: usize = 160;
 
-    pub fn eql(self: *const @This(), other: *const @This()) bool {
+    pub fn eql(self: *const Self, other: *const Self) bool {
         if (!std.mem.eql(u8, @tagName(self.*), @tagName(other.*))) {
             return false;
         }
@@ -135,7 +136,7 @@ pub const RepairMessage = union(enum(u8)) {
 
     /// Analogous to `ServeRepair::verify_signed_packet`
     pub fn verify(
-        self: *const @This(),
+        self: *const Self,
         /// bincode serialized data, from which this struct was deserialized
         serialized: []u8,
         /// to compare to the header. typically is this validator's own pubkey
