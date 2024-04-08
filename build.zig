@@ -30,6 +30,10 @@ pub fn build(b: *std.Build) void {
     const zstd_mod = zstd_dep.module("zstd");
     const zstd_c_lib = zstd_dep.artifact("zstd");
 
+    const curl_dep = b.dependency("curl", opts);
+    const curl_mod = curl_dep.module("curl");
+    const curl_c_lib = curl_dep.artifact("curl");
+
     const lib = b.addStaticLibrary(.{
         .name = "sig",
         // In this case the main source file is merely a path, however, in more
@@ -81,6 +85,8 @@ pub fn build(b: *std.Build) void {
     lib.addModule("httpz", httpz_mod);
     lib.addModule("zigdig", zigdig_mod);
     lib.addModule("zstd", zstd_mod);
+    lib.addModule("curl", curl_mod);
+    lib.linkLibrary(curl_c_lib);
     lib.linkLibrary(zstd_c_lib);
 
     // This declares intent for the library to be installed into the standard
@@ -102,6 +108,8 @@ pub fn build(b: *std.Build) void {
     tests.addModule("httpz", httpz_mod);
     tests.addModule("zigdig", zigdig_mod);
     tests.addModule("zstd", zstd_mod);
+    tests.addModule("curl", curl_mod);
+    tests.linkLibrary(curl_c_lib);
     tests.linkLibrary(zstd_c_lib);
 
     const run_tests = b.addRunArtifact(tests);
@@ -124,6 +132,8 @@ pub fn build(b: *std.Build) void {
     exe.addModule("httpz", httpz_mod);
     exe.addModule("zigdig", zigdig_mod);
     exe.addModule("zstd", zstd_mod);
+    exe.addModule("curl", curl_mod);
+    exe.linkLibrary(curl_c_lib);
     exe.linkLibrary(zstd_c_lib);
 
     // This declares intent for the executable to be installed into the
@@ -190,6 +200,8 @@ pub fn build(b: *std.Build) void {
         exec.addModule("httpz", httpz_mod);
         exec.addModule("zigdig", zigdig_mod);
         exec.addModule("zstd", zstd_mod);
+        exec.addModule("curl", curl_mod);
+        exec.linkLibrary(curl_c_lib);
         exec.linkLibrary(zstd_c_lib);
 
         // this lets us run it as an exec

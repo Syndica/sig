@@ -1,5 +1,5 @@
 const std = @import("std");
-
+const curl = @import("curl");
 const lib = @import("../lib.zig");
 const Pubkey = lib.core.Pubkey;
 const GossipService = lib.gossip.GossipService;
@@ -8,8 +8,7 @@ const GossipTable = lib.gossip.GossipTable;
 const SlotAndHash = lib.accounts_db.SlotAndHash;
 const setReadTimeout = lib.net.setReadTimeout;
 const Logger = lib.trace.Logger;
-
-const SOCKET_TAG_RPC = lib.gossip.socket_tag.RPC;
+const socket_tag = lib.gossip.socket_tag;
 
 // TODO: make cli flag
 const MIN_MB_PER_SEC: usize = 10;
@@ -75,7 +74,7 @@ pub fn downloadSnapshotsFromGossip(
                     invalid_shred_version += 1;
                     continue;
                 }
-                _ = ci.getSocket(SOCKET_TAG_RPC) orelse {
+                _ = ci.getSocket(socket_tag.RPC) orelse {
                     no_rpc_count += 1;
                     continue;
                 };
@@ -126,22 +125,25 @@ pub fn downloadSnapshotsFromGossip(
             });
             defer allocator.free(snapshot_filename);
 
-            const rpc_socket = peer.contact_info.getSocket(SOCKET_TAG_RPC).?;
+            const rpc_socket = peer.contact_info.getSocket(socket_tag.RPC).?;
             const r = rpc_socket.toString();
-            const snapshot_url = try std.fmt.allocPrint(allocator, "http://{s}/{s}", .{
+            const snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
                 r[0][0..r[1]],
                 snapshot_filename,
             });
             defer allocator.free(snapshot_url);
 
             logger.infof("downloading full_snapshot from: {s}", .{snapshot_url});
-            var success = try downloadFile(
+            var success = downloadFile(
                 allocator,
-                try std.Uri.parse(snapshot_url),
+                snapshot_url,
                 snapshot_filename,
-                true,
                 MIN_MB_PER_SEC,
-            );
+            ) catch |err| {
+                logger.infof("failed to download full_snapshot: {s}", .{@errorName(err)});
+                try slow_peer_pubkeys.append(peer.contact_info.pubkey);
+                continue;
+            };
             if (!success) {
                 logger.infof("peer is too slow, skipping", .{});
                 try slow_peer_pubkeys.append(peer.contact_info.pubkey);
@@ -159,21 +161,25 @@ pub fn downloadSnapshotsFromGossip(
                 });
                 defer allocator.free(inc_snapshot_filename);
 
-                const inc_snapshot_url = try std.fmt.allocPrint(allocator, "http://{s}/{s}", .{
+                const inc_snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
                     r[0][0..r[1]],
                     inc_snapshot_filename,
                 });
                 defer allocator.free(inc_snapshot_url);
 
                 logger.infof("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
-                _ = try downloadFile(
+                _ = downloadFile(
                     allocator,
-                    try std.Uri.parse(inc_snapshot_url),
+                    // try std.Uri.parse(inc_snapshot_url),
+                    inc_snapshot_url,
                     inc_snapshot_filename,
-                    true,
                     // NOTE: no min limit (we already downloaded the full snapshot at a good speed so this should be ok)
                     null,
-                );
+                ) catch |err| {
+                    // failure here is ok (for now?)
+                    logger.infof("failed to download inc_snapshot: {s}", .{@errorName(err)});
+                    return;
+                };
             }
 
             // success
@@ -185,95 +191,137 @@ pub fn downloadSnapshotsFromGossip(
     }
 }
 
-pub fn downloadFile(
-    allocator: std.mem.Allocator,
-    uri: std.Uri,
-    filename: []const u8,
-    with_progress: bool,
+const DownloadProgress = struct {
+    mmap: []align(std.mem.page_size) u8,
+    download_size: usize,
     min_mb_per_second: ?usize,
-) !bool {
-    var client = std.http.Client{ .allocator = allocator };
-    var headers = std.http.Headers{ .allocator = allocator };
-    defer headers.deinit();
 
-    var request = try client.request(.GET, uri, headers, .{});
-    defer request.deinit();
+    total_timer: std.time.Timer,
+    mb_timer: std.time.Timer,
+    bytes_read: usize = 0,
+    file_memory_index: usize = 0,
+    has_checked_speed: bool = false,
 
-    // TODO: this can stall the process if the peer never connects
-    try request.start();
-    try request.wait();
+    const Self = @This();
 
-    var download_size: usize = 0;
-    const response_headers = request.response.headers;
-    for (response_headers.list.items) |header| {
-        if (std.mem.eql(u8, header.name, "content-length")) {
-            download_size = try std.fmt.parseInt(usize, header.value, 10);
-        }
+    pub fn init(filename: []const u8, download_size: usize, min_mb_per_second: ?usize) !Self {
+        var file = try std.fs.cwd().createFile(filename, .{ .read = true });
+        defer file.close();
+
+        // resize the file
+        try file.seekTo(download_size - 1);
+        _ = try file.write(&[_]u8{1});
+        try file.seekTo(0);
+
+        var file_memory = try std.os.mmap(
+            null,
+            download_size,
+            std.os.PROT.READ | std.os.PROT.WRITE,
+            std.os.MAP.SHARED,
+            file.handle,
+            0,
+        );
+
+        return .{
+            .mmap = file_memory,
+            .download_size = download_size,
+            .min_mb_per_second = min_mb_per_second,
+            .total_timer = try std.time.Timer.start(),
+            .mb_timer = try std.time.Timer.start(),
+        };
     }
 
-    var file = try std.fs.cwd().createFile(filename, .{ .read = true });
-    defer file.close();
+    pub fn bufferWriteCallback(ptr: [*c]c_char, size: c_uint, nmemb: c_uint, user_data: *anyopaque) callconv(.C) c_uint {
+        const len = size * nmemb;
+        var self: *Self = @alignCast(@ptrCast(user_data));
+        var typed_data: [*]u8 = @ptrCast(ptr);
+        var buf = typed_data[0..len];
 
-    // resize the file
-    try file.seekTo(download_size - 1);
-    _ = try file.write(&[_]u8{1});
-    try file.seekTo(0);
+        @memcpy(self.mmap[self.file_memory_index..][0..len], buf);
+        self.file_memory_index += len;
+        self.bytes_read += len;
 
-    var file_memory = try std.os.mmap(
-        null,
-        download_size,
-        std.os.PROT.READ | std.os.PROT.WRITE,
-        std.os.MAP.SHARED,
-        file.handle,
-        0,
-    );
-    var file_memory_index: usize = 0;
-
-    var total_timer = try std.time.Timer.start();
-    var local_buf: [1024 * 1024]u8 = undefined;
-    var bytes_read: usize = 0;
-    var timer = try std.time.Timer.start();
-    while (true) {
-        const len = try request.read(&local_buf);
-        if (len == 0) break;
-
-        @memcpy(file_memory[file_memory_index..][0..len], local_buf[0..len]);
-        file_memory_index += len;
-        bytes_read += len;
-
-        if (with_progress and bytes_read > 1024 * 1024) { // each MB
-            defer {
-                bytes_read = 0;
-                timer.reset();
-            }
-
-            const elapsed_ns = timer.read();
+        if (self.bytes_read > 1024 * 1024) blk: { // each MB
+            const elapsed_ns = self.mb_timer.read();
             const elapsed_sec = elapsed_ns / std.time.ns_per_s;
-            if (elapsed_sec == 0) continue;
+            if (elapsed_sec == 0) break :blk;
 
-            const mb_read = bytes_read / 1024 / 1024;
-            if (mb_read == 0) continue;
+            const mb_read = self.bytes_read / 1024 / 1024;
+            if (mb_read == 0) break :blk;
 
+            defer {
+                self.bytes_read = 0;
+                self.mb_timer.reset();
+            }
             const ns_per_mb = elapsed_ns / mb_read;
-            const mb_left = (download_size - bytes_read) / 1024 / 1024;
+            const mb_left = (self.download_size - self.bytes_read) / 1024 / 1024;
             const time_left_ns = mb_left * ns_per_mb;
             const mb_per_second = mb_read / elapsed_sec;
 
             std.debug.print("{d}% done ({d} mb/s) (time left: {d})\r", .{
-                bytes_read * 100 / download_size,
+                self.bytes_read * 100 / self.download_size,
                 mb_per_second,
                 std.fmt.fmtDuration(time_left_ns),
             });
 
-            const total_time_seconds = total_timer.read() / std.time.ns_per_s;
-            if (min_mb_per_second != null and mb_per_second < min_mb_per_second.? and total_time_seconds > 15) {
-                std.debug.print("", .{});
-                return false;
+            const total_time_seconds = self.total_timer.read() / std.time.ns_per_s;
+            const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed and total_time_seconds > 15;
+            if (should_check_speed) {
+                // dont check again
+                self.has_checked_speed = true;
+                if (mb_per_second < self.min_mb_per_second.?) {
+                    // not fast enough => abort
+                    return 0;
+                } else {
+                    std.debug.print("download speed is ok -- maintaining connection\r", .{});
+                }
             }
         }
+        return len;
     }
-    // make sure we got the entire file
-    std.debug.assert(file_memory_index == download_size);
+};
 
+pub fn downloadFile(
+    allocator: std.mem.Allocator,
+    url: [:0]const u8,
+    filename: []const u8,
+    min_mb_per_second: ?usize,
+) !bool {
+    var easy = try curl.Easy.init(allocator, .{});
+    defer easy.deinit();
+
+    try easy.setUrl(url);
+    try easy.setMethod(.HEAD);
+    try easy.setNoBody(true);
+    var head_resp = try easy.perform();
+
+    var download_size: usize = 0;
+    if (try head_resp.getHeader("content-length")) |content_length| {
+        download_size = try std.fmt.parseInt(usize, content_length.get(), 10);
+    } else {
+        return error.NoContentLength;
+    }
+
+    // timeout will need to be larger
+    easy.timeout_ms = std.time.ms_per_hour;
+    var download_progress = try DownloadProgress.init(
+        filename,
+        download_size,
+        min_mb_per_second,
+    );
+    try easy.setNoBody(false); // full download
+    try easy.setUrl(url);
+    try easy.setMethod(.GET);
+    try easy.setWritedata(&download_progress);
+    try easy.setWritefunction(DownloadProgress.bufferWriteCallback);
+
+    var resp = easy.perform() catch return false;
+    defer resp.deinit();
+
+    const full_download = download_progress.file_memory_index == download_size;
+    if (!full_download) {
+        // too slow = early exit
+        return false;
+    }
     return true;
 }
