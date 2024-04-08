@@ -342,7 +342,7 @@ pub fn downloadFile(
         download_size,
         min_mb_per_second,
     );
-    
+
     try setNoBody(easy, false); // full download
     try easy.setUrl(url);
     try easy.setMethod(.GET);
