@@ -234,6 +234,22 @@ var app = &cli.App{
             },
         },
         &cli.Command{
+            .name = "download_snapshot",
+            .help = "downloads a snapshot",
+            .description =
+            \\starts a gossip client and downloads a snapshot from peers
+            ,
+            .action = downloadSnapshot,
+            .options = &.{
+                // where to download the snapshot
+                &snapshot_dir_option,
+                // gossip options
+                &gossip_host.option,
+                &gossip_port_option,
+                &gossip_entrypoints_option,
+            },
+        },
+        &cli.Command{
             .name = "accounts_db",
             .help = "run accounts_db",
             .description =
@@ -250,6 +266,38 @@ var app = &cli.App{
         },
     },
 };
+
+fn downloadSnapshot(_: []const []const u8) !void {
+    var logger = try spawnLogger();
+    defer logger.deinit();
+
+    var exit = std.atomic.Atomic(bool).init(false);
+    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
+    const entrypoints = try getEntrypoints(logger);
+    defer entrypoints.deinit();
+
+    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+
+    var gossip_service = try initGossip(
+        .noop,
+        my_keypair,
+        &exit,
+        entrypoints,
+        my_data.shred_version,
+        my_data.ip,
+        &.{},
+    );
+    defer gossip_service.deinit();
+    var handle = try spawnGossip(&gossip_service);
+
+    try downloadSnapshotsFromGossip(
+        gpa_allocator,
+        logger,
+        &gossip_service,
+    );
+
+    handle.join();
+}
 
 /// entrypoint to print (and create if DNE) pubkey in ~/.sig/identity.key
 fn identity(_: []const []const u8) !void {

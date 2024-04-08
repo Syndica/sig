@@ -56,8 +56,9 @@ const Gauge = @import("../prometheus/gauge.zig").Gauge;
 const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };
 
-pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
-pub const GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30000;
+pub const GOSSIP_PULL_RATE_MS: u64 = 5 * std.time.ms_per_s;
+pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15 * std.time.ms_per_s;
+pub const GOSSIP_PUSH_MSG_TIMEOUT_MS: u64 = 30 * std.time.ms_per_s;
 pub const GOSSIP_PRUNE_MSG_TIMEOUT_MS: u64 = 500;
 
 pub const FAILED_INSERTS_RETENTION_MS: u64 = 20_000;
@@ -884,15 +885,16 @@ pub const GossipService = struct {
     ) !void {
         var last_push_ts: u64 = 0;
         var last_stats_publish_ts: u64 = 0;
+        var last_pull_req_ts: u64 = 0;
         var push_cursor: u64 = 0;
-        var should_send_pull_requests = true;
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
         while (!self.exit.load(std.atomic.Ordering.Unordered)) {
             const top_of_loop_ts = getWallclockMs();
 
-            if (should_send_pull_requests) pull_blk: {
+            if (top_of_loop_ts - last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
+                defer last_pull_req_ts = getWallclockMs();
                 // this also includes sending ping messages to other peers
                 var packets = self.buildPullRequests(
                     pull_request.MAX_BLOOM_SIZE,
@@ -903,8 +905,6 @@ pub const GossipService = struct {
                 self.stats.pull_requests_sent.add(packets.items.len);
                 try self.packet_outgoing_channel.send(packets);
             }
-            // every other loop
-            should_send_pull_requests = !should_send_pull_requests;
 
             // new push msgs
             self.drainPushQueueToGossipTable(getWallclockMs());

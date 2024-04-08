@@ -7,8 +7,9 @@ const ContactInfo = lib.gossip.ContactInfo;
 const GossipTable = lib.gossip.GossipTable;
 const SlotAndHash = lib.accounts_db.SlotAndHash;
 const setReadTimeout = lib.net.setReadTimeout;
+const Logger = lib.trace.Logger;
 
-const SOCKET_TAG_RPC = lib.gossip.SOCKET_TAG_RPC;
+const SOCKET_TAG_RPC = lib.gossip.socket_tag.RPC;
 
 // TODO: make cli flag
 const MIN_MB_PER_SEC: usize = 10;
@@ -23,6 +24,7 @@ const PeerSnapshotHash = struct {
 /// note: gossip_service must be running.
 pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
+    logger: Logger,
     gossip_service: *GossipService,
 ) !void {
     const my_contact_info = gossip_service.my_contact_info;
@@ -39,7 +41,6 @@ pub fn downloadSnapshotsFromGossip(
     defer slow_peer_pubkeys.deinit();
 
     while (true) {
-        std.debug.print("sleeping...\n", .{});
         std.time.sleep(std.time.ns_per_s * 5); // wait while gossip table updates
 
         // only hold gossip table lock for this block
@@ -54,20 +55,34 @@ pub fn downloadSnapshotsFromGossip(
             // - rpc socket is enabled
             // - snapshot is available
             var contacts = table.getContactInfos(&contact_info_buf, 0);
-            std.debug.print("found {d} contacts\n", .{contacts.len});
+            logger.infof("found {d} contacts", .{contacts.len});
+
+            var is_me_count: usize = 0;
+            var invalid_shred_version: usize = 0;
+            var is_slow_count: usize = 0;
+            var no_rpc_count: usize = 0;
+            var no_snapshot_hashes_count: usize = 0;
 
             search_loop: for (contacts) |*ci| {
                 const is_me = ci.pubkey.equals(&my_pubkey);
                 if (is_me) {
+                    is_me_count += 1;
                     continue;
                 }
 
                 const matching_shred_version = my_contact_info.shred_version == ci.shred_version or my_contact_info.shred_version == 0;
                 if (!matching_shred_version) {
+                    invalid_shred_version += 1;
                     continue;
                 }
-                _ = ci.getSocket(SOCKET_TAG_RPC) orelse continue;
-                const snapshot_hash = table.get(.{ .SnapshotHashes = ci.pubkey }) orelse continue;
+                _ = ci.getSocket(SOCKET_TAG_RPC) orelse {
+                    no_rpc_count += 1;
+                    continue;
+                };
+                const snapshot_hash = table.get(.{ .SnapshotHashes = ci.pubkey }) orelse {
+                    no_snapshot_hashes_count += 1;
+                    continue;
+                };
                 const hashes = snapshot_hash.value.data.SnapshotHashes;
 
                 var max_inc_hash: ?SlotAndHash = null;
@@ -80,6 +95,7 @@ pub fn downloadSnapshotsFromGossip(
                 // dont try to download from a slow peer
                 for (slow_peer_pubkeys.items) |slow_peer| {
                     if (slow_peer.equals(&ci.pubkey)) {
+                        is_slow_count += 1;
                         continue :search_loop;
                     }
                 }
@@ -91,7 +107,14 @@ pub fn downloadSnapshotsFromGossip(
                     .inc_snapshot = max_inc_hash,
                 });
             }
-            std.debug.print("found {d} valid peers for snapshot download...\n", .{available_snapshot_peers.items.len});
+            logger.infof("is_me_count: {d}, invalid_shred_version: {d}, is_slow_count: {d}, no_rpc_count: {d}, no_snapshot_hashes_count: {d}", .{
+                is_me_count,
+                invalid_shred_version,
+                is_slow_count,
+                no_rpc_count,
+                no_snapshot_hashes_count,
+            });
+            logger.infof("found {d} valid peers for snapshot download...", .{available_snapshot_peers.items.len});
         }
 
         for (available_snapshot_peers.items) |peer| {
@@ -111,7 +134,7 @@ pub fn downloadSnapshotsFromGossip(
             });
             defer allocator.free(snapshot_url);
 
-            std.debug.print("downloading full_snapshot from: {s}\n", .{snapshot_url});
+            logger.infof("downloading full_snapshot from: {s}", .{snapshot_url});
             var success = try downloadFile(
                 allocator,
                 try std.Uri.parse(snapshot_url),
@@ -120,7 +143,7 @@ pub fn downloadSnapshotsFromGossip(
                 MIN_MB_PER_SEC,
             );
             if (!success) {
-                std.debug.print("peer is too slow, skipping\n", .{});
+                logger.infof("peer is too slow, skipping", .{});
                 try slow_peer_pubkeys.append(peer.contact_info.pubkey);
                 continue;
             }
@@ -142,7 +165,7 @@ pub fn downloadSnapshotsFromGossip(
                 });
                 defer allocator.free(inc_snapshot_url);
 
-                std.debug.print("downloading inc_snapshot from: {s}\n", .{inc_snapshot_url});
+                logger.infof("downloading inc_snapshot from: {s}", .{inc_snapshot_url});
                 _ = try downloadFile(
                     allocator,
                     try std.Uri.parse(inc_snapshot_url),
@@ -244,7 +267,7 @@ pub fn downloadFile(
 
             const total_time_seconds = total_timer.read() / std.time.ns_per_s;
             if (min_mb_per_second != null and mb_per_second < min_mb_per_second.? and total_time_seconds > 15) {
-                std.debug.print("\n", .{});
+                std.debug.print("", .{});
                 return false;
             }
         }

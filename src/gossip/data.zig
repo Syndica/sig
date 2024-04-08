@@ -924,14 +924,14 @@ pub const SnapshotHashes = struct {
 
     pub fn sanitize(self: *const @This()) !void {
         try sanitizeWallclock(self.wallclock);
-        if (self.full[0] >= MAX_SLOT) {
+        if (self.full.slot >= MAX_SLOT) {
             return error.ValueOutOfBounds;
         }
         for (self.incremental) |inc| {
-            if (inc[0] >= MAX_SLOT) {
+            if (inc.slot >= MAX_SLOT) {
                 return error.ValueOutOfBounds;
             }
-            if (self.full[0] >= inc[0]) {
+            if (self.full.slot >= inc.slot) {
                 return error.InvalidValue;
             }
         }
