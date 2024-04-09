@@ -134,7 +134,7 @@ var log_level_option = cli.Option{
 
 var metrics_port_option = cli.Option{
     .long_name = "metrics-port",
-    .help = "port to expose prometheus metrics via http",
+    .help = "port to expose prometheus metrics via http - default: 12345",
     .short_alias = 'm',
     .value = cli.OptionValue{ .int = 12345 },
     .required = false,
@@ -144,7 +144,7 @@ var metrics_port_option = cli.Option{
 // accounts-db options
 var n_threads_snapshot_load_option = cli.Option{
     .long_name = "n-threads-snapshot-load",
-    .help = "number of threads to load incremental snapshots",
+    .help = "number of threads to load incremental snapshots: - default: ncpus",
     .short_alias = 't',
     .value = cli.OptionValue{ .int = 0 },
     .required = false,
@@ -153,7 +153,7 @@ var n_threads_snapshot_load_option = cli.Option{
 
 var n_threads_snapshot_unpack_option = cli.Option{
     .long_name = "n-threads-snapshot-unpack",
-    .help = "number of threads to unpack incremental snapshots",
+    .help = "number of threads to unpack incremental snapshots - default: ncpus * 2",
     .short_alias = 'u',
     .value = cli.OptionValue{ .int = 0 },
     .required = false,
@@ -162,7 +162,7 @@ var n_threads_snapshot_unpack_option = cli.Option{
 
 var disk_index_path_option = cli.Option{
     .long_name = "disk-index-path",
-    .help = "path to disk index",
+    .help = "path to disk index - default: no disk index, index will use ram",
     .short_alias = 'd',
     .value = cli.OptionValue{ .string = null },
     .required = false,
@@ -180,7 +180,7 @@ var force_unpack_snapshot_option = cli.Option{
 
 var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
-    .help = "path to snapshot directory",
+    .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/",
     .short_alias = 's',
     .value = cli.OptionValue{ .string = "test_data/" },
     .required = false,
@@ -189,7 +189,7 @@ var snapshot_dir_option = cli.Option{
 
 var min_snapshot_download_speed_mb_option = cli.Option{
     .long_name = "min-snapshot-download-speed",
-    .help = "minimum download speed of full snapshots in megabytes per second",
+    .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
     .value = cli.OptionValue{ .int = 20 },
     .required = false,
     .value_name = "min_snapshot_download_speed_mb",
@@ -197,7 +197,7 @@ var min_snapshot_download_speed_mb_option = cli.Option{
 
 var storage_cache_size_option = cli.Option{
     .long_name = "storage-cache-size",
-    .help = "number of accounts preallocate for the storage cache for accounts-db",
+    .help = "number of accounts preallocate for the storage cache for accounts-db (used when writing accounts whose slot has not been rooted) - default: 10k",
     .value = cli.OptionValue{ .int = 10_000 },
     .required = false,
     .value_name = "storage_cache_size",
@@ -251,13 +251,22 @@ var app = &cli.App{
             ,
             .action = validator,
             .options = &.{
+                // gossip
                 &gossip_host.option,
                 &gossip_port_option,
                 &gossip_entrypoints_option,
                 &gossip_spy_node_option,
                 &gossip_dump_option,
+                // repair
                 &repair_port_option,
                 &test_repair_option,
+                // accounts-db
+                &snapshot_dir_option,
+                &n_threads_snapshot_load_option,
+                &n_threads_snapshot_unpack_option,
+                &disk_index_path_option,
+                &force_unpack_snapshot_option,
+                &min_snapshot_download_speed_mb_option,
             },
         },
         &cli.Command{

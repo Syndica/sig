@@ -10,6 +10,8 @@ const setReadTimeout = lib.net.setReadTimeout;
 const Logger = lib.trace.Logger;
 const socket_tag = lib.gossip.socket_tag;
 
+const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
+
 const PeerSnapshotHash = struct {
     contact_info: ContactInfo,
     full_snapshot: SlotAndHash,
@@ -203,7 +205,6 @@ const DownloadProgress = struct {
 
     total_timer: std.time.Timer,
     mb_timer: std.time.Timer,
-    progress_timer: std.time.Timer,
     bytes_read: usize = 0,
     file_memory_index: usize = 0,
     has_checked_speed: bool = false,
@@ -243,7 +244,6 @@ const DownloadProgress = struct {
             .min_mb_per_second = min_mb_per_second,
             .total_timer = try std.time.Timer.start(),
             .mb_timer = try std.time.Timer.start(),
-            .progress_timer = try std.time.Timer.start(),
         };
     }
 
@@ -257,7 +257,7 @@ const DownloadProgress = struct {
         self.file_memory_index += len;
         self.bytes_read += len;
 
-        if (self.bytes_read > 1024 * 1024) blk: { // each MB
+        if (self.mb_timer.read() > DOWNLOAD_PROGRESS_UPDATES_NS and self.bytes_read > 1024 * 1024) blk: { // each MB
             const elapsed_ns = self.mb_timer.read();
             const elapsed_sec = elapsed_ns / std.time.ns_per_s;
             if (elapsed_sec == 0) break :blk;
@@ -274,14 +274,11 @@ const DownloadProgress = struct {
             const time_left_ns = mb_left * ns_per_mb;
             const mb_per_second = mb_read / elapsed_sec;
 
-            if (self.progress_timer.read() > 30 * std.time.ns_per_s) {
-                self.logger.infof("[download progress]: {d}% done ({d} MB/s) (time left: {d})", .{
-                    self.bytes_read * 100 / self.download_size,
-                    mb_per_second,
-                    std.fmt.fmtDuration(time_left_ns),
-                });
-                self.progress_timer.reset();
-            }
+            self.logger.infof("[download progress]: {d}% done ({d} MB/s) (time left: {d})", .{
+                self.bytes_read * 100 / self.download_size,
+                mb_per_second,
+                std.fmt.fmtDuration(time_left_ns),
+            });
 
             const total_time_seconds = self.total_timer.read() / std.time.ns_per_s;
             const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed and total_time_seconds > 15;
