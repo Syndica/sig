@@ -53,6 +53,11 @@ pub fn main() !void {
             max_time_per_bench,
             TimeUnits.milliseconds,
         );
+        try benchmark(
+            @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
+            max_time_per_bench,
+            TimeUnits.milliseconds,
+        );
     }
 
     if (std.mem.startsWith(u8, "sync", filter)) {
