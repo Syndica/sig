@@ -238,7 +238,7 @@ pub const PingCache = struct {
         return .{ .valid_peers = valid_peers, .pings = pings };
     }
 
-    // only used in tests
+    // only used in tests/benchmarks
     pub fn _setPong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
         _ = self.pongs.put(PubkeyAndSocketAddr{
             .pubkey = peer,
