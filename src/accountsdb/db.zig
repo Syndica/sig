@@ -985,7 +985,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     var logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
     var accounts_db = try AccountsDB.init(allocator, logger, .{
-        .n_index_bins = 4,
+        .number_of_index_bins = 4,
         .storage_cache_size = 10,
         .disk_index_path = disk_dir,
         .index_disk_capacity = disk_capacity,

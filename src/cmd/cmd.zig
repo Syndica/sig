@@ -178,6 +178,14 @@ var force_unpack_snapshot_option = cli.Option{
     .value_name = "force_unpack_snapshot",
 };
 
+var force_new_snapshot_download_option = cli.Option{
+    .long_name = "force-new-snapshot-download",
+    .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
+    .value = cli.OptionValue{ .bool = false },
+    .required = false,
+    .value_name = "force_new_snapshot_download",
+};
+
 var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
     .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/",
@@ -267,6 +275,7 @@ var app = &cli.App{
                 &disk_index_path_option,
                 &force_unpack_snapshot_option,
                 &min_snapshot_download_speed_mb_option,
+                &force_new_snapshot_download_option,
             },
         },
         &cli.Command{
@@ -702,6 +711,7 @@ fn getOrDownloadSnapshots(
     // arg parsing
     const snapshot_dir_str = snapshot_dir_option.value.string.?;
     const force_unpack_snapshot = force_unpack_snapshot_option.value.bool;
+    const force_new_snapshot_download = force_new_snapshot_download_option.value.bool;
 
     const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
     var n_threads_snapshot_unpack: u32 = @intCast(n_threads_snapshot_unpack_option.value.int.?);
@@ -717,23 +727,30 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
-    var snapshot_files = SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| blk: {
-        if (err == error.NoFullSnapshotFileInfoFound) {
-            if (gossip_service) |gs| {
-                const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
-                try downloadSnapshotsFromGossip(
-                    allocator,
-                    logger,
-                    gs,
-                    snapshot_dir_str,
-                    @intCast(min_mb_per_sec),
-                );
+    if (force_new_snapshot_download) {
+        const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
+        try downloadSnapshotsFromGossip(
+            allocator,
+            logger,
+            gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
+            snapshot_dir_str,
+            @intCast(min_mb_per_sec),
+        );
+    }
 
-                // this shouldnt fail because we just downloaded it
-                break :blk try SnapshotFiles.find(allocator, snapshot_dir_str);
-            } else {
-                return error.SnapshotsNotFound;
-            }
+    var snapshot_files = SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| blk: {
+        // if we cant find the full snapshot, we try to download it
+        if (err == error.NoFullSnapshotFileInfoFound) {
+            const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
+            try downloadSnapshotsFromGossip(
+                allocator,
+                logger,
+                gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
+                snapshot_dir_str,
+                @intCast(min_mb_per_sec),
+            );
+            // this shouldnt fail because we just downloaded it
+            break :blk try SnapshotFiles.find(allocator, snapshot_dir_str);
         } else {
             return err;
         }
