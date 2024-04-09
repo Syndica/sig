@@ -1936,7 +1936,7 @@ pub const GossipStats = struct {
     // logging details
     _logging_fields: struct {
         logger: Logger,
-        log_interval_micros: i64 = 10_000_000,
+        log_interval_micros: i64 = 10 * std.time.us_per_s,
         last_log: i64 = 0,
         last_logged_snapshot: StatsToLog = .{},
         updates_since_last: u64 = 0,
