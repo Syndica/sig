@@ -862,6 +862,20 @@ pub const SnapshotFiles = struct {
     }
 };
 
+pub const SnapshotFieldsAndPaths = struct {
+    all_fields: AllSnapshotFields,
+    full_path: []const u8,
+    incremental_path: ?[]const u8,
+
+    pub fn deinit(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
+        self.all_fields.deinit(allocator);
+        allocator.free(self.full_path);
+        if (self.incremental_path) |incremental_path| {
+            allocator.free(incremental_path);
+        }
+    }
+};
+
 /// contains all fields from a snapshot (full and incremental)
 pub const AllSnapshotFields = struct {
     full: SnapshotFields,
@@ -874,11 +888,7 @@ pub const AllSnapshotFields = struct {
         allocator: std.mem.Allocator,
         snapshot_dir_str: []const u8,
         files: SnapshotFiles,
-    ) !struct {
-        all_fields: Self,
-        full_path: []const u8,
-        incremental_path: ?[]const u8,
-    } {
+    ) !SnapshotFieldsAndPaths {
         // unpack
         const full_metadata_path = try std.fmt.allocPrint(
             allocator,
@@ -906,13 +916,13 @@ pub const AllSnapshotFields = struct {
             );
         }
 
-        const all_fields: Self = .{
+        const fields: Self = .{
             .full = full_fields,
             .incremental = incremental_fields,
         };
 
         return .{
-            .all_fields = all_fields,
+            .all_fields = fields,
             .full_path = full_metadata_path,
             .incremental_path = incremental_metadata_path,
         };

@@ -48,7 +48,7 @@ pub const AccountsDBConfig = struct {
     // number of Accounts to preallocate for cache
     storage_cache_size: usize = 0,
     // number of bins to shard the index pubkeys across -- must be power of two
-    n_index_bins: usize = ACCOUNT_INDEX_BINS,
+    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
     // how many RAM references to preallocate for each bin
     index_ram_capacity: usize = 0,
     // where to create disk indexes files (if null, will not use disk indexes)
@@ -95,7 +95,7 @@ pub const AccountsDB = struct {
         const account_index = try AccountIndex.init(
             allocator,
             reference_allocator,
-            config.n_index_bins,
+            config.number_of_index_bins,
         );
 
         return Self{
@@ -180,7 +180,7 @@ pub const AccountsDB = struct {
             var thread_db = try AccountsDB.init(
                 per_thread_allocator,
                 self.logger,
-                .{ .n_index_bins = self.config.n_index_bins },
+                .{ .number_of_index_bins = self.config.number_of_index_bins },
             );
 
             thread_db.fields = self.fields;

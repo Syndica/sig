@@ -54,13 +54,13 @@ pub const AccountIndex = struct {
         // used to allocate the references
         reference_allocator: std.mem.Allocator,
         // number of bins to shard across
-        n_bins: usize,
+        number_of_bins: usize,
     ) !Self {
-        var bins = try allocator.alloc(RefMap, n_bins);
+        var bins = try allocator.alloc(RefMap, number_of_bins);
         for (bins) |*bin| {
             bin.* = RefMap.init(allocator);
         }
-        const calculator = PubkeyBinCalculator.init(n_bins);
+        const calculator = PubkeyBinCalculator.init(number_of_bins);
 
         return Self{
             .allocator = allocator,

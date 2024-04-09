@@ -22,6 +22,7 @@ pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
     logger: Logger,
     gossip_service: *GossipService,
+    output_dir: []const u8,
     min_mb_per_sec: usize,
 ) !void {
     logger.infof("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
@@ -138,6 +139,7 @@ pub fn downloadSnapshotsFromGossip(
                 allocator,
                 logger,
                 snapshot_url,
+                output_dir,
                 snapshot_filename,
                 min_mb_per_sec,
             ) catch |err| {
@@ -173,6 +175,7 @@ pub fn downloadSnapshotsFromGossip(
                     allocator,
                     logger,
                     inc_snapshot_url,
+                    output_dir,
                     inc_snapshot_filename,
                     // NOTE: no min limit (we already downloaded the full snapshot at a good speed so this should be ok)
                     null,
@@ -210,11 +213,13 @@ const DownloadProgress = struct {
 
     pub fn init(
         logger: Logger,
+        output_dir_str: []const u8,
         filename: []const u8,
         download_size: usize,
         min_mb_per_second: ?usize,
     ) !Self {
-        var file = try std.fs.cwd().createFile(filename, .{ .read = true });
+        var output_dir = try std.fs.cwd().openDir(output_dir_str, .{});
+        var file = try output_dir.createFile(filename, .{ .read = true });
         defer file.close();
 
         // resize the file
@@ -313,6 +318,7 @@ pub fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
     url: [:0]const u8,
+    output_dir: []const u8,
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !bool {
@@ -338,6 +344,7 @@ pub fn downloadFile(
     easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
         logger,
+        output_dir,
         filename,
         download_size,
         min_mb_per_second,
