@@ -31,7 +31,7 @@
             .hash = "122065be99695710b821bc8d886062ee69e9f97e5673e2a44f4faf00e2cf4b5911db",
         },
         .curl = .{
-            .url = "https://github.com/0xNineteen/zig-curl/archive/a40369ebf609d207bb8f1194347a09e5022c0764.tar.gz",
+            .url = "https://github.com/Syndica/zig-curl/archive/a40369ebf609d207bb8f1194347a09e5022c0764.tar.gz",
             .hash = "1220d6c126fc7155cf82cb860ed914bfa4d8128576618599baf860e044a67bd3e8ad",
         },
     },
