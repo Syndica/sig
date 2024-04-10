@@ -1,6 +1,6 @@
 services:
   prometheus:
-    network_mode: "host"
+    # network_mode: "host" # -- only linux
     image: prom/prometheus
     container_name: prometheus
     command:
@@ -12,7 +12,7 @@ services:
       - ./prometheus:/etc/prometheus
       - prom_data:/prometheus
   grafana:
-    network_mode: "host"
+    # network_mode: "host" # -- only linux
     image: grafana/grafana
     container_name: grafana
     ports:
