@@ -1250,13 +1250,10 @@ pub const BenchmarkAccountsDB = struct {
             // std.debug.print("using disk index\n", .{});
             accounts_db = try AccountsDB.init(allocator, logger, .{
                 .disk_index_path = "test_data/tmp_benchmarks",
-                .storage_cache_size = 10_000,
             });
         } else {
             // std.debug.print("using ram index\n", .{});
-            accounts_db = try AccountsDB.init(allocator, logger, .{
-                .storage_cache_size = 10_000,
-            });
+            accounts_db = try AccountsDB.init(allocator, logger, .{});
         }
         defer accounts_db.deinit();
 
