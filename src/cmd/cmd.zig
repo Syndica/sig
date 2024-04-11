@@ -107,6 +107,15 @@ var gossip_entrypoints_option = cli.Option{
     .value_name = "Entrypoints",
 };
 
+var trusted_validators_option = cli.Option{
+    .long_name = "trusted_validator",
+    .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
+    .short_alias = 't',
+    .value = cli.OptionValue{ .string_list = null },
+    .required = false,
+    .value_name = "Trusted Validator",
+};
+
 var gossip_spy_node_option = cli.Option{
     .long_name = "spy-node",
     .help = "run as a gossip spy node (minimize outgoing packets)",
@@ -292,6 +301,7 @@ var app = &cli.App{
                 &gossip_host.option,
                 &gossip_port_option,
                 &gossip_entrypoints_option,
+                &trusted_validators_option,
                 &min_snapshot_download_speed_mb_option,
             },
         },
@@ -690,17 +700,40 @@ fn downloadSnapshot(_: []const []const u8) !void {
     defer gossip_service.deinit();
     var handle = try spawnGossip(&gossip_service);
 
+    const trusted_validators = try getTrustedValidators(gpa_allocator);
+    defer if (trusted_validators) |*tvs| tvs.deinit();
+
     const snapshot_dir_str = snapshot_dir_option.value.string.?;
     const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
     try downloadSnapshotsFromGossip(
         gpa_allocator,
         logger,
+        trusted_validators,
         &gossip_service,
         snapshot_dir_str,
         @intCast(min_mb_per_sec),
     );
 
     handle.join();
+}
+
+fn getTrustedValidators(
+    allocator: std.mem.Allocator,
+) !?std.ArrayList(Pubkey) {
+    var trusted_validators: ?std.ArrayList(Pubkey) = null;
+    if (trusted_validators_option.value.string_list) |trusted_validator_strs| {
+        trusted_validators = try std.ArrayList(Pubkey).initCapacity(
+            allocator,
+            trusted_validator_strs.len,
+        );
+        for (trusted_validator_strs) |trusted_validator_str| {
+            trusted_validators.?.appendAssumeCapacity(
+                try Pubkey.fromString(trusted_validator_str),
+            );
+        }
+    }
+
+    return trusted_validators;
 }
 
 fn getOrDownloadSnapshots(
@@ -727,34 +760,34 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
-    if (force_new_snapshot_download) {
-        const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
-        try downloadSnapshotsFromGossip(
-            allocator,
-            logger,
-            gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
-            snapshot_dir_str,
-            @intCast(min_mb_per_sec),
-        );
-    }
-
-    var snapshot_files = SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| blk: {
+    var maybe_snapshot_files: ?SnapshotFiles = SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| blk: {
         // if we cant find the full snapshot, we try to download it
         if (err == error.NoFullSnapshotFileInfoFound) {
-            const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
-            try downloadSnapshotsFromGossip(
-                allocator,
-                logger,
-                gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
-                snapshot_dir_str,
-                @intCast(min_mb_per_sec),
-            );
-            // this shouldnt fail because we just downloaded it
-            break :blk try SnapshotFiles.find(allocator, snapshot_dir_str);
+            break :blk null;
         } else {
             return err;
         }
     };
+
+    const should_download_new_snapshot = force_new_snapshot_download or maybe_snapshot_files == null;
+    if (should_download_new_snapshot) { 
+        const trusted_validators = try getTrustedValidators(gpa_allocator);
+        defer if (trusted_validators) |*tvs| tvs.deinit();
+
+        const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
+        try downloadSnapshotsFromGossip(
+            allocator,
+            logger,
+            trusted_validators,
+            gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
+            snapshot_dir_str,
+            @intCast(min_mb_per_sec),
+        );
+        maybe_snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir_str);
+    }
+
+    // SAFE: this unwrap is safe because we either found the snapshot or downloaded it
+    var snapshot_files = maybe_snapshot_files.?;
     defer snapshot_files.deinit(allocator);
 
     if (snapshot_files.incremental_snapshot == null) {

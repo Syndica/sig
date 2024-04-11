@@ -9,6 +9,7 @@ const SlotAndHash = lib.accounts_db.SlotAndHash;
 const setReadTimeout = lib.net.setReadTimeout;
 const Logger = lib.trace.Logger;
 const socket_tag = lib.gossip.socket_tag;
+const Hash = lib.core.Hash;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 
@@ -23,6 +24,8 @@ const PeerSnapshotHash = struct {
 pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
     logger: Logger,
+    // if null, then we trust any peer for snapshot download
+    maybe_trusted_validators: ?std.ArrayList(Pubkey),
     gossip_service: *GossipService,
     output_dir: []const u8,
     min_mb_per_sec: usize,
@@ -119,7 +122,52 @@ pub fn downloadSnapshotsFromGossip(
             logger.infof("found {d} valid peers for snapshot download...", .{available_snapshot_peers.items.len});
         }
 
+        var trusted_snapshot_hashes = std.AutoHashMap(
+            SlotAndHash, // full snapshot hash
+            std.AutoHashMap(SlotAndHash, void), // set of incremental snapshots
+        ).init(allocator);
+        defer trusted_snapshot_hashes.deinit();
+
+        if (maybe_trusted_validators) |trusted_validators| {
+            // get the hashes of trusted validators
+            for (available_snapshot_peers.items) |*peer| {
+                var is_trusted = false;
+                for (trusted_validators.items) |trusted_validator| {
+                    if (peer.contact_info.pubkey.equals(&trusted_validator)) {
+                        is_trusted = true;
+                        break;
+                    }
+                }
+
+                if (is_trusted) {
+                    var r = try trusted_snapshot_hashes.getOrPut(peer.full_snapshot);
+                    if (peer.inc_snapshot) |inc_snapshot| {
+                        if (!r.found_existing) {
+                            r.value_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
+                        }
+                        try r.value_ptr.put(inc_snapshot, {});
+                    }
+                }
+            }
+        }
+
         for (available_snapshot_peers.items) |peer| {
+            const only_trusted_validators = maybe_trusted_validators != null;
+            if (only_trusted_validators) {
+                // full snapshot must be trusted
+                if (trusted_snapshot_hashes.getEntry(peer.full_snapshot)) |entry| {
+                    // if we have an incremental snapshot
+                    if (peer.inc_snapshot) |inc_snapshot| {
+                        // check if the incremental snapshot is trusted
+                        if (!entry.value_ptr.contains(inc_snapshot)) {
+                            continue;
+                        }
+                    }
+                } else {
+                    continue;
+                }
+            }
+
             // download the full snapshot
             const snapshot_filename = try std.fmt.allocPrint(allocator, "snapshot-{d}-{s}.{s}", .{
                 peer.full_snapshot.slot,
@@ -203,12 +251,10 @@ const DownloadProgress = struct {
     min_mb_per_second: ?usize,
     logger: Logger,
 
-    total_timer: std.time.Timer,
     mb_timer: std.time.Timer,
     bytes_read: usize = 0,
     file_memory_index: usize = 0,
     has_checked_speed: bool = false,
-    last_log_ts: usize = 0,
 
     const Self = @This();
 
@@ -242,7 +288,6 @@ const DownloadProgress = struct {
             .mmap = file_memory,
             .download_size = download_size,
             .min_mb_per_second = min_mb_per_second,
-            .total_timer = try std.time.Timer.start(),
             .mb_timer = try std.time.Timer.start(),
         };
     }
@@ -257,18 +302,20 @@ const DownloadProgress = struct {
         self.file_memory_index += len;
         self.bytes_read += len;
 
-        if (self.mb_timer.read() > DOWNLOAD_PROGRESS_UPDATES_NS and self.bytes_read > 1024 * 1024) blk: { // each MB
-            const elapsed_ns = self.mb_timer.read();
-            const elapsed_sec = elapsed_ns / std.time.ns_per_s;
-            if (elapsed_sec == 0) break :blk;
-
+        const elapsed_ns = self.mb_timer.read();
+        if (elapsed_ns > DOWNLOAD_PROGRESS_UPDATES_NS) {
+            // each MB
             const mb_read = self.bytes_read / 1024 / 1024;
-            if (mb_read == 0) break :blk;
+            if (mb_read == 0) {
+                self.logger.infof("download speed is too slow (<1MB/s) -- disconnecting", .{});
+                return 0;
+            }
 
             defer {
                 self.bytes_read = 0;
                 self.mb_timer.reset();
             }
+            const elapsed_sec = elapsed_ns / std.time.ns_per_s;
             const ns_per_mb = elapsed_ns / mb_read;
             const mb_left = (self.download_size - self.bytes_read) / 1024 / 1024;
             const time_left_ns = mb_left * ns_per_mb;
@@ -280,8 +327,7 @@ const DownloadProgress = struct {
                 std.fmt.fmtDuration(time_left_ns),
             });
 
-            const total_time_seconds = self.total_timer.read() / std.time.ns_per_s;
-            const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed and total_time_seconds > 15;
+            const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed;
             if (should_check_speed) {
                 // dont check again
                 self.has_checked_speed = true;
@@ -294,6 +340,7 @@ const DownloadProgress = struct {
                 }
             }
         }
+
         return len;
     }
 };
