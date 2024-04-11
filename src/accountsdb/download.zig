@@ -19,6 +19,82 @@ const PeerSnapshotHash = struct {
     inc_snapshot: ?SlotAndHash,
 };
 
+const PeerSearchResult = struct {
+    is_me_count: usize = 0,
+    invalid_shred_version: usize = 0,
+    no_rpc_count: usize = 0,
+    no_snapshot_hashes_count: usize = 0,
+    is_blacklist: usize = 0,
+    is_valid: usize = 0,
+};
+
+/// finds valid contact infos which we can download a snapshot from.
+/// valid contact infos are:
+/// - not me
+/// - shred version matches
+/// - rpc socket is enabled
+/// - snapshot hash is available
+/// result is populated inside valid_peers (which is cleared at the beginning)
+pub fn findPeersToDownloadFromAssumeCapacity(
+    table: *const GossipTable,
+    contact_infos: []ContactInfo,
+    my_shred_version: usize,
+    my_pubkey: Pubkey,
+    blacklist: []Pubkey,
+    valid_peers: *std.ArrayList(PeerSnapshotHash),
+) PeerSearchResult {
+    valid_peers.clearRetainingCapacity();
+
+    var result = PeerSearchResult{};
+    search_loop: for (contact_infos) |*peer_contact_info| {
+        const is_me = peer_contact_info.pubkey.equals(&my_pubkey);
+        if (is_me) {
+            result.is_me_count += 1;
+            continue;
+        }
+
+        const matching_shred_version = my_shred_version == peer_contact_info.shred_version or my_shred_version == 0;
+        if (!matching_shred_version) {
+            result.invalid_shred_version += 1;
+            continue;
+        }
+        _ = peer_contact_info.getSocket(socket_tag.RPC) orelse {
+            result.no_rpc_count += 1;
+            continue;
+        };
+        const snapshot_hash = table.get(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
+            result.no_snapshot_hashes_count += 1;
+            continue;
+        };
+        const snapshot_hashes = snapshot_hash.value.data.SnapshotHashes;
+
+        var max_inc_hash: ?SlotAndHash = null;
+        for (snapshot_hashes.incremental) |inc_hash| {
+            if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
+                max_inc_hash = inc_hash;
+            }
+        }
+
+        // dont try to download from a slow peer
+        for (blacklist) |black_list_peers| {
+            if (black_list_peers.equals(&peer_contact_info.pubkey)) {
+                result.is_blacklist += 1;
+                continue :search_loop;
+            }
+        }
+
+        valid_peers.appendAssumeCapacity(.{
+            // NOTE: maybe we need to deep clone here due to arraylist sockets?
+            .contact_info = peer_contact_info.*,
+            .full_snapshot = snapshot_hashes.full,
+            .inc_snapshot = max_inc_hash,
+        });
+    }
+    result.is_valid = valid_peers.items.len;
+
+    return result;
+}
+
 /// downloads full and incremental snapshots from peers found in gossip.
 /// note: gossip_service must be running.
 pub fn downloadSnapshotsFromGossip(
@@ -32,13 +108,10 @@ pub fn downloadSnapshotsFromGossip(
 ) !void {
     logger.infof("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
 
-    const my_contact_info = gossip_service.my_contact_info;
-    const my_pubkey = my_contact_info.pubkey;
-
     // TODO: maybe make this bigger? or dynamic?
     var contact_info_buf: [1_000]ContactInfo = undefined;
-    var valid_contacts_buf: [1_000]u8 = undefined;
-    @memset(&valid_contacts_buf, 0);
+
+    const my_contact_info = gossip_service.my_contact_info;
 
     var available_snapshot_peers = std.ArrayList(PeerSnapshotHash).init(allocator);
     defer available_snapshot_peers.deinit();
@@ -55,72 +128,28 @@ pub fn downloadSnapshotsFromGossip(
             defer lg.unlock();
             const table: *const GossipTable = lg.get();
 
-            // find valid contact infos:
-            // - not me
-            // - shred version matches
-            // - rpc socket is enabled
-            // - snapshot is available
             var contacts = table.getContactInfos(&contact_info_buf, 0);
-            logger.infof("found {d} contacts", .{contacts.len});
 
-            var is_me_count: usize = 0;
-            var invalid_shred_version: usize = 0;
-            var is_slow_count: usize = 0;
-            var no_rpc_count: usize = 0;
-            var no_snapshot_hashes_count: usize = 0;
+            try available_snapshot_peers.ensureTotalCapacity(contacts.len);
+            var result = findPeersToDownloadFromAssumeCapacity(
+                table,
+                contacts,
+                my_contact_info.shred_version,
+                my_contact_info.pubkey,
+                slow_peer_pubkeys.items,
+                // this is cleared and populated
+                &available_snapshot_peers,
+            );
+            logger.infof("searched for peers to downlod from: {any}", .{result});
 
-            search_loop: for (contacts) |*ci| {
-                const is_me = ci.pubkey.equals(&my_pubkey);
-                if (is_me) {
-                    is_me_count += 1;
-                    continue;
-                }
-
-                const matching_shred_version = my_contact_info.shred_version == ci.shred_version or my_contact_info.shred_version == 0;
-                if (!matching_shred_version) {
-                    invalid_shred_version += 1;
-                    continue;
-                }
-                _ = ci.getSocket(socket_tag.RPC) orelse {
-                    no_rpc_count += 1;
-                    continue;
-                };
-                const snapshot_hash = table.get(.{ .SnapshotHashes = ci.pubkey }) orelse {
-                    no_snapshot_hashes_count += 1;
-                    continue;
-                };
-                const hashes = snapshot_hash.value.data.SnapshotHashes;
-
-                var max_inc_hash: ?SlotAndHash = null;
-                for (hashes.incremental) |inc_hash| {
-                    if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
-                        max_inc_hash = inc_hash;
-                    }
-                }
-
-                // dont try to download from a slow peer
-                for (slow_peer_pubkeys.items) |slow_peer| {
-                    if (slow_peer.equals(&ci.pubkey)) {
-                        is_slow_count += 1;
-                        continue :search_loop;
-                    }
-                }
-
-                try available_snapshot_peers.append(.{
-                    // NOTE: maybe we need to deep clone here due to arraylist sockets?
-                    .contact_info = ci.*,
-                    .full_snapshot = hashes.full,
-                    .inc_snapshot = max_inc_hash,
-                });
-            }
-            logger.infof("is_me_count: {d}, invalid_shred_version: {d}, is_slow_count: {d}, no_rpc_count: {d}, no_snapshot_hashes_count: {d}", .{
-                is_me_count,
-                invalid_shred_version,
-                is_slow_count,
-                no_rpc_count,
-                no_snapshot_hashes_count,
-            });
-            logger.infof("found {d} valid peers for snapshot download...", .{available_snapshot_peers.items.len});
+            // logger.infof("is_me_count: {d}, invalid_shred_version: {d}, is_slow_count: {d}, no_rpc_count: {d}, no_snapshot_hashes_count: {d}", .{
+            //     result.is_me_count,
+            //     result.invalid_shred_version,
+            //     result.is_blacklist,
+            //     result.no_rpc_count,
+            //     result.no_snapshot_hashes_count,
+            // });
+            // logger.infof("found {d} valid peers for snapshot download...", .{available_snapshot_peers.items.len});
         }
 
         var trusted_snapshot_hashes = std.AutoHashMap(
@@ -240,9 +269,6 @@ pub fn downloadSnapshotsFromGossip(
             // success
             return;
         }
-
-        // try again
-        available_snapshot_peers.clearRetainingCapacity();
     }
 }
 
