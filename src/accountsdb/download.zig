@@ -35,6 +35,7 @@ pub fn downloadSnapshotsFromGossip(
     const my_contact_info = gossip_service.my_contact_info;
     const my_pubkey = my_contact_info.pubkey;
 
+    // TODO: maybe make this bigger? or dynamic?
     var contact_info_buf: [1_000]ContactInfo = undefined;
     var valid_contacts_buf: [1_000]u8 = undefined;
     @memset(&valid_contacts_buf, 0);

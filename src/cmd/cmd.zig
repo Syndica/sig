@@ -770,7 +770,7 @@ fn getOrDownloadSnapshots(
     };
 
     const should_download_new_snapshot = force_new_snapshot_download or maybe_snapshot_files == null;
-    if (should_download_new_snapshot) { 
+    if (should_download_new_snapshot) {
         const trusted_validators = try getTrustedValidators(gpa_allocator);
         defer if (trusted_validators) |*tvs| tvs.deinit();
 
