@@ -62,11 +62,11 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             result.no_rpc_count += 1;
             continue;
         };
-        const snapshot_hash = table.get(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
+        const gossip_data = table.get(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
             result.no_snapshot_hashes_count += 1;
             continue;
         };
-        const snapshot_hashes = snapshot_hash.value.data.SnapshotHashes;
+        const snapshot_hashes = gossip_data.value.data.SnapshotHashes;
 
         var max_inc_hash: ?SlotAndHash = null;
         for (snapshot_hashes.incremental) |inc_hash| {
@@ -93,6 +93,75 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     result.is_valid = valid_peers.items.len;
 
     return result;
+}
+
+/// uses swap remove to remove peers that do not have a hash which is trusted
+pub fn removeUnTrustedSnapshotPeers(
+    allocator: std.mem.Allocator,
+    table: *const GossipTable,
+    trusted_validators: std.ArrayList(Pubkey),
+    available_snapshot_peers: *std.ArrayList(PeerSnapshotHash),
+) !void {
+    var trusted_snapshot_hashes = std.AutoHashMap(
+        SlotAndHash, // full snapshot hash
+        std.AutoHashMap(SlotAndHash, void), // set of incremental snapshots
+    ).init(allocator);
+    defer trusted_snapshot_hashes.deinit();
+
+    // get the hashes of trusted validators
+    var trusted_count: usize = 0;
+    for (trusted_validators.items) |trusted_validator| {
+        const gossip_data = table.get(.{ .SnapshotHashes = trusted_validator }) orelse continue;
+        const trusted_hashes = gossip_data.value.data.SnapshotHashes;
+        trusted_count += 1;
+
+        var max_inc_hash: ?SlotAndHash = null;
+        for (trusted_hashes.incremental) |inc_hash| {
+            if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
+                max_inc_hash = inc_hash;
+            }
+        }
+
+        // track the full and incremental
+        var r = try trusted_snapshot_hashes.getOrPut(trusted_hashes.full);
+        if (max_inc_hash) |inc_snapshot| {
+            if (!r.found_existing) {
+                r.value_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
+            }
+            try r.value_ptr.put(inc_snapshot, {});
+        }
+    }
+
+    if (trusted_count == 0) {
+        available_snapshot_peers.clearRetainingCapacity();
+        return;
+    }
+
+    // remove peers that do not have a trusted hash
+    var peer_index: usize = 0;
+    for (0..available_snapshot_peers.items.len) |_| {
+        const peer = available_snapshot_peers.items[peer_index];
+        var should_remove = false;
+        // full snapshot must be trusted
+        if (trusted_snapshot_hashes.getEntry(peer.full_snapshot)) |entry| {
+            // if we have an incremental snapshot
+            if (peer.inc_snapshot) |inc_snapshot| {
+                // it should be trusted too
+                if (!entry.value_ptr.contains(inc_snapshot)) {
+                    should_remove = true;
+                }
+            }
+            // no incremental snapshot, thats ok
+        } else {
+            should_remove = true;
+        }
+
+        if (should_remove) {
+            _ = available_snapshot_peers.swapRemove(peer_index);
+        } else {
+            peer_index += 1;
+        }
+    }
 }
 
 /// downloads full and incremental snapshots from peers found in gossip.
@@ -140,64 +209,20 @@ pub fn downloadSnapshotsFromGossip(
                 // this is cleared and populated
                 &available_snapshot_peers,
             );
-            logger.infof("searched for peers to downlod from: {any}", .{result});
 
-            // logger.infof("is_me_count: {d}, invalid_shred_version: {d}, is_slow_count: {d}, no_rpc_count: {d}, no_snapshot_hashes_count: {d}", .{
-            //     result.is_me_count,
-            //     result.invalid_shred_version,
-            //     result.is_blacklist,
-            //     result.no_rpc_count,
-            //     result.no_snapshot_hashes_count,
-            // });
-            // logger.infof("found {d} valid peers for snapshot download...", .{available_snapshot_peers.items.len});
-        }
-
-        var trusted_snapshot_hashes = std.AutoHashMap(
-            SlotAndHash, // full snapshot hash
-            std.AutoHashMap(SlotAndHash, void), // set of incremental snapshots
-        ).init(allocator);
-        defer trusted_snapshot_hashes.deinit();
-
-        if (maybe_trusted_validators) |trusted_validators| {
-            // get the hashes of trusted validators
-            for (available_snapshot_peers.items) |*peer| {
-                var is_trusted = false;
-                for (trusted_validators.items) |trusted_validator| {
-                    if (peer.contact_info.pubkey.equals(&trusted_validator)) {
-                        is_trusted = true;
-                        break;
-                    }
-                }
-
-                if (is_trusted) {
-                    var r = try trusted_snapshot_hashes.getOrPut(peer.full_snapshot);
-                    if (peer.inc_snapshot) |inc_snapshot| {
-                        if (!r.found_existing) {
-                            r.value_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
-                        }
-                        try r.value_ptr.put(inc_snapshot, {});
-                    }
-                }
+            if (maybe_trusted_validators) |trusted_validators| {
+                try removeUnTrustedSnapshotPeers(
+                    allocator,
+                    table,
+                    trusted_validators,
+                    &available_snapshot_peers,
+                );
             }
+
+            logger.infof("searched for peers to downlod from: {any}", .{result});
         }
 
         for (available_snapshot_peers.items) |peer| {
-            const only_trusted_validators = maybe_trusted_validators != null;
-            if (only_trusted_validators) {
-                // full snapshot must be trusted
-                if (trusted_snapshot_hashes.getEntry(peer.full_snapshot)) |entry| {
-                    // if we have an incremental snapshot
-                    if (peer.inc_snapshot) |inc_snapshot| {
-                        // check if the incremental snapshot is trusted
-                        if (!entry.value_ptr.contains(inc_snapshot)) {
-                            continue;
-                        }
-                    }
-                } else {
-                    continue;
-                }
-            }
-
             // download the full snapshot
             const snapshot_filename = try std.fmt.allocPrint(allocator, "snapshot-{d}-{s}.{s}", .{
                 peer.full_snapshot.slot,
@@ -234,7 +259,7 @@ pub fn downloadSnapshotsFromGossip(
             }
 
             // download the incremental snapshot
-            // NOTE: PERF: maybe do this in another thread? while downloading the full snapshot
+            // PERF: maybe do this in another thread? while downloading the full snapshot
             if (peer.inc_snapshot) |inc_snapshot| {
                 const inc_snapshot_filename = try std.fmt.allocPrint(allocator, "incremental-snapshot-{d}-{d}-{s}.{s}", .{
                     peer.full_snapshot.slot,
@@ -436,4 +461,193 @@ pub fn downloadFile(
         return false;
     }
     return true;
+}
+
+const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
+const SnapshotHashes = @import("../gossip/data.zig").SnapshotHashes;
+const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+
+test "accounts_db.download: test remove untrusted peers" {
+    const allocator = std.testing.allocator;
+    var thread_pool = ThreadPool.init(.{});
+    var table = try GossipTable.init(allocator, &thread_pool);
+    defer table.deinit();
+
+    var random = std.rand.DefaultPrng.init(0);
+    const rng = random.random();
+
+    const my_shred_version: usize = 19;
+    const my_pubkey = Pubkey.random(rng);
+
+    const contact_infos: []ContactInfo = try allocator.alloc(ContactInfo, 10);
+    defer {
+        for (contact_infos) |ci| ci.deinit();
+        allocator.free(contact_infos);
+    }
+
+    for (contact_infos) |*ci| {
+        var lci = LegacyContactInfo.default(Pubkey.random(rng));
+        lci.rpc.setPort(19); // no long unspecified = valid
+        ci.* = try lci.toContactInfo(allocator);
+        ci.shred_version = 19; // matching shred version
+    }
+
+    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
+    defer valid_peers.deinit();
+
+    var trusted_validators = try std.ArrayList(Pubkey).initCapacity(allocator, 10);
+    defer trusted_validators.deinit();
+
+    for (contact_infos) |*ci| {
+        var kp = try KeyPair.create(null);
+        var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
+        data.data.SnapshotHashes.from = ci.pubkey;
+        try trusted_validators.append(ci.pubkey);
+        try table.insert(data, 0);
+    }
+
+    _ = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        &valid_peers,
+    );
+    try std.testing.expectEqual(valid_peers.items.len, 10);
+
+    try removeUnTrustedSnapshotPeers(
+        allocator,
+        &table,
+        trusted_validators,
+        &valid_peers,
+    );
+    try std.testing.expectEqual(valid_peers.items.len, 10);
+
+    // repopulate and try again with less trusted validators
+    _ = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        &valid_peers,
+    );
+    try std.testing.expectEqual(valid_peers.items.len, 10);
+
+    _ = trusted_validators.pop();
+    _ = trusted_validators.pop();
+
+    try removeUnTrustedSnapshotPeers(
+        allocator,
+        &table,
+        trusted_validators,
+        &valid_peers,
+    );
+    try std.testing.expectEqual(valid_peers.items.len, 8);
+}
+
+test "accounts_db.download: test finding peers" {
+    const allocator = std.testing.allocator;
+    var thread_pool = ThreadPool.init(.{});
+    var table = try GossipTable.init(allocator, &thread_pool);
+    defer table.deinit();
+
+    var random = std.rand.DefaultPrng.init(0);
+    const rng = random.random();
+
+    const my_shred_version: usize = 19;
+    const my_pubkey = Pubkey.random(rng);
+
+    const contact_infos: []ContactInfo = try allocator.alloc(ContactInfo, 10);
+    defer {
+        for (contact_infos) |ci| ci.deinit();
+        allocator.free(contact_infos);
+    }
+
+    for (contact_infos) |*ci| {
+        var lci = LegacyContactInfo.default(Pubkey.random(rng));
+        lci.rpc.setPort(19); // no long unspecified = valid
+        ci.* = try lci.toContactInfo(allocator);
+        ci.shred_version = 19; // matching shred version
+    }
+
+    var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
+    defer valid_peers.deinit();
+
+    var result = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        &valid_peers,
+    );
+
+    // no snapshot hashes
+    try std.testing.expect(result.is_valid == 0);
+    try std.testing.expect(result.invalid_shred_version == 0);
+    try std.testing.expect(result.no_rpc_count == 0);
+    try std.testing.expect(result.is_me_count == 0);
+    try std.testing.expect(result.is_blacklist == 0);
+    try std.testing.expect(result.no_snapshot_hashes_count == 10);
+
+    for (contact_infos) |*ci| {
+        var kp = try KeyPair.create(null);
+        var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
+        data.data.SnapshotHashes.from = ci.pubkey;
+        try table.insert(data, 0);
+    }
+
+    result = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        &valid_peers,
+    );
+    // all valid
+    try std.testing.expect(result.is_valid == 10);
+
+    // blacklist one
+    var blist = [_]Pubkey{contact_infos[0].pubkey};
+    result = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &blist,
+        &valid_peers,
+    );
+    try std.testing.expect(result.is_valid == 9);
+    try std.testing.expect(result.is_blacklist == 1);
+
+    for (contact_infos) |*ci| {
+        ci.shred_version = 21; // non-matching shred version
+    }
+    result = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        &valid_peers,
+    );
+    try std.testing.expect(result.invalid_shred_version == 10);
+
+    for (contact_infos) |*ci| {
+        ci.pubkey = my_pubkey; // is_me pubkey
+    }
+    result = findPeersToDownloadFromAssumeCapacity(
+        &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
+        &valid_peers,
+    );
+    try std.testing.expect(result.is_me_count == 10);
 }
