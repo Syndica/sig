@@ -465,7 +465,6 @@ pub fn downloadFile(
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
-const SnapshotHashes = @import("../gossip/data.zig").SnapshotHashes;
 const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
