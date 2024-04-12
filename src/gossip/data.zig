@@ -256,31 +256,6 @@ pub const GossipKey = union(enum) {
     ContactInfo: Pubkey,
 };
 
-pub const RestartHeaviestFork = struct {
-    from: Pubkey,
-    wallclock: u64,
-    last_slot: Slot,
-    last_slot_hash: Hash,
-    observed_stake: u64,
-    shred_version: u16,
-};
-
-pub const RestartLastVotedForkSlots = struct {
-    from: Pubkey,
-    wallclock: u64,
-    offsets: SlotsOffsets,
-    last_voted_slot: Slot,
-    last_voted_hash: Hash,
-    shred_version: u16,
-};
-
-pub const SlotsOffsets = union(enum) {
-    RunLengthEncoding: std.ArrayList(u16),
-    RawOffsets: DynamicArrayBitSet(u8),
-
-    pub const @"!bincode-config:bits" = BitVecConfig(u8);
-};
-
 // https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85
 pub const GossipData = union(enum(u32)) {
     LegacyContactInfo: LegacyContactInfo,
@@ -1251,6 +1226,31 @@ fn socket_addrs_unspecified() [13]SocketAddr {
         SocketAddr.unspecified(),
     };
 }
+
+pub const RestartHeaviestFork = struct {
+    from: Pubkey,
+    wallclock: u64,
+    last_slot: Slot,
+    last_slot_hash: Hash,
+    observed_stake: u64,
+    shred_version: u16,
+};
+
+pub const RestartLastVotedForkSlots = struct {
+    from: Pubkey,
+    wallclock: u64,
+    offsets: SlotsOffsets,
+    last_voted_slot: Slot,
+    last_voted_hash: Hash,
+    shred_version: u16,
+};
+
+pub const SlotsOffsets = union(enum) {
+    RunLengthEncoding: std.ArrayList(u16),
+    RawOffsets: DynamicArrayBitSet(u8),
+
+    pub const @"!bincode-config:bits" = BitVecConfig(u8);
+};
 
 test "gossip.data: new contact info" {
     var seed: u64 = @intCast(std.time.milliTimestamp());
