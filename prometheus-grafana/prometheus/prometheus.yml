@@ -13,3 +13,4 @@ scrape_configs:
   static_configs:
   - targets:
     - localhost:12345
+    - host.docker.internal:12345

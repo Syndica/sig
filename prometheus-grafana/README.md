@@ -1,16 +1,44 @@
 original src: https://github.com/docker/awesome-compose/tree/master/prometheus-grafana
 
+## Setup 
+
+requirements: 
+- `docker compose` 
+- either mac or linux supported 
+
+modify `/etc/hosts` to include the following line: 
+```
+127.0.0.1 prometheus
+```
+
+## Running 
+
+mac: `docker compose -f compose-mac.yaml up -d`
+linux: `docker compose -f compose-linux.yaml up -d`
+
+- grafana will be accessable on `localhost:3000`
+- prometheus will be accessable on `localhost:9090`
+- sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will 
+need to also modify the prometheus `target` to point to the different port).
+
+## Shutting down
+
+mac: `docker compose -f compose-mac.yaml down`
+linux: `docker compose -f compose-linux.yaml down`
+
 ## Compose sample
 ### Prometheus & Grafana
 
 Project structure:
 ```
 .
-├── compose.yaml
+├── compose-linux.yaml
+├── compose-mac.yaml
 ├── grafana
-│   └── datasource.yml
+│   └── dashboards/ -- this is where the sig dashboard lives (will need to copy .json export of dashboard from running container and push through git for any dashboard changes)
+│   └── datasources/ -- this points to prometheus docker
 ├── prometheus
-│   └── prometheus.yml
+│   └── prometheus.yml 
 └── README.md
 ```
 
