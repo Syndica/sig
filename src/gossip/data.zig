@@ -270,7 +270,7 @@ pub const GossipData = union(enum(u32)) {
     DuplicateShred: struct { u16, DuplicateShred },
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
-    // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47#diff-d374198af92c4965735962d2165abf35101b63599efb6d2f96cb4c0bc3d2be4f
+    // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47
     RestartHeaviestFork: RestartHeaviestFork,
     // https://github.com/anza-xyz/agave/commit/0a3810854fa4a11b0841c548dcbc0ada311b8830
     RestartLastVotedForkSlots: RestartLastVotedForkSlots,
