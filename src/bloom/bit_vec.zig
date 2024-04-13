@@ -2,10 +2,10 @@ const std = @import("std");
 const bincode = @import("../bincode/bincode.zig");
 const testing = std.testing;
 
-const DynamicArrayBitSet = @import("./bit_set.zig").DynamicArrayBitSet;
+const DynamicArrayBitSet = @import("bit_set.zig").DynamicArrayBitSet;
 
 /// We created this for compatibility with the Rust BitVec type
-/// even though `DynamicBitSet` functions the same but bincode
+/// even though `DynamicArrayBitSet` functions the same but bincode
 /// serializes/deserializes differently thus why we need this
 /// intermediary type.
 pub fn BitVec(comptime T: type) type {
@@ -69,7 +69,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
     };
 }
 
-test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec u64" {
+test "bloom.bit_vec: serializes/deserializes matches Rust's BitVec u64" {
     var rust_bit_vec_serialized = [_]u8{
         1,   2,   0,   0,   0,   0,   0, 0, 0, 255, 255, 239, 191, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 255, 128, 0, 0, 0, 0,   0,   0,   0,
@@ -92,7 +92,7 @@ test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec u64" {
     try testing.expectEqualSlices(u8, rust_bit_vec_serialized[0..], out[0..]);
 }
 
-test "bloom.bitvec: serializes/deserializes and matches Rust's BitVec u8" {
+test "bloom.bit_vec: serializes/deserializes matches Rust's BitVec u8" {
     var rust_bit_vec_serialized = [_]u8{ 1, 16, 0, 0, 0, 0, 0, 0, 0, 255, 255, 239, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 128, 0, 0, 0, 0, 0, 0, 0 };
     var bitset = try DynamicArrayBitSet(u8).initFull(std.testing.allocator, 128);
     defer bitset.deinit(std.testing.allocator);

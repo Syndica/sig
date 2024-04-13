@@ -1,9 +1,9 @@
-/// fork of stdlib bit_set `ArrayBitSet` to allow for
-/// dynamic sizing of bitsets
 const std = @import("std");
 const assert = std.debug.assert;
 const Allocator = std.mem.Allocator;
 
+/// fork of stdlib bit_set `ArrayBitSet` to allow for
+/// dynamic sizing of bitsets and different types of masks
 pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
     const mask_info: std.builtin.Type = @typeInfo(MaskIntType);
 
