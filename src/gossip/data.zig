@@ -154,6 +154,12 @@ pub const SignedGossipData = struct {
             .ContactInfo => |*v| {
                 return v.pubkey;
             },
+            .RestartLastVotedForkSlots => |*v| {
+                return v.from;
+            },
+            .RestartHeaviestFork => |*v| {
+                return v.from;
+            },
         };
     }
 
@@ -193,6 +199,12 @@ pub const SignedGossipData = struct {
                 return v.wallclock;
             },
             .ContactInfo => |*v| {
+                return v.wallclock;
+            },
+            .RestartLastVotedForkSlots => |*v| {
+                return v.wallclock;
+            },
+            .RestartHeaviestFork => |*v| {
                 return v.wallclock;
             },
         };
@@ -236,6 +248,12 @@ pub const SignedGossipData = struct {
             .ContactInfo => {
                 return .{ .ContactInfo = self.id() };
             },
+            .RestartLastVotedForkSlots => {
+                return .{ .RestartLastVotedForkSlots = self.id() };
+            },
+            .RestartHeaviestFork => {
+                return .{ .RestartHeaviestFork = self.id() };
+            },
         };
     }
 };
@@ -254,6 +272,8 @@ pub const GossipKey = union(enum) {
     DuplicateShred: struct { u16, Pubkey },
     SnapshotHashes: Pubkey,
     ContactInfo: Pubkey,
+    RestartLastVotedForkSlots: Pubkey,
+    RestartHeaviestFork: Pubkey,
 };
 
 // https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85
@@ -270,10 +290,10 @@ pub const GossipData = union(enum(u32)) {
     DuplicateShred: struct { u16, DuplicateShred },
     SnapshotHashes: SnapshotHashes,
     ContactInfo: ContactInfo,
-    // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47
-    RestartHeaviestFork: RestartHeaviestFork,
     // https://github.com/anza-xyz/agave/commit/0a3810854fa4a11b0841c548dcbc0ada311b8830
     RestartLastVotedForkSlots: RestartLastVotedForkSlots,
+    // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47
+    RestartHeaviestFork: RestartHeaviestFork,
 
     pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
@@ -368,6 +388,12 @@ pub const GossipData = union(enum(u32)) {
             },
             .ContactInfo => |*v| {
                 v.pubkey = id;
+            },
+            .RestartLastVotedForkSlots => |*v| {
+                v.from = id;
+            },
+            .RestartHeaviestFork => |*v| {
+                v.from = id;
             },
         }
     }
