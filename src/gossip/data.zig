@@ -304,6 +304,8 @@ pub const GossipData = union(enum(u32)) {
             .SnapshotHashes,
             .NodeInstance,
             .Version,
+            .RestartLastVotedForkSlots,
+            .RestartHeaviestFork,
             => |*v| {
                 try v.sanitize();
             },
@@ -1259,6 +1261,12 @@ pub const RestartHeaviestFork = struct {
     last_slot_hash: Hash,
     observed_stake: u64,
     shred_version: u16,
+
+    const Self = @This();
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
+    }
 };
 
 pub const RestartLastVotedForkSlots = struct {
@@ -1268,6 +1276,12 @@ pub const RestartLastVotedForkSlots = struct {
     last_voted_slot: Slot,
     last_voted_hash: Hash,
     shred_version: u16,
+
+    const Self = @This();
+
+    pub fn sanitize(self: *const Self) !void {
+        try sanitizeWallclock(self.wallclock);
+    }
 };
 
 pub const SlotsOffsets = union(enum(u32)) {
