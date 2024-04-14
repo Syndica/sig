@@ -47,9 +47,17 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, "sync", filter)) {
+    if (std.mem.startsWith(u8, "sync.channel", filter)) {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
+            max_time_per_bench,
+            TimeUnits.microseconds,
+        );
+    }
+
+    if (std.mem.startsWith(u8, "sync.chanx", filter)) {
+        try benchmark(
+            @import("sync/chanx.zig").BenchmarkChannel,
             max_time_per_bench,
             TimeUnits.microseconds,
         );
@@ -172,8 +180,8 @@ pub fn benchmark(
                 timer.reset();
 
                 const res = switch (@TypeOf(arg)) {
-                    void => @field(B, def.name)(),
-                    else => @field(B, def.name)(arg),
+                    void => @call(std.builtin.CallModifier.auto, @field(B, def.name), .{}),
+                    else => @call(std.builtin.CallModifier.auto, @field(B, def.name), if (@typeInfo(@TypeOf(arg)) == .Struct and @typeInfo(@TypeOf(arg)).Struct.is_tuple) arg else .{arg}),
                 };
                 res catch @panic("panic");
                 const ns_time = timer.read();

@@ -41,12 +41,18 @@ pub const version = struct {
 };
 
 pub const sync = struct {
+    pub usingnamespace @import("sync/backoff.zig");
+    pub usingnamespace @import("sync/bounded.zig");
     pub usingnamespace @import("sync/channel.zig");
+    pub usingnamespace @import("sync/chanx.zig");
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
     pub usingnamespace @import("sync/mux.zig");
     pub usingnamespace @import("sync/once_cell.zig");
+    pub usingnamespace @import("sync/parker.zig");
+    pub usingnamespace @import("sync/thread_context.zig");
     pub usingnamespace @import("sync/thread_pool.zig");
+    pub usingnamespace @import("sync/waker.zig");
 };
 
 pub const utils = struct {

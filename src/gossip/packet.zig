@@ -1,3 +1,4 @@
+const std = @import("std");
 const network = @import("zig-network");
 
 /// Maximum over-the-wire size of a Transaction
@@ -27,5 +28,17 @@ pub const Packet = struct {
             .data = undefined,
             .size = 0,
         };
+    }
+
+    pub fn random(rand: *std.rand.DefaultPrng) Self {
+        var packet = Self{
+            .addr = .{ .port = 0, .address = .{ .ipv4 = network.Address.IPv4.any } },
+            .data = undefined,
+            .size = 0,
+        };
+
+        rand.fill(&packet.data);
+
+        return packet;
     }
 };
