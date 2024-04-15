@@ -96,6 +96,7 @@ pub fn recvMmsg(
         }
         packet.addr = recv_meta.sender;
         packet.size = bytes_read;
+        packet.flags = 0;
 
         if (count == 0) {
             // nonblocking mode

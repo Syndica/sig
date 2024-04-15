@@ -29,6 +29,16 @@ pub const RepairRequest = union(enum) {
     HighestShred: struct { Slot, u64 },
     /// Requesting the missing shred at a particular index
     Shred: struct { Slot, u64 },
+
+    const Self = @This();
+
+    pub fn slot(self: *const Self) Slot {
+        return switch (self.*) {
+            .Orphan => |x| x,
+            .HighestShred => |x| x[0],
+            .Shred => |x| x[0],
+        };
+    }
 };
 
 /// Executes all three because they are tightly coupled:

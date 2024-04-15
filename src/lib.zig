@@ -49,15 +49,18 @@ pub const version = struct {
 };
 
 pub const sync = struct {
+    pub usingnamespace @import("sync/bit_array.zig");
     pub usingnamespace @import("sync/channel.zig");
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
+    pub usingnamespace @import("sync/ref_counter.zig");
     pub usingnamespace @import("sync/mux.zig");
     pub usingnamespace @import("sync/once_cell.zig");
     pub usingnamespace @import("sync/thread_pool.zig");
 };
 
 pub const utils = struct {
+    pub usingnamespace @import("utils/bitflags.zig");
     pub usingnamespace @import("utils/shortvec.zig");
     pub usingnamespace @import("utils/types.zig");
     pub usingnamespace @import("utils/varint.zig");
@@ -103,4 +106,8 @@ pub const tvu = struct {
     pub usingnamespace @import("tvu/repair_message.zig");
     pub usingnamespace @import("tvu/repair_service.zig");
     pub usingnamespace @import("tvu/shred_receiver.zig");
+    pub usingnamespace @import("tvu/shred_verifier.zig");
+    pub usingnamespace @import("tvu/shred.zig");
+    pub usingnamespace @import("tvu/shred_tracker.zig");
+    pub usingnamespace @import("tvu/shred_processor.zig");
 };

@@ -10,6 +10,7 @@ pub const Packet = struct {
     data: [PACKET_DATA_SIZE]u8,
     size: usize,
     addr: network.EndPoint,
+    flags: u8 = 0,
 
     const Self = @This();
 
@@ -28,4 +29,27 @@ pub const Packet = struct {
             .size = 0,
         };
     }
+
+    pub fn set(self: *Self, flag: Flag) void {
+        self.flags |= @intFromEnum(flag);
+    }
+
+    pub fn isSet(self: *const Self, flag: Flag) bool {
+        return self.flags & @intFromEnum(flag) == @intFromEnum(flag);
+    }
+};
+
+/// TODO this violates separation of concerns. it's unusual for network-specific
+/// type definitions to include information that's specific to application
+/// components (like repair)
+/// 
+/// it would be nice to find another approach that is equally easy to use,
+/// without sacrificing safety, performance, or readability.
+pub const Flag = enum(u8) {
+    discard = 0b0000_0001,
+    // forwarded = 0b0000_0010,
+    repair = 0b0000_0100,
+    // simple_vote_tx = 0b0000_1000,
+    // tracer_packet = 0b0001_0000,
+    // round_compute_unit_price = 0b0010_0000,
 };

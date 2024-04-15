@@ -3,11 +3,13 @@ const zig_network = @import("zig-network");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Atomic;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
+const BasicShredTracker = sig.tvu.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
@@ -28,6 +30,7 @@ pub const RepairService = struct {
     allocator: Allocator,
     requester: RepairRequester,
     peer_provider: RepairPeerProvider,
+    shred_tracker: *BasicShredTracker,
     logger: Logger,
     exit: *Atomic(bool),
     slot_to_request: ?u64,
@@ -36,15 +39,29 @@ pub const RepairService = struct {
         self.peer_provider.deinit();
     }
 
+    /// Start the long-running service and block until it exits.
     pub fn run(self: *@This()) !void {
         self.logger.info("starting repair service");
         defer self.logger.info("exiting repair service");
         while (!self.exit.load(.Unordered)) {
-            if (try self.initialSnapshotRepair()) |request| {
-                try self.requester.sendRepairRequest(request);
-            }
-            // TODO repair logic
+            try self.sendNecessaryRepairs();
+            // TODO sleep?
             std.time.sleep(100_000_000);
+        }
+    }
+
+    /// Identifies which repairs are needed based on the current state,
+    /// and sends those repairs, then returns.
+    fn sendNecessaryRepairs(self: *@This()) !void {
+        // if (try self.initialSnapshotRepair()) |request| {
+        //     try self.requester.sendRepairRequest(request);
+        // }
+        const repair_requests = try self.getRepairs();
+        defer repair_requests.deinit();
+        const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
+        defer addressed_requests.deinit();
+        for (addressed_requests.items) |addressed_request| {
+            try self.requester.sendRepairRequest(addressed_request);
         }
     }
 
@@ -61,6 +78,46 @@ pub const RepairService = struct {
             return null;
         }
     }
+
+    fn getRepairs(self: *@This()) !ArrayList(RepairRequest) {
+        const all_missing = try self.shred_tracker.identifyMissing(self.allocator);
+        defer all_missing.deinit();
+        var repairs = ArrayList(RepairRequest).init(self.allocator);
+        var individual_count: usize = 0;
+        for (all_missing.reports.items) |report| {
+            const slot = report.slot;
+            for (report.missing_shreds.items) |shred_window| {
+                if (shred_window.end) |end| {
+                    for (shred_window.start..end) |i| {
+                        if (individual_count > 500) break;
+                        individual_count += 1;
+                        try repairs.append(.{ .Shred = .{ slot, i } });
+                    }
+                } else {
+                    try repairs.append(.{ .HighestShred = .{ slot, shred_window.start } });
+                }
+            }
+        }
+        return repairs;
+    }
+
+    fn assignRequestsToPeers(
+        self: *@This(),
+        requests: []const RepairRequest,
+    ) !ArrayList(AddressedRepairRequest) {
+        var addressed = ArrayList(AddressedRepairRequest).init(self.allocator);
+        for (requests) |request| {
+            if (try self.peer_provider.getRandomPeer(request.slot())) |peer| {
+                try addressed.append(.{
+                    .request = request,
+                    .recipient = peer.pubkey,
+                    .recipient_addr = peer.serve_repair_socket,
+                });
+            }
+            // TODO do something if a peer is not found
+        }
+        return addressed;
+    }
 };
 
 /// Signs and serializes repair requests. Sends them over the network.
@@ -71,6 +128,7 @@ pub const RepairRequester = struct {
     udp_send_socket: *Socket,
     logger: Logger,
 
+    /// TODO: send batch
     pub fn sendRepairRequest(
         self: *const @This(),
         request: AddressedRepairRequest,
@@ -86,10 +144,11 @@ pub const RepairRequester = struct {
         );
         defer self.allocator.free(data);
         const addr = request.recipient_addr.toString();
-        self.logger.infof(
-            "sending repair request to {s} - {}",
-            .{ addr[0][0..addr[1]], request.request },
-        );
+        _ = addr;
+        // self.logger.infof(
+        //     "sending repair request to {s} - {}",
+        //     .{ addr[0][0..addr[1]], request.request },
+        // );
         _ = try self.udp_send_socket.sendTo(request.recipient_addr.toEndpoint(), data);
     }
 };
@@ -279,6 +338,8 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
+    var tracker = try BasicShredTracker.init(allocator, 13579);
+    defer tracker.deinit();
     var service = RepairService{
         .allocator = allocator,
         .requester = RepairRequester{
@@ -292,6 +353,7 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
         .logger = logger,
         .exit = &exit,
         .slot_to_request = 13579,
+        .shred_tracker = &tracker,
     };
     defer service.deinit();
 
