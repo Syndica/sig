@@ -3,7 +3,7 @@ const Bounded = @import("bounded.zig").Bounded;
 const Atomic = std.atomic.Atomic;
 const page_allocator = std.heap.page_allocator;
 
-/// Channel is an abstraction on top of different channels which provide different
+/// ChannelX is an abstraction on top of different channels which provide different
 /// performance/functionality. The idea is to allow for a generic API that each channel kind
 /// implements allowing for ease of swapping to a different kin if needed.
 pub fn ChannelX(comptime T: type) type {
