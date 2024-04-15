@@ -239,6 +239,7 @@ pub const BenchmarkChannel = struct {
         var n_items = argss.n_items;
         var senders_count = argss.n_senders;
         var receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
         var channel = Channel(usize).init(allocator, n_items / 2);
@@ -246,8 +247,6 @@ pub const BenchmarkChannel = struct {
 
         var sends_per_sender: usize = n_items / senders_count;
         var receives_per_receiver: usize = n_items / receivers_count;
-
-        var timer = try std.time.Timer.start();
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
@@ -276,6 +275,7 @@ pub const BenchmarkChannel = struct {
         var n_items = argss.n_items;
         var senders_count = argss.n_senders;
         var receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
         var channel = Channel(Packet).init(allocator, n_items / 2);
@@ -283,8 +283,6 @@ pub const BenchmarkChannel = struct {
 
         var sends_per_sender: usize = n_items / senders_count;
         var receives_per_receiver: usize = n_items / receivers_count;
-
-        var timer = try std.time.Timer.start();
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {

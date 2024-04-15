@@ -351,6 +351,7 @@ pub const BenchmarkChannel = struct {
         var n_items = argss.n_items;
         var senders_count = argss.n_senders;
         var receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
 
         var channel = try Channel(usize).init(.bounded, .{
             .allocator = page_allocator,
@@ -360,8 +361,6 @@ pub const BenchmarkChannel = struct {
 
         var sends_per_sender: usize = n_items / senders_count;
         var received_per_sender: usize = n_items / receivers_count;
-
-        var timer = try std.time.Timer.start();
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
@@ -386,6 +385,10 @@ pub const BenchmarkChannel = struct {
 
     pub fn benchmarkBoundedPacketChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        var n_items = argss.n_items;
+        var senders_count = argss.n_senders;
+        var receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
 
         var channel = try Channel(Packet).init(.bounded, .{
             .allocator = page_allocator,
@@ -393,14 +396,8 @@ pub const BenchmarkChannel = struct {
         });
         defer channel.deinit();
 
-        var n_items = argss.n_items;
-        var senders_count = argss.n_senders;
-        var receivers_count = argss.n_receivers;
-
         var sends_per_sender: usize = n_items / senders_count;
         var received_per_sender: usize = n_items / receivers_count;
-
-        var timer = try std.time.Timer.start();
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
