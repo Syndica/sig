@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Atomic = std.atomic.Atomic;
-const c = std.os.system;
+const c = std.c;
 const CLOCK_MONOTONIC = c.CLOCK.MONOTONIC;
 const CLOCK_REALTIME = c.CLOCK.REALTIME;
 
@@ -29,11 +29,13 @@ pub const Parker = struct {
 
         switch (builtin.os.tag) {
             .linux => {
-                var attr = c.pthread_condattr_t{};
-                assertEq(c.pthread_condattr_init(&attr), SUCCESS);
-                assertEq(c.pthread_condattr_setclock(&attr, CLOCK_MONOTONIC), SUCCESS);
-                assertEq(c.pthread_cond_init(&self.cond, &attr), SUCCESS);
-                assertEq(c.pthread_condattr_destroy(&attr), SUCCESS);
+                // TODO: initialize cond with attr (currently failing with linux build)
+                // var attr = c.pthread_condattr_t{};
+                // assertEq(c.pthread_condattr_init(&attr), SUCCESS);
+                // assertEq(c.pthread_condattr_setclock(&attr, CLOCK_MONOTONIC), SUCCESS);
+                // assertEq(c.pthread_cond_init(&self.cond, null), SUCCESS);
+                // assertEq(c.pthread_condattr_destroy(&attr), SUCCESS);
+                self.cond = c.PTHREAD_COND_INITIALIZER;
             },
             .macos => {
                 self.cond = c.PTHREAD_COND_INITIALIZER;
