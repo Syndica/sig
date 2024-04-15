@@ -6,7 +6,7 @@ const page_allocator = std.heap.page_allocator;
 /// Channel is an abstraction on top of different channels which provide different
 /// performance/functionality. The idea is to allow for a generic API that each channel kind
 /// implements allowing for ease of swapping to a different kin if needed.
-pub fn Channel(comptime T: type) type {
+pub fn ChannelX(comptime T: type) type {
     return union(enum(u8)) {
         bounded: *Bounded(T),
 
@@ -145,12 +145,12 @@ pub fn Sender(comptime T: type) type {
         const Internal = struct {
             tid: std.Thread.Id,
             released: bool,
-            ch: Channel(T),
+            ch: ChannelX(T),
         };
 
         const Self = @This();
 
-        fn init(chan: Channel(T)) Self {
+        fn init(chan: ChannelX(T)) Self {
             chan.acquireSender();
             return Self{
                 .private = .{
@@ -197,12 +197,12 @@ pub fn Receiver(comptime T: type) type {
         const Internal = struct {
             tid: std.Thread.Id,
             released: bool,
-            ch: Channel(T),
+            ch: ChannelX(T),
         };
 
         const Self = @This();
 
-        fn init(chan: Channel(T)) Self {
+        fn init(chan: ChannelX(T)) Self {
             return Self{
                 .private = .{
                     .tid = std.Thread.getCurrentId(),
@@ -244,7 +244,7 @@ pub fn Receiver(comptime T: type) type {
 const Packet = @import("../net/packet.zig").Packet;
 
 fn testPacketSender(
-    chan: Channel(Packet),
+    chan: ChannelX(Packet),
     total_send: usize,
 ) void {
     var sender = chan.sender();
@@ -258,7 +258,7 @@ fn testPacketSender(
 }
 
 fn testPacketReceiver(
-    chan: Channel(Packet),
+    chan: ChannelX(Packet),
     _: usize,
 ) void {
     var receiver = chan.receiver();
@@ -271,7 +271,7 @@ fn testPacketReceiver(
 }
 
 fn testUsizeSender(
-    chan: Channel(usize),
+    chan: ChannelX(usize),
     total_send: usize,
 ) void {
     var sender = chan.sender();
@@ -284,7 +284,7 @@ fn testUsizeSender(
 }
 
 fn testUsizeReceiver(
-    chan: Channel(usize),
+    chan: ChannelX(usize),
     _: usize,
 ) void {
     var receiver = chan.receiver();
@@ -353,7 +353,7 @@ pub const BenchmarkChannel = struct {
         var receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
-        var channel = try Channel(usize).init(.bounded, .{
+        var channel = try ChannelX(usize).init(.bounded, .{
             .allocator = page_allocator,
             .init_capacity = 4096,
         });
@@ -390,7 +390,7 @@ pub const BenchmarkChannel = struct {
         var receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
-        var channel = try Channel(Packet).init(.bounded, .{
+        var channel = try ChannelX(Packet).init(.bounded, .{
             .allocator = page_allocator,
             .init_capacity = 4096,
         });
