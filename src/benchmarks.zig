@@ -31,6 +31,14 @@ pub fn main() !void {
     // if we have more benchmarks we can make this more efficient
     const max_time_per_bench = 2 * std.time.ms_per_s; // !!
 
+    if (std.mem.startsWith(u8, "accounts_db", filter)) {
+        try benchmark(
+            @import("accountsdb/db.zig").BenchmarkAccountsDB,
+            max_time_per_bench,
+            TimeUnits.nanoseconds,
+        );
+    }
+
     if (std.mem.startsWith(u8, "socket_utils", filter)) {
         try benchmark(
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
@@ -42,6 +50,11 @@ pub fn main() !void {
     if (std.mem.startsWith(u8, "gossip", filter)) {
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
+            max_time_per_bench,
+            TimeUnits.milliseconds,
+        );
+        try benchmark(
+            @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
             TimeUnits.milliseconds,
         );
@@ -95,7 +108,6 @@ pub fn benchmark(
     time_unit: TimeUnits,
 ) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
-    const arg_names = if (@hasDecl(B, "arg_names")) B.arg_names else [_]u8{};
     const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
     const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
 
@@ -127,14 +139,12 @@ pub fn benchmark(
             formatter("Mean({s})", time_unit.toString()),
         );
         inline for (functions) |f| {
-            var i: usize = 0;
-            while (i < args.len) : (i += 1) {
+            for (args) |arg| {
                 const max = math.maxInt(u32);
-                res = if (i < arg_names.len) blk2: {
-                    const arg_name = formatter("{s}", arg_names[i]);
-                    break :blk2 try printBenchmark(writer, res, f.name, arg_name, max, max, max, max, max);
+                res = if (@TypeOf(arg) == void) blk2: {
+                    break :blk2 try printBenchmark(writer, res, f.name, formatter("{s}", ""), max, max, max, max, max);
                 } else blk2: {
-                    break :blk2 try printBenchmark(writer, res, f.name, i, max, max, max, max, max);
+                    break :blk2 try printBenchmark(writer, res, f.name, formatter("{s}", arg.name), max, max, max, max, max);
                 };
             }
         }
@@ -162,12 +172,11 @@ pub fn benchmark(
     try stderr.writeAll("\n");
     try stderr.context.flush();
 
-    var timer = try time.Timer.start();
     inline for (functions, 0..) |def, fcni| {
         if (fcni > 0)
             std.debug.print("---\n", .{});
 
-        inline for (args, 0..) |arg, index| {
+        inline for (args) |arg| {
             var runtimes: [max_iterations]u64 = undefined;
             var min: u64 = math.maxInt(u64);
             var max: u64 = 0;
@@ -177,23 +186,16 @@ pub fn benchmark(
             while (i < min_iterations or
                 (i < max_iterations and runtime_sum < max_time)) : (i += 1)
             {
-                timer.reset();
-
-                const res = switch (@TypeOf(arg)) {
-                    void => @call(std.builtin.CallModifier.auto, @field(B, def.name), .{}),
-                    else => @call(std.builtin.CallModifier.auto, @field(B, def.name), if (@typeInfo(@TypeOf(arg)) == .Struct and @typeInfo(@TypeOf(arg)).Struct.is_tuple) arg else .{arg}),
+                const ns_time = try switch (@TypeOf(arg)) {
+                    void => @field(B, def.name)(),
+                    else => @field(B, def.name)(arg),
                 };
-                res catch @panic("panic");
-                const ns_time = timer.read();
+
                 const runtime = time_unit.unitsfromNanoseconds(ns_time);
                 runtimes[i] = runtime;
                 runtime_sum += runtime;
                 if (runtimes[i] < min) min = runtimes[i];
                 if (runtimes[i] > max) max = runtimes[i];
-                switch (@TypeOf(res)) {
-                    void => {},
-                    else => std.mem.doNotOptimizeAway(&res),
-                }
             }
 
             const runtime_mean: u64 = @intCast(runtime_sum / i);
@@ -205,11 +207,10 @@ pub fn benchmark(
             }
             const variance = d_sq_sum / i;
 
-            if (index < arg_names.len) {
-                const arg_name = formatter("{s}", arg_names[index]);
-                _ = try printBenchmark(stderr, min_width, def.name, arg_name, i, min, max, variance, runtime_mean);
-            } else {
+            if (@TypeOf(arg) == void) {
                 _ = try printBenchmark(stderr, min_width, def.name, formatter("{s}", ""), i, min, max, variance, runtime_mean);
+            } else {
+                _ = try printBenchmark(stderr, min_width, def.name, formatter("{s}", arg.name), i, min, max, variance, runtime_mean);
             }
             try stderr.writeAll("\n");
             try stderr.context.flush();

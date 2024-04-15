@@ -6,7 +6,7 @@ const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
 const GossipData = _gossip_data.GossipData;
 const ContactInfo = _gossip_data.ContactInfo;
-const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const socket_tag = _gossip_data.socket_tag;
 const getWallclockMs = _gossip_data.getWallclockMs;
 
 const DefaultPrng = std.rand.DefaultPrng;
@@ -34,7 +34,7 @@ pub const Ping = struct {
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
         const sig = try keypair.sign(&token, null);
         var self = Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(sig.toBytes()),
         };
@@ -47,13 +47,13 @@ pub const Ping = struct {
         var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(sig.toBytes()),
         };
     }
 
-    pub fn verify(self: *Self) !void {
+    pub fn verify(self: *const Self) !void {
         if (!self.signature.verify(self.from, &self.token)) {
             return error.InvalidSignature;
         }
@@ -73,13 +73,13 @@ pub const Pong = struct {
         const sig = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key, true),
+            .from = Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
             .signature = Signature.init(sig.toBytes()),
         };
     }
 
-    pub fn verify(self: *Self) !void {
+    pub fn verify(self: *const Self) error{InvalidSignature}!void {
         if (!self.signature.verify(self.from, &self.hash.data)) {
             return error.InvalidSignature;
         }
@@ -88,6 +88,12 @@ pub const Pong = struct {
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         const ping = try Ping.random(rng, keypair);
         return try Pong.init(&ping, keypair);
+    }
+
+    pub fn eql(self: *const @This(), other: *const @This()) bool {
+        return std.mem.eql(u8, &self.from.data, &other.from.data) and
+            std.mem.eql(u8, &self.hash.data, &other.hash.data) and
+            std.mem.eql(u8, &self.signature.data, &other.signature.data);
     }
 };
 
@@ -218,7 +224,7 @@ pub const PingCache = struct {
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (peer.getSocket(SOCKET_TAG_GOSSIP)) |gossip_addr| {
+            if (peer.getSocket(socket_tag.GOSSIP)) |gossip_addr| {
                 var result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
@@ -232,7 +238,7 @@ pub const PingCache = struct {
         return .{ .valid_peers = valid_peers, .pings = pings };
     }
 
-    // only used in tests
+    // only used in tests/benchmarks
     pub fn _setPong(self: *Self, peer: Pubkey, socket_addr: SocketAddr) void {
         _ = self.pongs.put(PubkeyAndSocketAddr{
             .pubkey = peer,
@@ -249,7 +255,7 @@ test "gossip.ping_pong: PingCache works" {
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng, .{}), .socket_addr = SocketAddr.UNSPECIFIED };
+    var the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng), .socket_addr = SocketAddr.UNSPECIFIED };
     var now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 

@@ -145,7 +145,7 @@ const BlockPointerChannel = Channel(*Block);
 
 const logger = std.log.scoped(.sync_channel_tests);
 
-const Packet = @import("../gossip/packet.zig").Packet;
+const Packet = @import("../net/packet.zig").Packet;
 
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
@@ -188,26 +188,57 @@ pub const BenchmarkChannel = struct {
     pub const min_iterations = 10;
     pub const max_iterations = 25;
 
-    pub const args = [_]struct { usize, usize, usize }{
-        .{ 10_000, 1, 1 },
-        .{ 100_000, 4, 4 },
-        .{ 500_000, 8, 8 },
-        .{ 1_000_000, 16, 16 },
-        .{ 5_000_000, 16, 16 },
-        .{ 5_000_000, 4, 4 },
+    pub const BenchmarkArgs = struct {
+        name: []const u8 = "",
+        n_items: usize,
+        n_senders: usize,
+        n_receivers: usize,
     };
 
-    pub const arg_names = [_][]const u8{
-        "  10k_items,   1_senders,   1_receivers ",
-        " 100k_items,   4_senders,   4_receivers ",
-        " 500k_items,   8_senders,   8_receivers ",
-        "   1m_items,  16_senders,  16_receivers ",
-        "   5m_items,  16_senders,  16_receivers ",
-        "   5m_items,   4_senders,   4_receivers ",
+    pub const args = [_]BenchmarkArgs{
+        .{
+            .name = "  10k_items,   1_senders,   1_receivers ",
+            .n_items = 10_000,
+            .n_senders = 1,
+            .n_receivers = 1,
+        },
+        .{
+            .name = " 100k_items,   4_senders,   4_receivers ",
+            .n_items = 100_000,
+            .n_senders = 4,
+            .n_receivers = 4,
+        },
+        .{
+            .name = " 500k_items,   8_senders,   8_receivers ",
+            .n_items = 500_000,
+            .n_senders = 8,
+            .n_receivers = 8,
+        },
+        .{
+            .name = "   1m_items,  16_senders,  16_receivers ",
+            .n_items = 1_000_000,
+            .n_senders = 16,
+            .n_receivers = 16,
+        },
+        .{
+            .name = "   5m_items,   4_senders,   4_receivers ",
+            .n_items = 5_000_000,
+            .n_senders = 4,
+            .n_receivers = 4,
+        },
+        .{
+            .name = "   5m_items,  16_senders,  16_receivers ",
+            .n_items = 5_000_000,
+            .n_senders = 16,
+            .n_receivers = 16,
+        },
     };
 
-    pub fn benchmarkSimpleUsizeChannel(n_items: usize, senders_count: usize, receivers_count: usize) !void {
+    pub fn benchmarkSimpleUsizeChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        var n_items = argss.n_items;
+        var senders_count = argss.n_senders;
+        var receivers_count = argss.n_receivers;
 
         const allocator = std.heap.page_allocator;
         var channel = Channel(usize).init(allocator, n_items / 2);
@@ -216,14 +247,15 @@ pub const BenchmarkChannel = struct {
         var sends_per_sender: usize = n_items / senders_count;
         var receives_per_receiver: usize = n_items / receivers_count;
 
-        var sender_thread_index: usize = 0;
-        while (sender_thread_index < senders_count) : (sender_thread_index += 1) {
-            thread_handles[sender_thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ channel, sends_per_sender });
+        var timer = try std.time.Timer.start();
+
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ channel, sends_per_sender });
         }
 
-        var receiver_thread_index: usize = 0;
-        while (receiver_thread_index < receivers_count) : (receiver_thread_index += 1) {
-            thread_handles[receiver_thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ channel, receives_per_receiver });
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ channel, receives_per_receiver });
         }
 
         for (0..thread_handles.len) |i| {
@@ -235,10 +267,15 @@ pub const BenchmarkChannel = struct {
         }
 
         channel.close();
+        const elapsed = timer.read();
+        return elapsed;
     }
 
-    pub fn benchmarkSimplePacketChannel(n_items: usize, senders_count: usize, receivers_count: usize) !void {
+    pub fn benchmarkSimplePacketChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        var n_items = argss.n_items;
+        var senders_count = argss.n_senders;
+        var receivers_count = argss.n_receivers;
 
         const allocator = std.heap.page_allocator;
         var channel = Channel(Packet).init(allocator, n_items / 2);
@@ -246,6 +283,8 @@ pub const BenchmarkChannel = struct {
 
         var sends_per_sender: usize = n_items / senders_count;
         var receives_per_receiver: usize = n_items / receivers_count;
+
+        var timer = try std.time.Timer.start();
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
@@ -265,5 +304,7 @@ pub const BenchmarkChannel = struct {
         }
 
         channel.close();
+        const elapsed = timer.read();
+        return elapsed;
     }
 };

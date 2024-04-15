@@ -44,7 +44,7 @@ const IpEchoServerResponse = struct {
     pub fn init(addr: net.IpAddr) Self {
         return Self{
             .address = addr,
-            .shred_version = ShredVersion.init_manually_set(0),
+            .shred_version = ShredVersion{ .value = 0 },
         };
     }
 };
@@ -317,7 +317,7 @@ test "net.echo: Server works" {
     const port: u16 = 34333;
 
     // initialize logger
-    var logger = Logger.init(testing.allocator, .info);
+    var logger = Logger.init(testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();
 

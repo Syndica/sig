@@ -26,6 +26,10 @@ pub fn build(b: *std.Build) void {
     const httpz_mod = b.dependency("httpz", opts).module("httpz");
     const zigdig_mod = b.dependency("zigdig", opts).module("dns");
 
+    const zstd_dep = b.dependency("zstd", opts);
+    const zstd_mod = zstd_dep.module("zstd");
+    const zstd_c_lib = zstd_dep.artifact("zstd");
+
     const lib = b.addStaticLibrary(.{
         .name = "sig",
         // In this case the main source file is merely a path, however, in more
@@ -63,6 +67,10 @@ pub fn build(b: *std.Build) void {
                 .name = "zigdig",
                 .module = zigdig_mod,
             },
+            .{
+                .name = "zstd",
+                .module = zstd_mod,
+            },
         },
     });
 
@@ -72,6 +80,8 @@ pub fn build(b: *std.Build) void {
     lib.addModule("getty", getty_mod);
     lib.addModule("httpz", httpz_mod);
     lib.addModule("zigdig", zigdig_mod);
+    lib.addModule("zstd", zstd_mod);
+    lib.linkLibrary(zstd_c_lib);
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -91,6 +101,8 @@ pub fn build(b: *std.Build) void {
     tests.addModule("getty", getty_mod);
     tests.addModule("httpz", httpz_mod);
     tests.addModule("zigdig", zigdig_mod);
+    tests.addModule("zstd", zstd_mod);
+    tests.linkLibrary(zstd_c_lib);
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run library tests");
@@ -111,6 +123,8 @@ pub fn build(b: *std.Build) void {
     exe.addModule("getty", getty_mod);
     exe.addModule("httpz", httpz_mod);
     exe.addModule("zigdig", zigdig_mod);
+    exe.addModule("zstd", zstd_mod);
+    exe.linkLibrary(zstd_c_lib);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default
@@ -140,51 +154,52 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // gossip fuzz testing
-    // find ./zig-cache/o/* | grep fuzz
-    // lldb $(above path)
-    const fuzz_exe = b.addExecutable(.{
-        .name = "fuzz",
-        .root_source_file = .{ .path = "src/gossip/fuzz.zig" },
-        .target = target,
-        .optimize = optimize,
-        .main_pkg_path = .{ .path = "src" },
-    });
-    fuzz_exe.addModule("base58-zig", base58_module);
-    fuzz_exe.addModule("zig-network", zig_network_module);
-    fuzz_exe.addModule("zig-cli", zig_cli_module);
-    fuzz_exe.addModule("getty", getty_mod);
-    fuzz_exe.addModule("httpz", httpz_mod);
-    fuzz_exe.addModule("zigdig", zigdig_mod);
+    const ExecCommand = struct {
+        name: []const u8,
+        path: []const u8,
+        description: []const u8 = "",
+    };
 
-    b.installArtifact(fuzz_exe);
-    const fuzz_cmd = b.addRunArtifact(fuzz_exe);
-    if (b.args) |args| {
-        fuzz_cmd.addArgs(args);
+    const exec_commands = [_]ExecCommand{
+        ExecCommand{
+            .name = "fuzz",
+            .path = "src/gossip/fuzz.zig",
+            .description = "gossip fuzz testing",
+        },
+        ExecCommand{
+            .name = "benchmark",
+            .path = "src/benchmarks.zig",
+            .description = "benchmark client",
+            // note: we dont want this in ReleaseSafe always because its harder to debug
+        },
+    };
+
+    for (exec_commands) |command_info| {
+        const exec = b.addExecutable(.{
+            .name = command_info.name,
+            .root_source_file = .{ .path = command_info.path },
+            .target = target,
+            .optimize = optimize,
+            .main_pkg_path = .{ .path = "src" },
+        });
+
+        // TODO: maybe we dont need all these for all bins
+        exec.addModule("base58-zig", base58_module);
+        exec.addModule("zig-network", zig_network_module);
+        exec.addModule("zig-cli", zig_cli_module);
+        exec.addModule("getty", getty_mod);
+        exec.addModule("httpz", httpz_mod);
+        exec.addModule("zigdig", zigdig_mod);
+        exec.addModule("zstd", zstd_mod);
+        exec.linkLibrary(zstd_c_lib);
+
+        // this lets us run it as an exec
+        b.installArtifact(exec);
+
+        const cmd = b.addRunArtifact(exec);
+        if (b.args) |args| cmd.addArgs(args);
+        b
+            .step(command_info.name, command_info.description)
+            .dependOn(&cmd.step);
     }
-    b.step("fuzz", "fuzz gossip").dependOn(&fuzz_cmd.step);
-
-    // benchmarking
-    const benchmark_exe = b.addExecutable(.{
-        .name = "benchmark",
-        .root_source_file = .{ .path = "src/benchmarks.zig" },
-        .target = target,
-        // TODO: make it work
-        // .optimize = std.builtin.Mode.ReleaseSafe, // to get decent results - but things get optimized away
-        .optimize = optimize,
-        .main_pkg_path = .{ .path = "src" },
-    });
-    benchmark_exe.addModule("base58-zig", base58_module);
-    benchmark_exe.addModule("zig-network", zig_network_module);
-    benchmark_exe.addModule("zig-cli", zig_cli_module);
-    benchmark_exe.addModule("getty", getty_mod);
-    benchmark_exe.addModule("httpz", httpz_mod);
-    benchmark_exe.addModule("zigdig", zigdig_mod);
-
-    b.installArtifact(benchmark_exe);
-    const benchmark_cmd = b.addRunArtifact(benchmark_exe);
-    if (b.args) |args| {
-        benchmark_cmd.addArgs(args);
-    }
-    b.step("benchmark", "benchmark components").dependOn(&benchmark_cmd.step);
 }

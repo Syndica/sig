@@ -15,7 +15,7 @@ const _gossip_data = @import("data.zig");
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const SignedGossipData = _gossip_data.SignedGossipData;
 const ContactInfo = _gossip_data.ContactInfo;
-const SOCKET_TAG_GOSSIP = _gossip_data.SOCKET_TAG_GOSSIP;
+const socket_tag = _gossip_data.socket_tag;
 const AtomicBool = std.atomic.Atomic(bool);
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -26,8 +26,8 @@ const getWallclockMs = @import("data.zig").getWallclockMs;
 const Bloom = @import("../bloom/bloom.zig").Bloom;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
-const Packet = @import("packet.zig").Packet;
-const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
+const Packet = @import("../net/packet.zig").Packet;
+const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
 const Thread = std.Thread;
@@ -91,12 +91,12 @@ pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
 
 pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
     var keypair = try KeyPair.create(null);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key, false);
+    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     // will have random id
     // var value = try SignedGossipData.random(rng, &keypair);
     var value = try SignedGossipData.randomWithIndex(rng, &keypair, 0);
-    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false));
+    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key));
     try value.sign(&keypair);
 
     const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
@@ -120,7 +120,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PushMessage,
@@ -140,7 +140,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key, false),
+        &Pubkey.fromPublicKey(&keypair.public_key),
         &values,
         &to_addr,
         ChunkType.PullResponse,
@@ -148,16 +148,37 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     return packets;
 }
 
-pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn randomPullRequest(
+    allocator: std.mem.Allocator,
+    rng: std.rand.Random,
+    keypair: *const KeyPair,
+    to_addr: EndPoint,
+) !Packet {
+    var value = try SignedGossipData.initSigned(.{
+        .LegacyContactInfo = LegacyContactInfo.default(
+            Pubkey.fromPublicKey(&keypair.public_key),
+        ),
+    }, keypair);
+
+    return randomPullRequestWithContactInfo(
+        allocator,
+        rng,
+        to_addr,
+        value,
+    );
+}
+
+pub fn randomPullRequestWithContactInfo(
+    allocator: std.mem.Allocator,
+    rng: std.rand.Random,
+    to_addr: EndPoint,
+    contact_info: SignedGossipData,
+) !Packet {
     const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
-
-    var value = try SignedGossipData.initSigned(.{
-        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key, false)),
-    }, keypair);
 
     var filter = GossipPullFilter{
         .filter = bloom,
@@ -203,7 +224,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     }
 
     // serialize and send as packet
-    var msg = GossipMessage{ .PullRequest = .{ filter, value } };
+    var msg = GossipMessage{ .PullRequest = .{ filter, contact_info } };
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);
@@ -276,9 +297,9 @@ pub fn main() !void {
     var fuzz_keypair = try KeyPair.create(null);
     var fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
 
-    var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key, false);
+    var fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
-    try fuzz_contact_info.setSocket(SOCKET_TAG_GOSSIP, fuzz_address);
+    try fuzz_contact_info.setSocket(socket_tag.GOSSIP, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(
