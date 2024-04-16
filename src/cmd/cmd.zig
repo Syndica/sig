@@ -288,7 +288,7 @@ var app = &cli.App{
             },
         },
         &cli.Command{
-            .name = "download_snapshot",
+            .name = "download-snapshot",
             .help = "downloads a snapshot",
             .description =
             \\starts a gossip client and downloads a snapshot from peers
