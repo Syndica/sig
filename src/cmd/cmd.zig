@@ -33,19 +33,18 @@ const servePrometheus = sig.prometheus.servePrometheus;
 
 const socket_tag = sig.gossip.socket_tag;
 
-// TODO fix
-const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
-const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
-const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
-const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
-const AccountsDB = @import("../accountsdb/db.zig").AccountsDB;
-const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
-const AccountsDBConfig = @import("../accountsdb/db.zig").AccountsDBConfig;
-const GenesisConfig = @import("../accountsdb/genesis_config.zig").GenesisConfig;
-const StatusCache = @import("../accountsdb/snapshots.zig").StatusCache;
-const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
-const Bank = @import("../accountsdb/bank.zig").Bank;
-const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
+const SnapshotFiles = sig.accounts_db.SnapshotFiles;
+const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
+const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
+const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
+const AccountsDB = sig.accounts_db.AccountsDB;
+const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
+const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
+const GenesisConfig = sig.accounts_db.GenesisConfig;
+const StatusCache = sig.accounts_db.StatusCache;
+const SnapshotFields = sig.accounts_db.SnapshotFields;
+const Bank = sig.accounts_db.Bank;
+const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
