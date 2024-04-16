@@ -758,17 +758,22 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
-    var maybe_snapshot_files: ?SnapshotFiles = SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| blk: {
-        // if we cant find the full snapshot, we try to download it
-        if (err == error.NoFullSnapshotFileInfoFound) {
+    var maybe_snapshot_files: ?SnapshotFiles = blk: { 
+        if (force_new_snapshot_download) { 
             break :blk null;
-        } else {
-            return err;
         }
+
+        break :blk SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| {
+            // if we cant find the full snapshot, we try to download it
+            if (err == error.NoFullSnapshotFileInfoFound) {
+                break :blk null;
+            } else {
+                return err;
+            }
+        };
     };
 
-    const should_download_new_snapshot = force_new_snapshot_download or maybe_snapshot_files == null;
-    if (should_download_new_snapshot) {
+    var snapshot_files = maybe_snapshot_files orelse blk: { 
         const trusted_validators = try getTrustedValidators(gpa_allocator);
         defer if (trusted_validators) |*tvs| tvs.deinit();
 
@@ -781,11 +786,8 @@ fn getOrDownloadSnapshots(
             snapshot_dir_str,
             @intCast(min_mb_per_sec),
         );
-        maybe_snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir_str);
-    }
-
-    // SAFE: this unwrap is safe because we either found the snapshot or downloaded it
-    var snapshot_files = maybe_snapshot_files.?;
+        break :blk try SnapshotFiles.find(allocator, snapshot_dir_str);
+    };
     defer snapshot_files.deinit(allocator);
 
     if (snapshot_files.incremental_snapshot == null) {
