@@ -88,6 +88,14 @@ var repair_port_option = cli.Option{
     .value_name = "Repair Port",
 };
 
+var tvu_port_option = cli.Option{
+    .long_name = "tvu-port",
+    .help = "The port to run turbine listener - default: 8003",
+    .value = cli.OptionValue{ .int = 8003 },
+    .required = false,
+    .value_name = "Repair Port",
+};
+
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
@@ -307,6 +315,7 @@ fn validator(_: []const []const u8) !void {
     const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
     const repair_port: u16 = @intCast(repair_port_option.value.int.?);
+    const tvu_port: u16 = @intCast(tvu_port_option.value.int.?);
 
     var gossip_service = try initGossip(
         logger,
@@ -315,7 +324,10 @@ fn validator(_: []const []const u8) !void {
         entrypoints,
         ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
         ip_echo_data.ip,
-        &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
+        &.{
+            .{ .tag = socket_tag.REPAIR, .port = repair_port },
+            .{ .tag = socket_tag.TVU, .port = tvu_port },
+        },
     );
     defer gossip_service.deinit();
     var gossip_handle = try spawnGossip(&gossip_service);
@@ -323,8 +335,14 @@ fn validator(_: []const []const u8) !void {
     const shred_version = sig.tvu.CachedAtomic(u16).init(&gossip_service.my_shred_version);
 
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
+    try sig.net.enablePortReuse(&repair_socket, true);
     try repair_socket.bindToPort(repair_port);
     try repair_socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
+
+    var tvu_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
+    try sig.net.enablePortReuse(&tvu_socket, true);
+    try tvu_socket.bindToPort(tvu_port);
+    try tvu_socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
 
     var shred_tracker = try sig.tvu.BasicShredTracker.init(gpa_allocator, @intCast(test_repair_option.value.int orelse 0));
     const unverified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(gpa_allocator, 1000);
@@ -339,7 +357,8 @@ fn validator(_: []const []const u8) !void {
         .keypair = &my_keypair,
         .exit = &exit,
         .logger = logger,
-        .socket = &repair_socket,
+        .repair_socket = &repair_socket,
+        .tvu_socket = &tvu_socket,
         .outgoing_shred_channel = unverified_shreds_channel,
         .shred_version = shred_version,
     };

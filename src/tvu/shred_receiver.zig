@@ -55,7 +55,8 @@ pub const ShredReceiver = struct {
     keypair: *const KeyPair,
     exit: *Atomic(bool),
     logger: Logger,
-    socket: *Socket,
+    repair_socket: *Socket,
+    tvu_socket: *Socket,
     outgoing_shred_channel: *Channel(ArrayList(Packet)),
     shred_version: CachedAtomic(u16),
 
@@ -67,37 +68,41 @@ pub const ShredReceiver = struct {
         defer self.logger.err("exiting shred receiver");
         errdefer self.logger.err("error in shred receiver");
 
-        var sender = try SocketThread.initSender(self.allocator, self.logger, self.socket, self.exit);
+        var sender = try SocketThread.initSender(self.allocator, self.logger, self.repair_socket, self.exit);
         defer sender.deinit();
-        var receiver = try SocketThread.initReceiver(self.allocator, self.logger, self.socket, self.exit);
-        defer receiver.deinit();
+        var repair_receiver = try SocketThread.initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
+        defer repair_receiver.deinit();
+        var tvu_receiver = try SocketThread.initReceiver(self.allocator, self.logger, self.tvu_socket, self.exit);
+        defer tvu_receiver.deinit();
 
-        try self.runPacketHandler(receiver.channel, sender.channel);
+        try self.runPacketHandler(.{ tvu_receiver.channel, repair_receiver.channel }, sender.channel);
     }
 
     /// Keep looping over packet channel and process the incoming packets.
     /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receiver: *Channel(ArrayList(Packet)),
+        receivers: anytype,
         sender: *Channel(ArrayList(Packet)),
     ) !void {
         while (!self.exit.load(.Unordered)) {
-            var responses = ArrayList(Packet).init(self.allocator);
-            if (try receiver.try_drain()) |batches| {
-                for (batches) |batch| {
-                    for (batch.items) |*packet| {
-                        try self.handlePacket(packet, &responses);
+            inline for (receivers) |receiver| {
+                var responses = ArrayList(Packet).init(self.allocator);
+                if (try receiver.try_drain()) |batches| {
+                    for (batches) |batch| {
+                        for (batch.items) |*packet| {
+                            try self.handlePacket(packet, &responses);
+                        }
+                        try self.outgoing_shred_channel.send(batch);
                     }
-                    try self.outgoing_shred_channel.send(batch);
+                    if (responses.items.len > 0) {
+                        try sender.send(responses);
+                    }
+                } else {
+                    std.time.sleep(10 * std.time.ns_per_ms);
                 }
-                if (responses.items.len > 0) {
-                    try sender.send(responses);
-                }
-            } else {
-                std.time.sleep(10_000_000);
+                self.shred_version.update();
             }
-            self.shred_version.update();
         }
     }
 
