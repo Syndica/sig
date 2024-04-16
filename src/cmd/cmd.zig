@@ -433,7 +433,7 @@ fn validator(_: []const []const u8) !void {
     defer accounts_db.deinit();
 
     const snapshot_fields = try accounts_db.loadWithDefaults(
-        snapshots,
+        &snapshots,
         snapshot_dir_str,
         n_threads_snapshot_load,
         true, // validate too

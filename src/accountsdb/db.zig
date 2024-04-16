@@ -120,9 +120,9 @@ pub const AccountsDB = struct {
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
-        snapshot_fields_and_paths: SnapshotFieldsAndPaths,
+        snapshot_fields_and_paths: *SnapshotFieldsAndPaths,
         snapshot_dir: []const u8,
-        n_threads: usize,
+        n_threads: u32,
         validate: bool,
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.all_fields.collapse();
@@ -141,7 +141,7 @@ pub const AccountsDB = struct {
 
         if (validate) {
             timer.reset();
-            const full_snapshot = snapshot_fields.all_fields.full;
+            const full_snapshot = snapshot_fields_and_paths.all_fields.full;
             try self.validateLoadFromSnapshot(
                 snapshot_fields.bank_fields.incremental_snapshot_persistence,
                 full_snapshot.bank_fields.slot,
