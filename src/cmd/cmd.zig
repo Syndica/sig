@@ -413,6 +413,14 @@ fn validator(_: []const []const u8) !void {
         logger.infof("incremental snapshot: {s}", .{inc_path});
     }
 
+    // cli parsing
+    const snapshot_dir_str = snapshot_dir_option.value.string.?;
+    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
+    var n_threads_snapshot_load: u32 = @intCast(n_threads_snapshot_load_option.value.int.?);
+    if (n_threads_snapshot_load == 0) {
+        n_threads_snapshot_load = n_cpus;
+    }
+
     var accounts_db = try AccountsDB.init(
         gpa_allocator,
         logger,
@@ -424,74 +432,41 @@ fn validator(_: []const []const u8) !void {
     );
     defer accounts_db.deinit();
 
-    const snapshot = try snapshots.all_fields.collapse();
-
-    // cli parsing
-    const snapshot_dir_str = snapshot_dir_option.value.string.?;
-    const accounts_path = try std.fmt.allocPrint(gpa_allocator, "{s}/accounts/", .{snapshot_dir_str});
-
-    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_load: u32 = @intCast(n_threads_snapshot_load_option.value.int.?);
-    if (n_threads_snapshot_load == 0) {
-        n_threads_snapshot_load = n_cpus;
-    }
-
-    var timer = try std.time.Timer.start();
-    logger.infof("loading from snapshot...", .{});
-    try accounts_db.loadFromSnapshot(
-        snapshot.accounts_db_fields,
-        accounts_path,
+    const snapshot_fields = try accounts_db.loadWithDefaults(
+        snapshots,
+        snapshot_dir_str,
         n_threads_snapshot_load,
-        std.heap.page_allocator,
+        true, // validate too
     );
-    logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
-
-    const full_snapshot = snapshots.all_fields.full;
-    try accounts_db.validateLoadFromSnapshot(
-        snapshot.bank_fields.incremental_snapshot_persistence,
-        full_snapshot.bank_fields.slot,
-        full_snapshot.bank_fields.capitalization,
-    );
-    logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+    const bank_fields = snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
-    const genesis_path = try std.fmt.allocPrint(
-        gpa_allocator,
-        "{s}/genesis.bin",
-        .{snapshot_dir_str},
-    );
-    defer gpa_allocator.free(genesis_path);
-
-    std.fs.cwd().access(genesis_path, .{}) catch {
-        logger.errf("genesis.bin not found: {s}", .{genesis_path});
-        return error.GenesisNotFound;
+    logger.infof("reading genesis...", .{});
+    const genesis_config = readGenesisConfig(gpa_allocator, snapshot_dir_str) catch |err| {
+        if (err == error.GenesisNotFound) {
+            logger.errf("genesis.bin not found - expecting {s}/genesis.bin to exist", .{snapshot_dir_str});
+        }
+        return err;
     };
-
-    // use the genesis to validate the bank
-    const genesis_config = try GenesisConfig.init(gpa_allocator, genesis_path);
     defer genesis_config.deinit(gpa_allocator);
 
     logger.infof("validating bank...", .{});
-    const bank = Bank.init(&accounts_db, &snapshot.bank_fields);
+    const bank = Bank.init(&accounts_db, &bank_fields);
     try Bank.validateBankFields(bank.bank_fields, &genesis_config);
 
     // validate the status cache
     logger.infof("validating status cache...", .{});
-    const status_cache_path = try std.fmt.allocPrint(
-        gpa_allocator,
-        "{s}/{s}",
-        .{ snapshot_dir_str, "snapshots/status_cache" },
-    );
-    defer gpa_allocator.free(status_cache_path);
-
-    var status_cache = try StatusCache.init(gpa_allocator, status_cache_path);
+    var status_cache = readStatusCache(gpa_allocator, snapshot_dir_str) catch |err| {
+        if (err == error.StatusCacheNotFound) {
+            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+        }
+        return err;
+    };
     defer status_cache.deinit();
 
     var slot_history = try accounts_db.getSlotHistory();
     defer slot_history.deinit(accounts_db.allocator);
-
-    const bank_slot = snapshot.bank_fields.slot;
-    try status_cache.validate(gpa_allocator, bank_slot, &slot_history);
+    try status_cache.validate(gpa_allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
 
@@ -672,6 +647,45 @@ fn spawnLogger() !Logger {
     var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
     logger.spawn();
     return logger;
+}
+
+/// load genesis config with default filenames
+fn readGenesisConfig(
+    allocator: std.mem.Allocator,
+    snapshot_dir: []const u8,
+) !GenesisConfig {
+    const genesis_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/genesis.bin",
+        .{snapshot_dir},
+    );
+    defer allocator.free(genesis_path);
+
+    std.fs.cwd().access(genesis_path, .{}) catch {
+        return error.GenesisNotFound;
+    };
+
+    const genesis_config = try GenesisConfig.init(allocator, genesis_path);
+    return genesis_config;
+}
+
+fn readStatusCache(
+    allocator: std.mem.Allocator,
+    snapshot_dir: []const u8,
+) !StatusCache {
+    const status_cache_path = try std.fmt.allocPrint(
+        gpa_allocator,
+        "{s}/{s}",
+        .{ snapshot_dir, "snapshots/status_cache" },
+    );
+    defer allocator.free(status_cache_path);
+
+    std.fs.cwd().access(status_cache_path, .{}) catch {
+        return error.StatusCacheNotFound;
+    };
+
+    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    return status_cache;
 }
 
 /// entrypoint to download snapshot

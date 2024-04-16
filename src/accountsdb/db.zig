@@ -27,6 +27,7 @@ const Bank = @import("bank.zig").Bank;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
 const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
 const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
+const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const Logger = @import("../trace/log.zig").Logger;
 const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
@@ -114,6 +115,42 @@ pub const AccountsDB = struct {
         if (self.disk_allocator_ptr) |ptr| {
             self.allocator.destroy(ptr);
         }
+    }
+
+    /// easier to use load function
+    pub fn loadWithDefaults(
+        self: *Self,
+        snapshot_fields_and_paths: SnapshotFieldsAndPaths,
+        snapshot_dir: []const u8,
+        n_threads: usize,
+        validate: bool,
+    ) !SnapshotFields {
+        const snapshot_fields = try snapshot_fields_and_paths.all_fields.collapse();
+        const accounts_path = try std.fmt.allocPrint(self.allocator, "{s}/accounts/", .{snapshot_dir});
+        defer self.allocator.free(accounts_path);
+
+        var timer = try std.time.Timer.start();
+        self.logger.infof("loading from snapshot...", .{});
+        try self.loadFromSnapshot(
+            snapshot_fields.accounts_db_fields,
+            accounts_path,
+            n_threads,
+            std.heap.page_allocator,
+        );
+        self.logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+
+        if (validate) {
+            timer.reset();
+            const full_snapshot = snapshot_fields.all_fields.full;
+            try self.validateLoadFromSnapshot(
+                snapshot_fields.bank_fields.incremental_snapshot_persistence,
+                full_snapshot.bank_fields.slot,
+                full_snapshot.bank_fields.capitalization,
+            );
+            self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        }
+
+        return snapshot_fields;
     }
 
     /// loads the account files and gernates the account index from a snapshot
