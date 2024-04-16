@@ -220,7 +220,7 @@ pub fn downloadSnapshotsFromGossip(
             defer allocator.free(snapshot_url);
 
             logger.infof("downloading full_snapshot from: {s}", .{snapshot_url});
-            var success = downloadFile(
+            downloadFile(
                 allocator,
                 logger,
                 snapshot_url,
@@ -229,14 +229,12 @@ pub fn downloadSnapshotsFromGossip(
                 min_mb_per_sec,
             ) catch |err| {
                 logger.infof("failed to download full_snapshot: {s}", .{@errorName(err)});
-                try slow_peer_pubkeys.append(peer.contact_info.pubkey);
+                if (err == error.TooSlow) {
+                    logger.infof("peer is too slow, skipping", .{});
+                    try slow_peer_pubkeys.append(peer.contact_info.pubkey);
+                }
                 continue;
             };
-            if (!success) {
-                logger.infof("peer is too slow, skipping", .{});
-                try slow_peer_pubkeys.append(peer.contact_info.pubkey);
-                continue;
-            }
 
             // download the incremental snapshot
             // PERF: maybe do this in another thread? while downloading the full snapshot
@@ -368,7 +366,7 @@ const DownloadProgress = struct {
                     self.logger.infof("download speed is too slow ({d} MB/s) -- disconnecting", .{mb_per_second});
                     return 0;
                 } else {
-                    self.logger.infof("download speed is ok ({d} MB/s) -- maintaining connection\r", .{mb_per_second});
+                    self.logger.infof("download speed is ok ({d} MB/s) -- maintaining connection", .{mb_per_second});
                 }
             }
         }
@@ -390,6 +388,9 @@ pub fn setNoBody(self: curl.Easy, no_body: bool) !void {
     try checkCode(curl.libcurl.curl_easy_setopt(self.handle, curl.libcurl.CURLOPT_NOBODY, @as(c_long, @intFromBool(no_body))));
 }
 
+/// downloads a file from a url into output_dir/filename
+/// returns error if it fails.
+/// the main errors include {HeaderRequestFailed, NoContentLength, TooSlow} or a curl-related error
 pub fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -397,7 +398,7 @@ pub fn downloadFile(
     output_dir: []const u8,
     filename: []const u8,
     min_mb_per_second: ?usize,
-) !bool {
+) !void {
     var easy = try curl.Easy.init(allocator, .{});
     defer easy.deinit();
 
@@ -432,15 +433,14 @@ pub fn downloadFile(
     try easy.setWritedata(&download_progress);
     try easy.setWritefunction(DownloadProgress.bufferWriteCallback);
 
-    var resp = easy.perform() catch return false;
+    var resp = try easy.perform();
     defer resp.deinit();
 
     const full_download = download_progress.file_memory_index == download_size;
+    // this if block should only be hit if the download was too slow
     if (!full_download) {
-        // too slow = early exit
-        return false;
+        return error.TooSlow;
     }
-    return true;
 }
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
