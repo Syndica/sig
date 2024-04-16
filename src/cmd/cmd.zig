@@ -23,6 +23,15 @@ const RepairPeerProvider = sig.tvu.RepairPeerProvider;
 const RepairRequester = sig.tvu.RepairRequester;
 const ShredReceiver = sig.tvu.ShredReceiver;
 const SocketAddr = sig.net.SocketAddr;
+const SnapshotFiles = sig.accounts_db.SnapshotFiles;
+const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
+const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
+const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
+const GenesisConfig = sig.accounts_db.GenesisConfig;
+const StatusCache = sig.accounts_db.StatusCache;
+const SnapshotFields = sig.accounts_db.SnapshotFields;
+const Bank = sig.accounts_db.Bank;
 
 const enumFromName = sig.utils.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -30,21 +39,11 @@ const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
-
-const socket_tag = sig.gossip.socket_tag;
-
-const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
-const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
-const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
-const AccountsDB = sig.accounts_db.AccountsDB;
-const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
-const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
-const GenesisConfig = sig.accounts_db.GenesisConfig;
-const StatusCache = sig.accounts_db.StatusCache;
-const SnapshotFields = sig.accounts_db.SnapshotFields;
-const Bank = sig.accounts_db.Bank;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
+
+const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
+const socket_tag = sig.gossip.socket_tag;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
