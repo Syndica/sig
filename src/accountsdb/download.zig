@@ -67,20 +67,15 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             const gossip_data = table.get(.{ .SnapshotHashes = trusted_validator }) orelse continue;
             const trusted_hashes = gossip_data.value.data.SnapshotHashes;
             trusted_count += 1;
-            var max_inc_hash: ?SlotAndHash = null;
-            for (trusted_hashes.incremental) |inc_hash| {
-                if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
-                    max_inc_hash = inc_hash;
-                }
-            }
-            // track the full and incremental
+
+            // track the full and all incremental hashes
             var r = try trusted_snapshot_hashes.getOrPut(trusted_hashes.full);
             const inc_map_ptr = r.value_ptr;
             if (!r.found_existing) {
                 inc_map_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
             }
-            if (max_inc_hash) |inc_snapshot| {
-                try inc_map_ptr.put(inc_snapshot, {});
+            for (trusted_hashes.incremental) |inc_hash| {
+                try inc_map_ptr.put(inc_hash, {});
             }
         }
     }
