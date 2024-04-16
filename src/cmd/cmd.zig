@@ -758,8 +758,8 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
-    var maybe_snapshot_files: ?SnapshotFiles = blk: { 
-        if (force_new_snapshot_download) { 
+    var maybe_snapshot_files: ?SnapshotFiles = blk: {
+        if (force_new_snapshot_download) {
             break :blk null;
         }
 
@@ -773,7 +773,7 @@ fn getOrDownloadSnapshots(
         };
     };
 
-    var snapshot_files = maybe_snapshot_files orelse blk: { 
+    var snapshot_files = maybe_snapshot_files orelse blk: {
         const trusted_validators = try getTrustedValidators(gpa_allocator);
         defer if (trusted_validators) |*tvs| tvs.deinit();
 

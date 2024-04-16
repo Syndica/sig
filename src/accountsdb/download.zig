@@ -26,6 +26,8 @@ const PeerSearchResult = struct {
     no_snapshot_hashes_count: usize = 0,
     is_blacklist: usize = 0,
     is_valid: usize = 0,
+    untrusted_full_snapshot_count: usize = 0,
+    untrusted_inc_snapshot_count: usize = 0,
 };
 
 /// finds valid contact infos which we can download a snapshot from.
@@ -36,14 +38,52 @@ const PeerSearchResult = struct {
 /// - snapshot hash is available
 /// result is populated inside valid_peers (which is cleared at the beginning)
 pub fn findPeersToDownloadFromAssumeCapacity(
+    allocator: std.mem.Allocator,
     table: *const GossipTable,
     contact_infos: []ContactInfo,
     my_shred_version: usize,
     my_pubkey: Pubkey,
     blacklist: []Pubkey,
+    trusted_validators: ?std.ArrayList(Pubkey),
     valid_peers: *std.ArrayList(PeerSnapshotHash),
-) PeerSearchResult {
+) !PeerSearchResult {
+    // clear the list
     valid_peers.clearRetainingCapacity();
+
+    const TrustedMapType = std.AutoHashMap(
+        SlotAndHash, // full snapshot hash
+        std.AutoHashMap(SlotAndHash, void), // set of incremental snapshots
+    );
+    var maybe_trusted_snapshot_hashes: ?TrustedMapType = if (trusted_validators != null) TrustedMapType.init(allocator) else null;
+    defer {
+        if (maybe_trusted_snapshot_hashes) |*ts| ts.deinit();
+    }
+
+    if (maybe_trusted_snapshot_hashes) |*trusted_snapshot_hashes| {
+        // populate with the hashes of trusted validators
+        var trusted_count: usize = 0;
+        // SAFE: the perf is safe because maybe_ is non null only if trusted_validators is non-null
+        for (trusted_validators.?.items) |trusted_validator| {
+            const gossip_data = table.get(.{ .SnapshotHashes = trusted_validator }) orelse continue;
+            const trusted_hashes = gossip_data.value.data.SnapshotHashes;
+            trusted_count += 1;
+            var max_inc_hash: ?SlotAndHash = null;
+            for (trusted_hashes.incremental) |inc_hash| {
+                if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
+                    max_inc_hash = inc_hash;
+                }
+            }
+            // track the full and incremental
+            var r = try trusted_snapshot_hashes.getOrPut(trusted_hashes.full);
+            const inc_map_ptr = r.value_ptr;
+            if (!r.found_existing) {
+                inc_map_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
+            }
+            if (max_inc_hash) |inc_snapshot| {
+                try inc_map_ptr.put(inc_snapshot, {});
+            }
+        }
+    }
 
     var result = PeerSearchResult{};
     search_loop: for (contact_infos) |*peer_contact_info| {
@@ -83,6 +123,25 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             }
         }
 
+        // check if we have a trusted snapshot
+        if (maybe_trusted_snapshot_hashes) |trusted_snapshot_hashes| {
+            // full snapshot must be trusted
+            if (trusted_snapshot_hashes.getEntry(snapshot_hashes.full)) |entry| {
+                // if we have an incremental snapshot
+                if (max_inc_hash) |inc_snapshot| {
+                    // it should be trusted too
+                    if (!entry.value_ptr.contains(inc_snapshot)) {
+                        result.untrusted_inc_snapshot_count += 1;
+                        continue;
+                    }
+                }
+                // no incremental snapshot, thats ok
+            } else {
+                result.untrusted_full_snapshot_count += 1;
+                continue;
+            }
+        }
+
         valid_peers.appendAssumeCapacity(.{
             // NOTE: maybe we need to deep clone here due to arraylist sockets?
             .contact_info = peer_contact_info.*,
@@ -93,75 +152,6 @@ pub fn findPeersToDownloadFromAssumeCapacity(
     result.is_valid = valid_peers.items.len;
 
     return result;
-}
-
-/// uses swap remove to remove peers that do not have a hash which is trusted
-pub fn removeUnTrustedSnapshotPeers(
-    allocator: std.mem.Allocator,
-    table: *const GossipTable,
-    trusted_validators: std.ArrayList(Pubkey),
-    available_snapshot_peers: *std.ArrayList(PeerSnapshotHash),
-) !void {
-    var trusted_snapshot_hashes = std.AutoHashMap(
-        SlotAndHash, // full snapshot hash
-        std.AutoHashMap(SlotAndHash, void), // set of incremental snapshots
-    ).init(allocator);
-    defer trusted_snapshot_hashes.deinit();
-
-    // get the hashes of trusted validators
-    var trusted_count: usize = 0;
-    for (trusted_validators.items) |trusted_validator| {
-        const gossip_data = table.get(.{ .SnapshotHashes = trusted_validator }) orelse continue;
-        const trusted_hashes = gossip_data.value.data.SnapshotHashes;
-        trusted_count += 1;
-
-        var max_inc_hash: ?SlotAndHash = null;
-        for (trusted_hashes.incremental) |inc_hash| {
-            if (max_inc_hash == null or inc_hash.slot > max_inc_hash.?.slot) {
-                max_inc_hash = inc_hash;
-            }
-        }
-
-        // track the full and incremental
-        var r = try trusted_snapshot_hashes.getOrPut(trusted_hashes.full);
-        if (max_inc_hash) |inc_snapshot| {
-            if (!r.found_existing) {
-                r.value_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
-            }
-            try r.value_ptr.put(inc_snapshot, {});
-        }
-    }
-
-    if (trusted_count == 0) {
-        available_snapshot_peers.clearRetainingCapacity();
-        return;
-    }
-
-    // remove peers that do not have a trusted hash
-    var peer_index: usize = 0;
-    for (0..available_snapshot_peers.items.len) |_| {
-        const peer = available_snapshot_peers.items[peer_index];
-        var should_remove = false;
-        // full snapshot must be trusted
-        if (trusted_snapshot_hashes.getEntry(peer.full_snapshot)) |entry| {
-            // if we have an incremental snapshot
-            if (peer.inc_snapshot) |inc_snapshot| {
-                // it should be trusted too
-                if (!entry.value_ptr.contains(inc_snapshot)) {
-                    should_remove = true;
-                }
-            }
-            // no incremental snapshot, thats ok
-        } else {
-            should_remove = true;
-        }
-
-        if (should_remove) {
-            _ = available_snapshot_peers.swapRemove(peer_index);
-        } else {
-            peer_index += 1;
-        }
-    }
 }
 
 /// downloads full and incremental snapshots from peers found in gossip.
@@ -200,24 +190,17 @@ pub fn downloadSnapshotsFromGossip(
             var contacts = table.getContactInfos(&contact_info_buf, 0);
 
             try available_snapshot_peers.ensureTotalCapacity(contacts.len);
-            var result = findPeersToDownloadFromAssumeCapacity(
+            var result = try findPeersToDownloadFromAssumeCapacity(
+                allocator,
                 table,
                 contacts,
                 my_contact_info.shred_version,
                 my_contact_info.pubkey,
                 slow_peer_pubkeys.items,
+                maybe_trusted_validators,
                 // this is cleared and populated
                 &available_snapshot_peers,
             );
-
-            if (maybe_trusted_validators) |trusted_validators| {
-                try removeUnTrustedSnapshotPeers(
-                    allocator,
-                    table,
-                    trusted_validators,
-                    &available_snapshot_peers,
-                );
-            }
 
             logger.infof("searched for peers to downlod from: {any}", .{result});
         }
@@ -233,8 +216,10 @@ pub fn downloadSnapshotsFromGossip(
 
             const rpc_socket = peer.contact_info.getSocket(socket_tag.RPC).?;
             const r = rpc_socket.toString();
+            const rpc_url = r[0][0..r[1]];
+
             const snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
-                r[0][0..r[1]],
+                rpc_url,
                 snapshot_filename,
             });
             defer allocator.free(snapshot_url);
@@ -270,7 +255,7 @@ pub fn downloadSnapshotsFromGossip(
                 defer allocator.free(inc_snapshot_filename);
 
                 const inc_snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
-                    r[0][0..r[1]],
+                    rpc_url,
                     inc_snapshot_filename,
                 });
                 defer allocator.free(inc_snapshot_url);
@@ -507,41 +492,40 @@ test "accounts_db.download: test remove untrusted peers" {
         try table.insert(data, 0);
     }
 
-    _ = findPeersToDownloadFromAssumeCapacity(
+    _ = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &.{},
+        null, // no trusted validators
         &valid_peers,
     );
     try std.testing.expectEqual(valid_peers.items.len, 10);
 
-    try removeUnTrustedSnapshotPeers(
+    _ = try findPeersToDownloadFromAssumeCapacity(
         allocator,
         &table,
+        contact_infos,
+        my_shred_version,
+        my_pubkey,
+        &.{},
         trusted_validators,
         &valid_peers,
     );
     try std.testing.expectEqual(valid_peers.items.len, 10);
 
-    // repopulate and try again with less trusted validators
-    _ = findPeersToDownloadFromAssumeCapacity(
+    _ = trusted_validators.pop();
+    _ = trusted_validators.pop();
+
+    _ = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &.{},
-        &valid_peers,
-    );
-    try std.testing.expectEqual(valid_peers.items.len, 10);
-
-    _ = trusted_validators.pop();
-    _ = trusted_validators.pop();
-
-    try removeUnTrustedSnapshotPeers(
-        allocator,
-        &table,
         trusted_validators,
         &valid_peers,
     );
@@ -576,12 +560,14 @@ test "accounts_db.download: test finding peers" {
     var valid_peers = try std.ArrayList(PeerSnapshotHash).initCapacity(allocator, 10);
     defer valid_peers.deinit();
 
-    var result = findPeersToDownloadFromAssumeCapacity(
+    var result = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &.{},
+        null,
         &valid_peers,
     );
 
@@ -600,12 +586,14 @@ test "accounts_db.download: test finding peers" {
         try table.insert(data, 0);
     }
 
-    result = findPeersToDownloadFromAssumeCapacity(
+    result = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &.{},
+        null,
         &valid_peers,
     );
     // all valid
@@ -613,12 +601,14 @@ test "accounts_db.download: test finding peers" {
 
     // blacklist one
     var blist = [_]Pubkey{contact_infos[0].pubkey};
-    result = findPeersToDownloadFromAssumeCapacity(
+    result = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &blist,
+        null,
         &valid_peers,
     );
     try std.testing.expect(result.is_valid == 9);
@@ -627,12 +617,14 @@ test "accounts_db.download: test finding peers" {
     for (contact_infos) |*ci| {
         ci.shred_version = 21; // non-matching shred version
     }
-    result = findPeersToDownloadFromAssumeCapacity(
+    result = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &.{},
+        null,
         &valid_peers,
     );
     try std.testing.expect(result.invalid_shred_version == 10);
@@ -640,12 +632,14 @@ test "accounts_db.download: test finding peers" {
     for (contact_infos) |*ci| {
         ci.pubkey = my_pubkey; // is_me pubkey
     }
-    result = findPeersToDownloadFromAssumeCapacity(
+    result = try findPeersToDownloadFromAssumeCapacity(
+        allocator,
         &table,
         contact_infos,
         my_shred_version,
         my_pubkey,
         &.{},
+        null,
         &valid_peers,
     );
     try std.testing.expect(result.is_me_count == 10);
