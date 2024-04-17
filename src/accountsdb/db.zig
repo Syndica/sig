@@ -272,9 +272,12 @@ pub const AccountsDB = struct {
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        var n_accounts_est = file_names.len * accounts_per_file_est;
-        var memory = try ArrayList(AccountRef).initCapacity(self.account_index.reference_allocator, n_accounts_est);
-        var refs_ptr = try self.account_index.addMemoryBlock(memory);
+        const n_accounts_est = file_names.len * accounts_per_file_est;
+        const refs_ptr = blk: {
+            var memory = try ArrayList(AccountRef).initCapacity(self.account_index.reference_allocator, n_accounts_est);
+            errdefer memory.deinit();
+            break :blk try self.account_index.addMemoryBlock(memory);
+        };
 
         // NOTE: might need to be longer depending on abs path length
         var buf: [1024]u8 = undefined;
@@ -543,7 +546,7 @@ pub const AccountsDB = struct {
         const total_lamports = full_result.total_lamports;
         const accounts_hash = full_result.accounts_hash;
 
-        if (expected_accounts_hash.cmp(&accounts_hash) != .eq) {
+        if (expected_accounts_hash.order(&accounts_hash) != .eq) {
             self.logger.errf(
                 \\ incorrect accounts hash
                 \\ expected vs calculated: {d} vs {d}
@@ -580,7 +583,7 @@ pub const AccountsDB = struct {
             return error.IncorrectIncrementalLamports;
         }
 
-        if (expected_accounts_delta_hash.cmp(&accounts_delta_hash) != .eq) {
+        if (expected_accounts_delta_hash.order(&accounts_delta_hash) != .eq) {
             self.logger.errf(
                 \\ incorrect accounts delta hash
                 \\ expected vs calculated: {d} vs {d}
@@ -1352,8 +1355,13 @@ pub const BenchmarkAccountsDB = struct {
                     break :blk offset;
                 };
 
-                var file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
-                var account_file = try AccountFile.init(file, .{ .id = s, .length = length }, s);
+                var account_file = blk: {
+                    const file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
+                    errdefer file.close();
+                    break :blk try AccountFile.init(file, .{ .id = s, .length = length }, s);
+                };
+                errdefer account_file.deinit();
+
                 if (s < bench_args.n_accounts_multiple) {
                     try accounts_db.putAccountFile(&account_file, n_accounts);
                 } else {
@@ -1369,7 +1377,7 @@ pub const BenchmarkAccountsDB = struct {
             }
             const elapsed = timer.read();
 
-            std.debug.print("WRITE: {d}\n", .{elapsed});
+            std.log.debug("WRITE: {d}\n", .{elapsed});
         }
 
         var timer = try std.time.Timer.start();

@@ -114,7 +114,10 @@ test "gossip.gossip_shards: tests GossipTableShards" {
     var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 
-    const v = Hash.random();
+    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    const rand = default_prng.random();
+
+    const v = Hash.random(rand);
     try shards.insert(10, &v);
     shards.remove(10, &v);
 
