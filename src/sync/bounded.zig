@@ -9,9 +9,10 @@ const thread_context = @import("thread_context.zig");
 const ThreadLocalContext = thread_context.ThreadLocalContext;
 const ThreadState = thread_context.ThreadState;
 
-/// Token is a temporary struct that holds a reference to Slot(T) within the
-/// channel's buffer along with a stamp (slot identifier)
-pub fn Token(comptime T: type) type {
+/// TempSlot is a temporary struct that holds a reference to Slot(T) within the
+/// channel's buffer along with a stamp (slot identifier) that will be writen to slot
+/// upon successful read/write.
+pub fn TempSlot(comptime T: type) type {
     return struct {
         slot: *Slot(T),
         stamp: usize,
@@ -57,6 +58,10 @@ pub fn Bounded(comptime T: type) type {
         const Self = @This();
 
         pub fn init(config: struct { allocator: std.mem.Allocator, init_capacity: usize }) error{OutOfMemory}!*Self {
+            if (config.init_capacity < 1) {
+                @panic("bounded init_capacity must be greater than 0");
+            }
+
             var allocator = config.allocator;
             var disconnect_bit = std.math.ceilPowerOfTwo(usize, config.init_capacity + 1) catch unreachable;
             var one_lap = disconnect_bit * 2;
@@ -96,8 +101,12 @@ pub fn Bounded(comptime T: type) type {
             self.allocator.destroy(self);
         }
 
+        pub fn capacity(self: *Self) usize {
+            return self.buffer.len;
+        }
+
         /// Attempts to acquire a slot to send a message in
-        inline fn acquireSendSlot(self: *Self, token: *Token(T)) error{ full, disconnected }!void {
+        inline fn acquireSendSlot(self: *Self, token: *TempSlot(T)) error{ full, disconnected }!void {
             var backoff = Backoff.init();
             var tail = self.tail.load(.Unordered);
 
@@ -120,7 +129,6 @@ pub fn Bounded(comptime T: type) type {
 
                 if (tail == stamp) {
                     var new_tail = if (index + 1 < self.buffer.len) tail + 1 else lap +| self.one_lap;
-
                     if (self.tail.tryCompareAndSwap(tail, new_tail, .SeqCst, .Monotonic)) |current_tail| {
                         // failed
                         tail = current_tail;
@@ -131,7 +139,7 @@ pub fn Bounded(comptime T: type) type {
                         token.stamp = tail + 1;
                         return;
                     }
-                } else if (stamp +| self.one_lap == tail + 1) {
+                } else if (tail + 1 == (stamp +| self.one_lap)) {
                     std.atomic.fence(.SeqCst);
                     var head = self.head.load(.Unordered);
 
@@ -151,20 +159,20 @@ pub fn Bounded(comptime T: type) type {
         }
 
         /// writes a value to given `Token`'s slot
-        inline fn write(self: *Self, token: *Token(T), val: T) void {
+        inline fn write(self: *Self, token: *TempSlot(T), val: T) void {
             token.slot.val = val;
             token.slot.stamp.store(token.stamp, .Release);
             self.receivers.notify();
         }
 
         pub fn trySend(self: *Self, val: T) error{ full, disconnected }!void {
-            var token = Token(T).default();
-            try self.acquireSendSlot(&token);
-            self.write(&token, val);
+            var temp_slot = TempSlot(T).uninitialized();
+            try self.acquireSendSlot(&temp_slot);
+            self.write(&temp_slot, val);
         }
 
         pub fn send(self: *Self, val: T, timeout_ns: ?u64) error{ timeout, disconnected }!void {
-            var token = Token(T).uninitialized();
+            var temp_slot = TempSlot(T).uninitialized();
             var timeout: ?std.time.Instant = null;
 
             if (timeout_ns) |ns| {
@@ -177,8 +185,8 @@ pub fn Bounded(comptime T: type) type {
                 var backoff = Backoff.init();
 
                 while (true) {
-                    if (self.acquireSendSlot(&token)) {
-                        return self.write(&token, val);
+                    if (self.acquireSendSlot(&temp_slot)) {
+                        return self.write(&temp_slot, val);
                     } else |err| switch (err) {
                         // if channel disconnected, we return as nothing else can be done
                         error.disconnected => return error.disconnected,
@@ -196,10 +204,10 @@ pub fn Bounded(comptime T: type) type {
                 if (timeout != null and (std.time.Instant.now() catch unreachable).order(timeout.?) == .gt)
                     return error.timeout;
 
-                var context = thread_context.getThreadLocalContext();
-                context.reset();
-                var opId = token.toOperationId();
-                self.senders.registerOperation(opId, context);
+                var thread_ctx = thread_context.getThreadLocalContext();
+                thread_ctx.reset();
+                var opId = temp_slot.toOperationId();
+                self.senders.registerOperation(opId, thread_ctx);
 
                 // We do this because if channel is not full or if channel is not disconnected,
                 // (in either case) we don't want to wait. Let's break out of the sleep.
@@ -208,9 +216,9 @@ pub fn Bounded(comptime T: type) type {
                 // with this. This is why we don't check the return value as a call to `waitUntil`
                 // will allow us to perform the checks below.
                 if (!self.isFull() or self.isDisconnected())
-                    _ = context.tryUpdateState(.aborted);
+                    _ = thread_ctx.tryUpdateFromWaitingStateTo(.aborted);
 
-                switch (context.waitUntil(timeout)) {
+                switch (thread_ctx.waitUntil(timeout)) {
                     .waiting => unreachable,
                     .aborted, .disconnected => {
                         // there must be an entry with this operation id, if not panic!
@@ -223,7 +231,7 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        inline fn acquireReceiveSlot(self: *Self, token: *Token(T)) error{ empty, disconnected }!void {
+        inline fn acquireReceiveSlot(self: *Self, token: *TempSlot(T)) error{ empty, disconnected }!void {
             var backoff = Backoff.init();
             var head = self.head.load(.Unordered);
 
@@ -274,7 +282,7 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        inline fn read(self: *Self, token: *Token(T)) T {
+        inline fn read(self: *Self, token: *TempSlot(T)) T {
             var slot = token.slot;
             slot.stamp.store(token.stamp, .Release);
             self.senders.notify();
@@ -282,13 +290,13 @@ pub fn Bounded(comptime T: type) type {
         }
 
         pub fn tryReceive(self: *Self) error{ empty, disconnected }!T {
-            var token = Token(T).uninitialized();
-            try self.acquireReceiveSlot(&token);
-            return self.read(&token);
+            var temp_slot = TempSlot(T).uninitialized();
+            try self.acquireReceiveSlot(&temp_slot);
+            return self.read(&temp_slot);
         }
 
         pub fn receive(self: *Self, timeout_ns: ?u64) error{ timeout, disconnected }!T {
-            var token = Token(T).uninitialized();
+            var temp_slot = TempSlot(T).uninitialized();
             var timeout: ?std.time.Instant = null;
 
             if (timeout_ns) |ns| {
@@ -301,8 +309,8 @@ pub fn Bounded(comptime T: type) type {
                 var backoff = Backoff.init();
 
                 while (true) {
-                    if (self.acquireReceiveSlot(&token)) {
-                        return self.read(&token);
+                    if (self.acquireReceiveSlot(&temp_slot)) {
+                        return self.read(&temp_slot);
                     } else |err| switch (err) {
                         // if channel disconnected, we return as nothing else can be done
                         error.disconnected => return error.disconnected,
@@ -320,10 +328,10 @@ pub fn Bounded(comptime T: type) type {
                 if (timeout != null and (std.time.Instant.now() catch unreachable).order(timeout.?) == .gt)
                     return error.timeout;
 
-                var context = thread_context.getThreadLocalContext();
-                context.reset();
-                var opId = token.toOperationId();
-                self.receivers.registerOperation(opId, context);
+                var thread_ctx = thread_context.getThreadLocalContext();
+                thread_ctx.reset();
+                var opId = temp_slot.toOperationId();
+                self.receivers.registerOperation(opId, thread_ctx);
 
                 // We do this because if channel is not full or if channel is not disconnected,
                 // (in either case) we don't want to wait. Let's break out of the sleep.
@@ -332,9 +340,9 @@ pub fn Bounded(comptime T: type) type {
                 // with this. This is why we don't check the return value as a call to `waitUntil`
                 // will allow us to perform the checks below.
                 if (!self.isEmpty() or self.isDisconnected())
-                    _ = context.tryUpdateState(.aborted);
+                    _ = thread_ctx.tryUpdateFromWaitingStateTo(.aborted);
 
-                switch (context.waitUntil(timeout)) {
+                switch (thread_ctx.waitUntil(timeout)) {
                     .waiting => unreachable,
                     .aborted, .disconnected => {
                         // there must be an entry with this operation id, if not panic!
@@ -347,24 +355,40 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        pub inline fn acquireReceiver(self: *Self) void {
+        pub inline fn acquireReceiver(self: *Self) bool {
+            if (self.isDisconnected())
+                return false;
             _ = self.n_receivers.fetchAdd(1, .SeqCst);
+            return true;
         }
 
-        pub inline fn releaseReceiver(self: *Self) void {
+        pub inline fn releaseReceiver(self: *Self) bool {
+            if (self.n_receivers.load(.SeqCst) == 0)
+                return false;
             if (self.n_receivers.fetchSub(1, .SeqCst) == 1) {
                 self.disconnect();
             }
+            return true;
         }
 
-        pub inline fn acquireSender(self: *Self) void {
+        /// attempts to acquire a sender, returns true if successful, returns
+        /// false if channel is disconnected.
+        pub inline fn acquireSender(self: *Self) bool {
+            if (self.isDisconnected())
+                return false;
             _ = self.n_senders.fetchAdd(1, .SeqCst);
+            return true;
         }
 
-        pub inline fn releaseSender(self: *Self) void {
+        /// attempts to release a sender, returns true if successful, returns
+        /// false if channel is disconnected.
+        pub inline fn releaseSender(self: *Self) bool {
+            if (self.n_senders.load(.SeqCst) == 0)
+                return false;
             if (self.n_senders.fetchSub(1, .SeqCst) == 1) {
                 self.disconnect();
             }
+            return true;
         }
 
         pub inline fn isFull(self: *const Self) bool {
@@ -413,12 +437,505 @@ fn addToInstant(instant: *std.time.Instant, duration_ns: u64) void {
     instant.timestamp.tv_nsec +|= @intCast(nsecs);
 }
 
-test "bounded channel" {
-    var chan = try Bounded(u64).init(.{ .allocator = std.testing.allocator, .init_capacity = 10 });
+fn testChannelSender(chan: *Bounded(usize), count: usize, timeout_ns: ?u64) void {
+    std.debug.assert(chan.acquireSender());
+    defer std.debug.assert(chan.releaseSender());
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        chan.send(i, timeout_ns) catch break;
+    }
+}
+
+fn testChannelReceiver(chan: *Bounded(usize), received_counter: ?*Atomic(usize), timeout_ns: ?u64) void {
+    std.debug.assert(chan.acquireReceiver());
+    defer std.debug.assert(chan.releaseReceiver());
+
+    while (true) {
+        _ = chan.receive(timeout_ns) catch break;
+        if (received_counter) |counter| {
+            _ = counter.fetchAdd(1, .SeqCst);
+        }
+    }
+}
+
+test "sync.bounded: bounded channel works" {
+    const items_to_send = 1000;
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
     defer chan.deinit();
 
-    try chan.send(100, null);
-    var received = try chan.receive(null);
+    var received_counter = Atomic(usize).init(0);
 
-    try std.testing.expectEqual(received, 100);
+    var sender_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, items_to_send, null });
+    var receiver_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_counter, null });
+
+    sender_handle.join();
+    receiver_handle.join();
+
+    try std.testing.expectEqual(received_counter.load(.SeqCst), 1000);
+    try std.testing.expectEqual(chan.n_receivers.load(.SeqCst), 0);
+    try std.testing.expectEqual(chan.n_senders.load(.SeqCst), 0);
+    try std.testing.expectEqual(chan.isDisconnected(), true);
+    try std.testing.expectEqual(chan.isEmpty(), true);
+    try std.testing.expectEqual(chan.isFull(), false);
+}
+
+test "sync.bounded: buffer len is correct" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expectEqual(chan.capacity(), 10);
+}
+
+test "sync.bounded: disconnect bit is correct" {
+    var capacity: usize = 0b01100100;
+    var disconnect_bit: usize = 0b10000000;
+    var fake_tail: usize = 0b01000100;
+    var disconnected_fake_tail: usize = fake_tail | disconnect_bit; // 0b11000100;
+    var disconnected: usize = disconnected_fake_tail & disconnect_bit;
+
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+
+    try std.testing.expectEqual(chan.disconnect_bit, disconnect_bit);
+    try std.testing.expect(!chan.isDisconnected());
+    chan.disconnect();
+
+    try std.testing.expect(chan.isDisconnected());
+    try std.testing.expectError(error.disconnected, chan.send(1, null));
+    try std.testing.expectError(error.disconnected, chan.trySend(1));
+    try std.testing.expectError(error.disconnected, chan.receive(null));
+    try std.testing.expectError(error.disconnected, chan.tryReceive());
+
+    try std.testing.expectEqual(capacity, 100);
+    try std.testing.expectEqual(disconnect_bit, try std.math.ceilPowerOfTwo(usize, capacity + 1));
+    try std.testing.expectEqual(disconnected_fake_tail, 0b11000100);
+    try std.testing.expect(disconnected != 0);
+}
+
+test "sync.bounded: one_lap is correct" {
+    var capacity: usize = 0b01100100;
+    var disconnect_bit: usize = 0b10000000;
+    var one_lap: usize = disconnect_bit * 2; // 0b100000000
+
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+
+    try std.testing.expectEqual(one_lap, chan.one_lap);
+}
+
+test "sync.bounded: mpsc" {
+    var capacity: usize = 100;
+    var n_items: usize = 1000;
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+    var received_count = Atomic(usize).init(0);
+
+    var sender_1_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, n_items / 2, null });
+    var sender_2_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, n_items / 2, null });
+    var receiver_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+
+    sender_1_handle.join();
+    sender_2_handle.join();
+    receiver_handle.join();
+
+    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+}
+
+test "sync.bounded: mpmc" {
+    var capacity: usize = 100;
+    var n_items: usize = 1000;
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+    var received_count = Atomic(usize).init(0);
+
+    var sender_1_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, n_items / 2, null });
+    var sender_2_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, n_items / 2, null });
+    var receiver_1_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+    var receiver_2_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+
+    sender_1_handle.join();
+    sender_2_handle.join();
+    receiver_1_handle.join();
+    receiver_2_handle.join();
+
+    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+}
+
+test "sync.bounded: spsc" {
+    var capacity: usize = 100;
+    var n_items: usize = 1000;
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+    var received_count = Atomic(usize).init(0);
+
+    var sender_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, n_items, null });
+    var receiver_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+
+    sender_handle.join();
+    receiver_handle.join();
+
+    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+}
+
+test "sync.bounded: spmc" {
+    var capacity: usize = 100;
+    var n_items: usize = 1000;
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+    var received_count = Atomic(usize).init(0);
+
+    var sender_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, n_items, null });
+    var receiver_1_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+    var receiver_2_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+
+    sender_handle.join();
+    receiver_1_handle.join();
+    receiver_2_handle.join();
+
+    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+}
+
+test "sync.bounded: disconnect after all senders released" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    // acquire a few senders and a single receiver
+    std.debug.assert(chan.acquireReceiver());
+    defer std.debug.assert(chan.releaseReceiver());
+    std.debug.assert(chan.acquireSender());
+    std.debug.assert(chan.acquireSender());
+    std.debug.assert(chan.acquireSender());
+
+    // channel should not be disconnected
+    try std.testing.expect(!chan.isDisconnected());
+
+    // release only 2
+    try std.testing.expect(chan.releaseSender());
+    try std.testing.expect(chan.releaseSender());
+
+    // should still be connected
+    try std.testing.expect(!chan.isDisconnected());
+
+    // release last sender
+    try std.testing.expect(chan.releaseSender());
+
+    // channel should now be disconnected
+    try std.testing.expect(chan.isDisconnected());
+    try std.testing.expectError(error.disconnected, chan.receive(null));
+}
+
+test "sync.bounded: disconnect after all receivers deinit" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    // acquire a few receivers and a single sender
+    try std.testing.expect(chan.acquireSender());
+    defer std.debug.assert(chan.releaseSender());
+    try std.testing.expect(chan.acquireReceiver());
+    try std.testing.expect(chan.acquireReceiver());
+    try std.testing.expect(chan.acquireReceiver());
+
+    // channel should not be disconnected
+    try std.testing.expect(!chan.isDisconnected());
+
+    // release only 2
+    try std.testing.expect(chan.releaseReceiver());
+    try std.testing.expect(chan.releaseReceiver());
+
+    // should still be connected
+    try std.testing.expect(!chan.isDisconnected());
+
+    // release last sender
+    try std.testing.expect(chan.releaseReceiver());
+
+    // channel should now be disconnected
+    try std.testing.expect(chan.isDisconnected());
+    try std.testing.expectError(error.disconnected, chan.send(1, null));
+}
+
+test "sync.bounded: acquire sender correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    // acquire a few receivers and a single sender
+    try std.testing.expect(chan.acquireSender());
+    try std.testing.expect(chan.n_senders.load(.SeqCst) == 1);
+    try std.testing.expect(chan.releaseSender());
+    try std.testing.expect(chan.n_senders.load(.SeqCst) == 0);
+    try std.testing.expect(chan.isDisconnected());
+}
+
+test "sync.bounded: acquire sender fails after disconnect" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expect(chan.acquireSender());
+    try std.testing.expect(chan.n_senders.load(.SeqCst) == 1);
+    try std.testing.expect(chan.releaseSender());
+    try std.testing.expect(chan.n_senders.load(.SeqCst) == 0);
+    try std.testing.expect(chan.isDisconnected());
+    try std.testing.expect(!chan.acquireSender());
+}
+
+test "sync.bounded: acquire receiver" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expect(chan.acquireReceiver());
+    try std.testing.expect(chan.n_receivers.load(.SeqCst) == 1);
+    try std.testing.expect(chan.releaseReceiver());
+    try std.testing.expect(chan.n_receivers.load(.SeqCst) == 0);
+    try std.testing.expect(chan.isDisconnected());
+}
+
+test "sync.bounded: acquire receiver fails after disconnect" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expect(chan.acquireReceiver());
+    try std.testing.expect(chan.n_receivers.load(.SeqCst) == 1);
+    try std.testing.expect(chan.releaseReceiver());
+    try std.testing.expect(chan.n_receivers.load(.SeqCst) == 0);
+    try std.testing.expect(chan.isDisconnected());
+    try std.testing.expect(!chan.acquireReceiver());
+}
+
+test "sync.bounded: release sender correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expect(chan.acquireSender());
+    try std.testing.expect(chan.n_senders.load(.SeqCst) == 1);
+    try std.testing.expect(chan.releaseSender());
+    try std.testing.expect(chan.n_senders.load(.SeqCst) == 0);
+    try std.testing.expect(!chan.releaseSender());
+}
+
+test "sync.bounded: release receiver correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expect(chan.acquireReceiver());
+    try std.testing.expect(chan.n_receivers.load(.SeqCst) == 1);
+    try std.testing.expect(chan.releaseReceiver());
+    try std.testing.expect(chan.n_receivers.load(.SeqCst) == 0);
+    try std.testing.expect(!chan.releaseReceiver());
+}
+
+test "sync.bounded: channel full/empty works correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 2,
+    });
+    defer chan.deinit();
+
+    try std.testing.expect(chan.isEmpty());
+    try std.testing.expect(!chan.isFull());
+    try chan.send(1, null);
+    try chan.send(2, null);
+    try std.testing.expectError(error.full, chan.trySend(3));
+    try std.testing.expect(chan.isFull());
+    try std.testing.expect(!chan.isEmpty());
+}
+
+test "sync.bounded: channel send works correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try chan.send(1, null);
+    try std.testing.expectEqual(try chan.receive(null), 1);
+}
+
+test "sync.bounded: send while disconnected fails" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    chan.disconnect();
+    try std.testing.expectError(error.disconnected, chan.send(1, null));
+}
+
+test "sync.bounded: send timeout works" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 1,
+    });
+    defer chan.deinit();
+
+    var timeout: u64 = std.time.ns_per_ms * 100;
+
+    try std.testing.expect(chan.acquireSender());
+    defer std.debug.assert(chan.releaseSender());
+    try chan.send(1, null);
+    var timer = try std.time.Timer.start();
+    try std.testing.expectError(error.timeout, chan.send(2, timeout));
+    var time = timer.read();
+    try std.testing.expect(time >= timeout);
+}
+
+test "sync.bounded: acquireSenderSlot works correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 3,
+    });
+    defer chan.deinit();
+
+    try chan.send(1, null);
+    try chan.send(2, null);
+    try chan.send(3, null);
+
+    var temp_slot = TempSlot(usize).uninitialized();
+    try std.testing.expectError(error.full, chan.acquireSendSlot(&temp_slot));
+
+    chan.disconnect();
+    try std.testing.expectError(error.disconnected, chan.acquireSendSlot(&temp_slot));
+}
+
+test "sync.bounded: trySend works properly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 3,
+    });
+    defer chan.deinit();
+
+    try chan.trySend(1);
+    try chan.trySend(2);
+    try chan.trySend(3);
+    try std.testing.expectError(error.full, chan.trySend(4));
+    chan.disconnect();
+    try std.testing.expectError(error.disconnected, chan.trySend(4));
+}
+
+test "sync.bounded: receive order is correct" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 3,
+    });
+    defer chan.deinit();
+
+    try chan.send(1, null);
+    try chan.send(2, null);
+    try chan.send(3, null);
+    try std.testing.expectEqual(try chan.receive(null), 1);
+    try std.testing.expectEqual(try chan.receive(null), 2);
+    try std.testing.expectEqual(try chan.receive(null), 3);
+}
+
+test "sync.bounded: receive while disconnected should still drain all elements" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try chan.send(1, null);
+    try chan.send(2, null);
+    try chan.send(3, null);
+    chan.disconnect();
+    try std.testing.expect(try chan.receive(null) == 1);
+    try std.testing.expect(try chan.receive(null) == 2);
+    try std.testing.expect(try chan.receive(null) == 3);
+    try std.testing.expectError(error.disconnected, chan.receive(null));
+}
+
+test "sync.bounded: receive while empty with timeout" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    var timeout: u64 = std.time.ns_per_ms * 100;
+
+    try std.testing.expectError(error.timeout, chan.receive(timeout));
+}
+
+test "sync.bounded: acquireReceiveSlot works correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try chan.send(1, null);
+    try chan.send(2, null);
+    try chan.send(3, null);
+    try std.testing.expect(try chan.receive(null) == 1);
+    try std.testing.expect(try chan.receive(null) == 2);
+    try std.testing.expect(try chan.receive(null) == 3);
+
+    var temp_slot = TempSlot(usize).uninitialized();
+    try std.testing.expectError(error.empty, chan.acquireReceiveSlot(&temp_slot));
+
+    chan.disconnect();
+    try std.testing.expectError(error.disconnected, chan.acquireReceiveSlot(&temp_slot));
+}
+
+test "sync.bounded: tryReceive works correctly" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 10,
+    });
+    defer chan.deinit();
+
+    try std.testing.expectError(error.empty, chan.tryReceive());
+    try chan.send(1, null);
+    try std.testing.expectEqual(@as(usize, 1), try chan.tryReceive());
+    try std.testing.expectError(error.empty, chan.tryReceive());
+    chan.disconnect();
+    try std.testing.expectError(error.disconnected, chan.tryReceive());
 }

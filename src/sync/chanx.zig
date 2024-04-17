@@ -38,25 +38,25 @@ pub fn ChannelX(comptime T: type) type {
 
         fn acquireSender(self: Self) void {
             switch (self) {
-                .bounded => |c| c.acquireSender(),
+                .bounded => |c| std.debug.assert(c.acquireSender()),
             }
         }
 
         fn releaseSender(self: Self) void {
             switch (self) {
-                .bounded => |c| c.releaseSender(),
+                .bounded => |c| std.debug.assert(c.releaseSender()),
             }
         }
 
         fn acquireReceiver(self: Self) void {
             switch (self) {
-                .bounded => |c| c.acquireReceiver(),
+                .bounded => |c| std.debug.assert(c.acquireReceiver()),
             }
         }
 
         fn releaseReceiver(self: Self) void {
             switch (self) {
-                .bounded => |c| c.releaseReceiver(),
+                .bounded => |c| std.debug.assert(c.releaseReceiver()),
             }
         }
 
@@ -87,13 +87,13 @@ pub fn ChannelX(comptime T: type) type {
             }
         }
 
-        fn receive(self: Self) error{disconnected}!T {
+        fn receive(self: Self) ?T {
             switch (self) {
                 .bounded => |chan| {
                     if (chan.receive(null)) |val| {
                         return val;
                     } else |err| switch (err) {
-                        error.disconnected => return error.disconnected,
+                        error.disconnected => return null,
                         error.timeout => unreachable,
                     }
                 },
@@ -143,7 +143,7 @@ pub fn Sender(comptime T: type) type {
         private: Internal,
 
         const Internal = struct {
-            tid: std.Thread.Id,
+            thread_id: std.Thread.Id,
             released: bool,
             ch: ChannelX(T),
         };
@@ -154,7 +154,7 @@ pub fn Sender(comptime T: type) type {
             chan.acquireSender();
             return Self{
                 .private = .{
-                    .tid = std.Thread.getCurrentId(),
+                    .thread_id = std.Thread.getCurrentId(),
                     .released = false,
                     .ch = chan,
                 },
@@ -162,7 +162,7 @@ pub fn Sender(comptime T: type) type {
         }
 
         pub fn send(self: *Self, val: T) error{disconnected}!void {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             return self.private.ch.send(val);
         }
@@ -170,19 +170,19 @@ pub fn Sender(comptime T: type) type {
         /// `trySend` allows you to non-blockingly send a value to the channel. It returns
         /// an `error.full` or `error.disconnected` if either of those cases are encountered.
         pub fn trySend(self: *Self, val: T) error{ full, disconnected }!void {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             return self.private.ch.trySend(val);
         }
 
         pub fn sendTimeout(self: *Self, val: T, timeout_ns: u64) error{ timeout, disconnected }!void {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             return self.private.ch.sendTimeout(val, timeout_ns);
         }
 
         pub fn deinit(self: *Self) void {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             self.private.released = true;
             self.private.ch.releaseSender();
@@ -195,7 +195,7 @@ pub fn Receiver(comptime T: type) type {
         private: Internal,
 
         const Internal = struct {
-            tid: std.Thread.Id,
+            thread_id: std.Thread.Id,
             released: bool,
             ch: ChannelX(T),
         };
@@ -203,17 +203,18 @@ pub fn Receiver(comptime T: type) type {
         const Self = @This();
 
         fn init(chan: ChannelX(T)) Self {
+            chan.acquireReceiver();
             return Self{
                 .private = .{
-                    .tid = std.Thread.getCurrentId(),
+                    .thread_id = std.Thread.getCurrentId(),
                     .released = false,
                     .ch = chan,
                 },
             };
         }
 
-        pub fn receive(self: *Self) error{disconnected}!T {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+        pub fn receive(self: *Self) ?T {
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             return self.private.ch.receive();
         }
@@ -221,19 +222,19 @@ pub fn Receiver(comptime T: type) type {
         /// `tryreceive` allows you to non-blockingly receive a value to the channel. It returns
         /// an `error.empty` or `error.disconnected` if either of those cases are encountered.
         pub fn tryReceive(self: *Self) error{ empty, disconnected }!T {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             return self.private.ch.tryReceive();
         }
 
         pub fn receiveTimeout(self: *Self, timeout_ns: u64) error{ timeout, disconnected }!T {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             return self.private.ch.receiveTimeout(timeout_ns);
         }
 
         pub fn deinit(self: *Self) void {
-            std.debug.assert(std.Thread.getCurrentId() == self.private.tid);
+            std.debug.assert(std.Thread.getCurrentId() == self.private.thread_id);
             std.debug.assert(!self.private.released);
             self.private.released = true;
             self.private.ch.releaseReceiver();
@@ -264,8 +265,7 @@ fn testPacketReceiver(
     var receiver = chan.receiver();
     defer receiver.deinit();
 
-    while (true) {
-        const v = receiver.receive() catch break;
+    while (receiver.receive()) |v| {
         _ = v;
     }
 }
@@ -290,8 +290,7 @@ fn testUsizeReceiver(
     var receiver = chan.receiver();
     defer receiver.deinit();
 
-    while (true) {
-        const v = receiver.receive() catch break;
+    while (receiver.receive()) |v| {
         _ = v;
     }
 }

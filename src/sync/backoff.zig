@@ -46,3 +46,14 @@ pub const Backoff = struct {
         return self.step > YIELD_LIMIT;
     }
 };
+
+test "sync.backoff: backoff mechanism works" {
+    var backoff = Backoff.init();
+    try std.testing.expect(!backoff.isCompleted());
+    try std.testing.expect(backoff.step == 0);
+    backoff.spin();
+    try std.testing.expect(!backoff.isCompleted());
+    try std.testing.expect(backoff.step == 1);
+    backoff.reset();
+    backoff.snooze();
+}

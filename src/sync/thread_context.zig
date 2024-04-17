@@ -1,7 +1,7 @@
 const std = @import("std");
 const parker = @import("parker.zig");
 const OperationId = @import("waker.zig").OperationId;
-const Token = @import("bounded.zig").Token;
+const Token = @import("bounded.zig").TempSlot;
 const Backoff = @import("backoff.zig").Backoff;
 const Parker = parker.Parker;
 const Atomic = std.atomic.Atomic;
@@ -31,9 +31,10 @@ pub const ThreadLocalContext = struct {
 
     const Self = @This();
 
-    /// tries to update internal `state` with `new_state` returning current state if comparison failed,
-    /// meaning it failed to update the state successfully. If successful, returns `null`.
-    pub inline fn tryUpdateState(self: *Self, new_state: ThreadState) ?ThreadState {
+    /// tries to update internal `state` from `.waiting` to `new_state` returning current state
+    /// if comparison failed (or state isn't `.waiting`), meaning it failed to update the state successfully.
+    /// If successful, returns `null`.
+    pub inline fn tryUpdateFromWaitingStateTo(self: *Self, new_state: ThreadState) ?ThreadState {
         return ThreadState.fromUsize(self.state.compareAndSwap(
             ThreadState.toUsize(.waiting),
             new_state.toUsize(),
@@ -72,7 +73,7 @@ pub const ThreadLocalContext = struct {
                 if (now.timestamp.tv_sec < end.timestamp.tv_sec and now.timestamp.tv_nsec < end.timestamp.tv_nsec)
                     self.parker.parkTimeout(timespecDifferenceInNs(end, now))
                 else
-                    return self.tryUpdateState(.aborted) orelse .aborted;
+                    return self.tryUpdateFromWaitingStateTo(.aborted) orelse .aborted;
             } else self.parker.park();
         }
     }

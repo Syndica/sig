@@ -1,6 +1,6 @@
 const std = @import("std");
 const Parker = @import("parker.zig").Parker;
-const Token = @import("bounded.zig").Token;
+const Token = @import("bounded.zig").TempSlot;
 const thread_context = @import("thread_context.zig");
 const ThreadLocalContext = thread_context.ThreadLocalContext;
 const ThreadState = thread_context.ThreadState;
@@ -81,7 +81,7 @@ pub const Waker = struct {
             //
             // If found: unpark the thread, remove and return it
             if (sleeper.thread_context.id != this_thread_id and
-                sleeper.thread_context.tryUpdateState(.{ .operation = sleeper.operation_id }) == null)
+                sleeper.thread_context.tryUpdateFromWaitingStateTo(.{ .operation = sleeper.operation_id }) == null)
             {
                 // awaken the thread
                 sleeper.thread_context.parker.unpark();
@@ -97,7 +97,7 @@ pub const Waker = struct {
         defer self.mutex.unlock();
         for (self.sleepers.items) |sleeper| {
             // for each sleeping operation, try and update state to disconnected
-            if (sleeper.thread_context.tryUpdateState(.disconnected) == null) {
+            if (sleeper.thread_context.tryUpdateFromWaitingStateTo(.disconnected) == null) {
                 // if updated, awaken the thread so it can exit op
                 sleeper.thread_context.parker.unpark();
             }
