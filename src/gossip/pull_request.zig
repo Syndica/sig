@@ -313,7 +313,10 @@ test "gossip.pull_request: test building filters" {
 test "gossip.pull_request: filter set deinits correct" {
     var filter_set = try GossipPullFilterSet.init(std.testing.allocator, 10000, 200);
 
-    const hash = Hash.random();
+    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    const rand = default_prng.random();
+
+    const hash = Hash.random(rand);
     filter_set.add(&hash);
 
     const index = GossipPullFilterSet.hashIndex(filter_set.mask_bits, &hash);

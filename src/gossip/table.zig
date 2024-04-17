@@ -2,8 +2,7 @@ const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
 const bincode = @import("../bincode/bincode.zig");
-const _hash = @import("../core/hash.zig");
-const Hash = _hash.Hash;
+const Hash = @import("../core/hash.zig").Hash;
 const GossipTableShards = @import("./shards.zig").GossipTableShards;
 const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
@@ -272,7 +271,7 @@ pub const GossipTable = struct {
         } else {
             const old_entry = result.value_ptr.*;
 
-            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != .eq) {
+            if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
                 return TableError.OldValue;
@@ -821,12 +820,11 @@ pub const GossipTable = struct {
 
         // run this loop in parallel
         for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..) |key, i| {
-            var old_labels = std.ArrayList(GossipKey).init(self.allocator);
             tasks[i] = GetOldLabelsTask{
                 .key = key,
                 .table = self,
                 .cutoff_timestamp = cutoff_timestamp,
-                .old_labels = old_labels,
+                .old_labels = std.ArrayList(GossipKey).init(self.allocator),
             };
 
             // run it
@@ -1031,15 +1029,18 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var htq = HashTimeQueue.init(std.testing.allocator);
     defer htq.deinit();
 
-    try htq.insert(Hash.random(), 100);
-    try htq.insert(Hash.random(), 102);
-    try htq.insert(Hash.random(), 103);
+    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    const rand = default_prng.random();
+
+    try htq.insert(Hash.random(rand), 100);
+    try htq.insert(Hash.random(rand), 102);
+    try htq.insert(Hash.random(rand), 103);
 
     try htq.trim(102);
     try std.testing.expect(htq.len() == 2);
 
-    try htq.insert(Hash.random(), 101);
-    try htq.insert(Hash.random(), 120);
+    try htq.insert(Hash.random(rand), 101);
+    try htq.insert(Hash.random(rand), 120);
     try std.testing.expect(htq.len() == 4);
 
     try htq.trim(150);

@@ -105,7 +105,7 @@ pub fn writeIntLittleMem(
 
 const std = @import("std");
 const Blake3 = std.crypto.hash.Blake3;
-const Hash = @import("./hash.zig").Hash;
+const Hash = @import("hash.zig").Hash;
 
 pub fn hashAccount(
     lamports: u64,

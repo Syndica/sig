@@ -60,7 +60,7 @@ pub const GossipVersionedData = struct {
         } else if (new_ts < old_ts) {
             return false;
         } else {
-            return old_value.value_hash.cmp(&new_value.value_hash) == .lt;
+            return old_value.value_hash.order(&new_value.value_hash) == .lt;
         }
     }
 };
@@ -915,7 +915,7 @@ pub const SnapshotHashes = struct {
         var slice: [0]struct { Slot, Hash } = .{};
         return SnapshotHashes{
             .from = Pubkey.random(rng),
-            .full = .{ rng.int(u64), Hash.random() },
+            .full = .{ rng.int(u64), Hash.random(rng) },
             .incremental = &slice,
             .wallclock = getWallclockMs(),
         };
