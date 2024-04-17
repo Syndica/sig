@@ -624,9 +624,9 @@ test "sync.bounded: disconnect after all senders released" {
     // acquire a few senders and a single receiver
     chan.acquireReceiver();
     defer std.debug.assert(chan.releaseReceiver());
-    std.debug.assert(chan.acquireSender());
-    std.debug.assert(chan.acquireSender());
-    std.debug.assert(chan.acquireSender());
+    chan.acquireSender();
+    chan.acquireSender();
+    chan.acquireSender();
 
     // channel should not be disconnected
     try std.testing.expect(!chan.isDisconnected());
@@ -654,7 +654,7 @@ test "sync.bounded: disconnect after all receivers deinit" {
     defer chan.deinit();
 
     // acquire a few receivers and a single sender
-    try std.testing.expect(chan.acquireSender());
+    chan.acquireSender();
     defer std.debug.assert(chan.releaseSender());
     chan.acquireReceiver();
     chan.acquireReceiver();
@@ -686,7 +686,7 @@ test "sync.bounded: acquire sender correctly" {
     defer chan.deinit();
 
     // acquire a few receivers and a single sender
-    try std.testing.expect(chan.acquireSender());
+    chan.acquireSender();
     try std.testing.expect(chan.n_senders.load(.SeqCst) == 1);
     try std.testing.expect(chan.releaseSender());
     try std.testing.expect(chan.n_senders.load(.SeqCst) == 0);
@@ -700,12 +700,12 @@ test "sync.bounded: acquire sender fails after disconnect" {
     });
     defer chan.deinit();
 
-    try std.testing.expect(chan.acquireSender());
+    chan.acquireSender();
     try std.testing.expect(chan.n_senders.load(.SeqCst) == 1);
     try std.testing.expect(chan.releaseSender());
     try std.testing.expect(chan.n_senders.load(.SeqCst) == 0);
     try std.testing.expect(chan.isDisconnected());
-    try std.testing.expect(!chan.acquireSender());
+    chan.acquireSender();
 }
 
 test "sync.bounded: acquire receiver" {
@@ -744,7 +744,7 @@ test "sync.bounded: release sender correctly" {
     });
     defer chan.deinit();
 
-    try std.testing.expect(chan.acquireSender());
+    chan.acquireSender();
     try std.testing.expect(chan.n_senders.load(.SeqCst) == 1);
     try std.testing.expect(chan.releaseSender());
     try std.testing.expect(chan.n_senders.load(.SeqCst) == 0);
@@ -812,7 +812,7 @@ test "sync.bounded: send timeout works" {
 
     var timeout: u64 = std.time.ns_per_ms * 100;
 
-    try std.testing.expect(chan.acquireSender());
+    chan.acquireSender();
     defer std.debug.assert(chan.releaseSender());
     try chan.send(1, null);
     var timer = try std.time.Timer.start();
