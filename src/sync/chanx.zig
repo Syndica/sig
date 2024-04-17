@@ -38,7 +38,7 @@ pub fn ChannelX(comptime T: type) type {
 
         fn acquireSender(self: Self) void {
             switch (self) {
-                .bounded => |c| std.debug.assert(c.acquireSender()),
+                .bounded => |c| c.acquireSender(),
             }
         }
 
@@ -50,7 +50,7 @@ pub fn ChannelX(comptime T: type) type {
 
         fn acquireReceiver(self: Self) void {
             switch (self) {
-                .bounded => |c| std.debug.assert(c.acquireReceiver()),
+                .bounded => |c| c.acquireReceiver(),
             }
         }
 

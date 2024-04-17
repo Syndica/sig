@@ -355,11 +355,8 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        pub inline fn acquireReceiver(self: *Self) bool {
-            if (self.isDisconnected())
-                return false;
+        pub inline fn acquireReceiver(self: *Self) void {
             _ = self.n_receivers.fetchAdd(1, .SeqCst);
-            return true;
         }
 
         pub inline fn releaseReceiver(self: *Self) bool {
@@ -373,11 +370,8 @@ pub fn Bounded(comptime T: type) type {
 
         /// attempts to acquire a sender, returns true if successful, returns
         /// false if channel is disconnected.
-        pub inline fn acquireSender(self: *Self) bool {
-            if (self.isDisconnected())
-                return false;
+        pub inline fn acquireSender(self: *Self) void {
             _ = self.n_senders.fetchAdd(1, .SeqCst);
-            return true;
         }
 
         /// attempts to release a sender, returns true if successful, returns
@@ -438,7 +432,7 @@ fn addToInstant(instant: *std.time.Instant, duration_ns: u64) void {
 }
 
 fn testChannelSender(chan: *Bounded(usize), count: usize, timeout_ns: ?u64) void {
-    std.debug.assert(chan.acquireSender());
+    chan.acquireSender();
     defer std.debug.assert(chan.releaseSender());
 
     var i: usize = 0;
@@ -448,7 +442,7 @@ fn testChannelSender(chan: *Bounded(usize), count: usize, timeout_ns: ?u64) void
 }
 
 fn testChannelReceiver(chan: *Bounded(usize), received_counter: ?*Atomic(usize), timeout_ns: ?u64) void {
-    std.debug.assert(chan.acquireReceiver());
+    chan.acquireReceiver();
     defer std.debug.assert(chan.releaseReceiver());
 
     while (true) {
@@ -628,7 +622,7 @@ test "sync.bounded: disconnect after all senders released" {
     defer chan.deinit();
 
     // acquire a few senders and a single receiver
-    std.debug.assert(chan.acquireReceiver());
+    chan.acquireReceiver();
     defer std.debug.assert(chan.releaseReceiver());
     std.debug.assert(chan.acquireSender());
     std.debug.assert(chan.acquireSender());
@@ -662,9 +656,9 @@ test "sync.bounded: disconnect after all receivers deinit" {
     // acquire a few receivers and a single sender
     try std.testing.expect(chan.acquireSender());
     defer std.debug.assert(chan.releaseSender());
-    try std.testing.expect(chan.acquireReceiver());
-    try std.testing.expect(chan.acquireReceiver());
-    try std.testing.expect(chan.acquireReceiver());
+    chan.acquireReceiver();
+    chan.acquireReceiver();
+    chan.acquireReceiver();
 
     // channel should not be disconnected
     try std.testing.expect(!chan.isDisconnected());
@@ -721,7 +715,7 @@ test "sync.bounded: acquire receiver" {
     });
     defer chan.deinit();
 
-    try std.testing.expect(chan.acquireReceiver());
+    chan.acquireReceiver();
     try std.testing.expect(chan.n_receivers.load(.SeqCst) == 1);
     try std.testing.expect(chan.releaseReceiver());
     try std.testing.expect(chan.n_receivers.load(.SeqCst) == 0);
@@ -735,12 +729,12 @@ test "sync.bounded: acquire receiver fails after disconnect" {
     });
     defer chan.deinit();
 
-    try std.testing.expect(chan.acquireReceiver());
+    chan.acquireReceiver();
     try std.testing.expect(chan.n_receivers.load(.SeqCst) == 1);
     try std.testing.expect(chan.releaseReceiver());
     try std.testing.expect(chan.n_receivers.load(.SeqCst) == 0);
     try std.testing.expect(chan.isDisconnected());
-    try std.testing.expect(!chan.acquireReceiver());
+    chan.acquireReceiver();
 }
 
 test "sync.bounded: release sender correctly" {
@@ -764,7 +758,7 @@ test "sync.bounded: release receiver correctly" {
     });
     defer chan.deinit();
 
-    try std.testing.expect(chan.acquireReceiver());
+    chan.acquireReceiver();
     try std.testing.expect(chan.n_receivers.load(.SeqCst) == 1);
     try std.testing.expect(chan.releaseReceiver());
     try std.testing.expect(chan.n_receivers.load(.SeqCst) == 0);
