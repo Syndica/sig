@@ -148,16 +148,37 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     return packets;
 }
 
-pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, keypair: *const KeyPair, to_addr: EndPoint) !Packet {
+pub fn randomPullRequest(
+    allocator: std.mem.Allocator,
+    rng: std.rand.Random,
+    keypair: *const KeyPair,
+    to_addr: EndPoint,
+) !Packet {
+    var value = try SignedGossipData.initSigned(.{
+        .LegacyContactInfo = LegacyContactInfo.default(
+            Pubkey.fromPublicKey(&keypair.public_key),
+        ),
+    }, keypair);
+
+    return randomPullRequestWithContactInfo(
+        allocator,
+        rng,
+        to_addr,
+        value,
+    );
+}
+
+pub fn randomPullRequestWithContactInfo(
+    allocator: std.mem.Allocator,
+    rng: std.rand.Random,
+    to_addr: EndPoint,
+    contact_info: SignedGossipData,
+) !Packet {
     const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
     var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
-
-    var value = try SignedGossipData.initSigned(.{
-        .LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key)),
-    }, keypair);
 
     var filter = GossipPullFilter{
         .filter = bloom,
@@ -203,7 +224,7 @@ pub fn randomPullRequest(allocator: std.mem.Allocator, rng: std.rand.Random, key
     }
 
     // serialize and send as packet
-    var msg = GossipMessage{ .PullRequest = .{ filter, value } };
+    var msg = GossipMessage{ .PullRequest = .{ filter, contact_info } };
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
     var msg_slice = try bincode.writeToSlice(&packet_buf, msg, bincode.Params{});
     var packet = Packet.init(to_addr, packet_buf, msg_slice.len);

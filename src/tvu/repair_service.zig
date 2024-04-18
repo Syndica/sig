@@ -32,11 +32,13 @@ pub const RepairService = struct {
     exit: *Atomic(bool),
     slot_to_request: ?u64,
 
-    pub fn deinit(self: *@This()) void {
+    const Self = @This();
+
+    pub fn deinit(self: *Self) void {
         self.peer_provider.deinit();
     }
 
-    pub fn run(self: *@This()) !void {
+    pub fn run(self: *Self) !void {
         self.logger.info("starting repair service");
         defer self.logger.info("exiting repair service");
         while (!self.exit.load(.Unordered)) {
@@ -48,7 +50,7 @@ pub const RepairService = struct {
         }
     }
 
-    fn initialSnapshotRepair(self: *@This()) !?AddressedRepairRequest {
+    fn initialSnapshotRepair(self: *Self) !?AddressedRepairRequest {
         if (self.slot_to_request == null) return null;
         const request: RepairRequest = .{ .HighestShred = .{ self.slot_to_request.?, 0 } };
         const maybe_peer = try self.peer_provider.getRandomPeer(self.slot_to_request.?);
@@ -71,8 +73,10 @@ pub const RepairRequester = struct {
     udp_send_socket: *Socket,
     logger: Logger,
 
+    const Self = @This();
+
     pub fn sendRepairRequest(
-        self: *const @This(),
+        self: *const Self,
         request: AddressedRepairRequest,
     ) !void {
         const timestamp = std.time.milliTimestamp();
@@ -134,6 +138,8 @@ pub const RepairPeerProvider = struct {
     my_pubkey: Pubkey,
     my_shred_version: *const Atomic(u16),
 
+    const Self = @This();
+
     const RepairPeers = struct {
         insertion_time_secs: u64,
         peers: []RepairPeer,
@@ -161,13 +167,13 @@ pub const RepairPeerProvider = struct {
         };
     }
 
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *Self) void {
         self.cache.deinit();
     }
 
     /// Selects a peer at random from gossip or cache that is expected
     /// to be able to handle a repair request for the specified slot.
-    pub fn getRandomPeer(self: *@This(), slot: Slot) !?RepairPeer {
+    pub fn getRandomPeer(self: *Self, slot: Slot) !?RepairPeer {
         const peers = try self.getPeers(slot);
         if (peers.len == 0) return null;
         const index = self.rng.intRangeLessThan(usize, 0, peers.len);
@@ -175,7 +181,7 @@ pub const RepairPeerProvider = struct {
     }
 
     /// Tries to get peers that could have the slot. Checks cache, falling back to gossip.
-    fn getPeers(self: *@This(), slot: Slot) ![]RepairPeer {
+    fn getPeers(self: *Self, slot: Slot) ![]RepairPeer {
         const now: u64 = @intCast(std.time.timestamp());
 
         if (self.cache.get(slot)) |peers| {
@@ -196,7 +202,7 @@ pub const RepairPeerProvider = struct {
     /// This will always acquire the gossip table lock.
     /// Instead of using this function, access the cache when possible to avoid contention.
     fn getRepairPeersFromGossip(
-        self: *@This(),
+        self: *Self,
         allocator: Allocator,
         slot: Slot,
     ) error{OutOfMemory}![]RepairPeer {

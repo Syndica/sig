@@ -24,6 +24,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
+  "id": 1,
   "links": [],
   "liveNow": false,
   "panels": [
@@ -91,7 +92,7 @@
         "x": 0,
         "y": 0
       },
-      "id": 14,
+      "id": 2,
       "options": {
         "legend": {
           "calcs": [],
@@ -106,38 +107,33 @@
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "disableTextWrap": false,
+          "datasource": {},
           "editorMode": "builder",
-          "expr": "push_messages_time_to_insert",
-          "fullMetaSearch": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "__auto",
+          "expr": "gossip_packets_received",
+          "legendFormat": "gossip_packets_received",
           "range": true,
-          "refId": "A",
-          "useBackend": false
+          "refId": "A"
         },
         {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "disableTextWrap": false,
+          "datasource": {},
           "editorMode": "builder",
-          "expr": "push_messages_time_build_prune",
-          "fullMetaSearch": false,
+          "expr": "gossip_packets_verified",
           "hide": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "__auto",
+          "legendFormat": "gossip_packets_verified",
           "range": true,
-          "refId": "B",
-          "useBackend": false
+          "refId": "B"
+        },
+        {
+          "datasource": {},
+          "editorMode": "builder",
+          "expr": "gossip_packets_processed",
+          "hide": false,
+          "legendFormat": "gossip_packets_processed",
+          "range": true,
+          "refId": "C"
         }
       ],
-      "title": "Push Message Processing Times",
+      "title": "Packet Info",
       "type": "timeseries"
     },
     {
@@ -201,135 +197,8 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 8
-      },
-      "id": 13,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "push_message_n_values",
-          "fullMetaSearch": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "A",
-          "useBackend": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "push_message_n_failed_inserts",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "B",
-          "useBackend": false
-        },
-        {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "push_message_n_invalid_values",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "C",
-          "useBackend": false
-        }
-      ],
-      "title": "Push Message Processing Info",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {},
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
+        "x": 12,
+        "y": 0
       },
       "id": 12,
       "options": {
@@ -349,31 +218,39 @@
           "datasource": {},
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "ping_messages_dropped",
+          "expr": "idelta(ping_messages_dropped[$__interval])",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
-          "legendFormat": "__auto",
+          "legendFormat": "ping_messages_dropped",
           "range": true,
           "refId": "A",
           "useBackend": false
         },
         {
           "datasource": {},
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_requests_dropped",
+          "expr": "idelta(pull_requests_dropped[$__interval])",
+          "fullMetaSearch": false,
           "hide": false,
-          "legendFormat": "__auto",
+          "includeNullMetadata": true,
+          "legendFormat": "pull_requests_dropped",
           "range": true,
-          "refId": "D"
+          "refId": "D",
+          "useBackend": false
         },
         {
           "datasource": {},
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "prune_messages_dropped",
+          "expr": "idelta(prune_messages_dropped[$__interval])",
+          "fullMetaSearch": false,
           "hide": false,
-          "legendFormat": "__auto",
+          "includeNullMetadata": true,
+          "legendFormat": "prune_messages_dropped",
           "range": true,
-          "refId": "B"
+          "refId": "B",
+          "useBackend": false
         }
       ],
       "title": "Dropped Messages",
@@ -441,9 +318,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 24
+        "y": 8
       },
-      "id": 10,
+      "id": 6,
       "options": {
         "legend": {
           "calcs": [],
@@ -459,88 +336,248 @@
       "targets": [
         {
           "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_batch_ping_time",
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_batch_pong_time",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_batch_prune_time",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_batch_pull_req_time",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "D"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_batch_pull_resp_time",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "E"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_batch_push_time",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "F"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "handle_trim_table_time",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "G"
-        },
-        {
-          "datasource": {
-            "type": "prometheus"
-          },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "packets_verified_loop_time",
+          "expr": "idelta(pull_requests_recv[$__interval])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "legendFormat": "pull_requests_recv",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(pull_responses_recv[$__interval])",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
-          "instant": false,
-          "legendFormat": "__auto",
+          "legendFormat": "pull_responses_recv",
           "range": true,
-          "refId": "H",
+          "refId": "B",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(prune_messages_recv[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "prune_messages_recv",
+          "range": true,
+          "refId": "C",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(push_messages_recv[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "push_messages_recv",
+          "range": true,
+          "refId": "D",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(ping_messages_recv[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "ping_messages_recv",
+          "range": true,
+          "refId": "E",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(pong_messages_recv[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "pong_messages_recv",
+          "range": true,
+          "refId": "F",
           "useBackend": false
         }
       ],
-      "title": "Handle Messages Time",
+      "title": "Message Type Recv",
       "type": "timeseries"
     },
     {
-      "datasource": {},
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(ping_messages_sent[$__interval])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "legendFormat": "ping_messages_sent",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(pong_messages_sent[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "pong_messages_sent",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(prune_messages_sent[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "prune_messages_sent",
+          "range": true,
+          "refId": "C",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(pull_requests_sent[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "pull_requests_sent",
+          "range": true,
+          "refId": "D",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(pull_responses_sent[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "pull_responses_sent",
+          "range": true,
+          "refId": "E",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(push_messages_sent[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "push_messages_sent",
+          "range": true,
+          "refId": "F",
+          "useBackend": false
+        }
+      ],
+      "title": "Message Type Send",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -599,7 +636,179 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 16
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_batch_ping_time[$__interval])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_batch_ping_time",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_batch_pong_time[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_batch_pong_time",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_batch_prune_time[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_batch_prune_time",
+          "range": true,
+          "refId": "C",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_batch_pull_req_time[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_batch_pull_req_time",
+          "range": true,
+          "refId": "D",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_batch_pull_resp_time[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_batch_pull_resp_time",
+          "range": true,
+          "refId": "E",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_batch_push_time[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_batch_push_time",
+          "range": true,
+          "refId": "F",
+          "useBackend": false
+        },
+        {
+          "datasource": {},
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "idelta(handle_trim_table_time[$__interval])",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "legendFormat": "handle_trim_table_time",
+          "range": true,
+          "refId": "G",
+          "useBackend": false
+        }
+      ],
+      "title": "Handle Messages Time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
       },
       "id": 8,
       "options": {
@@ -619,7 +828,7 @@
           "datasource": {},
           "editorMode": "builder",
           "expr": "table_n_values",
-          "legendFormat": "__auto",
+          "legendFormat": "n_values",
           "range": true,
           "refId": "A"
         },
@@ -628,7 +837,7 @@
           "editorMode": "builder",
           "expr": "table_n_pubkeys",
           "hide": false,
-          "legendFormat": "__auto",
+          "legendFormat": "n_pubkeys",
           "range": true,
           "refId": "B"
         }
@@ -637,7 +846,9 @@
       "type": "timeseries"
     },
     {
-      "datasource": {},
+      "datasource": {
+        "type": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -696,9 +907,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 24
       },
-      "id": 6,
+      "id": 13,
       "options": {
         "legend": {
           "calcs": [],
@@ -713,64 +924,60 @@
       },
       "targets": [
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_requests_recv",
-          "legendFormat": "__auto",
+          "expr": "idelta(push_message_n_values[$__interval])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "n_values",
           "range": true,
-          "refId": "A"
+          "refId": "A",
+          "useBackend": false
         },
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pull_responses_recv",
+          "expr": "idelta(push_message_n_failed_inserts[$__interval])",
+          "fullMetaSearch": false,
           "hide": false,
-          "legendFormat": "__auto",
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "n_failed_inserts",
           "range": true,
-          "refId": "B"
+          "refId": "B",
+          "useBackend": false
         },
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "prune_messages_recv",
+          "expr": "idelta(push_message_n_invalid_values[$__interval])",
+          "fullMetaSearch": false,
           "hide": false,
-          "legendFormat": "__auto",
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "n_invalid_values",
           "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "push_messages_recv",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "D"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "ping_messages_recv",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "E"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "pong_messages_recv",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "F"
+          "refId": "C",
+          "useBackend": false
         }
       ],
-      "title": "Message Type Recv",
+      "title": "Push Message Processing Info",
       "type": "timeseries"
     },
     {
-      "datasource": {},
+      "datasource": {
+        "type": "prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -828,14 +1035,14 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 0,
-        "y": 48
+        "x": 12,
+        "y": 24
       },
-      "id": 4,
+      "id": 14,
       "options": {
         "legend": {
           "calcs": [],
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
         },
@@ -846,170 +1053,42 @@
       },
       "targets": [
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "ping_messages_sent",
-          "legendFormat": "__auto",
+          "expr": "idelta(push_messages_time_to_insert[$__interval])",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "interval": "",
+          "legendFormat": "time_to_insert",
           "range": true,
-          "refId": "A"
+          "refId": "A",
+          "useBackend": false
         },
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "pong_messages_sent",
+          "expr": "idelta(push_messages_time_build_prune[$__interval])",
+          "fullMetaSearch": false,
           "hide": false,
-          "legendFormat": "__auto",
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "time_build_prune",
           "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "prune_messages_sent",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "C"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "pull_requests_sent",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "D"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "pull_responses_sent",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "E"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "push_messages_sent",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "F"
+          "refId": "B",
+          "useBackend": false
         }
       ],
-      "title": "Message Type Send",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {},
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 56
-      },
-      "id": 2,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "gossip_packets_received",
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "gossip_packets_verified",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {},
-          "editorMode": "builder",
-          "expr": "gossip_packets_processed",
-          "hide": false,
-          "legendFormat": "__auto",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "Packet Info",
+      "title": "Push Message Processing Times",
       "type": "timeseries"
     }
   ],
-  "refresh": "",
   "revision": 1,
   "schemaVersion": 39,
   "tags": [],
@@ -1024,6 +1103,6 @@
   "timezone": "",
   "title": "sig",
   "uid": "jBuN47BVz",
-  "version": 1,
+  "version": 15,
   "weekStart": ""
 }
