@@ -113,13 +113,14 @@ pub fn Channel(comptime T: type) type {
                 return error.ChannelClosed;
             }
 
-            var num_items_to_drain = buffer.get().items.len;
+            var values: *const std.ArrayList(T) = buffer.get();
+            var num_items_to_drain = values.items.len;
             if (num_items_to_drain == 0) {
                 return null;
             }
 
             var out = try self.allocator.alloc(T, num_items_to_drain);
-            @memcpy(out, buffer.get().items);
+            @memcpy(out, values.items);
             buffer.mut().clearRetainingCapacity();
 
             return out;

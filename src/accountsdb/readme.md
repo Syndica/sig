@@ -13,6 +13,16 @@ main file outlines:
 
 main code path starts from the `main()` in `db.zig`
 
+## download a snapshot throught cli 
+
+```
+zig-out/bin/sig download_snapshot \
+    -s test_data/tmp \
+    --entrypoint 34.83.231.102:8001 \
+    --entrypoint 145.40.67.83:8001 \
+    --min-snapshot-download-speed 50
+```
+
 ## loading from a snapshot : `loadFromSnapshot`
 
 compressed (tar.zst) snapshots are unpacked using `parallelUnpackZstdTarBall`

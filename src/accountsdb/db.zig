@@ -27,6 +27,7 @@ const Bank = @import("bank.zig").Bank;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
 const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
 const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
+const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const Logger = @import("../trace/log.zig").Logger;
 const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
@@ -48,7 +49,7 @@ pub const AccountsDBConfig = struct {
     // number of Accounts to preallocate for cache
     storage_cache_size: usize = 0,
     // number of bins to shard the index pubkeys across -- must be power of two
-    n_index_bins: usize = ACCOUNT_INDEX_BINS,
+    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
     // how many RAM references to preallocate for each bin
     index_ram_capacity: usize = 0,
     // where to create disk indexes files (if null, will not use disk indexes)
@@ -95,7 +96,7 @@ pub const AccountsDB = struct {
         const account_index = try AccountIndex.init(
             allocator,
             reference_allocator,
-            config.n_index_bins,
+            config.number_of_index_bins,
         );
 
         return Self{
@@ -114,6 +115,42 @@ pub const AccountsDB = struct {
         if (self.disk_allocator_ptr) |ptr| {
             self.allocator.destroy(ptr);
         }
+    }
+
+    /// easier to use load function
+    pub fn loadWithDefaults(
+        self: *Self,
+        snapshot_fields_and_paths: *SnapshotFieldsAndPaths,
+        snapshot_dir: []const u8,
+        n_threads: u32,
+        validate: bool,
+    ) !SnapshotFields {
+        const snapshot_fields = try snapshot_fields_and_paths.all_fields.collapse();
+        const accounts_path = try std.fmt.allocPrint(self.allocator, "{s}/accounts/", .{snapshot_dir});
+        defer self.allocator.free(accounts_path);
+
+        var timer = try std.time.Timer.start();
+        self.logger.infof("loading from snapshot...", .{});
+        try self.loadFromSnapshot(
+            snapshot_fields.accounts_db_fields,
+            accounts_path,
+            n_threads,
+            std.heap.page_allocator,
+        );
+        self.logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+
+        if (validate) {
+            timer.reset();
+            const full_snapshot = snapshot_fields_and_paths.all_fields.full;
+            try self.validateLoadFromSnapshot(
+                snapshot_fields.bank_fields.incremental_snapshot_persistence,
+                full_snapshot.bank_fields.slot,
+                full_snapshot.bank_fields.capitalization,
+            );
+            self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        }
+
+        return snapshot_fields;
     }
 
     /// loads the account files and gernates the account index from a snapshot
@@ -180,7 +217,7 @@ pub const AccountsDB = struct {
             var thread_db = try AccountsDB.init(
                 per_thread_allocator,
                 self.logger,
-                .{ .n_index_bins = self.config.n_index_bins },
+                .{ .number_of_index_bins = self.config.number_of_index_bins },
             );
 
             thread_db.fields = self.fields;
@@ -988,7 +1025,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     var logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
     var accounts_db = try AccountsDB.init(allocator, logger, .{
-        .n_index_bins = 4,
+        .number_of_index_bins = 4,
         .storage_cache_size = 10,
         .disk_index_path = disk_dir,
         .index_disk_capacity = disk_capacity,
@@ -1114,9 +1151,10 @@ test "core.accounts_db: load other sysvars" {
         snapshots.deinit(allocator);
     }
 
+    const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
     _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
-    _ = try accounts_db.getTypeFromAccount(sysvars.SlotHash, &sysvars.IDS.slot_hashes);
+    _ = try accounts_db.getTypeFromAccount(SlotAndHash, &sysvars.IDS.slot_hashes);
     _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
 
     const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
@@ -1377,7 +1415,7 @@ pub const BenchmarkAccountsDB = struct {
             }
             const elapsed = timer.read();
 
-            std.log.debug("WRITE: {d}\n", .{elapsed});
+            std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
         var timer = try std.time.Timer.start();

@@ -608,13 +608,15 @@ pub const CompressionType = enum {
 
 pub const LegacySnapshotHashes = AccountsHashes;
 
+const SlotAndHash = @import("../accountsdb/snapshots.zig").SlotAndHash;
+
 pub const AccountsHashes = struct {
     from: Pubkey,
-    hashes: []struct { u64, Hash },
+    hashes: []SlotAndHash,
     wallclock: u64,
 
     pub fn random(rng: std.rand.Random) AccountsHashes {
-        var slice: [0]struct { u64, Hash } = .{};
+        var slice: [0]SlotAndHash = .{};
         return AccountsHashes{
             .from = Pubkey.random(rng),
             .hashes = &slice,
@@ -625,8 +627,7 @@ pub const AccountsHashes = struct {
     pub fn sanitize(value: *const AccountsHashes) !void {
         try sanitizeWallclock(value.wallclock);
         for (value.hashes) |*snapshot_hash| {
-            const slot = snapshot_hash[0];
-            if (slot >= MAX_SLOT) {
+            if (snapshot_hash.slot >= MAX_SLOT) {
                 return error.ValueOutOfBounds;
             }
         }
@@ -907,15 +908,15 @@ pub const DuplicateShred = struct {
 
 pub const SnapshotHashes = struct {
     from: Pubkey,
-    full: struct { Slot, Hash },
-    incremental: []struct { Slot, Hash },
+    full: SlotAndHash,
+    incremental: []SlotAndHash,
     wallclock: u64,
 
     pub fn random(rng: std.rand.Random) SnapshotHashes {
-        var slice: [0]struct { Slot, Hash } = .{};
+        var slice: [0]SlotAndHash = .{};
         return SnapshotHashes{
             .from = Pubkey.random(rng),
-            .full = .{ rng.int(u64), Hash.random(rng) },
+            .full = .{ .slot = rng.int(u64), .hash = Hash.random(rng) },
             .incremental = &slice,
             .wallclock = getWallclockMs(),
         };
@@ -923,14 +924,14 @@ pub const SnapshotHashes = struct {
 
     pub fn sanitize(self: *const @This()) !void {
         try sanitizeWallclock(self.wallclock);
-        if (self.full[0] >= MAX_SLOT) {
+        if (self.full.slot >= MAX_SLOT) {
             return error.ValueOutOfBounds;
         }
         for (self.incremental) |inc| {
-            if (inc[0] >= MAX_SLOT) {
+            if (inc.slot >= MAX_SLOT) {
                 return error.ValueOutOfBounds;
             }
-            if (self.full[0] >= inc[0]) {
+            if (self.full.slot >= inc.slot) {
                 return error.InvalidValue;
             }
         }
@@ -1540,7 +1541,7 @@ test "gossip.data: sanitize valid SnapshotHashes works" {
     var rand = std.rand.DefaultPrng.init(23523413);
     const rng = rand.random();
     var instance = SnapshotHashes.random(rng);
-    instance.full[0] = 1000;
+    instance.full.slot = 1000;
     const data = GossipData{ .SnapshotHashes = instance };
     try data.sanitize();
 }
@@ -1549,7 +1550,7 @@ test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
     var instance = SnapshotHashes.random(rng);
-    instance.full[0] = 1_000_000_000_487_283;
+    instance.full.slot = 1_000_000_000_487_283;
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}
 }
@@ -1557,7 +1558,7 @@ test "gossip.data: sanitize invalid SnapshotHashes full slot has error" {
 test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
-    var incremental: [1]struct { Slot, Hash } = .{.{ 1_000_000_000_487_283, Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1_000_000_000_487_283, .hash = Hash.default() }};
     var instance = SnapshotHashes.random(rng);
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
@@ -1567,9 +1568,9 @@ test "gossip.data: sanitize invalid SnapshotHashes incremental slot has error" {
 test "gossip.data: sanitize SnapshotHashes full > incremental has error" {
     var rand = std.rand.DefaultPrng.init(524145234);
     const rng = rand.random();
-    var incremental: [1]struct { Slot, Hash } = .{.{ 1, Hash.default() }};
+    var incremental: [1]SlotAndHash = .{.{ .slot = 1, .hash = Hash.default() }};
     var instance = SnapshotHashes.random(rng);
-    instance.full[0] = 2;
+    instance.full.slot = 2;
     instance.incremental = &incremental;
     const data = GossipData{ .SnapshotHashes = instance };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}

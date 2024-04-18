@@ -54,13 +54,13 @@ pub const AccountIndex = struct {
         // used to allocate the references
         reference_allocator: std.mem.Allocator,
         // number of bins to shard across
-        n_bins: usize,
+        number_of_bins: usize,
     ) !Self {
-        var bins = try allocator.alloc(RefMap, n_bins);
+        var bins = try allocator.alloc(RefMap, number_of_bins);
         for (bins) |*bin| {
             bin.* = RefMap.init(allocator);
         }
-        const calculator = PubkeyBinCalculator.init(n_bins);
+        const calculator = PubkeyBinCalculator.init(number_of_bins);
 
         return Self{
             .allocator = allocator,
@@ -88,9 +88,7 @@ pub const AccountIndex = struct {
 
     pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !*ArrayList(AccountRef) {
         var node = try self.allocator.create(RefMemoryLinkedList);
-        node.* = .{
-            .memory = refs,
-        };
+        node.* = .{ .memory = refs };
         if (self.memory_linked_list == null) {
             self.memory_linked_list = node;
         } else {

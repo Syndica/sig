@@ -19,6 +19,10 @@ pub fn build(b: *std.Build) void {
     const zstd_mod = zstd_dep.module("zstd");
     const zstd_c_lib = zstd_dep.artifact("zstd");
 
+    const curl_dep = b.dependency("curl", opts);
+    const curl_mod = curl_dep.module("curl");
+    const curl_c_lib = curl_dep.artifact("curl");
+
     // expose Sig as a module
     _ = b.addModule(package_name, .{
         .source_file = .{ .path = package_path },
@@ -68,6 +72,8 @@ pub fn build(b: *std.Build) void {
     tests.addModule("httpz", httpz_mod);
     tests.addModule("zigdig", zigdig_mod);
     tests.addModule("zstd", zstd_mod);
+    tests.addModule("curl", curl_mod);
+    tests.linkLibrary(curl_c_lib);
     tests.linkLibrary(zstd_c_lib);
 
     const run_tests = b.addRunArtifact(tests);
@@ -87,6 +93,8 @@ pub fn build(b: *std.Build) void {
     exe.addModule("httpz", httpz_mod);
     exe.addModule("zigdig", zigdig_mod);
     exe.addModule("zstd", zstd_mod);
+    exe.addModule("curl", curl_mod);
+    exe.linkLibrary(curl_c_lib);
     exe.linkLibrary(zstd_c_lib);
 
     b.installArtifact(exe);
@@ -135,6 +143,8 @@ pub fn build(b: *std.Build) void {
         exec.addModule("httpz", httpz_mod);
         exec.addModule("zigdig", zigdig_mod);
         exec.addModule("zstd", zstd_mod);
+        exec.addModule("curl", curl_mod);
+        exec.linkLibrary(curl_c_lib);
         exec.linkLibrary(zstd_c_lib);
 
         // this lets us run it as an exec

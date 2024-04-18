@@ -4,6 +4,7 @@ const GenesisConfig = @import("genesis_config.zig").GenesisConfig;
 const BankFields = @import("snapshots.zig").BankFields;
 const SnapshotFields = @import("snapshots.zig").SnapshotFields;
 
+// TODO: we can likley come up with a better name for this struct
 pub const Bank = struct {
     accounts_db: *AccountsDB,
     bank_fields: *const BankFields,
