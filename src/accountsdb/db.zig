@@ -1415,7 +1415,7 @@ pub const BenchmarkAccountsDB = struct {
             }
             const elapsed = timer.read();
 
-            std.log.debug("WRITE: {d}\n", .{elapsed});
+            std.debug.print("WRITE: {d}\n", .{elapsed});
         }
 
         var timer = try std.time.Timer.start();
