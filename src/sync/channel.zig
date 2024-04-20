@@ -136,15 +136,6 @@ pub fn Channel(comptime T: type) type {
     };
 }
 
-const Block = struct {
-    num: u64 = 0,
-};
-
-const BlockChannel = Channel(Block);
-const BlockPointerChannel = Channel(*Block);
-
-const logger = std.log.scoped(.sync_channel_tests);
-
 const Packet = @import("../net/packet.zig").Packet;
 
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
@@ -158,7 +149,7 @@ fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
 fn testPacketReceiver(chan: *Channel(Packet), total_recv: usize) void {
     var count: usize = 0;
     while (count < total_recv) : (count += 1) {
-        const v = chan.receive();
+        const v = chan.receive() orelse unreachable;
         _ = v;
     }
 }
@@ -166,9 +157,10 @@ fn testPacketReceiver(chan: *Channel(Packet), total_recv: usize) void {
 fn testUsizeReceiver(chan: *Channel(usize), recv_count: usize) void {
     var count: usize = 0;
     while (count < recv_count) : (count += 1) {
-        if (chan.receive()) |v| {
+        if (chan.try_drain()) |v| {
             _ = v;
-        } else {
+        } else |_| {
+            // break;
             @panic("channel closed while trying to receive!");
         }
     }

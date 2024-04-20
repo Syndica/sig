@@ -9,39 +9,18 @@ const thread_context = @import("thread_context.zig");
 const ThreadLocalContext = thread_context.ThreadLocalContext;
 const ThreadState = thread_context.ThreadState;
 
-/// TempSlot is a temporary struct that holds a reference to Slot(T) within the
-/// channel's buffer along with a stamp (slot identifier) that will be writen to slot
-/// upon successful read/write.
-pub fn TempSlot(comptime T: type) type {
-    return struct {
-        slot: *Slot(T),
-        stamp: usize,
-
-        const Self = @This();
-
-        pub fn uninitialized() Self {
-            return .{
-                .slot = undefined,
-                .stamp = 0,
-            };
-        }
-
-        pub fn toOperationId(self: *const Self) OperationId {
-            return @intFromPtr(self);
-        }
-
-        pub fn fromOperationId(op: OperationId) *Self {
-            return @ptrFromInt(op);
-        }
-    };
-}
-pub fn Slot(comptime T: type) type {
-    return struct {
-        stamp: Atomic(usize),
-        val: T,
-    };
-}
-
+/// `Bounded(T)` is a bare bones channel implementation that's backed by a circular ring-buffer. It supports
+/// many channel modes such as `mpmc`, `mpsc`, `spmc` and `spsc`. Some characteristics:
+///
+/// - Blocking and non-blocking methods (i.e. `send`/`trySend` or `receive`/`tryReceive`)
+/// - Always ordered
+/// - Channel guarantees all items drained before `error.disconnect` is returned
+/// - (Optional) state synchronization via `acquire` and `release` methods for senders & receivers
+/// - Effective thread & resource utilization via thread parking/wakers
+///
+/// NOTE: This channel implemenation should ideally not be used outside of the `Channel(T)` structure. It
+/// provides important safety mechanisms. If you know what you're doing, you can use it to implement things
+/// like `Pool`(s), exit signals and other interesting thread sync mechanisms.
 pub fn Bounded(comptime T: type) type {
     return struct {
         allocator: std.mem.Allocator,
@@ -57,7 +36,14 @@ pub fn Bounded(comptime T: type) type {
 
         const Self = @This();
 
-        pub fn init(config: struct { allocator: std.mem.Allocator, init_capacity: usize }) error{OutOfMemory}!*Self {
+        pub const Config = struct {
+            allocator: std.mem.Allocator,
+            init_capacity: usize,
+        };
+
+        /// `init` will take config struct with an `allocator` and `init_capacity` and will create
+        /// and return a `*Self`.
+        pub fn init(config: Config) error{OutOfMemory}!*Self {
             if (config.init_capacity < 1) {
                 @panic("bounded init_capacity must be greater than 0");
             }
@@ -93,6 +79,7 @@ pub fn Bounded(comptime T: type) type {
             return self;
         }
 
+        /// `deinit` will disconnect the chanenel and deinitialize internal structures.
         pub fn deinit(self: *Self) void {
             self.disconnect();
             self.senders.deinit();
@@ -101,20 +88,19 @@ pub fn Bounded(comptime T: type) type {
             self.allocator.destroy(self);
         }
 
+        /// Returns the capacity the channel holds.
         pub fn capacity(self: *Self) usize {
             return self.buffer.len;
         }
 
-        /// Attempts to acquire a slot to send a message in
-        inline fn acquireSendSlot(self: *Self, token: *TempSlot(T)) error{ full, disconnected }!void {
+        /// Attempts to acquire a slot to send a message.
+        inline fn tryAcquireSendSlot(self: *Self, temp_slot: *TempSlot(T)) error{ full, disconnected }!void {
             var backoff = Backoff.init();
             var tail = self.tail.load(.Unordered);
 
             while (true) {
                 // Check if the channel is disconnected.
                 if (tail & self.disconnect_bit != 0) {
-                    token.slot = undefined;
-                    token.stamp = 0;
                     return error.disconnected;
                 }
 
@@ -135,8 +121,8 @@ pub fn Bounded(comptime T: type) type {
                         backoff.spin();
                     } else {
                         // succeeded
-                        token.slot = slot;
-                        token.stamp = tail + 1;
+                        temp_slot.slot = slot;
+                        temp_slot.stamp = tail + 1;
                         return;
                     }
                 } else if (tail + 1 == (stamp +| self.one_lap)) {
@@ -158,19 +144,23 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        /// writes a value to given `Token`'s slot
-        inline fn write(self: *Self, token: *TempSlot(T), val: T) void {
-            token.slot.val = val;
-            token.slot.stamp.store(token.stamp, .Release);
+        /// Writes a value to given `temp_slot`'s slot
+        inline fn write(self: *Self, temp_slot: *TempSlot(T), val: T) void {
+            temp_slot.slot.val = val;
+            temp_slot.slot.stamp.store(temp_slot.stamp, .Release);
             self.receivers.notify();
         }
 
+        /// Attempts to send a value (non-blocking) if the channel has a slot available for
+        /// writing immediately.
         pub fn trySend(self: *Self, val: T) error{ full, disconnected }!void {
             var temp_slot = TempSlot(T).uninitialized();
-            try self.acquireSendSlot(&temp_slot);
+            try self.tryAcquireSendSlot(&temp_slot);
             self.write(&temp_slot, val);
         }
 
+        /// Attempts to send a value (blocking) to channel with an optional `timeout_ns`.
+        /// Returns `error.timeout` if `timeout_ns` has passed.
         pub fn send(self: *Self, val: T, timeout_ns: ?u64) error{ timeout, disconnected }!void {
             var temp_slot = TempSlot(T).uninitialized();
             var timeout: ?std.time.Instant = null;
@@ -185,7 +175,7 @@ pub fn Bounded(comptime T: type) type {
                 var backoff = Backoff.init();
 
                 while (true) {
-                    if (self.acquireSendSlot(&temp_slot)) {
+                    if (self.tryAcquireSendSlot(&temp_slot)) {
                         return self.write(&temp_slot, val);
                     } else |err| switch (err) {
                         // if channel disconnected, we return as nothing else can be done
@@ -231,7 +221,8 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        inline fn acquireReceiveSlot(self: *Self, token: *TempSlot(T)) error{ empty, disconnected }!void {
+        /// Attempts to acquire a slot that's ready to be read immediately.
+        inline fn tryAcquireReceiveSlot(self: *Self, temp_slot: *TempSlot(T)) error{ empty, disconnected }!void {
             var backoff = Backoff.init();
             var head = self.head.load(.Unordered);
 
@@ -258,8 +249,8 @@ pub fn Bounded(comptime T: type) type {
                         backoff.spin();
                     } else {
                         // succeeded
-                        token.slot = slot;
-                        token.stamp = head +| self.one_lap;
+                        temp_slot.slot = slot;
+                        temp_slot.stamp = head +| self.one_lap;
                         return;
                     }
                 } else if (stamp == head) {
@@ -282,19 +273,25 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
-        inline fn read(self: *Self, token: *TempSlot(T)) T {
-            var slot = token.slot;
-            slot.stamp.store(token.stamp, .Release);
+        /// Reads a `temp_slot`'s slot value while storing the new `stamp` into the
+        /// slot.
+        inline fn read(self: *Self, temp_slot: *TempSlot(T)) T {
+            var slot = temp_slot.slot;
+            slot.stamp.store(temp_slot.stamp, .Release);
             self.senders.notify();
             return slot.val;
         }
 
+        /// Attempts to receive a value (non-blockingly) a value that's immediately
+        /// ready to be read.
         pub fn tryReceive(self: *Self) error{ empty, disconnected }!T {
             var temp_slot = TempSlot(T).uninitialized();
-            try self.acquireReceiveSlot(&temp_slot);
+            try self.tryAcquireReceiveSlot(&temp_slot);
             return self.read(&temp_slot);
         }
 
+        /// Attempts to receive a value (blocking) returning `error.timeout` if the optional
+        /// `timeout_ns` passed was reached.
         pub fn receive(self: *Self, timeout_ns: ?u64) error{ timeout, disconnected }!T {
             var temp_slot = TempSlot(T).uninitialized();
             var timeout: ?std.time.Instant = null;
@@ -309,7 +306,7 @@ pub fn Bounded(comptime T: type) type {
                 var backoff = Backoff.init();
 
                 while (true) {
-                    if (self.acquireReceiveSlot(&temp_slot)) {
+                    if (self.tryAcquireReceiveSlot(&temp_slot)) {
                         return self.read(&temp_slot);
                     } else |err| switch (err) {
                         // if channel disconnected, we return as nothing else can be done
@@ -355,10 +352,14 @@ pub fn Bounded(comptime T: type) type {
             }
         }
 
+        /// Acquires a receiver modifying the channel state.
         pub inline fn acquireReceiver(self: *Self) void {
             _ = self.n_receivers.fetchAdd(1, .SeqCst);
         }
 
+        /// Releases a receiver modifying the channel state. Returns `true` if the
+        /// receiver was successfully released else returns `false` if `n_recievers < 1`
+        /// indicating a (potential) invalid state.
         pub inline fn releaseReceiver(self: *Self) bool {
             if (self.n_receivers.load(.SeqCst) == 0)
                 return false;
@@ -368,14 +369,14 @@ pub fn Bounded(comptime T: type) type {
             return true;
         }
 
-        /// attempts to acquire a sender, returns true if successful, returns
-        /// false if channel is disconnected.
+        /// Acquires a sender modifying the channel state.
         pub inline fn acquireSender(self: *Self) void {
             _ = self.n_senders.fetchAdd(1, .SeqCst);
         }
 
-        /// attempts to release a sender, returns true if successful, returns
-        /// false if channel is disconnected.
+        /// Releases a sender modifying the channel state. Returns `true` if the
+        /// sender was successfully released else returns `false` if `n_senders < 1`
+        /// indicating a (potential) invalid state.
         pub inline fn releaseSender(self: *Self) bool {
             if (self.n_senders.load(.SeqCst) == 0)
                 return false;
@@ -385,6 +386,7 @@ pub fn Bounded(comptime T: type) type {
             return true;
         }
 
+        /// Returns whether or not the channel is full.
         pub inline fn isFull(self: *const Self) bool {
             var tail = self.tail.load(.SeqCst);
             var head = self.head.load(.SeqCst);
@@ -396,6 +398,7 @@ pub fn Bounded(comptime T: type) type {
             return head +| self.one_lap == tail & ~self.disconnect_bit;
         }
 
+        /// Returns whether or not channel is empty
         pub inline fn isEmpty(self: *Self) bool {
             var head = self.head.load(.SeqCst);
             var tail = self.tail.load(.SeqCst);
@@ -407,10 +410,13 @@ pub fn Bounded(comptime T: type) type {
             return (tail & ~self.disconnect_bit) == head;
         }
 
+        /// Returns whether or not the channel is disconnected either by `release`(ing) senders/receivers
+        /// or an explicit call to `disconnect()`.
         pub inline fn isDisconnected(self: *const Self) bool {
             return self.tail.load(.SeqCst) & self.disconnect_bit != 0;
         }
 
+        /// Attempts to disconnect the channel setting the `disconnect_bit` on the `tail`.
         pub inline fn disconnect(self: *Self) void {
             var tail = self.tail.fetchOr(self.disconnect_bit, .SeqCst);
 
@@ -421,6 +427,43 @@ pub fn Bounded(comptime T: type) type {
                 self.receivers.disconnectAll();
             }
         }
+    };
+}
+
+/// `TempSlot` is a temporary struct that holds a reference to `Slot` within the
+/// channel's buffer along with a `stamp` (slot identifier) that will be writen to slot
+/// upon successful read/write.
+pub fn TempSlot(comptime T: type) type {
+    return struct {
+        slot: *Slot(T),
+        stamp: usize,
+
+        const Self = @This();
+
+        pub fn uninitialized() Self {
+            return .{
+                .slot = undefined,
+                .stamp = 0,
+            };
+        }
+
+        pub fn toOperationId(self: *const Self) OperationId {
+            return @intFromPtr(self);
+        }
+
+        pub fn fromOperationId(op: OperationId) *Self {
+            return @ptrFromInt(op);
+        }
+    };
+}
+
+/// `Slot` is a structure that holds a value (`val`) and a `stamp` which is
+/// an atomic `usize` used to identify whether the slot is ready to be
+/// read/written to
+pub fn Slot(comptime T: type) type {
+    return struct {
+        stamp: Atomic(usize),
+        val: T,
     };
 }
 
@@ -549,6 +592,23 @@ test "sync.bounded: mpsc" {
     receiver_handle.join();
 
     try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+}
+
+test "sync.bounded: oneshot" {
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = 1,
+    });
+    defer chan.deinit();
+    var received_count = Atomic(usize).init(0);
+
+    var sender_1_handle = try std.Thread.spawn(.{}, testChannelSender, .{ chan, 1, null });
+    var receiver_handle = try std.Thread.spawn(.{}, testChannelReceiver, .{ chan, &received_count, null });
+
+    sender_1_handle.join();
+    receiver_handle.join();
+
+    try std.testing.expectEqual(@as(usize, 1), received_count.load(.SeqCst));
 }
 
 test "sync.bounded: mpmc" {
@@ -833,10 +893,10 @@ test "sync.bounded: acquireSenderSlot works correctly" {
     try chan.send(3, null);
 
     var temp_slot = TempSlot(usize).uninitialized();
-    try std.testing.expectError(error.full, chan.acquireSendSlot(&temp_slot));
+    try std.testing.expectError(error.full, chan.tryAcquireSendSlot(&temp_slot));
 
     chan.disconnect();
-    try std.testing.expectError(error.disconnected, chan.acquireSendSlot(&temp_slot));
+    try std.testing.expectError(error.disconnected, chan.tryAcquireSendSlot(&temp_slot));
 }
 
 test "sync.bounded: trySend works properly" {
@@ -913,10 +973,10 @@ test "sync.bounded: acquireReceiveSlot works correctly" {
     try std.testing.expect(try chan.receive(null) == 3);
 
     var temp_slot = TempSlot(usize).uninitialized();
-    try std.testing.expectError(error.empty, chan.acquireReceiveSlot(&temp_slot));
+    try std.testing.expectError(error.empty, chan.tryAcquireReceiveSlot(&temp_slot));
 
     chan.disconnect();
-    try std.testing.expectError(error.disconnected, chan.acquireReceiveSlot(&temp_slot));
+    try std.testing.expectError(error.disconnected, chan.tryAcquireReceiveSlot(&temp_slot));
 }
 
 test "sync.bounded: tryReceive works correctly" {
