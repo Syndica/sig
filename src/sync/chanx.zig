@@ -36,19 +36,13 @@ pub fn ChannelX(comptime T: type) type {
 
         /// Initializes a new `Sender` to allow for sending values to the underlying channel. It's
         /// the caller's responsibility to `deinit()` returned sender.
-        pub fn initSender(self: Self) error{disconnected}!Sender(T) {
-            switch (self) {
-                .bounded => |ch| if (ch.isDisconnected()) return error.disconnected,
-            }
+        pub fn initSender(self: Self) Sender(T) {
             return Sender(T).init(self);
         }
 
         /// Initializes a new `Receiver` to allow for receiving values from the underlying channel.
         /// It's the caller's responsibility to `deinit()` returned receiver.
-        pub fn initReceiver(self: Self) error{disconnected}!Receiver(T) {
-            switch (self) {
-                .bounded => |ch| if (ch.isDisconnected()) return error.disconnected,
-            }
+        pub fn initReceiver(self: Self) Receiver(T) {
             return Receiver(T).init(self);
         }
 
@@ -346,7 +340,7 @@ fn benchPacketSender(
     chan: ChannelX(Packet),
     total_send: usize,
 ) void {
-    var sender = chan.initSender() catch unreachable;
+    var sender = chan.initSender();
     defer sender.deinit();
     var i: usize = 0;
 
@@ -360,7 +354,7 @@ fn benchPacketReceiver(
     chan: ChannelX(Packet),
     _: usize,
 ) void {
-    var receiver = chan.initReceiver() catch unreachable;
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
 
     while (receiver.receive()) |v| {
@@ -372,7 +366,7 @@ fn benchUsizeSender(
     chan: ChannelX(usize),
     total_send: usize,
 ) void {
-    var sender = chan.initSender() catch unreachable;
+    var sender = chan.initSender();
     defer sender.deinit();
 
     var i: usize = 0;
@@ -385,7 +379,7 @@ fn benchUsizeReceiver(
     chan: ChannelX(usize),
     _: usize,
 ) void {
-    var receiver = chan.initReceiver() catch unreachable;
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
 
     while (receiver.receive()) |v| {
@@ -522,7 +516,7 @@ fn testUsizeSender(
     chan: ChannelX(usize),
     total_send: usize,
 ) void {
-    var sender = chan.initSender() catch unreachable;
+    var sender = chan.initSender();
     defer sender.deinit();
 
     var i: usize = 0;
@@ -535,7 +529,7 @@ fn testUsizeReceiver(
     chan: ChannelX(usize),
     received_count: *Atomic(usize),
 ) void {
-    var receiver = chan.initReceiver() catch unreachable;
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
 
     while (receiver.receive()) |v| {
@@ -550,9 +544,9 @@ test "sync.chanx.bounded works" {
 
     // we deinit sender after sending (not defer'ing it) so it can trigger disconnect
     // and receiving while can break
-    var sender = try chan.initSender();
+    var sender = chan.initSender();
 
-    var receiver = try chan.initReceiver();
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
 
     try sender.send(1);
@@ -686,8 +680,8 @@ test "sync.chanx.bounded: disconnect after all senders released" {
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
-    var receiver = try chan.initReceiver();
+    var sender = chan.initSender();
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
 
     try sender.send(1);
@@ -703,29 +697,14 @@ test "sync.chanx.bounded: disconnect after all receivers deinit" {
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
+    var sender = chan.initSender();
     defer sender.deinit();
-    var receiver = try chan.initReceiver();
+    var receiver = chan.initReceiver();
 
     try sender.send(1);
     try std.testing.expectEqual(receiver.receive(), 1);
     receiver.deinit();
     try std.testing.expectError(error.disconnected, sender.send(2));
-}
-
-test "sync.chanx.bounded: initSender or initReceiver fails after disconnect" {
-    var chan = try ChannelX(usize).initBounded(.{
-        .allocator = std.testing.allocator,
-        .init_capacity = 10,
-    });
-    defer chan.deinit();
-
-    var sender_1 = try chan.initSender();
-    defer sender_1.deinit();
-    var receiver_1 = try chan.initReceiver();
-    receiver_1.deinit();
-    try std.testing.expectError(error.disconnected, chan.initSender());
-    try std.testing.expectError(error.disconnected, chan.initReceiver());
 }
 
 test "sync.chanx.bounded: channel full/empty works correctly" {
@@ -735,8 +714,8 @@ test "sync.chanx.bounded: channel full/empty works correctly" {
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
-    var receiver = try chan.initReceiver();
+    var sender = chan.initSender();
+    var receiver = chan.initReceiver();
 
     try std.testing.expectError(error.empty, receiver.tryReceive());
     try sender.send(1);
@@ -754,7 +733,7 @@ test "sync.chanx.bounded: send timeout works" {
 
     var timeout: u64 = std.time.ns_per_ms * 100;
 
-    var sender = try chan.initSender();
+    var sender = chan.initSender();
     defer sender.deinit();
 
     try sender.send(1);
@@ -772,8 +751,8 @@ test "sync.chanx.bounded: trySend works properly" {
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
-    var receiver = try chan.initReceiver();
+    var sender = chan.initSender();
+    var receiver = chan.initReceiver();
 
     try sender.trySend(1);
     try sender.trySend(2);
@@ -790,8 +769,8 @@ test "sync.chanx.bounded: receive order is correct" {
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
-    var receiver = try chan.initReceiver();
+    var sender = chan.initSender();
+    var receiver = chan.initReceiver();
 
     try sender.send(1);
     try sender.send(2);
@@ -808,8 +787,8 @@ test "sync.chanx.bounded: receive while disconnected should still drain all elem
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
-    var receiver = try chan.initReceiver();
+    var sender = chan.initSender();
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
 
     try sender.send(1);
@@ -829,9 +808,9 @@ test "sync.chanx.bounded: receive while empty with timeout" {
     });
     defer chan.deinit();
 
-    var sender = try chan.initSender();
+    var sender = chan.initSender();
     defer sender.deinit();
-    var receiver = try chan.initReceiver();
+    var receiver = chan.initReceiver();
     defer receiver.deinit();
     var timeout: u64 = std.time.ns_per_ms * 100;
 
