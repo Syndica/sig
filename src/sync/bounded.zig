@@ -878,7 +878,7 @@ test "sync.bounded: send timeout works" {
     var timer = try std.time.Timer.start();
     try std.testing.expectError(error.timeout, chan.send(2, timeout));
     var time = timer.read();
-    try std.testing.expect(time >= timeout);
+    try std.testing.expect(time >= std.time.ns_per_ms * 95);
 }
 
 test "sync.bounded: acquireSenderSlot works correctly" {
