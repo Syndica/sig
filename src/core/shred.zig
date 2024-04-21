@@ -19,7 +19,7 @@ pub const ShredVersion = struct {
             accum[0] ^= chunk[0];
             accum[1] ^= chunk[1];
         }
-        var version = (@as(u16, accum[0]) << 8) | accum[1];
+        const version = (@as(u16, accum[0]) << 8) | accum[1];
         return version +| 1;
     }
 

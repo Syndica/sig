@@ -13,8 +13,8 @@ const std = @import("std");
 pub fn OnceCell(comptime T: type) type {
     return struct {
         value: T = undefined,
-        started: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
-        finished: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+        started: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        finished: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
         const Self = @This();
 
@@ -28,7 +28,7 @@ pub fn OnceCell(comptime T: type) type {
         pub fn initialize(self: *Self, initLogic: anytype, init_args: anytype) error{AlreadyInitialized}!*T {
             if (!self.acquire()) return error.AlreadyInitialized;
             self.value = @call(.auto, initLogic, init_args);
-            self.finished.store(true, .Release);
+            self.finished.store(true, .release);
             return &self.value;
         }
 
@@ -37,9 +37,9 @@ pub fn OnceCell(comptime T: type) type {
         /// Blocks while other threads are in the process of initialization.
         pub fn tryInit(self: *Self, initLogic: anytype, init_args: anytype) !*T {
             if (!self.acquire()) return error.AlreadyInitialized;
-            errdefer self.started.store(false, .Release);
+            errdefer self.started.store(false, .release);
             self.value = try @call(.auto, initLogic, init_args);
-            self.finished.store(true, .Release);
+            self.finished.store(true, .release);
             return &self.value;
         }
 
@@ -49,7 +49,7 @@ pub fn OnceCell(comptime T: type) type {
         pub fn getOrInit(self: *Self, initLogic: anytype, init_args: anytype) *T {
             if (self.acquire()) {
                 self.value = @call(.auto, initLogic, init_args);
-                self.finished.store(true, .Release);
+                self.finished.store(true, .release);
             }
             return &self.value;
         }
@@ -59,9 +59,9 @@ pub fn OnceCell(comptime T: type) type {
         /// Blocks while other threads are in the process of initialization.
         pub fn getOrTryInit(self: *Self, initLogic: anytype, init_args: anytype) !*T {
             if (self.acquire()) {
-                errdefer self.started.store(false, .Release);
+                errdefer self.started.store(false, .release);
                 self.value = try @call(.auto, initLogic, init_args);
-                self.finished.store(true, .Release);
+                self.finished.store(true, .release);
             }
             return &self.value;
         }
@@ -72,7 +72,7 @@ pub fn OnceCell(comptime T: type) type {
         /// - false if write lock is not acquirable because a write was already completed.
         /// - waits if another thread has a write in progress. if the other thread fails, this may acquire the lock.
         fn acquire(self: *Self) bool {
-            while (self.started.compareAndSwap(false, true, .Acquire, .Monotonic)) |_| {
+            while (self.started.compareAndSwap(false, true, .Acquire, .monotonic)) |_| {
                 if (self.finished.load(.Acquire)) {
                     return false;
                 }
@@ -87,7 +87,7 @@ pub fn OnceCell(comptime T: type) type {
             if (self.finished.load(.Acquire)) {
                 return &self.value;
             }
-            while (self.started.load(.Monotonic)) {
+            while (self.started.load(.monotonic)) {
                 if (self.finished.load(.Acquire)) {
                     return &self.value;
                 }

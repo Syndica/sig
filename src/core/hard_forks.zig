@@ -43,8 +43,8 @@ pub const HardForks = struct {
     pub fn get_hash_data(self: *const Self, slot: Slot, parent_slot: Slot) ?[8]u8 {
         var fork_count: u64 = 0;
         for (self.hard_forks.items) |hard_fork| {
-            var current_fork_slot = hard_fork.slot;
-            var current_fork_count = hard_fork.count;
+            const current_fork_slot = hard_fork.slot;
+            const current_fork_count = hard_fork.count;
 
             if (parent_slot < current_fork_slot and slot >= current_fork_slot) {
                 fork_count += current_fork_count;
@@ -79,7 +79,7 @@ test "core.hard_forks: test hardforks" {
     try expect(hard_forks.get_forks()[1].slot == 20);
     try expect(hard_forks.get_forks()[1].count == 1);
 
-    var hash_data_one = hard_forks.get_hash_data(9, 0);
+    const hash_data_one = hard_forks.get_hash_data(9, 0);
     try expect(hash_data_one == null);
 
     logger.debugf("hash_data_one: {any}", .{hash_data_one});

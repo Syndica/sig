@@ -5,18 +5,18 @@ const testing = std.testing;
 
 pub const Params = struct {
     pub const legacy: Params = .{
-        .endian = .Little,
+        .endian = .little,
         .int_encoding = .fixed,
         .include_fixed_array_length = true,
     };
 
     pub const standard: Params = .{
-        .endian = .Little,
+        .endian = .little,
         .int_encoding = .fixed,
         .include_fixed_array_length = false,
     };
 
-    endian: std.builtin.Endian = .Little,
+    endian: std.builtin.Endian = .little,
     int_encoding: enum { variable, fixed } = .fixed,
     include_fixed_array_length: bool = false,
 };
@@ -62,7 +62,7 @@ pub fn Deserializer(comptime Reader: type) type {
         fn deserializeMap(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
             const T = u64;
             const len = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(T),
+                .little => self.reader.readIntLittle(T),
                 .Big => self.reader.readIntBig(T),
             } catch {
                 return Error.EOF;
@@ -83,7 +83,7 @@ pub fn Deserializer(comptime Reader: type) type {
                     // try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64){});
                     const T = u64;
                     const len = switch (self.params.endian) {
-                        .Little => self.reader.readIntLittle(T),
+                        .little => self.reader.readIntLittle(T),
                         .Big => self.reader.readIntBig(T),
                     } catch {
                         return Error.EOF;
@@ -121,7 +121,7 @@ pub fn Deserializer(comptime Reader: type) type {
                 SerializedSize = T.BincodeSize;
             };
             const tag = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(SerializedSize),
+                .little => self.reader.readIntLittle(SerializedSize),
                 .Big => self.reader.readIntBig(SerializedSize),
             } catch {
                 return Error.EOF;
@@ -144,7 +144,7 @@ pub fn Deserializer(comptime Reader: type) type {
             const T = @TypeOf(visitor).Value;
 
             const value = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(T),
+                .little => self.reader.readIntLittle(T),
                 .Big => self.reader.readIntBig(T),
             } catch {
                 return Error.EOF;
@@ -508,7 +508,7 @@ pub fn Serializer(
                     switch (self.params.int_encoding) {
                         .fixed => {
                             try (switch (self.params.endian) {
-                                .Little => self.writer.writeIntLittle(T, value),
+                                .little => self.writer.writeIntLittle(T, value),
                                 .Big => self.writer.writeIntBig(T, value),
                             } catch Error.IO);
                         },
@@ -575,8 +575,8 @@ pub fn Serializer(
                             return;
                         }
 
-                        var params = ss.context.params;
-                        var writer = ss.context.writer;
+                        const params = ss.context.params;
+                        const writer = ss.context.writer;
 
                         inline for (info.fields) |field| {
                             if (!field.is_comptime) {
@@ -705,7 +705,7 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
 /// note: will fail if the slice is too small to hold the serialized data
 pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
     var stream = std.io.fixedBufferStream(slice);
-    var writer = stream.writer();
+    const writer = stream.writer();
 
     var s = serializer(writer, params);
     const ss = s.serializer();
@@ -733,7 +733,7 @@ pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: 
 }
 
 pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !usize {
-    var ser_slice = try writeToSlice(slice, data, params);
+    const ser_slice = try writeToSlice(slice, data, params);
     return ser_slice.len;
 }
 
@@ -746,7 +746,7 @@ pub fn getSerializedSize(alloc: std.mem.Allocator, data: anytype, params: Params
 // can call if dont require an allocator
 pub fn readFromSlice(alloc: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
     var stream = std.io.fixedBufferStream(slice);
-    var reader = stream.reader();
+    const reader = stream.reader();
     var d = deserializer(reader, params);
     const dd = d.deserializer();
     const v = try getty.deserialize(alloc, T, dd);
@@ -768,7 +768,7 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     const S = struct {
         fn deserializeTestSlice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
             var ally = allocator.?;
-            var len = try bincode.read(ally, u16, reader, params);
+            const len = try bincode.read(ally, u16, reader, params);
             var elems = try ally.alloc(Child, len);
             for (0..len) |i| {
                 elems[i] = try bincode.read(ally, Child, reader, params);
@@ -777,7 +777,7 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
         }
 
         pub fn serilaizeTestSlice(writer: anytype, data: anytype, params: bincode.Params) !void {
-            var len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
+            const len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
             try bincode.write(null, writer, len, params);
             for (data) |item| {
                 try bincode.write(null, writer, item, params);
@@ -802,7 +802,7 @@ test "bincode: default on eof" {
     };
 
     var buf: [1]u8 = .{1};
-    var r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
+    const r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
     try std.testing.expect(r.value == 1);
 
     var buf2: [1024]u8 = undefined;
@@ -811,7 +811,7 @@ test "bincode: default on eof" {
         .accounts = std.ArrayList(u64).init(std.testing.allocator),
     }, .{});
 
-    var r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
+    const r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
     try std.testing.expect(r2.value == 10);
 }
 
@@ -834,17 +834,17 @@ test "bincode: custom field serialization" {
 
     var accounts = [_]u8{ 1, 2, 3 };
     var txs = [_]u32{ 1, 2, 3 };
-    var foo = Foo{ .accounts = &accounts, .txs = &txs };
+    const foo = Foo{ .accounts = &accounts, .txs = &txs };
 
     var buf: [1000]u8 = undefined;
-    var out = try writeToSlice(&buf, foo, Params{});
+    const out = try writeToSlice(&buf, foo, Params{});
     // std.debug.print("{any}", .{out});
     try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
-    var size = try getSerializedSize(std.testing.allocator, foo, Params{});
+    const size = try getSerializedSize(std.testing.allocator, foo, Params{});
     try std.testing.expect(size > 0);
 
-    var r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
+    const r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
     defer free(std.testing.allocator, r);
     // std.debug.print("{any}", .{r});
 
@@ -861,7 +861,7 @@ test "bincode: test arraylist" {
     try array.append(11);
 
     var buf: [1024]u8 = undefined;
-    var bytes = try writeToSlice(&buf, array, .{});
+    const bytes = try writeToSlice(&buf, array, .{});
 
     // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
     var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
@@ -880,7 +880,7 @@ test "bincode: test hashmap/BTree (de)ser" {
     try map.put(20, 10);
 
     var buf: [1024]u8 = undefined;
-    var bytes = try writeToSlice(&buf, map, .{});
+    const bytes = try writeToSlice(&buf, map, .{});
 
     try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
 
@@ -894,11 +894,11 @@ test "bincode: test hashmap/BTree (de)ser" {
 test "bincode: test float serialization" {
     const f: f64 = 1.234;
     var buf: [1024]u8 = undefined;
-    var bytes = try writeToSlice(&buf, f, .{});
+    const bytes = try writeToSlice(&buf, f, .{});
     const rust_bytes = [_]u8{ 88, 57, 180, 200, 118, 190, 243, 63 };
     try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
 
-    var f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
+    const f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
     try std.testing.expect(f2 == f);
 }
 
@@ -906,18 +906,18 @@ test "bincode: test serialization" {
     var buf: [1]u8 = undefined;
 
     {
-        var out = try writeToSlice(&buf, true, Params.standard);
+        const out = try writeToSlice(&buf, true, Params.standard);
         try std.testing.expect(out.len == 1);
         try std.testing.expect(out[0] == 1);
     }
 
     {
-        var out = try readFromSlice(null, bool, &buf, Params{});
+        const out = try readFromSlice(null, bool, &buf, Params{});
         try std.testing.expect(out == true);
     }
 
     {
-        var out = try writeToSlice(&buf, false, Params.standard);
+        const out = try writeToSlice(&buf, false, Params.standard);
         try std.testing.expect(out.len == 1);
         try std.testing.expect(out[0] == 0);
     }
@@ -926,20 +926,20 @@ test "bincode: test serialization" {
     _ = try writeToSlice(&buf2, 300, Params.standard);
 
     var buf3: [4]u8 = undefined;
-    var v: u32 = 200;
+    const v: u32 = 200;
     _ = try writeToSlice(&buf3, v, Params.standard);
 
     {
-        var out = try readFromSlice(null, u32, &buf3, Params{});
+        const out = try readFromSlice(null, u32, &buf3, Params{});
         try std.testing.expect(out == 200);
     }
 
     const Foo = enum { A, B };
-    var out = try writeToSlice(&buf3, Foo.B, Params.standard);
+    const out = try writeToSlice(&buf3, Foo.B, Params.standard);
     var e = [_]u8{ 1, 0, 0, 0 };
     try std.testing.expectEqualSlices(u8, &e, out);
 
-    var read_out = try readFromSlice(null, Foo, &buf3, Params{});
+    const read_out = try readFromSlice(null, Foo, &buf3, Params{});
     try std.testing.expectEqual(read_out, Foo.B);
 
     const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
@@ -949,16 +949,16 @@ test "bincode: test serialization" {
     // .A = 65 = 1000001 (7 bits)
     // .B = 66 = 1000010
     // .B = 67 = 1000011
-    var out2 = try writeToSlice(&buf2, value, Params.standard);
+    const out2 = try writeToSlice(&buf2, value, Params.standard);
     try std.testing.expectEqualSlices(u8, &expected, out2);
 
-    var read_out2 = try readFromSlice(null, Foo2, &buf2, Params{});
+    const read_out2 = try readFromSlice(null, Foo2, &buf2, Params{});
     try std.testing.expectEqual(read_out2, value);
 
     const Bar = struct { a: u32, b: u32, c: Foo2 };
     const b = Bar{ .a = 65, .b = 66, .c = Foo2{ .B = 16843009 } };
     var buf4: [100]u8 = undefined;
-    var out3 = try writeToSlice(&buf4, b, Params.standard);
+    const out3 = try writeToSlice(&buf4, b, Params.standard);
     var expected2 = [_]u8{ 65, 0, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1 };
     try std.testing.expectEqualSlices(u8, &expected2, out3);
 
@@ -973,8 +973,8 @@ test "bincode: test serialization" {
         .c = Bar{ .a = 66, .b = 67, .c = Foo2{ .B = 16843009 } },
     };
     var buf6: [100]u8 = undefined;
-    var out4 = try writeToSlice(&buf6, _s, Params.standard);
-    var result = try readFromSlice(null, s, out4, Params{});
+    const out4 = try writeToSlice(&buf6, _s, Params.standard);
+    const result = try readFromSlice(null, s, out4, Params{});
     try std.testing.expectEqual(result, _s);
 
     // ensure write to array works too

@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
@@ -37,7 +37,7 @@ pub const GossipDumpService = struct {
 
             // allocate buffer to write records
             const table_len = gossip_table.store.count();
-            var buf = try self.allocator.alloc(u8, (1 + table_len) * 200);
+            const buf = try self.allocator.alloc(u8, (1 + table_len) * 200);
             errdefer self.allocator.free(buf);
             var stream = std.io.fixedBufferStream(buf);
             const writer = stream.writer();
@@ -47,7 +47,7 @@ pub const GossipDumpService = struct {
             const base58Encoder = @import("base58-zig").Encoder.init(.{});
             for (gossip_table.store.values()) |gossip_versioned_data| {
                 const val: SignedGossipData = gossip_versioned_data.value;
-                var size = try base58Encoder.encode(
+                const size = try base58Encoder.encode(
                     &gossip_versioned_data.value_hash.data,
                     &encoder_buf,
                 );

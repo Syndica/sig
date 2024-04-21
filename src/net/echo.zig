@@ -5,7 +5,7 @@ const ShredVersion = @import("../core/shred.zig").ShredVersion;
 const SocketAddr = @import("net.zig").SocketAddr;
 const Logger = @import("../trace/log.zig").Logger;
 const Channel = @import("../sync/channel.zig").Channel;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const assert = std.debug.assert;
 const testing = std.testing;
 const http = std.http;
@@ -107,7 +107,7 @@ pub const Server = struct {
             self.logger.debug("connection done");
             response.deinit();
             self.allocator.destroy(response);
-            _ = self.conns_in_flight.fetchSub(1, .SeqCst);
+            _ = self.conns_in_flight.fetchSub(1, .seq_cst);
         }
 
         // if "Connection" header is "keep-alive", we don't close conn
@@ -134,9 +134,9 @@ pub const Server = struct {
         self: *Self,
     ) !void {
         self.logger.debug("accepting new connections");
-        while (!self.conns.isClosed() and !self.exit.load(std.atomic.Ordering.Unordered)) {
+        while (!self.conns.isClosed() and !self.exit.load(.unordered)) {
             // TODO: change to non-blocking socket
-            var response = self.server.accept(.{
+            const response = self.server.accept(.{
                 .allocator = self.allocator,
                 .header_strategy = .{ .dynamic = MAX_REQ_HEADER_SIZE },
             }) catch |err| {
@@ -151,16 +151,16 @@ pub const Server = struct {
                 }
             };
 
-            var resp = try self.allocator.create(Response);
+            const resp = try self.allocator.create(Response);
             resp.* = response;
 
             // we track how many conns in flight
-            _ = self.conns_in_flight.fetchAdd(1, .SeqCst);
+            _ = self.conns_in_flight.fetchAdd(1, .seq_cst);
 
             self.conns.send(resp) catch |err| {
                 // in any error case, we destroy Response and decrement conns in flight
                 self.allocator.destroy(resp);
-                _ = self.conns_in_flight.fetchSub(1, .SeqCst);
+                _ = self.conns_in_flight.fetchSub(1, .seq_cst);
 
                 switch (err) {
                     error.ChannelClosed => {
@@ -192,9 +192,9 @@ pub const Server = struct {
 
         acceptor_thread_handle.join();
 
-        var acceptor_closed_at = std.time.Instant.now() catch unreachable;
+        const acceptor_closed_at = std.time.Instant.now() catch unreachable;
         // wait for connections in flight to complete before exiting listener
-        while (self.conns_in_flight.load(.SeqCst) != 0) {
+        while (self.conns_in_flight.load(.seq_cst) != 0) {
             var now = std.time.Instant.now() catch unreachable;
 
             // we wait for N time before breaking out of conns_in_flight wait guard
@@ -257,7 +257,7 @@ pub fn handleRequest(
         var buffer = std.io.fixedBufferStream(&buff);
 
         // convert a u32 to Ipv4
-        var socket_addr = SocketAddr.fromIpV4Address(resp.address);
+        const socket_addr = SocketAddr.fromIpV4Address(resp.address);
 
         std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, buffer.writer()) catch |err| {
             logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
@@ -276,7 +276,7 @@ pub fn handleRequest(
         }
 
         if (!chunked) {
-            var content_length = try std.fmt.allocPrint(alloc, "{d}", .{buffer.getWritten().len});
+            const content_length = try std.fmt.allocPrint(alloc, "{d}", .{buffer.getWritten().len});
             try resp.headers.append("content-length", content_length);
             alloc.free(content_length);
         }
@@ -332,7 +332,7 @@ test "net.echo: Server works" {
     defer client.deinit();
 
     // create request
-    var headers = std.http.Headers.init(testing.allocator);
+    const headers = std.http.Headers.init(testing.allocator);
     var req = try client.request(.POST, try std.Uri.parse("http://localhost:34333/"), headers, .{});
     defer req.deinit();
     defer req.headers.deinit(); // we have to do this otherwise leaks (not sure why)
@@ -348,7 +348,7 @@ test "net.echo: Server works" {
 
     var tcp_ports = [4]u16{ 1000, 2000, 3000, 4000 };
     var udp_port = [4]u16{ 1000, 2000, 3000, 4000 };
-    var ip_echo_server_msg = IpEchoServerMessage.init(&tcp_ports, &udp_port);
+    const ip_echo_server_msg = IpEchoServerMessage.init(&tcp_ports, &udp_port);
 
     // json stringify
     var buff = [_]u8{0} ** 128;

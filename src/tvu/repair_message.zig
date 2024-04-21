@@ -52,7 +52,7 @@ pub fn serializeRepairRequest(
         .timestamp = timestamp,
         .nonce = nonce,
     };
-    var msg: RepairMessage = switch (request) {
+    const msg: RepairMessage = switch (request) {
         .Shred => |r| .{ .WindowIndex = .{
             .header = header,
             .slot = r[0],
@@ -68,7 +68,7 @@ pub fn serializeRepairRequest(
             .slot = r,
         } },
     };
-    var buf = try allocator.alloc(u8, RepairMessage.MAX_SERIALIZED_SIZE);
+    const buf = try allocator.alloc(u8, RepairMessage.MAX_SERIALIZED_SIZE);
     var stream = std.io.fixedBufferStream(buf);
     try bincode.write(null, stream.writer(), msg, .{});
     var serialized = try allocator.realloc(buf, stream.pos);

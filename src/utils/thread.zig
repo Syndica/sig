@@ -45,12 +45,12 @@ pub fn ThreadPoolTask(
     return struct {
         task: Task,
         entry: EntryType,
-        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(true),
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) ![]Self {
-            var tasks = try allocator.alloc(Self, capacity);
+            const tasks = try allocator.alloc(Self, capacity);
             for (tasks) |*t| {
                 t.* = .{
                     .entry = undefined,
@@ -61,10 +61,10 @@ pub fn ThreadPoolTask(
         }
 
         fn callback(task: *Task) void {
-            var self = @fieldParentPtr(Self, "task", task);
+            var self: Self = @fieldParentPtr("task", task);
             std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
             defer {
-                self.done.store(true, std.atomic.Ordering.Release);
+                self.done.store(true, std.atomic.Ordering.release);
             }
             self.entry.callback() catch |err| {
                 std.debug.print("{s} error: {}\n", .{ @typeName(EntryType), err });
@@ -79,7 +79,7 @@ pub fn ThreadPoolTask(
                 task_i = (task_i + 1) % tasks.len;
                 task_ptr = &tasks[task_i];
             }
-            task_ptr.done.store(false, std.atomic.Ordering.Release);
+            task_ptr.done.store(false, std.atomic.Ordering.release);
             task_ptr.entry = entry;
 
             const batch = Batch.from(&task_ptr.task);

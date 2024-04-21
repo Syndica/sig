@@ -1,5 +1,5 @@
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const UdpSocket = @import("zig-network").Socket;
 const Packet = @import("packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("packet.zig").PACKET_DATA_SIZE;
@@ -14,7 +14,7 @@ pub fn readSocket(
     allocator: std.mem.Allocator,
     socket: *UdpSocket,
     incoming_channel: *Channel(std.ArrayList(Packet)),
-    exit: *const std.atomic.Atomic(bool),
+    exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) !void {
     //Performance out of the IO without poll
@@ -25,7 +25,7 @@ pub fn readSocket(
 
     const MAX_WAIT_NS = std.time.ns_per_ms; // 1ms
 
-    while (!exit.load(std.atomic.Ordering.Unordered)) {
+    while (!exit.load(.unordered)) {
         // init a new batch
         var count: usize = 0;
         const capacity = PACKETS_PER_BATCH;
@@ -42,7 +42,7 @@ pub fn readSocket(
 
         // recv packets into batch
         while (true) {
-            var n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity], exit) catch |err| {
+            const n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity], exit) catch |err| {
                 if (count > 0 and err == error.WouldBlock) {
                     if (timer.read() > MAX_WAIT_NS) {
                         break;
@@ -73,7 +73,7 @@ pub fn recvMmsg(
     socket: *UdpSocket,
     /// pre-allocated array of packets to fill up
     packet_batch: []Packet,
-    exit: *const std.atomic.Atomic(bool),
+    exit: *const std.atomic.Value(bool),
 ) !usize {
     const max_size = packet_batch.len;
     var count: usize = 0;
@@ -85,7 +85,7 @@ pub fn recvMmsg(
             if (count > 0 and err == error.WouldBlock) {
                 break;
             } else {
-                if (exit.load(std.atomic.Ordering.Unordered)) return 0;
+                if (exit.load(.unordered)) return 0;
                 continue;
             }
         };
@@ -110,12 +110,12 @@ pub fn recvMmsg(
 pub fn sendSocket(
     socket: *UdpSocket,
     outgoing_channel: *Channel(std.ArrayList(Packet)),
-    exit: *const std.atomic.Atomic(bool),
+    exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
-    while (!exit.load(std.atomic.Ordering.Unordered)) {
+    while (!exit.load(.unordered)) {
         const maybe_packet_batches = try outgoing_channel.try_drain();
         if (maybe_packet_batches == null) {
             // sleep for 1ms
@@ -152,7 +152,7 @@ pub fn sendSocket(
 /// socket, the underlying thread won't actually read the data from the channel.
 pub const SocketThread = struct {
     channel: *Channel(std.ArrayList(Packet)),
-    exit: *std.atomic.Atomic(bool),
+    exit: *std.atomic.Value(bool),
     handle: std.Thread,
 
     const Self = @This();
@@ -210,7 +210,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         const to_endpoint = try socket.getLocalEndPoint();
 
-        var exit = std.atomic.Atomic(bool).init(false);
+        var exit = std.atomic.Value(bool).init(false);
 
         var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, &socket, channel, &exit, .noop });
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
@@ -237,7 +237,7 @@ pub const BenchmarkPacketProcessing = struct {
         recv_handle.join();
         const elapsed = timer.read();
 
-        exit.store(true, std.atomic.Ordering.Unordered);
+        exit.store(true, .unordered);
         handle.join();
 
         return elapsed;

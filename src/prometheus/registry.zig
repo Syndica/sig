@@ -144,7 +144,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 return GetMetricError.InvalidType;
             }
 
-            return @fieldParentPtr(MetricType, "metric", gop.value_ptr.*.metric);
+            return @as(MetricType, @fieldParentPtr("metric", gop.value_ptr.*.metric));
         }
 
         pub fn write(self: *Self, allocator: mem.Allocator, writer: anytype) !void {
@@ -296,13 +296,13 @@ test "prometheus.registry: write" {
 
         // Add some counters
         {
-            var counter = try registry.getOrCreateCounter(tc.counter_name);
+            const counter = try registry.getOrCreateCounter(tc.counter_name);
             counter.* = .{ .value = .{ .value = 2 } };
         }
 
         // Add some gauges
         {
-            var counter = try registry.getOrCreateGauge(tc.gauge_name, u64);
+            const counter = try registry.getOrCreateGauge(tc.gauge_name, u64);
             counter.* = .{ .value = .{ .value = 13 } };
         }
 

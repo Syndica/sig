@@ -46,17 +46,17 @@ pub const BitVec = struct {
 pub fn BitVecConfig() bincode.FieldConfig(DynamicBitSet) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            var bitset: DynamicBitSet = data;
-            var bitvec = BitVec.initFromBitSet(bitset);
+            const bitset: DynamicBitSet = data;
+            const bitvec = BitVec.initFromBitSet(bitset);
             try bincode.write(null, writer, bitvec, params);
         }
 
         pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !DynamicBitSet {
-            var ally = allocator.?;
+            const ally = allocator.?;
             var bitvec = try bincode.read(ally, BitVec, reader, params);
             defer bincode.free(ally, bitvec);
 
-            var dynamic_bitset = try bitvec.toBitSet(ally);
+            const dynamic_bitset = try bitvec.toBitSet(ally);
             return dynamic_bitset;
         }
 

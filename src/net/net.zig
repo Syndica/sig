@@ -92,7 +92,7 @@ pub const SocketAddr = union(enum(u8)) {
     pub fn random(rng: std.rand.Random) Self {
         const pport = rng.int(u16);
 
-        var version = rng.int(u8);
+        const version = rng.int(u8);
         if (version % 2 == 0) {
             var octets: [4]u8 = undefined;
             rng.bytes(&octets);
@@ -384,7 +384,7 @@ pub const Ipv6Addr = struct {
         const big_endian_parts: *align(1) const [8]u16 = @ptrCast(&self.octets);
         const native_endian_parts = switch (builtin.target.cpu.arch.endian()) {
             .Big => big_endian_parts.*,
-            .Little => blk: {
+            .little => blk: {
                 var buf: [8]u16 = undefined;
                 for (big_endian_parts, 0..) |part, i| {
                     buf[i] = std.mem.bigToNative(u16, part);
@@ -463,30 +463,30 @@ pub fn endpointToString(allocator: std.mem.Allocator, endpoint: *const network.E
 
 test "net.net: invalid ipv4 socket parsing" {
     {
-        var addr = "127.0.0.11234";
-        var result = SocketAddr.parseIpv4(addr);
+        const addr = "127.0.0.11234";
+        const result = SocketAddr.parseIpv4(addr);
         try std.testing.expectError(error.InvalidIpv4, result);
     }
     {
-        var addr = "127.0.0:1123";
-        var result = SocketAddr.parseIpv4(addr);
+        const addr = "127.0.0:1123";
+        const result = SocketAddr.parseIpv4(addr);
         try std.testing.expectError(error.InvalidIpv4, result);
     }
 }
 
 test "net.net: valid ipv4 socket parsing" {
-    var addr = "127.0.0.1:1234";
-    var expected_addr = SocketAddr{ .V4 = SocketAddrV4{
+    const addr = "127.0.0.1:1234";
+    const expected_addr = SocketAddr{ .V4 = SocketAddrV4{
         .ip = Ipv4Addr.init(127, 0, 0, 1),
         .port = 1234,
     } };
-    var actual_addr = try SocketAddr.parseIpv4(addr);
+    const actual_addr = try SocketAddr.parseIpv4(addr);
     try std.testing.expectEqual(expected_addr, actual_addr);
 }
 
 test "net.net: test random" {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
-    var addr = SocketAddr.random(rng.random());
+    const addr = SocketAddr.random(rng.random());
     _ = addr;
 }
 

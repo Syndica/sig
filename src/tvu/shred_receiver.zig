@@ -6,7 +6,7 @@ const bincode = sig.bincode;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Socket = network.Socket;
 

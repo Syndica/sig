@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Ordering = std.atomic.Ordering;
 
 const Metric = @import("metric.zig").Metric;
@@ -73,7 +73,7 @@ pub const Histogram = struct {
     }
 
     fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
-        var slice = try allocator.alloc(u64, size);
+        const slice = try allocator.alloc(u64, size);
         @memset(slice, 0);
         return ArrayList(Atomic(u64)).fromOwnedSlice(allocator, @ptrCast(slice));
     }
@@ -84,12 +84,12 @@ pub const Histogram = struct {
         const shard = &self.shards[shard_sync.shard];
         for (0.., self.upper_bounds.items) |i, bound| {
             if (value <= bound) {
-                _ = shard.buckets.items[i].fetchAdd(1, .Monotonic);
+                _ = shard.buckets.items[i].fetchAdd(1, .monotonic);
                 break;
             }
         }
-        _ = shard.sum.fetchAdd(value, .Monotonic);
-        _ = shard.count.fetchAdd(1, .Release); // releases lock. must be last step.
+        _ = shard.sum.fetchAdd(value, .monotonic);
+        _ = shard.count.fetchAdd(1, .release); // releases lock. must be last step.
     }
 
     /// Reads the current state of the histogram.
@@ -103,13 +103,13 @@ pub const Histogram = struct {
 
         // Make the hot shard cold. Some writers may still be writing to it,
         // but no more will start after this.
-        const shard_sync = self.flipShard(.Monotonic);
+        const shard_sync = self.flipShard(.monotonic);
         const cold_shard = &self.shards[shard_sync.shard];
         const hot_shard = &self.shards[shard_sync.shard +% 1];
 
         // Wait until all writers are done writing to the cold shard
         // TODO: switch to a condvar. see: `std.Thread.Condition`
-        while (cold_shard.count.tryCompareAndSwap(shard_sync.count, 0, .Acquire, .Monotonic)) |_| {
+        while (cold_shard.count.tryCompareAndSwap(shard_sync.count, 0, .Acquire, .monotonic)) |_| {
             // Acquire on success: keeps shard usage after.
         }
 
@@ -117,26 +117,26 @@ pub const Histogram = struct {
         // - read the cold shard's data
         // - zero out the cold shard.
         // - write the cold shard's data into the hot shard.
-        const cold_shard_sum = cold_shard.sum.swap(0.0, .Monotonic);
+        const cold_shard_sum = cold_shard.sum.swap(0.0, .monotonic);
         var buckets = try ArrayList(Bucket).initCapacity(alloc, self.upper_bounds.items.len);
         var cumulative_count: u64 = 0;
         for (0.., self.upper_bounds.items) |i, upper_bound| {
-            const count = cold_shard.buckets.items[i].swap(0, .Monotonic);
+            const count = cold_shard.buckets.items[i].swap(0, .monotonic);
             cumulative_count += count;
             buckets.appendAssumeCapacity(.{
                 .cumulative_count = cumulative_count,
                 .upper_bound = upper_bound,
             });
-            _ = hot_shard.buckets.items[i].fetchAdd(count, .Monotonic);
+            _ = hot_shard.buckets.items[i].fetchAdd(count, .monotonic);
         }
-        _ = hot_shard.sum.fetchAdd(cold_shard_sum, .Monotonic);
-        _ = hot_shard.count.fetchAdd(shard_sync.count, .Monotonic);
+        _ = hot_shard.sum.fetchAdd(cold_shard_sum, .monotonic);
+        _ = hot_shard.count.fetchAdd(shard_sync.count, .monotonic);
 
         return HistogramSnapshot.init(cold_shard_sum, shard_sync.count, buckets);
     }
 
     fn getResult(metric: *Metric, allocator: Allocator) Metric.Error!Metric.Result {
-        const self = @fieldParentPtr(Self, "metric", metric);
+        const self: Self = @fieldParentPtr("metric", metric);
         const snapshot = try self.getSnapshot(allocator);
         return Metric.Result{ .histogram = snapshot };
     }

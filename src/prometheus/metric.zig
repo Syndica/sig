@@ -6,7 +6,7 @@ const testing = std.testing;
 const HistogramSnapshot = @import("histogram.zig").HistogramSnapshot;
 
 pub const Metric = struct {
-    pub const Error = error{OutOfMemory} || std.os.WriteError || std.http.Server.Response.Writer.Error;
+    pub const Error = error{OutOfMemory} || std.posix.WriteError || std.http.Server.Response.WriteError;
 
     pub const Result = union(enum) {
         const Self = @This();

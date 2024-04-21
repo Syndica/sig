@@ -69,7 +69,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             trusted_count += 1;
 
             // track the full and all incremental hashes
-            var r = try trusted_snapshot_hashes.getOrPut(trusted_hashes.full);
+            const r = try trusted_snapshot_hashes.getOrPut(trusted_hashes.full);
             const inc_map_ptr = r.value_ptr;
             if (!r.found_existing) {
                 inc_map_ptr.* = std.AutoHashMap(SlotAndHash, void).init(allocator);
@@ -182,10 +182,10 @@ pub fn downloadSnapshotsFromGossip(
             defer lg.unlock();
             const table: *const GossipTable = lg.get();
 
-            var contacts = table.getContactInfos(&contact_info_buf, 0);
+            const contacts = table.getContactInfos(&contact_info_buf, 0);
 
             try available_snapshot_peers.ensureTotalCapacity(contacts.len);
-            var result = try findPeersToDownloadFromAssumeCapacity(
+            const result = try findPeersToDownloadFromAssumeCapacity(
                 allocator,
                 table,
                 contacts,
@@ -304,11 +304,11 @@ const DownloadProgress = struct {
         _ = try file.write(&[_]u8{1});
         try file.seekTo(0);
 
-        var file_memory = try std.os.mmap(
+        const file_memory = try std.posix.mmap(
             null,
             download_size,
-            std.os.PROT.READ | std.os.PROT.WRITE,
-            std.os.MAP.SHARED,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.MAP.SHARED,
             file.handle,
             0,
         );
@@ -326,7 +326,7 @@ const DownloadProgress = struct {
         const len = size * nmemb;
         var self: *Self = @alignCast(@ptrCast(user_data));
         var typed_data: [*]u8 = @ptrCast(ptr);
-        var buf = typed_data[0..len];
+        const buf = typed_data[0..len];
 
         @memcpy(self.mmap[self.file_memory_index..][0..len], buf);
         self.file_memory_index += len;

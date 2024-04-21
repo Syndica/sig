@@ -101,7 +101,7 @@ pub const SignedGossipData = struct {
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        var bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
+        const bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         var sig = try keypair.sign(bytes, null);
         self.signature.data = sig.toBytes();
     }
@@ -109,7 +109,7 @@ pub const SignedGossipData = struct {
     pub fn verify(self: *Self, pubkey: Pubkey) !bool {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
-        var msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
+        const msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
         return self.signature.verify(pubkey, msg);
     }
 
@@ -883,8 +883,8 @@ pub const DuplicateShred = struct {
     pub fn random(rng: std.rand.Random) DuplicateShred {
         // NOTE: cant pass around a slice here (since the stack data will get cleared)
         var slice = [0]u8{}; // empty slice
-        var num_chunks = rng.intRangeAtMost(u8, 5, 100);
-        var chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
+        const num_chunks = rng.intRangeAtMost(u8, 5, 100);
+        const chunk_index = rng.intRangeAtMost(u8, 0, num_chunks - 1);
 
         return DuplicateShred{
             .from = Pubkey.random(rng),
@@ -996,7 +996,7 @@ pub const ContactInfo = struct {
         wallclock: u64,
         shred_version: u16,
     ) Self {
-        var outset = @as(u64, @intCast(std.time.microTimestamp()));
+        const outset = @as(u64, @intCast(std.time.microTimestamp()));
         return Self{
             .pubkey = pubkey,
             .wallclock = wallclock,
@@ -1063,7 +1063,7 @@ pub const ContactInfo = struct {
             };
         }
 
-        var entry = SocketEntry.init(key, try self.pushAddr(socket_addr.ip()), offset);
+        const entry = SocketEntry.init(key, try self.pushAddr(socket_addr.ip()), offset);
 
         if (index) |i| {
             self.sockets.items[i].offset -= entry.offset;
@@ -1087,7 +1087,7 @@ pub const ContactInfo = struct {
         // if found, remove it, it's associated IpAddr, set cache[key] to unspecified
         if (existing_socket_index) |index| {
             // first we remove this existing socket
-            var removed_entry = self.sockets.orderedRemove(index);
+            const removed_entry = self.sockets.orderedRemove(index);
             // reset the socket entry offset
             if (index < self.sockets.items.len - 1) {
                 var next_entry = self.sockets.items[index];
@@ -1221,7 +1221,7 @@ fn socket_addrs_unspecified() [13]SocketAddr {
 }
 
 test "gossip.data: new contact info" {
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
@@ -1235,7 +1235,7 @@ test "gossip.data: socketaddr bincode serialize matches rust" {
     };
     const tmp = Tmp{ .addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234) };
     var buf = [_]u8{0} ** 1024;
-    var bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
+    const bytes = try bincode.writeToSlice(buf[0..], tmp, bincode.Params.standard);
 
     // #[derive(Serialize, Debug, Clone, Copy)]
     // pub struct Tmp {
@@ -1250,7 +1250,7 @@ test "gossip.data: socketaddr bincode serialize matches rust" {
 }
 
 test "gossip.data: set & get socket on contact info" {
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
@@ -1274,7 +1274,7 @@ test "gossip.data: contact info bincode serialize matches rust bincode" {
         20,  30, 0,
     };
 
-    var pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
+    const pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
     var ci = ContactInfo.initDummyForTest(testing.allocator, pubkey, 100, 200, 300);
     defer ci.deinit();
 
@@ -1309,7 +1309,7 @@ test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
     };
 
     var stream = std.io.fixedBufferStream(&contact_info_bytes_from_mainnet);
-    var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
+    const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
     defer bincode.free(testing.allocator, ci2);
 
     var buf = std.ArrayList(u8).init(testing.allocator);
@@ -1322,14 +1322,14 @@ test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
 test "gossip.data: SocketEntry serializer works" {
     testing.log_level = .debug;
 
-    var se = SocketEntry.init(3, 3, 30304);
+    const se = SocketEntry.init(3, 3, 30304);
 
     var buf = std.ArrayList(u8).init(testing.allocator);
     defer buf.deinit();
     try bincode.write(null, buf.writer(), se, bincode.Params.standard);
 
     var stream = std.io.fixedBufferStream(buf.items);
-    var other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
+    const other_se = try bincode.read(testing.allocator, SocketEntry, stream.reader(), bincode.Params.standard);
 
     try testing.expect(other_se.index == se.index);
     try testing.expect(other_se.key == se.key);
@@ -1338,7 +1338,7 @@ test "gossip.data: SocketEntry serializer works" {
 
 test "gossip.data: test sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     var rng = std.rand.DefaultPrng.init(0);
     var data = DuplicateShred.random(rng.random());
     data.from = pubkey;
@@ -1350,7 +1350,7 @@ test "gossip.data: test sig verify duplicateShreds" {
 
 test "gossip.data: test sanitize GossipData" {
     var rng = std.rand.DefaultPrng.init(0);
-    var rand = rng.random();
+    const rand = rng.random();
 
     for (0..4) |i| {
         const data = GossipData.randomFromIndex(rand, i);
@@ -1359,7 +1359,7 @@ test "gossip.data: test sanitize GossipData" {
 }
 
 test "gossip.data: test SignedGossipData label() and id() methods" {
-    var kp_bytes = [_]u8{1} ** 32;
+    const kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk);
@@ -1376,7 +1376,7 @@ test "gossip.data: test SignedGossipData label() and id() methods" {
 }
 
 test "gossip.data: pubkey matches rust" {
-    var kp_bytes = [_]u8{1} ** 32;
+    const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk);
@@ -1389,12 +1389,12 @@ test "gossip.data: pubkey matches rust" {
     var bytes = try bincode.writeToSlice(buf[0..], id, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes[0..bytes.len]);
 
-    var out = try bincode.readFromSlice(std.testing.allocator, Pubkey, buf[0..], bincode.Params.standard);
+    const out = try bincode.readFromSlice(std.testing.allocator, Pubkey, buf[0..], bincode.Params.standard);
     try std.testing.expectEqual(id, out);
 }
 
 test "gossip.data: contact info serialization matches rust" {
-    var kp_bytes = [_]u8{1} ** 32;
+    const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk);
@@ -1424,7 +1424,7 @@ test "gossip.data: contact info serialization matches rust" {
 }
 
 test "gossip.data: gossip data serialization matches rust" {
-    var kp_bytes = [_]u8{1} ** 32;
+    const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk);
@@ -1435,7 +1435,7 @@ test "gossip.data: gossip data serialization matches rust" {
     legacy_contact_info.gossip = gossip_addr;
     legacy_contact_info.wallclock = 0;
 
-    var gossip_data = GossipData{
+    const gossip_data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
@@ -1456,7 +1456,7 @@ test "gossip.data: gossip data serialization matches rust" {
 }
 
 test "gossip.data: random gossip data" {
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
@@ -1490,7 +1490,7 @@ test "gossip.data: random gossip data" {
 }
 
 test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 

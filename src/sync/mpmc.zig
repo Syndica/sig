@@ -1,7 +1,7 @@
 // NOTE: WIP
 const std = @import("std");
 const assert = std.debug.assert;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const ref = @import("ref.zig");
 
 /// An UnboundedChannel with the following characteristics:
@@ -30,7 +30,7 @@ pub fn UnboundedChannel(comptime T: type) type {
             data: ref.Arc(T),
 
             pub fn init(allocator: std.mem.Allocator, data: T) !*Node {
-                var node = try allocator.create(Node);
+                const node = try allocator.create(Node);
                 node.* = .{
                     .next = null,
                     .data = try ref.arc(allocator, data),
@@ -75,7 +75,7 @@ pub fn UnboundedChannel(comptime T: type) type {
             }
 
             fn flush(self: *Sender, list: Batch) void {
-                var stack = self.stack.load(.SeqCst);
+                var stack = self.stack.load(.seq_cst);
                 while (true) {
                     // Attach the list to the stack (pt. 1)
                     list.last.next = @as(?*Node, @ptrFromInt(stack & PTR_MASK));
@@ -90,17 +90,17 @@ pub fn UnboundedChannel(comptime T: type) type {
                     stack = self.stack.tryCompareAndSwap(
                         stack,
                         new_stack,
-                        .Release,
-                        .Monotonic,
+                        .release,
+                        .monotonic,
                     ) orelse break;
                 }
             }
 
             pub fn send(self: *Sender, data: T) error{Closed}!void {
-                if (self.closed.load(.Monotonic)) {
+                if (self.closed.load(.monotonic)) {
                     return error.Closed;
                 }
-                var node = Node.init(self.allocator, data) catch unreachable;
+                const node = Node.init(self.allocator, data) catch unreachable;
                 self.flush(Batch.init(node, node));
             }
         };
@@ -127,12 +127,12 @@ pub fn UnboundedChannel(comptime T: type) type {
                 // Release the consumer with a release barrier to ensure cache/node accesses
                 // happen before the consumer was released and before the next consumer starts using the cache.
                 self.cache.* = self.ref;
-                const stack = self.stack.fetchSub(remove, .SeqCst);
+                const stack = self.stack.fetchSub(remove, .seq_cst);
                 assert(stack & remove != 0);
             }
 
             fn tryAcquireConsumer(noalias self: *Receiver) error{ Empty, Contended }!?*Node {
-                var stack = self.stack.load(.Monotonic);
+                var stack = self.stack.load(.monotonic);
                 while (true) {
                     if (stack & IS_CONSUMING != 0)
                         return error.Contended; // The queue already has a consumer.
@@ -152,15 +152,15 @@ pub fn UnboundedChannel(comptime T: type) type {
                         stack,
                         new_stack,
                         .Acquire,
-                        .Monotonic,
+                        .monotonic,
                     ) orelse return self.cache.* orelse @as(*Node, @ptrFromInt(stack & PTR_MASK));
                 }
             }
 
             pub fn recv(noalias self: *Receiver) ?ref.Arc(T) {
-                while (!self.closed.load(.Monotonic)) {
+                while (!self.closed.load(.monotonic)) {
                     while (!self.acquired) {
-                        if (self.closed.load(.Monotonic)) {
+                        if (self.closed.load(.monotonic)) {
                             return null;
                         }
                         self.ref = self.tryAcquireConsumer() catch continue;
@@ -171,7 +171,7 @@ pub fn UnboundedChannel(comptime T: type) type {
                     if (self.ref) |node| {
                         self.ref = node.next;
                         // grab the data and retain arc
-                        var data = node.data.retain();
+                        const data = node.data.retain();
                         // deinit the node
                         node.deinit(self.allocator);
                         // return the data
@@ -179,7 +179,7 @@ pub fn UnboundedChannel(comptime T: type) type {
                     }
 
                     // Load the stack to see if there was anything pushed that we could grab.
-                    var stack = self.stack.load(.Monotonic);
+                    var stack = self.stack.load(.monotonic);
                     assert(stack & IS_CONSUMING != 0);
                     if (stack & PTR_MASK == 0) {
                         continue;
@@ -192,7 +192,7 @@ pub fn UnboundedChannel(comptime T: type) type {
 
                     const node = @as(*Node, @ptrFromInt(stack & PTR_MASK));
                     self.ref = node.next;
-                    var data = node.data.retain();
+                    const data = node.data.retain();
                     node.deinit(self.allocator);
                     return data;
                 }
@@ -222,18 +222,18 @@ pub fn UnboundedChannel(comptime T: type) type {
         }
 
         pub fn close(self: *Self) void {
-            self.closed.store(true, .Monotonic);
+            self.closed.store(true, .monotonic);
         }
 
         pub fn sender(self: *Self) error{Closed}!Sender {
-            if (self.closed.load(.SeqCst)) {
+            if (self.closed.load(.seq_cst)) {
                 return error.Closed;
             }
             return Sender.init(self.arena.allocator(), &self.stack, &self.closed);
         }
 
         pub fn receiver(self: *Self) error{Closed}!Receiver {
-            if (self.closed.load(.SeqCst)) {
+            if (self.closed.load(.seq_cst)) {
                 return error.Closed;
             }
             return Receiver.init(self.arena.allocator(), &self.stack, &self.closed, &self.cache);

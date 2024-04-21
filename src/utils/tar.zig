@@ -43,11 +43,11 @@ pub const UnTarEntry = struct {
         _ = try file.write(&[_]u8{1});
         try file.seekTo(0);
 
-        var memory = try std.os.mmap(
+        const memory = try std.posix.mmap(
             null,
             file_size,
-            std.os.PROT.WRITE,
-            std.os.MAP.SHARED,
+            std.posix.PROT.WRITE,
+            std.posix.MAP.SHARED,
             file.handle,
             0,
         );
@@ -74,7 +74,7 @@ pub fn parallelUntarToFileSystem(
     }
 
     std.debug.print("using {d} threads to unpack snapshot\n", .{n_threads});
-    var tasks = try UnTarTask.init(allocator, n_threads);
+    const tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
 
     var timer = try std.time.Timer.start();
@@ -119,7 +119,7 @@ pub fn parallelUntarToFileSystem(
                 }
                 file_count += 1;
 
-                var contents = try allocator.alloc(u8, file_size);
+                const contents = try allocator.alloc(u8, file_size);
                 _ = try reader.readAtLeast(contents, file_size);
 
                 try reader.skipBytes(pad_len, .{});

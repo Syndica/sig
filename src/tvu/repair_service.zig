@@ -3,7 +3,7 @@ const zig_network = @import("zig-network");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
@@ -216,7 +216,7 @@ pub const RepairPeerProvider = struct {
         while (infos.next()) |info| {
             const serve_repair_socket = info.getSocket(sig.gossip.socket_tag.SERVE_REPAIR);
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
-                info.shred_version == self.my_shred_version.load(.Monotonic) and // need compatible shreds
+                info.shred_version == self.my_shred_version.load(.monotonic) and // need compatible shreds
                 serve_repair_socket != null and // node must be able to receive repair requests
                 info.getSocket(sig.gossip.socket_tag.TVU) != null) // node needs access to shreds
             {
@@ -278,7 +278,7 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
     // init service
     var exit = Atomic(bool).init(false);
     var gossip_mux = RwMux(GossipTable).init(gossip);
-    var peers = try RepairPeerProvider.init(
+    const peers = try RepairPeerProvider.init(
         allocator,
         random,
         &gossip_mux,
@@ -314,7 +314,7 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
     try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);
 
     // exit
-    exit.store(true, .Monotonic);
+    exit.store(true, .monotonic);
     handle.join();
 }
 

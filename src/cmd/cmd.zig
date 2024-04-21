@@ -6,7 +6,7 @@ const network = @import("zig-network");
 const sig = @import("../lib.zig");
 const helpers = @import("helpers.zig");
 
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
@@ -42,6 +42,9 @@ const servePrometheus = sig.prometheus.servePrometheus;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 
+const config = @import("config.zig");
+// var validator_config = config.validator_config;
+
 const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 const socket_tag = sig.gossip.socket_tag;
 
@@ -54,7 +57,7 @@ const gossip_host = struct {
     var option = cli.Option{
         .long_name = "gossip-host",
         .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
-        .value = cli.OptionValue{ .string = null },
+        .value_ref = cli.mkRef(&config.validator_config.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
     };
@@ -75,7 +78,7 @@ var gossip_port_option = cli.Option{
     .long_name = "gossip-port",
     .help = "The port to run gossip listener - default: 8001",
     .short_alias = 'p',
-    .value = cli.OptionValue{ .int = 8001 },
+    .value_ref = cli.mkRef(&config.validator_config.gossip.port),
     .required = false,
     .value_name = "Gossip Port",
 };
@@ -83,7 +86,7 @@ var gossip_port_option = cli.Option{
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
     .help = "The port to run tvu repair listener - default: 8002",
-    .value = cli.OptionValue{ .int = 8002 },
+    .value_ref = cli.mkRef(&config.validator_config.repair.port),
     .required = false,
     .value_name = "Repair Port",
 };
@@ -91,7 +94,7 @@ var repair_port_option = cli.Option{
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value = cli.OptionValue{ .int = null },
+    .value_ref = cli.mkRef(&config.validator_config.repair.test_repair_slot),
     .required = false,
     .value_name = "slot number",
 };
@@ -100,7 +103,7 @@ var gossip_entrypoints_option = cli.Option{
     .long_name = "entrypoint",
     .help = "gossip address of the entrypoint validators",
     .short_alias = 'e',
-    .value = cli.OptionValue{ .string_list = null },
+    .value_ref = cli.mkRef(&config.validator_config.gossip.entrypoints),
     .required = false,
     .value_name = "Entrypoints",
 };
@@ -109,7 +112,7 @@ var trusted_validators_option = cli.Option{
     .long_name = "trusted_validator",
     .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
     .short_alias = 't',
-    .value = cli.OptionValue{ .string_list = null },
+    .value_ref = cli.mkRef(&config.validator_config.gossip.trusted_validators),
     .required = false,
     .value_name = "Trusted Validator",
 };
@@ -117,7 +120,7 @@ var trusted_validators_option = cli.Option{
 var gossip_spy_node_option = cli.Option{
     .long_name = "spy-node",
     .help = "run as a gossip spy node (minimize outgoing packets)",
-    .value = cli.OptionValue{ .bool = false },
+    .value_ref = cli.mkRef(&config.validator_config.gossip.spy_node),
     .required = false,
     .value_name = "Spy Node",
 };
@@ -125,7 +128,7 @@ var gossip_spy_node_option = cli.Option{
 var gossip_dump_option = cli.Option{
     .long_name = "dump-gossip",
     .help = "periodically dump gossip table to csv files and logs",
-    .value = cli.OptionValue{ .bool = false },
+    .value_ref = cli.mkRef(&config.validator_config.gossip.dump),
     .required = false,
     .value_name = "Gossip Table Dump",
 };
@@ -134,7 +137,7 @@ var log_level_option = cli.Option{
     .long_name = "log-level",
     .help = "The amount of detail to log (default = debug)",
     .short_alias = 'l',
-    .value = cli.OptionValue{ .string = "debug" },
+    .value_ref = cli.mkRef(&config.validator_config.log_level),
     .required = false,
     .value_name = "err|warn|info|debug",
 };
@@ -143,7 +146,7 @@ var metrics_port_option = cli.Option{
     .long_name = "metrics-port",
     .help = "port to expose prometheus metrics via http - default: 12345",
     .short_alias = 'm',
-    .value = cli.OptionValue{ .int = 12345 },
+    .value_ref = cli.mkRef(&config.validator_config.metrics_port),
     .required = false,
     .value_name = "port_number",
 };
@@ -153,7 +156,7 @@ var n_threads_snapshot_load_option = cli.Option{
     .long_name = "n-threads-snapshot-load",
     .help = "number of threads to load incremental snapshots: - default: ncpus",
     .short_alias = 't',
-    .value = cli.OptionValue{ .int = 0 },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.num_threads_snapshot_load),
     .required = false,
     .value_name = "n_threads_snapshot_load",
 };
@@ -162,7 +165,7 @@ var n_threads_snapshot_unpack_option = cli.Option{
     .long_name = "n-threads-snapshot-unpack",
     .help = "number of threads to unpack incremental snapshots - default: ncpus * 2",
     .short_alias = 'u',
-    .value = cli.OptionValue{ .int = 0 },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.num_threads_snapshot_unpack),
     .required = false,
     .value_name = "n_threads_snapshot_unpack",
 };
@@ -171,7 +174,7 @@ var disk_index_path_option = cli.Option{
     .long_name = "disk-index-path",
     .help = "path to disk index - default: no disk index, index will use ram",
     .short_alias = 'd',
-    .value = cli.OptionValue{ .string = null },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.disk_index_path),
     .required = false,
     .value_name = "disk_index_path",
 };
@@ -180,7 +183,7 @@ var force_unpack_snapshot_option = cli.Option{
     .long_name = "force-unpack-snapshot",
     .help = "force unpack snapshot even if it exists",
     .short_alias = 'f',
-    .value = cli.OptionValue{ .bool = false },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.force_unpack_snapshot),
     .required = false,
     .value_name = "force_unpack_snapshot",
 };
@@ -188,7 +191,7 @@ var force_unpack_snapshot_option = cli.Option{
 var force_new_snapshot_download_option = cli.Option{
     .long_name = "force-new-snapshot-download",
     .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
-    .value = cli.OptionValue{ .bool = false },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.force_new_snapshot_download),
     .required = false,
     .value_name = "force_new_snapshot_download",
 };
@@ -197,7 +200,7 @@ var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
     .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/",
     .short_alias = 's',
-    .value = cli.OptionValue{ .string = "test_data/" },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.snapshot_dir),
     .required = false,
     .value_name = "snapshot_dir",
 };
@@ -205,7 +208,7 @@ var snapshot_dir_option = cli.Option{
 var min_snapshot_download_speed_mb_option = cli.Option{
     .long_name = "min-snapshot-download-speed",
     .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
-    .value = cli.OptionValue{ .int = 20 },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.min_snapshot_download_speed_mbs),
     .required = false,
     .value_name = "min_snapshot_download_speed_mb",
 };
@@ -213,7 +216,7 @@ var min_snapshot_download_speed_mb_option = cli.Option{
 var storage_cache_size_option = cli.Option{
     .long_name = "storage-cache-size",
     .help = "number of accounts preallocate for the storage cache for accounts-db (used when writing accounts whose slot has not been rooted) - default: 10k",
-    .value = cli.OptionValue{ .int = 10_000 },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.storage_cache_size),
     .required = false,
     .value_name = "storage_cache_size",
 };
@@ -221,111 +224,142 @@ var storage_cache_size_option = cli.Option{
 var number_of_index_bins_option = cli.Option{
     .long_name = "number-of-index-bins",
     .help = "number of bins to shard the index pubkeys across",
-    .value = cli.OptionValue{ .int = ACCOUNT_INDEX_BINS },
+    .value_ref = cli.mkRef(&config.validator_config.accounts_db.num_account_index_bins),
     .required = false,
     .value_name = "number_of_index_bins",
 };
 
 var app = &cli.App{
-    .name = "sig",
-    .description = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
-    .version = "0.1.1",
+    .version = "0.2.0",
     .author = "Syndica & Contributors",
-    .options = &.{ &log_level_option, &metrics_port_option },
-    .subcommands = &.{
-        &cli.Command{
-            .name = "identity",
-            .help = "Get own identity",
-            .description =
-            \\Gets own identity (Pubkey) or creates one if doesn't exist.
-            \\
-            \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
-            ,
-            .action = identity,
+    .command = .{
+        .name = "sig",
+        .description = .{
+            .one_line = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
+            // .detailed = "",
         },
-        &cli.Command{
-            .name = "gossip",
-            .help = "Run gossip client",
-            .description =
-            \\Start Solana gossip client on specified port.
-            ,
-            .action = gossip,
-            .options = &.{
-                &gossip_host.option,
-                &gossip_port_option,
-                &gossip_entrypoints_option,
-                &gossip_spy_node_option,
-                &gossip_dump_option,
-            },
-        },
-        &cli.Command{
-            .name = "validator",
-            .help = "Run validator",
-            .description =
-            \\Start a full Solana validator client.
-            ,
-            .action = validator,
-            .options = &.{
-                // gossip
-                &gossip_host.option,
-                &gossip_port_option,
-                &gossip_entrypoints_option,
-                &gossip_spy_node_option,
-                &gossip_dump_option,
-                // repair
-                &repair_port_option,
-                &test_repair_option,
-                // accounts-db
-                &snapshot_dir_option,
-                &n_threads_snapshot_load_option,
-                &n_threads_snapshot_unpack_option,
-                &disk_index_path_option,
-                &force_unpack_snapshot_option,
-                &min_snapshot_download_speed_mb_option,
-                &force_new_snapshot_download_option,
-            },
-        },
-        &cli.Command{
-            .name = "download-snapshot",
-            .help = "downloads a snapshot",
-            .description =
-            \\starts a gossip client and downloads a snapshot from peers
-            ,
-            .action = downloadSnapshot,
-            .options = &.{
-                // where to download the snapshot
-                &snapshot_dir_option,
-                // gossip options
-                &gossip_host.option,
-                &gossip_port_option,
-                &gossip_entrypoints_option,
-                &trusted_validators_option,
-                &min_snapshot_download_speed_mb_option,
+        .options = &.{ &log_level_option, &metrics_port_option },
+        .target = .{
+            .subcommands = &.{
+                &cli.Command{
+                    .name = "identity",
+                    .description = .{
+                        .one_line = "Get own identity",
+                        .detailed =
+                        \\Gets own identity (Pubkey) or creates one if doesn't exist.
+                        \\
+                        \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
+                        ,
+                    },
+                    .target = .{
+                        .action = .{
+                            .exec = identity,
+                        },
+                    },
+                },
+                &cli.Command{
+                    .name = "gossip",
+                    .description = .{
+                        .one_line = "Run gossip client",
+                        .detailed =
+                        \\Start Solana gossip client on specified port.
+                        ,
+                    },
+                    .options = &.{
+                        &gossip_host.option,
+                        &gossip_port_option,
+                        &gossip_entrypoints_option,
+                        &gossip_spy_node_option,
+                        &gossip_dump_option,
+                    },
+                    .target = .{
+                        .action = .{
+                            .exec = gossip,
+                        },
+                    },
+                },
+                &cli.Command{
+                    .name = "validator",
+                    .description = .{
+                        .one_line = "Run Solana validator",
+                        .detailed =
+                        \\Start a full Solana validator client.
+                        ,
+                    },
+                    .options = &.{
+                        // gossip
+                        &gossip_host.option,
+                        &gossip_port_option,
+                        &gossip_entrypoints_option,
+                        &gossip_spy_node_option,
+                        &gossip_dump_option,
+                        // repair
+                        &repair_port_option,
+                        &test_repair_option,
+                        // accounts-db
+                        &snapshot_dir_option,
+                        &n_threads_snapshot_load_option,
+                        &n_threads_snapshot_unpack_option,
+                        &disk_index_path_option,
+                        &force_unpack_snapshot_option,
+                        &min_snapshot_download_speed_mb_option,
+                        &force_new_snapshot_download_option,
+                    },
+                    .target = .{
+                        .action = .{
+                            .exec = validator,
+                        },
+                    },
+                },
+                &cli.Command{
+                    .name = "download-snapshot",
+                    .description = .{
+                        .one_line = "Downloads a snapshot",
+                        .detailed =
+                        \\starts a gossip client and downloads a snapshot from peers
+                        ,
+                    },
+                    .options = &.{
+                        // where to download the snapshot
+                        &snapshot_dir_option,
+                        // gossip options
+                        &gossip_host.option,
+                        &gossip_port_option,
+                        &gossip_entrypoints_option,
+                        &trusted_validators_option,
+                        &min_snapshot_download_speed_mb_option,
+                    },
+                    .target = .{
+                        .action = .{
+                            .exec = downloadSnapshot,
+                        },
+                    },
+                },
             },
         },
     },
 };
 
-/// entrypoint to print (and create if DNE) pubkey in ~/.sig/identity.key
-fn identity(_: []const []const u8) !void {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
+/// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
+fn identity() !void {
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.validator_config.log_level));
     defer logger.deinit();
     logger.spawn();
 
     const keypair = try getOrInitIdentity(gpa_allocator, logger);
     var pubkey: [50]u8 = undefined;
-    var size = try base58Encoder.encode(&keypair.public_key.toBytes(), &pubkey);
+    const size = try base58Encoder.encode(&keypair.public_key.toBytes(), &pubkey);
     try std.io.getStdErr().writer().print("Identity: {s}\n", .{pubkey[0..size]});
 }
 
 /// entrypoint to run only gossip
-fn gossip(_: []const []const u8) !void {
+fn gossip() !void {
     var logger = try spawnLogger();
     defer logger.deinit();
     const metrics_thread = try spawnMetrics(logger);
     defer metrics_thread.detach();
 
-    var exit = std.atomic.Atomic(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
@@ -347,14 +381,14 @@ fn gossip(_: []const []const u8) !void {
 }
 
 /// entrypoint to run a full solana validator
-fn validator(_: []const []const u8) !void {
+fn validator() !void {
     var logger = try spawnLogger();
     defer logger.deinit();
     const metrics_thread = try spawnMetrics(logger);
     defer metrics_thread.detach();
 
     var rand = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
-    var exit = std.atomic.Atomic(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
@@ -485,12 +519,12 @@ fn initGossip(
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: u8, port: u16 },
 ) !GossipService {
-    var gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
+    const gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
     logger.infof("gossip host: {any}", .{gossip_host_ip});
     logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.init(gossip_host_ip, gossip_port));
     for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
@@ -514,7 +548,7 @@ fn initRepair(
     gossip_service: *GossipService,
     socket: *Socket,
 ) !RepairService {
-    var peer_provider = try RepairPeerProvider.init(
+    const peer_provider = try RepairPeerProvider.init(
         gpa_allocator,
         random,
         &gossip_service.gossip_table_rw,
@@ -580,44 +614,42 @@ fn getMyDataFromIpEcho(
 
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
-    if (gossip_entrypoints_option.value.string_list) |entrypoints_strs| {
-        for (entrypoints_strs) |entrypoint| {
-            var socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-                // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
-                var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
-                const domain_str = domain_and_port.next() orelse {
-                    logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
-                    return error.EntrypointDomainMissing;
-                };
-                const port_str = domain_and_port.next() orelse {
-                    logger.field("entrypoint", entrypoint).err("entrypoint port missing");
-                    return error.EntrypointPortMissing;
-                };
-
-                // get dns address lists
-                var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
-                defer addr_list.deinit();
-                if (addr_list.addrs.len == 0) {
-                    logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
-                    return error.EntrypointDnsResolutionFailure;
-                }
-
-                // use first A record address
-                var ipv4_addr = addr_list.addrs[0];
-
-                // parse port from string
-                var port = std.fmt.parseInt(u16, port_str, 10) catch {
-                    logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
-                    return error.EntrypointPortNotValid;
-                };
-
-                var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-                socket_addr.setPort(port);
-                break :brk socket_addr;
+    for (config.validator_config.gossip.entrypoints) |entrypoint| {
+        const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
+            // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
+            var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
+            const domain_str = domain_and_port.next() orelse {
+                logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
+                return error.EntrypointDomainMissing;
+            };
+            const port_str = domain_and_port.next() orelse {
+                logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+                return error.EntrypointPortMissing;
             };
 
-            try entrypoints.append(socket_addr);
-        }
+            // get dns address lists
+            var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+            defer addr_list.deinit();
+            if (addr_list.addrs.len == 0) {
+                logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
+                return error.EntrypointDnsResolutionFailure;
+            }
+
+            // use first A record address
+            const ipv4_addr = addr_list.addrs[0];
+
+            // parse port from string
+            const port = std.fmt.parseInt(u16, port_str, 10) catch {
+                logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
+                return error.EntrypointPortNotValid;
+            };
+
+            var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+            socket_addr.setPort(port);
+            break :brk socket_addr;
+        };
+
+        try entrypoints.append(socket_addr);
     }
 
     // log entrypoints
@@ -637,14 +669,14 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 /// Initializes the global registry. Returns error if registry was already initialized.
 /// Spawns a thread to serve the metrics over http on the CLI configured port.
 fn spawnMetrics(logger: Logger) !std.Thread {
-    var metrics_port: u16 = @intCast(metrics_port_option.value.int.?);
+    const metrics_port: u16 = config.validator_config.metrics_port;
     logger.infof("metrics port: {d}", .{metrics_port});
     const registry = globalRegistry();
     return try std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port });
 }
 
 fn spawnLogger() !Logger {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, log_level_option.value.string.?));
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.validator_config.log_level));
     logger.spawn();
     return logger;
 }
@@ -684,16 +716,16 @@ fn readStatusCache(
         return error.StatusCacheNotFound;
     };
 
-    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    const status_cache = try StatusCache.init(allocator, status_cache_path);
     return status_cache;
 }
 
 /// entrypoint to download snapshot
-fn downloadSnapshot(_: []const []const u8) !void {
+fn downloadSnapshot() !void {
     var logger = try spawnLogger();
     defer logger.deinit();
 
-    var exit = std.atomic.Atomic(bool).init(false);
+    var exit = std.atomic.Value(bool).init(false);
     const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
     const entrypoints = try getEntrypoints(logger);
     defer entrypoints.deinit();
@@ -772,7 +804,7 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
-    var maybe_snapshot_files: ?SnapshotFiles = blk: {
+    const maybe_snapshot_files: ?SnapshotFiles = blk: {
         if (force_new_snapshot_download) {
             break :blk null;
         }
@@ -852,7 +884,7 @@ fn getOrDownloadSnapshots(
 
     timer.reset();
     logger.infof("reading snapshot metadata...", .{});
-    var snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_files);
+    const snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_files);
     logger.infof("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return snapshots;

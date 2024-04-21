@@ -1,5 +1,5 @@
 const std = @import("std");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 const testing = std.testing;
@@ -18,7 +18,7 @@ pub fn Channel(comptime T: type) type {
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, init_capacity: usize) *Self {
-            var self = allocator.create(Self) catch unreachable;
+            const self = allocator.create(Self) catch unreachable;
             self.* = .{
                 .buffer = Mux(std.ArrayList(T)).init(std.ArrayList(T).initCapacity(allocator, init_capacity) catch unreachable),
                 .allocator = allocator,
@@ -36,7 +36,7 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn send(self: *Self, value: T) error{ OutOfMemory, ChannelClosed }!void {
-            if (self.closed.load(.Monotonic)) {
+            if (self.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
             var buffer_lock = self.buffer.lock();
@@ -49,7 +49,7 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn sendBatch(self: *Self, value: std.ArrayList(T)) error{ OutOfMemory, ChannelClosed }!void {
-            if (self.closed.load(.Monotonic)) {
+            if (self.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
             var buffer_lock = self.buffer.lock();
@@ -65,7 +65,7 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
+            while (buffer.get().items.len == 0 and !self.closed.load(.seq_cst)) {
                 buffer.condition(&self.has_value);
             }
 
@@ -84,7 +84,7 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
+            while (buffer.get().items.len == 0 and !self.closed.load(.seq_cst)) {
                 buffer.condition(&self.has_value);
             }
 
@@ -93,9 +93,9 @@ pub fn Channel(comptime T: type) type {
                 return null;
             }
 
-            var num_items_to_drain = buffer.get().items.len;
+            const num_items_to_drain = buffer.get().items.len;
 
-            var out = self.allocator.alloc(T, num_items_to_drain) catch @panic("could not alloc");
+            const out = self.allocator.alloc(T, num_items_to_drain) catch @panic("could not alloc");
             @memcpy(out, buffer.get().items);
 
             buffer.mut().shrinkRetainingCapacity(0);
@@ -109,17 +109,17 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            if (self.closed.load(.SeqCst)) {
+            if (self.closed.load(.seq_cst)) {
                 return error.ChannelClosed;
             }
 
-            var values: *const std.ArrayList(T) = buffer.get();
-            var num_items_to_drain = values.items.len;
+            const values: *const std.ArrayList(T) = buffer.get();
+            const num_items_to_drain = values.items.len;
             if (num_items_to_drain == 0) {
                 return null;
             }
 
-            var out = try self.allocator.alloc(T, num_items_to_drain);
+            const out = try self.allocator.alloc(T, num_items_to_drain);
             @memcpy(out, values.items);
             buffer.mut().clearRetainingCapacity();
 
@@ -127,12 +127,12 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn close(self: *Self) void {
-            self.closed.store(true, .SeqCst);
+            self.closed.store(true, .seq_cst);
             self.has_value.broadcast();
         }
 
         pub fn isClosed(self: *Self) bool {
-            return self.closed.load(.SeqCst);
+            return self.closed.load(.seq_cst);
         }
     };
 }
@@ -152,7 +152,7 @@ fn testReceiver(chan: *BlockChannel, recv_count: *Atomic(usize), id: u8) void {
     _ = id;
     while (chan.receive()) |v| {
         _ = v;
-        _ = recv_count.fetchAdd(1, .SeqCst);
+        _ = recv_count.fetchAdd(1, .seq_cst);
     }
 }
 
@@ -168,7 +168,7 @@ const Packet = @import("../net/packet.zig").Packet;
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
-        var packet = Packet.default();
+        const packet = Packet.default();
         chan.send(packet) catch unreachable;
     }
 }
@@ -186,7 +186,7 @@ test "sync.channel: channel works properly" {
     defer ch.deinit();
 
     var recv_count: Atomic(usize) = Atomic(usize).init(0);
-    var send_count: usize = 100_000;
+    const send_count: usize = 100_000;
 
     var join2 = try std.Thread.spawn(.{}, testSender, .{ ch, send_count });
     var join1 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });

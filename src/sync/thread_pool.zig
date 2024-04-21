@@ -8,7 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Futex = std.Thread.Futex;
 const assert = std.debug.assert;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 pub const OnSpawnCallback = *const fn (ctx: ?*anyopaque) ?*anyopaque;
 
 pub const ThreadPool = struct {
@@ -90,13 +90,13 @@ pub const ThreadPool = struct {
         tail: ?*Task = null,
 
         pub fn pop(this: *Batch) ?*Task {
-            const len = @atomicLoad(usize, &this.len, .Monotonic);
+            const len = @atomicLoad(usize, &this.len, .monotonic);
             if (len == 0) {
                 return null;
             }
-            var task = this.head.?;
+            const task: Task = this.head.?;
             if (task.node.next) |node| {
-                this.head = @fieldParentPtr(Task, "node", node);
+                this.head = @fieldParentPtr("node", node);
             } else {
                 if (task != this.tail.?) unreachable;
                 this.tail = null;
@@ -158,7 +158,7 @@ pub const ThreadPool = struct {
         }
 
         pub fn isDone(this: *WaitGroup) bool {
-            return @atomicLoad(u32, &this.counter, .Monotonic) == 0;
+            return @atomicLoad(u32, &this.counter, .monotonic) == 0;
         }
 
         pub fn finish(self: *WaitGroup) void {
@@ -228,7 +228,7 @@ pub const ThreadPool = struct {
                 task: Task = .{ .callback = callback },
 
                 pub fn callback(task: *Task) void {
-                    var routine = @fieldParentPtr(@This(), "task", task);
+                    const routine: @This() = @fieldParentPtr("task", task);
                     @call(.always_inline, Fn, routine.args);
                 }
             };
@@ -310,7 +310,7 @@ pub const ThreadPool = struct {
             i: usize = 0,
 
             pub fn call(task: *Task) void {
-                var runner_task = @fieldParentPtr(@This(), "task", task);
+                var runner_task: @This() = @fieldParentPtr("task", task);
                 const i = runner_task.i;
                 if (comptime as_ptr) {
                     Function(runner_task.ctx.ctx, &runner_task.ctx.values[i], i);
@@ -321,7 +321,7 @@ pub const ThreadPool = struct {
                 runner_task.ctx.wait_group.finish();
             }
         };
-        var wait_context = allocator.create(WaitContext) catch unreachable;
+        const wait_context = allocator.create(WaitContext) catch unreachable;
         wait_context.* = .{
             .ctx = ctx,
             .wait_group = wait_group,
@@ -391,7 +391,7 @@ pub const ThreadPool = struct {
         // Fast path to check the Sync state to avoid calling into notifySlow().
         // If we're waking, then we need to update the state regardless
         if (!is_waking) {
-            const sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+            const sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
             if (sync.notified) {
                 return;
             }
@@ -403,7 +403,7 @@ pub const ThreadPool = struct {
     /// Warm the thread pool up to the given number of threads.
     /// https://www.youtube.com/watch?v=ys3qcbO5KWw
     pub fn warm(self: *ThreadPool, count: u14) void {
-        var sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+        var sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
         if (sync.spawned >= count)
             return;
 
@@ -414,8 +414,8 @@ pub const ThreadPool = struct {
             sync = @as(Sync, @bitCast(self.sync.tryCompareAndSwap(
                 @as(u32, @bitCast(sync)),
                 @as(u32, @bitCast(new_sync)),
-                .Release,
-                .Monotonic,
+                .release,
+                .monotonic,
             ) orelse break));
             const spawn_config = if (builtin.os.tag.isDarwin())
                 // stack size must be a multiple of page_size
@@ -430,7 +430,7 @@ pub const ThreadPool = struct {
     }
 
     noinline fn notifySlow(self: *ThreadPool, is_waking: bool) void {
-        var sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+        var sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
         while (sync.state != .shutdown) {
             const can_wake = is_waking or (sync.state == .pending);
             if (is_waking) {
@@ -455,8 +455,8 @@ pub const ThreadPool = struct {
             sync = @as(Sync, @bitCast(self.sync.tryCompareAndSwap(
                 @as(u32, @bitCast(sync)),
                 @as(u32, @bitCast(new_sync)),
-                .Release,
-                .Monotonic,
+                .release,
+                .monotonic,
             ) orelse {
                 // We signaled to notify an idle thread
                 if (can_wake and sync.idle > 0) {
@@ -485,7 +485,7 @@ pub const ThreadPool = struct {
     noinline fn wait(self: *ThreadPool, _is_waking: bool) error{Shutdown}!bool {
         var is_idle = false;
         var is_waking = _is_waking;
-        var sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+        var sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
 
         while (true) {
             if (sync.state == .shutdown) return error.Shutdown;
@@ -506,7 +506,7 @@ pub const ThreadPool = struct {
                     @as(u32, @bitCast(sync)),
                     @as(u32, @bitCast(new_sync)),
                     .Acquire,
-                    .Monotonic,
+                    .monotonic,
                 ) orelse {
                     return is_waking or (sync.state == .signaled);
                 }));
@@ -519,8 +519,8 @@ pub const ThreadPool = struct {
                 sync = @as(Sync, @bitCast(self.sync.tryCompareAndSwap(
                     @as(u32, @bitCast(sync)),
                     @as(u32, @bitCast(new_sync)),
-                    .Monotonic,
-                    .Monotonic,
+                    .monotonic,
+                    .monotonic,
                 ) orelse {
                     is_waking = false;
                     is_idle = true;
@@ -532,14 +532,14 @@ pub const ThreadPool = struct {
                 }
 
                 self.idle_event.wait();
-                sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+                sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
             }
         }
     }
 
     /// Marks the thread pool as shutdown
     pub noinline fn shutdown(self: *ThreadPool) void {
-        var sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+        var sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
         while (sync.state != .shutdown) {
             var new_sync = sync;
             new_sync.notified = true;
@@ -550,8 +550,8 @@ pub const ThreadPool = struct {
             sync = @as(Sync, @bitCast(self.sync.tryCompareAndSwap(
                 @as(u32, @bitCast(sync)),
                 @as(u32, @bitCast(new_sync)),
-                .AcqRel,
-                .Monotonic,
+                .acq_rel,
+                .monotonic,
             ) orelse {
                 // Wake up any threads sleeping on the idle_event.
                 // TODO: I/O polling notification here.
@@ -563,14 +563,14 @@ pub const ThreadPool = struct {
 
     fn register(noalias self: *ThreadPool, noalias thread: *Thread) void {
         // Push the thread onto the threads stack in a lock-free manner.
-        var threads = self.threads.load(.Monotonic);
+        var threads = self.threads.load(.monotonic);
         while (true) {
             thread.next = threads;
             threads = self.threads.tryCompareAndSwap(
                 threads,
                 thread,
-                .Release,
-                .Monotonic,
+                .release,
+                .monotonic,
             ) orelse break;
         }
     }
@@ -578,7 +578,7 @@ pub const ThreadPool = struct {
     pub fn setThreadContext(noalias pool: *ThreadPool, ctx: ?*anyopaque) void {
         pool.threadpool_context = ctx;
 
-        var thread = pool.threads.load(.Monotonic) orelse return;
+        var thread = pool.threads.load(.monotonic) orelse return;
         thread.ctx = pool.threadpool_context;
         while (thread.next) |next| {
             next.ctx = pool.threadpool_context;
@@ -589,7 +589,7 @@ pub const ThreadPool = struct {
     fn unregister(noalias self: *ThreadPool, noalias maybe_thread: ?*Thread) void {
         // Un-spawn one thread, either due to a failed OS thread spawning or the thread is exiting.
         const one_spawned = @as(u32, @bitCast(Sync{ .spawned = 1 }));
-        const sync = @as(Sync, @bitCast(self.sync.fetchSub(one_spawned, .Release)));
+        const sync = @as(Sync, @bitCast(self.sync.fetchSub(one_spawned, .release)));
         assert(sync.spawned > 0);
 
         // The last thread to exit must wake up the thread pool join()er
@@ -611,10 +611,10 @@ pub const ThreadPool = struct {
 
     fn join(self: *ThreadPool) void {
         // Wait for the thread pool to be shutdown() then for all threads to enter a joinable state
-        var sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+        var sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
         if (!(sync.state == .shutdown and sync.spawned == 0)) {
             self.join_event.wait();
-            sync = @as(Sync, @bitCast(self.sync.load(.Monotonic)));
+            sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
         }
 
         assert(sync.state == .shutdown);
@@ -668,7 +668,7 @@ pub const ThreadPool = struct {
                         thread_pool.notify(is_waking);
                     is_waking = false;
 
-                    const task = @fieldParentPtr(Task, "node", result.node);
+                    const task: Task = @fieldParentPtr("node", result.node);
                     (task.callback)(task);
                 }
 
@@ -680,7 +680,7 @@ pub const ThreadPool = struct {
             var consumer = self.idle_queue.tryAcquireConsumer() catch return;
             defer self.idle_queue.releaseConsumer(consumer);
             while (self.idle_queue.pop(&consumer)) |node| {
-                const task = @fieldParentPtr(Task, "node", node);
+                const task: Task = @fieldParentPtr("node", node);
                 (task.callback)(task);
             }
         }
@@ -707,7 +707,7 @@ pub const ThreadPool = struct {
             }
 
             // Then try work stealing from other threads
-            var num_threads: u32 = @as(Sync, @bitCast(thread_pool.sync.load(.Monotonic))).spawned;
+            var num_threads: u32 = @as(Sync, @bitCast(thread_pool.sync.load(.monotonic))).spawned;
             while (num_threads > 0) : (num_threads -= 1) {
                 // Traverse the stack of registered threads on the thread pool
                 const target = self.target orelse thread_pool.threads.load(.Acquire) orelse unreachable;
@@ -749,7 +749,7 @@ pub const ThreadPool = struct {
         /// or wait for the event to be shutdown entirely
         noinline fn wait(self: *Event) void {
             var acquire_with: u32 = EMPTY;
-            var state = self.state.load(.Monotonic);
+            var state = self.state.load(.monotonic);
 
             while (true) {
                 // If we're shutdown then exit early.
@@ -767,7 +767,7 @@ pub const ThreadPool = struct {
                         state,
                         acquire_with,
                         .Acquire,
-                        .Monotonic,
+                        .monotonic,
                     ) orelse return;
                     continue;
                 }
@@ -777,8 +777,8 @@ pub const ThreadPool = struct {
                     state = self.state.tryCompareAndSwap(
                         state,
                         WAITING,
-                        .Monotonic,
-                        .Monotonic,
+                        .monotonic,
+                        .monotonic,
                     ) orelse break :blk;
                     continue;
                 }
@@ -791,7 +791,7 @@ pub const ThreadPool = struct {
                 // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all threads are awoken.
                 // This unfortunately results in the last notify() or shutdown() doing an extra futex wake but that's fine.
                 Futex.wait(&self.state, WAITING);
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 acquire_with = WAITING;
             }
         }
@@ -801,7 +801,7 @@ pub const ThreadPool = struct {
         noinline fn waitFor(self: *Event, timeout: usize) void {
             _ = timeout;
             var acquire_with: u32 = EMPTY;
-            var state = self.state.load(.Monotonic);
+            var state = self.state.load(.monotonic);
 
             while (true) {
                 // If we're shutdown then exit early.
@@ -819,7 +819,7 @@ pub const ThreadPool = struct {
                         state,
                         acquire_with,
                         .Acquire,
-                        .Monotonic,
+                        .monotonic,
                     ) orelse return;
                     continue;
                 }
@@ -829,8 +829,8 @@ pub const ThreadPool = struct {
                     state = self.state.tryCompareAndSwap(
                         state,
                         WAITING,
-                        .Monotonic,
-                        .Monotonic,
+                        .monotonic,
+                        .monotonic,
                     ) orelse break :blk;
                     continue;
                 }
@@ -843,7 +843,7 @@ pub const ThreadPool = struct {
                 // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all threads are awoken.
                 // This unfortunately results in the last notify() or shutdown() doing an extra futex wake but that's fine.
                 Futex.wait(&self.state, WAITING);
-                state = self.state.load(.Monotonic);
+                state = self.state.load(.monotonic);
                 acquire_with = WAITING;
             }
         }
@@ -863,7 +863,7 @@ pub const ThreadPool = struct {
         fn wake(self: *Event, release_with: u32, wake_threads: u32) void {
             // Update the Event to notify it with the new `release_with` state (either NOTIFIED or SHUTDOWN).
             // Release barrier to ensure any operations before this are this to happen before the wait() in the other threads.
-            const state = self.state.swap(release_with, .Release);
+            const state = self.state.swap(release_with, .release);
 
             // Only wake threads sleeping in futex if the state is WAITING.
             // Avoids unnecessary wake ups.
@@ -897,7 +897,7 @@ pub const ThreadPool = struct {
             }
 
             fn push(noalias self: *Queue, list: List) void {
-                var stack = self.stack.load(.Monotonic);
+                var stack = self.stack.load(.monotonic);
                 while (true) {
                     // Attach the list to the stack (pt. 1)
                     list.tail.next = @as(?*Node, @ptrFromInt(stack & PTR_MASK));
@@ -912,14 +912,14 @@ pub const ThreadPool = struct {
                     stack = self.stack.tryCompareAndSwap(
                         stack,
                         new_stack,
-                        .Release,
-                        .Monotonic,
+                        .release,
+                        .monotonic,
                     ) orelse break;
                 }
             }
 
             fn tryAcquireConsumer(self: *Queue) error{ Empty, Contended }!?*Node {
-                var stack = self.stack.load(.Monotonic);
+                var stack = self.stack.load(.monotonic);
                 while (true) {
                     if (stack & IS_CONSUMING != 0)
                         return error.Contended; // The queue already has a consumer.
@@ -939,7 +939,7 @@ pub const ThreadPool = struct {
                         stack,
                         new_stack,
                         .Acquire,
-                        .Monotonic,
+                        .monotonic,
                     ) orelse return self.cache orelse @as(*Node, @ptrFromInt(stack & PTR_MASK));
                 }
             }
@@ -954,7 +954,7 @@ pub const ThreadPool = struct {
                 // Release the consumer with a release barrier to ensure cache/node accesses
                 // happen before the consumer was released and before the next consumer starts using the cache.
                 self.cache = consumer;
-                const stack = self.stack.fetchSub(remove, .Release);
+                const stack = self.stack.fetchSub(remove, .release);
                 assert(stack & remove != 0);
             }
 
@@ -966,7 +966,7 @@ pub const ThreadPool = struct {
                 }
 
                 // Load the stack to see if there was anything pushed that we could grab.
-                var stack = self.stack.load(.Monotonic);
+                var stack = self.stack.load(.monotonic);
                 assert(stack & IS_CONSUMING != 0);
                 if (stack & PTR_MASK == 0) {
                     return null;
@@ -997,7 +997,7 @@ pub const ThreadPool = struct {
             }
 
             fn push(noalias self: *Buffer, noalias list: *List) error{Overflow}!void {
-                var head = self.head.load(.Monotonic);
+                var head = self.head.load(.monotonic);
                 var tail = self.tail.loadUnchecked(); // we're the only thread that can change this
 
                 while (true) {
@@ -1017,12 +1017,12 @@ pub const ThreadPool = struct {
                         }
 
                         // Release barrier synchronizes with Acquire loads for steal()ers to see the array writes.
-                        self.tail.store(tail, .Release);
+                        self.tail.store(tail, .release);
 
                         // Update the list with the nodes we pushed to the buffer and try again if there's more.
                         list.head = nodes orelse return;
                         std.atomic.spinLoopHint();
-                        head = self.head.load(.Monotonic);
+                        head = self.head.load(.monotonic);
                         continue;
                     }
 
@@ -1034,7 +1034,7 @@ pub const ThreadPool = struct {
                         head,
                         head +% migrate,
                         .Acquire,
-                        .Monotonic,
+                        .monotonic,
                     ) orelse {
                         // Link the migrated Nodes together
                         const first = self.array[head % capacity].loadUnchecked();
@@ -1057,12 +1057,12 @@ pub const ThreadPool = struct {
             }
 
             fn pop(self: *Buffer) ?*Node {
-                var head = self.head.load(.Monotonic);
-                var tail = self.tail.loadUnchecked(); // we're the only thread that can change this
+                var head = self.head.load(.monotonic);
+                const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
 
                 while (true) {
                     // Quick sanity check and return null when not empty
-                    var size = tail -% head;
+                    const size = tail -% head;
                     assert(size <= capacity);
                     if (size == 0) {
                         return null;
@@ -1074,7 +1074,7 @@ pub const ThreadPool = struct {
                         head,
                         head +% 1,
                         .Acquire,
-                        .Monotonic,
+                        .monotonic,
                     ) orelse return self.array[head % capacity].loadUnchecked();
                 }
             }
@@ -1088,7 +1088,7 @@ pub const ThreadPool = struct {
                 var consumer = queue.tryAcquireConsumer() catch return null;
                 defer queue.releaseConsumer(consumer);
 
-                const head = self.head.load(.Monotonic);
+                const head = self.head.load(.monotonic);
                 const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
 
                 const size = tail -% head;
@@ -1113,7 +1113,7 @@ pub const ThreadPool = struct {
 
                 // Update the array tail with the nodes we pushed to it.
                 // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.
-                if (pushed > 0) self.tail.store(tail +% pushed, .Release);
+                if (pushed > 0) self.tail.store(tail +% pushed, .release);
                 return Stole{
                     .node = node,
                     .pushed = pushed > 0,
@@ -1121,7 +1121,7 @@ pub const ThreadPool = struct {
             }
 
             fn steal(noalias self: *Buffer, noalias buffer: *Buffer) ?Stole {
-                const head = self.head.load(.Monotonic);
+                const head = self.head.load(.monotonic);
                 const tail = self.tail.loadUnchecked(); // we're the only thread that can change this
 
                 const size = tail -% head;
@@ -1161,8 +1161,8 @@ pub const ThreadPool = struct {
                     _ = buffer.head.compareAndSwap(
                         buffer_head,
                         buffer_head +% steal_size,
-                        .AcqRel,
-                        .Monotonic,
+                        .acq_rel,
+                        .monotonic,
                     ) orelse {
                         // Pop one from the nodes we stole as we'll be returning it
                         const pushed = steal_size - 1;
@@ -1170,7 +1170,7 @@ pub const ThreadPool = struct {
 
                         // Update the array tail with the nodes we pushed to it.
                         // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.
-                        if (pushed > 0) self.tail.store(tail +% pushed, .Release);
+                        if (pushed > 0) self.tail.store(tail +% pushed, .release);
                         return Stole{
                             .node = node,
                             .pushed = pushed > 0,

@@ -33,7 +33,7 @@ pub const Ping = struct {
 
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
         const sig = try keypair.sign(&token, null);
-        var self = Self{
+        const self = Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
             .signature = Signature.init(sig.toBytes()),
@@ -151,7 +151,7 @@ pub const PingCache = struct {
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
     pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
-        var peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
+        const peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
             if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
                 _ = self.pings.pop(peer_and_addr);
@@ -173,15 +173,15 @@ pub const PingCache = struct {
             // to prevent integer overflow
             assert(now.order(earlier) != .lt);
 
-            var elapsed: u64 = now.since(earlier);
+            const elapsed: u64 = now.since(earlier);
             if (elapsed < self.rate_limit_delay_ns) {
                 return null;
             }
         }
         var rng = DefaultPrng.init(getWallclockMs());
-        var ping = Ping.random(rng.random(), keypair) catch return null;
+        const ping = Ping.random(rng.random(), keypair) catch return null;
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
-        var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
+        const hash = Hash.generateSha256Hash(token_with_prefix[0..]);
         _ = self.pending_cache.put(hash, peer_and_addr);
         _ = self.pings.put(peer_and_addr, now);
         return ping;
@@ -197,7 +197,7 @@ pub const PingCache = struct {
             // to prevent integer overflow
             assert(now.order(last_pong_time) != .lt);
 
-            var age = now.since(last_pong_time);
+            const age = now.since(last_pong_time);
 
             // if age is greater than time-to-live, remove pong
             if (age > self.ttl_ns) {
@@ -219,13 +219,13 @@ pub const PingCache = struct {
         our_keypair: KeyPair,
         peers: []ContactInfo,
     ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
-        var now = std.time.Instant.now() catch @panic("time not supported by OS!");
+        const now = std.time.Instant.now() catch @panic("time not supported by OS!");
         var valid_peers = std.ArrayList(usize).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
             if (peer.getSocket(socket_tag.GOSSIP)) |gossip_addr| {
-                var result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
+                const result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
                 }
@@ -251,23 +251,23 @@ test "gossip.ping_pong: PingCache works" {
     var ping_cache = try PingCache.init(testing.allocator, 10_000, 1000, 1024);
     defer ping_cache.deinit();
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
-    var the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng), .socket_addr = SocketAddr.UNSPECIFIED };
-    var now1 = try std.time.Instant.now();
+    const the_node = PubkeyAndSocketAddr{ .pubkey = Pubkey.random(rng), .socket_addr = SocketAddr.UNSPECIFIED };
+    const now1 = try std.time.Instant.now();
     var our_kp = try KeyPair.create(null);
 
-    var ping = ping_cache.maybePing(
+    const ping = ping_cache.maybePing(
         now1,
         the_node,
         &our_kp,
     );
 
-    var now2 = try std.time.Instant.now();
+    const now2 = try std.time.Instant.now();
 
-    var resp = ping_cache.check(now2, the_node, &our_kp);
+    const resp = ping_cache.check(now2, the_node, &our_kp);
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 

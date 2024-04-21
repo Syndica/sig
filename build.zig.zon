@@ -8,36 +8,36 @@
     },
     .dependencies = .{
         .@"base58-zig" = .{
-            .url = "https://github.com/ultd/base58-zig/archive/fe23d156211edbfcede019970d1619184aadb83b.tar.gz",
-            .hash = "1220227d746ee3f156059a22b0044c6d8ad062a7cfb15b060cc2e7cbae4d0631f34e",
+            .url = "https://github.com/ultd/base58-zig/archive/7cec0723c99d713149ad4e875f888918d2687ca6.tar.gz",
+            .hash = "1220995cd000a5d0f8595b119de29573769531c002fe3448a2c69fa6307bd1332620",
         },
         .@"zig-network" = .{
-            .url = "https://github.com/MasterQ32/zig-network/archive/02ffa0fc310ff0746f06c9bfb73b008ce4fca200.tar.gz",
-            .hash = "1220fe0d4ca564aa15f3fd7f9f84ba04e031bb70c3a1432257e0d35c74b183550c24",
+            .url = "https://github.com/MasterQ32/zig-network/archive/2caffd712f57f29abb5e41a453cd1c2129517b05.tar.gz",
+            .hash = "122095b1af33a2fbe87af9365516e6c2d21f9f5a6725b539e03bcc6ed8df3c012f39",
         },
         .@"zig-cli" = .{
-            .url = "https://github.com/sam701/zig-cli/archive/ea92821a797bdefb5df41ce602f8c7f387bcfb93.tar.gz",
-            .hash = "122044525df0d1896556da08c5ed50b456a672a52ab86a65834bb1e27d3ae7a847f2",
+            .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
+            .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
         },
         .getty = .{
-            .url = "https://github.com/getty-zig/getty/archive/5b0e750d92ee4ef8e46ad743bb8ced63723acd00.tar.gz",
-            .hash = "12209398657d260abcd6dae946d8da4cd3057b8c7990608476a9f8011aae570d2ebb",
+            .url = "https://github.com/getty-zig/getty/archive/805c4be6eacb988c968911a1cdfd585a8f54ae00.tar.gz",
+            .hash = "1220a5465b323d39df3cdfdc2a77d086d5079d142de48044da1b1feac87531fd6f1c",
         },
         .httpz = .{
-            .url = "https://github.com/karlseguin/http.zig/archive/7a751549a751d9b45952037abdb127b3225b2ac1.tar.gz",
-            .hash = "122004f74adf46001fe9129d8cec54bd4a98895ce89f0897790e13b60fa99e527b99",
+            .url = "https://github.com/karlseguin/http.zig/archive/d05b9889382d240c826c7654a999e4da515bd20a.tar.gz",
+            .hash = "1220833d40f1767fa46b0efc4ae1af9bd5880a8e6fe7a66ee0215be916263f149e40",
         },
         .zigdig = .{
-            .url = "https://github.com/lun-4/zigdig/archive/2ec407ec3c7f347e747717977958e9ba339eb82f.tar.gz",
-            .hash = "1220dfdb3089dfe9a4e4bc1226fcff08d91d0c0853f287d98d8b81270da251790331",
+            .url = "https://github.com/dnut/zigdig/archive/cfb8c055d66dc2afcb6a1c6d4f1bf4fefb6e5479.tar.gz",
+            .hash = "122079a1a1b7f0b4419814c4e41f412c4829e85f09dd459327d814508f29f22678fb",
         },
         .zstd = .{
-            .url = "https://github.com/Syndica/zstd.zig/archive/164d0f8edcf981c5d070f0b6fd0e343ba3abeb92.tar.gz",
-            .hash = "122065be99695710b821bc8d886062ee69e9f97e5673e2a44f4faf00e2cf4b5911db",
+            .url = "https://github.com/Syndica/zstd.zig/archive/e2531ba732422b61df927e4aec26681928bc4ea9.tar.gz",
+            .hash = "12207186b1dad9f4cf900aee680c086a6a37c1a66089512cd19518f51746a3250b3b",
         },
         .curl = .{
-            .url = "https://github.com/Syndica/zig-curl/archive/a40369ebf609d207bb8f1194347a09e5022c0764.tar.gz",
-            .hash = "1220d6c126fc7155cf82cb860ed914bfa4d8128576618599baf860e044a67bd3e8ad",
+            .url = "https://github.com/jiacai2050/zig-curl/archive/7b1e1c6adb1daca48bbae6bd18fc1386dc6076ab.tar.gz",
+            .hash = "1220f2f863742c19fec9381537083da27519a7e638ce690973b34faf89f8f2b32729",
         },
     },
 }

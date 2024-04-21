@@ -4,7 +4,7 @@ const Logger = @import("../trace/log.zig").Logger;
 
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
-const AtomicBool = std.atomic.Atomic(bool);
+const AtomicBool = std.atomic.Value(bool);
 const ArrayList = std.ArrayList;
 
 const IDENTITY_KEYPAIR_DIR = "/.sig";
@@ -13,7 +13,7 @@ const IDENTITY_KEYPAIR_PATH = "/identity.key";
 pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: Logger) !Keypair {
     const home_dir = try std.process.getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home_dir);
-    var path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR, IDENTITY_KEYPAIR_PATH });
+    const path = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR, IDENTITY_KEYPAIR_PATH });
 
     if (std.fs.openFileAbsolute(path, .{})) |file| {
         try file.seekTo(0);
@@ -21,14 +21,14 @@ pub fn getOrInitIdentity(allocator: std.mem.Allocator, logger: Logger) !Keypair 
         var buf: [SecretKey.encoded_length]u8 = undefined;
         _ = try file.readAll(&buf);
 
-        var sk = try SecretKey.fromBytes(buf);
+        const sk = try SecretKey.fromBytes(buf);
 
         return try Keypair.fromSecretKey(sk);
     } else |err| {
         switch (err) {
             error.FileNotFound => {
                 // create ~/.sig dir
-                var dir = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR });
+                const dir = try std.mem.concat(allocator, u8, &[_][]const u8{ home_dir, IDENTITY_KEYPAIR_DIR });
                 std.fs.makeDirAbsolute(dir) catch {
                     logger.debugf("sig directory already exists...", .{});
                 };

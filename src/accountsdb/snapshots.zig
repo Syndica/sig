@@ -654,7 +654,7 @@ pub const StatusCache = struct {
         var status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
 
-        var status_cache = try bincode.read(
+        const status_cache = try bincode.read(
             allocator,
             StatusCache,
             status_cache_file.reader(),
@@ -730,7 +730,7 @@ pub const FullSnapshotFileInfo = struct {
         var ext_parts = std.mem.splitSequence(u8, filename, ".");
         const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
 
-        var extn = ext_parts.rest();
+        const extn = ext_parts.rest();
         // only support tar.zst
         if (!std.mem.eql(u8, extn, "tar.zst"))
             return error.InvalidSnapshotPath;
@@ -743,7 +743,7 @@ pub const FullSnapshotFileInfo = struct {
         const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
         const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
 
-        var hash = parts.next() orelse return error.InvalidSnapshotPath;
+        const hash = parts.next() orelse return error.InvalidSnapshotPath;
 
         return .{ .filename = filename, .slot = slot, .hash = hash };
     }
@@ -768,7 +768,7 @@ pub const IncrementalSnapshotFileInfo = struct {
         var ext_parts = std.mem.splitSequence(u8, filename, ".");
         const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
 
-        var extn = ext_parts.rest();
+        const extn = ext_parts.rest();
         // only support tar.zst
         if (!std.mem.eql(u8, extn, "tar.zst"))
             return error.InvalidSnapshotPath;
@@ -788,7 +788,7 @@ pub const IncrementalSnapshotFileInfo = struct {
         const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
         const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
 
-        var hash = parts.next() orelse return error.InvalidSnapshotPath;
+        const hash = parts.next() orelse return error.InvalidSnapshotPath;
 
         return .{
             .filename = filename,
@@ -810,7 +810,7 @@ pub const SnapshotFiles = struct {
         var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
         defer snapshot_dir_iter.close();
 
-        var files = try readDirectory(allocator, snapshot_dir_iter);
+        const files = try readDirectory(allocator, snapshot_dir_iter);
         var filenames = files.filenames;
         defer {
             filenames.deinit();
@@ -896,7 +896,7 @@ pub const AllSnapshotFields = struct {
             .{ snapshot_dir_str, "snapshots", files.full_snapshot.slot, files.full_snapshot.slot },
         );
 
-        var full_fields = try SnapshotFields.readFromFilePath(
+        const full_fields = try SnapshotFields.readFromFilePath(
             allocator,
             full_metadata_path,
         );
@@ -959,7 +959,7 @@ pub const AllSnapshotFields = struct {
                 continue;
             }
 
-            var slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(slot);
+            const slot_entry = try self.full.accounts_db_fields.file_map.getOrPut(slot);
             if (slot_entry.found_existing) {
                 std.debug.panic("invalid incremental snapshot: slot {d} is in both full and incremental snapshots\n", .{slot});
             } else {
@@ -1002,11 +1002,11 @@ pub fn parallelUnpackZstdTarBall(
 
     const file_stat = try file.stat();
     const file_size: u64 = @intCast(file_stat.size);
-    var memory = try std.os.mmap(
+    const memory = try std.posix.mmap(
         null,
         file_size,
-        std.os.PROT.READ,
-        std.os.MAP.SHARED,
+        std.posix.PROT.READ,
+        std.posix.MAP.SHARED,
         file.handle,
         0,
     );
