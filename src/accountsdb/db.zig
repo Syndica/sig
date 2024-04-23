@@ -40,6 +40,7 @@ const RefMemoryLinkedList = _accounts_index.RefMemoryLinkedList;
 const AccountRef = _accounts_index.AccountRef;
 const DiskMemoryAllocator = _accounts_index.DiskMemoryAllocator;
 
+pub const DB_PROGRESS_UPDATES_NS = 5 * std.time.ns_per_s;
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
@@ -319,6 +320,8 @@ pub const AccountsDB = struct {
         // NOTE: might need to be longer depending on abs path length
         var buf: [1024]u8 = undefined;
         var timer = try std.time.Timer.start();
+        var progress_timer = try std.time.Timer.start();
+
         for (file_names, 1..) |file_name, file_count| {
             // parse "{slot}.{id}" from the file_name
             var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
@@ -360,8 +363,16 @@ pub const AccountsDB = struct {
             const file_id_u32: u32 = @intCast(accounts_file_id);
             file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
 
-            if (file_count % 100 == 0 or (file_names.len - file_count) < 100) {
-                printTimeEstimate(&timer, file_names.len, file_count, "reading account files", null);
+            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+                printTimeEstimate(
+                    self.logger,
+                    &timer,
+                    file_names.len,
+                    file_count,
+                    "loading account files",
+                    null,
+                );
+                progress_timer.reset();
             }
         }
 
@@ -387,9 +398,17 @@ pub const AccountsDB = struct {
         // compute how many account_references for each pubkey
         for (refs_ptr.items, 1..) |*ref, ref_count| {
             _ = self.account_index.indexRefIfNotDuplicateSlot(ref);
-            // NOTE: PERF: make sure this doesnt lead to degration due to stderr locks
-            if (ref_count % 1_000_000 == 0 or (refs_ptr.items.len - ref_count) < 50_000) {
-                printTimeEstimate(&timer, refs_ptr.items.len, ref_count, "generating accounts index", null);
+
+            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+                printTimeEstimate(
+                    self.logger,
+                    &timer,
+                    refs_ptr.items.len,
+                    ref_count,
+                    "building index",
+                    null,
+                );
+                progress_timer.reset();
             }
         }
     }
@@ -405,6 +424,7 @@ pub const AccountsDB = struct {
             self.allocator,
             combineThreadIndexesMultiThread,
             .{
+                self.logger,
                 &self.account_index,
                 thread_dbs,
             },
@@ -449,6 +469,7 @@ pub const AccountsDB = struct {
     /// combines multiple thread indexes into the given index.
     /// each bin is also sorted by pubkey.
     pub fn combineThreadIndexesMultiThread(
+        logger: Logger,
         index: *AccountIndex,
         thread_dbs: []AccountsDB,
         // task specific
@@ -459,6 +480,7 @@ pub const AccountsDB = struct {
         _ = thread_id;
         const total_bins = bin_end_index - bin_start_index;
         var timer = try std.time.Timer.start();
+        var progress_timer = try std.time.Timer.start();
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
             const index_bin = index.getBin(bin_index);
@@ -485,7 +507,16 @@ pub const AccountsDB = struct {
                 }
             }
 
-            printTimeEstimate(&timer, total_bins, iteration_count, "combining thread indexes", null);
+            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+                printTimeEstimate(
+                    logger,
+                    &timer,
+                    total_bins,
+                    iteration_count,
+                    "combining thread indexes",
+                    null,
+                );
+            }
         }
     }
 
@@ -670,6 +701,7 @@ pub const AccountsDB = struct {
 
         var local_total_lamports: u64 = 0;
         var timer = try std.time.Timer.start();
+        var progress_timer = try std.time.Timer.start();
         for (thread_bins, 1..) |*bin_ptr, count| {
             // get and sort pubkeys in bin
             const bin_refs = bin_ptr;
@@ -721,7 +753,17 @@ pub const AccountsDB = struct {
                 local_total_lamports += lamports;
             }
 
-            printTimeEstimate(&timer, thread_bins.len, count, "gathering account hashes", null);
+            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+                printTimeEstimate(
+                    self.logger,
+                    &timer,
+                    thread_bins.len,
+                    count,
+                    "gathering account hashes",
+                    null,
+                );
+                progress_timer.reset();
+            }
         }
         total_lamports.* = local_total_lamports;
     }
@@ -989,6 +1031,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     // unpack both snapshots to get the acccount files
     try parallelUnpackZstdTarBall(
         allocator,
+        .noop,
         "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
         dir,
         1,
@@ -996,6 +1039,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     );
     try parallelUnpackZstdTarBall(
         allocator,
+        .noop,
         "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
         dir,
         1,
@@ -1136,7 +1180,6 @@ test "core.accounts_db: load clock sysvar" {
         .leader_schedule_epoch = 1,
         .unix_timestamp = 1702587915,
     };
-    std.debug.print("clock: {}\n", .{clock});
     try std.testing.expectEqual(clock, expected_clock);
 }
 

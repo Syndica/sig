@@ -4,6 +4,9 @@ const ThreadPoolTask = @import("../utils/thread.zig").ThreadPoolTask;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
 
+/// Unpack tarball is related to accounts_db so we reuse it's progress bar
+const TAR_PROGRESS_UPDATES_NS = @import("../accountsdb/db.zig").DB_PROGRESS_UPDATES_NS;
+
 const Options = std.tar.Options;
 const Header = std.tar.Header;
 
@@ -58,8 +61,11 @@ pub const UnTarEntry = struct {
 /// interface struct for queueing untar tasks
 pub const UnTarTask = ThreadPoolTask(UnTarEntry);
 
+const Logger = @import("../trace/log.zig").Logger;
+
 pub fn parallelUntarToFileSystem(
     allocator: std.mem.Allocator,
+    logger: Logger,
     dir: std.fs.Dir,
     reader: anytype,
     n_threads: usize,
@@ -73,11 +79,12 @@ pub fn parallelUntarToFileSystem(
         thread_pool.deinit();
     }
 
-    std.debug.print("using {d} threads to unpack snapshot\n", .{n_threads});
+    logger.infof("using {d} threads to unpack snapshot\n", .{n_threads});
     var tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
 
     var timer = try std.time.Timer.start();
+    var progress_timer = try std.time.Timer.start();
     var file_count: usize = 0;
     const strip_components: u32 = 0;
     loop: while (true) {
@@ -114,8 +121,17 @@ pub fn parallelUntarToFileSystem(
                     try dir.makePath(dir_name);
                 }
 
-                if (n_files_estimate) |n_files| {
-                    printTimeEstimate(&timer, n_files, file_count, "untar_files", null);
+                if (n_files_estimate) |total_n_files| {
+                    if (progress_timer.read() > TAR_PROGRESS_UPDATES_NS) {
+                        printTimeEstimate(
+                            logger,
+                            &timer,
+                            total_n_files,
+                            file_count,
+                            "untar files to disk",
+                            null,
+                        );
+                    }
                 }
                 file_count += 1;
 
