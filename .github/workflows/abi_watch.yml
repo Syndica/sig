@@ -5,7 +5,7 @@ name: Python application
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "x19/abi_watch_cron", "main" ]
 
 permissions:
   contents: read
