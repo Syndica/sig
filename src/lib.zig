@@ -41,7 +41,8 @@ pub const gossip = struct {
 };
 
 pub const bloom = struct {
-    pub usingnamespace @import("bloom/bitvec.zig");
+    pub usingnamespace @import("bloom/bit_vec.zig");
+    pub usingnamespace @import("bloom/bit_set.zig");
     pub usingnamespace @import("bloom/bloom.zig");
 };
 

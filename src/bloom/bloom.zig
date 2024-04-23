@@ -1,11 +1,11 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const DynamicBitSet = std.bit_set.DynamicBitSet;
-const BitVec = @import("bitvec.zig").BitVec;
+const DynamicArrayBitSet = @import("bit_set.zig").DynamicArrayBitSet;
+const BitVec = @import("bit_vec.zig").BitVec;
 const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
 
 const bincode = @import("../bincode/bincode.zig");
-const BitVecConfig = @import("bitvec.zig").BitVecConfig;
+const BitVecConfig = @import("bit_vec.zig").BitVecConfig;
 
 const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
@@ -15,11 +15,11 @@ const RndGen = std.rand.DefaultPrng;
 /// A bloom filter whose bitset is made up of u64 blocks
 pub const Bloom = struct {
     keys: ArrayList(u64),
-    bits: DynamicBitSet,
+    bits: DynamicArrayBitSet(u64),
     num_bits_set: u64,
 
     pub const @"!bincode-config:keys" = ArrayListConfig(u64);
-    pub const @"!bincode-config:bits" = BitVecConfig();
+    pub const @"!bincode-config:bits" = BitVecConfig(u64);
 
     const Self = @This();
 
@@ -36,19 +36,16 @@ pub const Bloom = struct {
                 break :blk std.math.pow(u64, 2, std.math.log2(n_bits));
             }
         };
-        // if (bitset_bits != n_bits) {
-        //     std.debug.print("rounding n_bits from {d} to {d}...\n", .{ n_bits, bitset_bits });
-        // }
 
         return Self{
             .keys = keys orelse ArrayList(u64).init(alloc),
-            .bits = DynamicBitSet.initEmpty(alloc, bitset_bits) catch unreachable,
+            .bits = DynamicArrayBitSet(u64).initEmpty(alloc, bitset_bits) catch unreachable,
             .num_bits_set = 0,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.bits.deinit();
+        self.bits.deinit(self.keys.allocator);
         self.keys.deinit();
     }
 
@@ -150,8 +147,6 @@ test "bloom.bloom: serializes/deserializes correctly" {
 
     // allocate some memory to make sure were cleaning up too
     try deserialized.addKey(10);
-    try deserialized.bits.resize(100, true);
-
     try testing.expect(bloom.num_bits_set == deserialized.num_bits_set);
 }
 
