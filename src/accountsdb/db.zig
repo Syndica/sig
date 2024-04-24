@@ -205,7 +205,12 @@ pub const AccountsDB = struct {
 
         // short path
         if (n_threads == 1) {
-            try self.loadAndVerifyAccountsFiles(accounts_path, filenames.items, ACCOUNTS_PER_FILE_EST);
+            try self.loadAndVerifyAccountsFiles(
+                accounts_path,
+                filenames.items,
+                ACCOUNTS_PER_FILE_EST,
+                true,
+            );
             return;
         }
 
@@ -292,6 +297,7 @@ pub const AccountsDB = struct {
             accounts_dir_path,
             thread_filenames,
             ACCOUNTS_PER_FILE_EST,
+            thread_id == 0,
         );
     }
 
@@ -302,6 +308,8 @@ pub const AccountsDB = struct {
         accounts_dir_path: []const u8,
         file_names: [][]const u8,
         accounts_per_file_est: usize,
+        // when we multithread this function we only want to print on the first thread
+        print_progress: bool,
     ) !void {
         var file_map = &self.storage.file_map;
         try file_map.ensureTotalCapacity(file_names.len);
@@ -363,14 +371,14 @@ pub const AccountsDB = struct {
             const file_id_u32: u32 = @intCast(accounts_file_id);
             file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
 
-            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
                     file_names.len,
                     file_count,
                     "loading account files",
-                    null,
+                    "thread0",
                 );
                 progress_timer.reset();
             }
@@ -399,7 +407,7 @@ pub const AccountsDB = struct {
         for (refs_ptr.items, 1..) |*ref, ref_count| {
             _ = self.account_index.indexRefIfNotDuplicateSlot(ref);
 
-            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -477,10 +485,10 @@ pub const AccountsDB = struct {
         bin_end_index: usize,
         thread_id: usize,
     ) !void {
-        _ = thread_id;
         const total_bins = bin_end_index - bin_start_index;
         var timer = try std.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
+        const print_progress = thread_id == 0;
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
             const index_bin = index.getBin(bin_index);
@@ -507,14 +515,14 @@ pub const AccountsDB = struct {
                 }
             }
 
-            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
                     logger,
                     &timer,
                     total_bins,
                     iteration_count,
                     "combining thread indexes",
-                    null,
+                    "thread0",
                 );
             }
         }
@@ -677,6 +685,7 @@ pub const AccountsDB = struct {
             self.account_index.bins[bin_start_index..bin_end_index],
             &hashes[thread_index],
             &total_lamports[thread_index],
+            thread_index == 0,
         );
     }
 
@@ -688,6 +697,8 @@ pub const AccountsDB = struct {
         thread_bins: []AccountIndex.RefMap,
         hashes: *ArrayList(Hash),
         total_lamports: *u64,
+        // when we multithread this function we only want to print on the first thread
+        print_progress: bool,
     ) !void {
         var total_n_pubkeys: usize = 0;
         for (thread_bins) |*bin| {
@@ -753,14 +764,14 @@ pub const AccountsDB = struct {
                 local_total_lamports += lamports;
             }
 
-            if (progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
                     thread_bins.len,
                     count,
                     "gathering account hashes",
-                    null,
+                    "thread0",
                 );
                 progress_timer.reset();
             }
