@@ -1077,8 +1077,11 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     }
 
     const snapshot = try snapshots.all_fields.collapse();
+
     var logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
+    // logger.spawn();
+
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .storage_cache_size = 10,
