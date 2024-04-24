@@ -373,8 +373,7 @@ fn validator(_: []const []const u8) !void {
         &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
     );
     defer gossip_service.deinit();
-
-    // var gossip_handle = try spawnGossip(&gossip_service);
+    var gossip_handle = try spawnGossip(&gossip_service);
 
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
@@ -471,7 +470,7 @@ fn validator(_: []const []const u8) !void {
 
     logger.infof("accounts-db setup done...", .{});
 
-    // gossip_handle.join();
+    gossip_handle.join();
     repair_handle.join();
     shred_receive_handle.join();
 }
@@ -811,7 +810,6 @@ fn getOrDownloadSnapshots(
 
     var accounts_path_exists = true;
     std.fs.cwd().access(accounts_path, .{}) catch {
-        std.debug.print("{s} does not exist\n", .{accounts_path});
         accounts_path_exists = false;
     };
     const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
