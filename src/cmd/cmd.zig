@@ -151,7 +151,7 @@ var metrics_port_option = cli.Option{
 // accounts-db options
 var n_threads_snapshot_load_option = cli.Option{
     .long_name = "n-threads-snapshot-load",
-    .help = "number of threads to load incremental snapshots: - default: ncpus",
+    .help = "number of threads to load snapshots: - default: ncpus",
     .short_alias = 't',
     .value = cli.OptionValue{ .int = 0 },
     .required = false,
@@ -160,7 +160,7 @@ var n_threads_snapshot_load_option = cli.Option{
 
 var n_threads_snapshot_unpack_option = cli.Option{
     .long_name = "n-threads-snapshot-unpack",
-    .help = "number of threads to unpack incremental snapshots - default: ncpus * 2",
+    .help = "number of threads to unpack snapshots - default: ncpus * 2",
     .short_alias = 'u',
     .value = cli.OptionValue{ .int = 0 },
     .required = false,
@@ -283,6 +283,7 @@ var app = &cli.App{
                 &force_unpack_snapshot_option,
                 &min_snapshot_download_speed_mb_option,
                 &force_new_snapshot_download_option,
+                &trusted_validators_option,
             },
         },
         &cli.Command{
@@ -295,12 +296,13 @@ var app = &cli.App{
             .options = &.{
                 // where to download the snapshot
                 &snapshot_dir_option,
+                // download options
+                &trusted_validators_option,
+                &min_snapshot_download_speed_mb_option,
                 // gossip options
                 &gossip_host.option,
                 &gossip_port_option,
                 &gossip_entrypoints_option,
-                &trusted_validators_option,
-                &min_snapshot_download_speed_mb_option,
             },
         },
     },
