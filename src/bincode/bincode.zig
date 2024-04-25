@@ -116,32 +116,53 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
         .Struct => |info| {
             var data: T = undefined;
 
-            inline for (info.fields) |field| {
-                if (!field.is_comptime) {
-                    if (getFieldConfig(T, field)) |config| {
-                        if (shouldUseDefaultValue(field, config)) |default_value| {
-                            @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-                            continue;
-                        }
+            if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
+                const ElementType = @typeInfo(T.Slice).Pointer.child;
+                const len = try bincode.read(allocator, u64, reader, params);
+                data = try T.initCapacity(allocator, len);
+                for (0..len) |_| {
+                    data.appendAssumeCapacity(try bincode.read(allocator, ElementType, reader, params));
+                }
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
+                const K = std.meta.fieldInfo(T.KV, .key).type;
+                const V = std.meta.fieldInfo(T.KV, .value).type;
+                const len = try bincode.read(allocator, u64, reader, params);
+                var map = T.init(allocator);
+                try map.ensureTotalCapacity(@intCast(len));
+                for (0..len) |_| {
+                    const key = try bincode.read(allocator, K, reader, params);
+                    const value = try bincode.read(allocator, V, reader, params);
+                    map.putAssumeCapacity(key, value);
+                }
+            } else {
+                inline for (info.fields) |field| {
+                    if (!field.is_comptime) {
+                        if (getFieldConfig(T, field)) |config| {
+                            if (shouldUseDefaultValue(field, config)) |default_value| {
+                                @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
+                                continue;
+                            }
 
-                        if (config.deserializer) |deser_fcn| {
-                            @field(data, field.name) = try deser_fcn(allocator, reader, params);
-                            continue;
-                        }
+                            if (config.deserializer) |deser_fcn| {
+                                @field(data, field.name) = try deser_fcn(allocator, reader, params);
+                                continue;
+                            }
 
-                        if (config.default_on_eof) {
-                            const field_type = field.type;
+                            if (config.default_on_eof) {
+                                const field_type = field.type;
 
-                            @field(data, field.name) = bincode.read(allocator, field_type, reader, params) catch {
-                                @field(data, field.name) = @as(*const field_type, @ptrCast(@alignCast(field.default_value))).*;
-                            };
-                            continue;
+                                @field(data, field.name) = bincode.read(allocator, field_type, reader, params) catch {
+                                    @field(data, field.name) = @as(*const field_type, @ptrCast(@alignCast(field.default_value))).*;
+                                };
+                                continue;
+                            }
                         }
+                        errdefer {
+                            std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                        }
+                        @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
                     }
-                    errdefer {
-                        std.debug.print("failed to deserialize field {s}\n", .{field.name});
-                    }
-                    @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
                 }
             }
             return data;
@@ -397,31 +418,37 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
             return;
         },
         .Struct => |info| {
-            // note: need comptime here for it to compile
             if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
-                try bincode.write(writer, @as(u64, data.items.len), params);
-                for (data.items) |element| {
-                    try bincode.write(writer, element, params);
+                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
+                try bincode.write(writer, data.items.len, params);
+                for (data.items) |item| {
+                    try bincode.write(writer, item, params);
                 }
-                return;
-            }
-
-            inline for (info.fields) |field| {
-                if (!field.is_comptime) {
-                    if (getFieldConfig(T, field)) |config| {
-                        if (config.skip) {
-                            continue;
-                        } else if (config.serializer) |ser_fcn| {
-                            try ser_fcn(writer, @field(data, field.name), params);
-                        } else {
-                            try bincode.write(writer, @field(data, field.name), params);
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
+                const len = data.capacity();
+                try bincode.write(writer, len, params);
+                var iter = data.iterator();
+                while (iter.next()) |entry| {
+                    try bincode.write(writer, entry.key_ptr.*, params);
+                    try bincode.write(writer, entry.value_ptr.*, params);
+                }
+            } else {
+                inline for (info.fields) |field| {
+                    if (!field.is_comptime) {
+                        if (getFieldConfig(T, field)) |config| {
+                            if (config.skip) {
+                                continue;
+                            } else if (config.serializer) |ser_fcn| {
+                                try ser_fcn(writer, @field(data, field.name), params);
+                            } else {
+                                try bincode.write(writer, @field(data, field.name), params);
+                            }
                         }
                     }
                 }
             }
 
             return;
-
             // TODO: Doesn't above handle this already?
             // var maybe_err: anyerror!void = {};
             // inline for (info.fields) |field| {

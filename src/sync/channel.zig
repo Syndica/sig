@@ -5,7 +5,6 @@ const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;
 const Mux = @import("mux.zig").Mux;
-const Ordering = std.atomic.Ordering;
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
 pub fn Channel(comptime T: type) type {

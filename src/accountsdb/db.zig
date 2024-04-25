@@ -175,10 +175,12 @@ pub const AccountsDB = struct {
         timer.reset();
 
         // read the account files
-        var accounts_dir = try std.fs.cwd().openIterableDir(accounts_path, .{});
+        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{});
         defer accounts_dir.close();
 
-        var files = try readDirectory(self.allocator, accounts_dir);
+        const accounts_dir_iter = accounts_dir.iterate();
+
+        var files = try readDirectory(self.allocator, accounts_dir_iter);
         const filenames = files.filenames;
         defer {
             files.filenames.deinit();

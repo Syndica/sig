@@ -2,7 +2,6 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
-const Ordering = std.atomic.Ordering;
 
 const Metric = @import("metric.zig").Metric;
 
@@ -143,13 +142,13 @@ pub const Histogram = struct {
 
     /// Increases the global count (used for synchronization), not a count within a shard.
     /// Returns the state from before this operation, which was replaced by this operation.
-    fn incrementCount(self: *@This(), comptime ordering: Ordering) ShardSync {
+    fn incrementCount(self: *@This(), comptime ordering: std.builtin.AtomicOrder) ShardSync {
         return @bitCast(self.shard_sync.fetchAdd(1, ordering));
     }
 
     /// Makes the hot shard cold and vice versa.
     /// Returns the state from before this operation, which was replaced by this operation.
-    fn flipShard(self: *@This(), comptime ordering: Ordering) ShardSync {
+    fn flipShard(self: *@This(), comptime ordering: std.builtin.AtomicOrder) ShardSync {
         const data = self.shard_sync.fetchAdd(@bitCast(ShardSync{ .shard = 1 }), ordering);
         return @bitCast(data);
     }

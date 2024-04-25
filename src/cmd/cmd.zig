@@ -448,9 +448,9 @@ fn validator() !void {
     }
 
     // cli parsing
-    const snapshot_dir_str = snapshot_dir_option.value.string.?;
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_load: u32 = @intCast(n_threads_snapshot_load_option.value.int.?);
+    var n_threads_snapshot_load: u32 = @intCast(config.current.accounts_db.num_threads_snapshot_load);
     if (n_threads_snapshot_load == 0) {
         n_threads_snapshot_load = n_cpus;
     }
@@ -459,9 +459,9 @@ fn validator() !void {
         gpa_allocator,
         logger,
         AccountsDBConfig{
-            .disk_index_path = disk_index_path_option.value.string,
-            .storage_cache_size = @intCast(storage_cache_size_option.value.int.?),
-            .number_of_index_bins = @intCast(number_of_index_bins_option.value.int.?),
+            .disk_index_path = config.current.accounts_db.disk_index_path,
+            .storage_cache_size = @intCast(config.current.accounts_db.storage_cache_size),
+            .number_of_index_bins = @intCast(config.current.accounts_db.num_account_index_bins),
         },
     );
     defer accounts_db.deinit();

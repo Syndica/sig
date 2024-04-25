@@ -314,7 +314,9 @@ pub const SnapshotFields = struct {
         const contents = try file.readToEndAlloc(allocator, size);
         defer allocator.free(contents);
 
-        var snapshot_fields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
+        // TODO: Brennan
+        // var snapshot_fields: SnapshotFields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
+        var snapshot_fields: SnapshotFields = undefined;
 
         // if these are available, we push them onto the banks
         var bank_fields = &snapshot_fields.bank_fields;
@@ -333,7 +335,10 @@ pub const SnapshotFields = struct {
     }
 
     pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
-        bincode.free(allocator, self);
+        _ = self;
+        _ = allocator;
+        // TODO: Brennan
+        // bincode.free(allocator, self);
     }
 };
 
@@ -663,8 +668,9 @@ pub const StatusCache = struct {
         return status_cache;
     }
 
-    pub fn deinit(self: *StatusCache) void {
-        bincode.free(self.bank_slot_deltas.allocator, self.*);
+    pub fn deinit(_: *StatusCache) void {
+        // TODO: Brennan
+        // bincode.free(self.bank_slot_deltas.allocator, self.*);
     }
 
     pub fn validate(
@@ -983,9 +989,10 @@ pub const AllSnapshotFields = struct {
             self.full.deinit(allocator);
             if (self.incremental) |*inc| {
                 inc.accounts_db_fields.file_map.deinit();
-                bincode.free(allocator, inc.bank_fields);
-                bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
-                bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
+                // TODO: Brennan
+                // bincode.free(allocator, inc.bank_fields);
+                // bincode.free(allocator, inc.accounts_db_fields.rooted_slots);
+                // bincode.free(allocator, inc.accounts_db_fields.rooted_slot_hashes);
             }
         }
     }

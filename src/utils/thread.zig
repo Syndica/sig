@@ -61,10 +61,10 @@ pub fn ThreadPoolTask(
         }
 
         fn callback(task: *Task) void {
-            var self: Self = @fieldParentPtr("task", task);
-            std.debug.assert(!self.done.load(std.atomic.Ordering.acquire));
+            var self: *Self = @fieldParentPtr("task", task);
+            std.debug.assert(!self.done.load(.acquire));
             defer {
-                self.done.store(true, std.atomic.Ordering.release);
+                self.done.store(true, .release);
             }
             self.entry.callback() catch |err| {
                 std.debug.print("{s} error: {}\n", .{ @typeName(EntryType), err });
@@ -75,11 +75,11 @@ pub fn ThreadPoolTask(
         pub fn queue(thread_pool: *ThreadPool, tasks: []Self, entry: EntryType) void {
             var task_i: usize = 0;
             var task_ptr = &tasks[task_i];
-            while (!task_ptr.done.load(std.atomic.Ordering.acquire)) {
+            while (!task_ptr.done.load(.acquire)) {
                 task_i = (task_i + 1) % tasks.len;
                 task_ptr = &tasks[task_i];
             }
-            task_ptr.done.store(false, std.atomic.Ordering.release);
+            task_ptr.done.store(false, .release);
             task_ptr.entry = entry;
 
             const batch = Batch.from(&task_ptr.task);
