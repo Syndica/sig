@@ -32,8 +32,8 @@
             .hash = "122079a1a1b7f0b4419814c4e41f412c4829e85f09dd459327d814508f29f22678fb",
         },
         .zstd = .{
-            .url = "https://github.com/Syndica/zstd.zig/archive/e2531ba732422b61df927e4aec26681928bc4ea9.tar.gz",
-            .hash = "12207186b1dad9f4cf900aee680c086a6a37c1a66089512cd19518f51746a3250b3b",
+            .url = "https://github.com/Syndica/zstd.zig/archive/d9f86cad45380bf6b5d1e83ac8514cbddf3c4a38.tar.gz",
+            .hash = "1220be2064e0060e3836ee349595119c9d5874b58ee76147897d4070206f9e9e5db6",
         },
         .curl = .{
             .url = "https://github.com/jiacai2050/zig-curl/archive/7b1e1c6adb1daca48bbae6bd18fc1386dc6076ab.tar.gz",
