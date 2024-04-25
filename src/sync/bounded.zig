@@ -27,12 +27,17 @@ pub fn Bounded(comptime T: type) type {
         buffer: []Slot(T),
         head: Atomic(usize),
         tail: Atomic(usize),
-        disconnect_bit: usize, // if this bit is set on the tail, the channel is disconnected
         one_lap: usize,
         receivers: Waker,
         senders: Waker,
         n_receivers: Atomic(usize),
         n_senders: Atomic(usize),
+
+        /// if this bit is set on the tail, the channel is disconnected
+        const disconnect_bit: usize = ~@as(usize, std.math.maxInt(usize) >> 1);
+
+        /// if this bit is set on a slot, the slot is already occupied.
+        const occupied_bit: usize = disconnect_bit >> 1;
 
         const Self = @This();
 
@@ -49,8 +54,6 @@ pub fn Bounded(comptime T: type) type {
             }
 
             var allocator = config.allocator;
-            var disconnect_bit = std.math.ceilPowerOfTwo(usize, config.init_capacity + 1) catch unreachable;
-            var one_lap = disconnect_bit * 2;
 
             var self = try allocator.create(Self);
             var buff = try allocator.alloc(Slot(T), config.init_capacity);
@@ -68,8 +71,7 @@ pub fn Bounded(comptime T: type) type {
                 .buffer = buff,
                 .head = Atomic(usize).init(0),
                 .tail = Atomic(usize).init(0),
-                .disconnect_bit = disconnect_bit,
-                .one_lap = one_lap,
+                .one_lap = config.init_capacity,
                 .receivers = Waker.init(allocator),
                 .senders = Waker.init(allocator),
                 .n_receivers = Atomic(usize).init(0),
@@ -100,13 +102,12 @@ pub fn Bounded(comptime T: type) type {
 
             while (true) {
                 // Check if the channel is disconnected.
-                if (tail & self.disconnect_bit != 0) {
+                if (tail & disconnect_bit != 0) {
                     return error.disconnected;
                 }
 
                 // Deconstruct the tail.
-                var index = tail & (self.disconnect_bit - 1);
-                var lap = tail & ~(self.one_lap - 1);
+                var index = tail % self.one_lap;
 
                 // Inspect the corresponding slot.
                 std.debug.assert(index < self.buffer.len);
@@ -114,18 +115,17 @@ pub fn Bounded(comptime T: type) type {
                 var stamp = slot.stamp.load(.Acquire);
 
                 if (tail == stamp) {
-                    var new_tail = if (index + 1 < self.buffer.len) tail + 1 else lap +| self.one_lap;
-                    if (self.tail.tryCompareAndSwap(tail, new_tail, .SeqCst, .Monotonic)) |current_tail| {
+                    if (self.tail.tryCompareAndSwap(tail, tail + 1, .SeqCst, .Monotonic)) |current_tail| {
                         // failed
                         tail = current_tail;
                         backoff.spin();
                     } else {
                         // succeeded
                         temp_slot.slot = slot;
-                        temp_slot.stamp = tail + 1;
+                        temp_slot.stamp = tail | occupied_bit;
                         return;
                     }
-                } else if (tail + 1 == (stamp +| self.one_lap)) {
+                } else if (stamp & occupied_bit != 0) {
                     std.atomic.fence(.SeqCst);
                     var head = self.head.load(.Unordered);
 
@@ -227,20 +227,17 @@ pub fn Bounded(comptime T: type) type {
             var head = self.head.load(.Unordered);
 
             while (true) {
-                var index = head & (self.disconnect_bit - 1);
-                var lap = head & ~(self.one_lap - 1);
+                var index = head % self.one_lap;
 
                 std.debug.assert(index < self.buffer.len);
                 var slot = &self.buffer[index];
                 var stamp = slot.stamp.load(.Acquire);
 
-                if (head + 1 == stamp) {
-                    var new = if (index + 1 < self.buffer.len) head + 1 else lap +| self.one_lap;
-
+                if (head | occupied_bit == stamp) {
                     // Try moving the head.
                     if (self.head.tryCompareAndSwap(
                         head,
-                        new,
+                        head + 1,
                         .SeqCst,
                         .Monotonic,
                     )) |current_head| {
@@ -250,7 +247,7 @@ pub fn Bounded(comptime T: type) type {
                     } else {
                         // succeeded
                         temp_slot.slot = slot;
-                        temp_slot.stamp = head +| self.one_lap;
+                        temp_slot.stamp = ~occupied_bit & head +| self.one_lap;
                         return;
                     }
                 } else if (stamp == head) {
@@ -258,9 +255,9 @@ pub fn Bounded(comptime T: type) type {
                     var tail = self.tail.load(.Unordered);
 
                     // If the tail equals the head, that means the channel is empty.
-                    if ((tail & ~self.disconnect_bit) == head) {
+                    if ((tail & ~disconnect_bit) == head) {
                         // channel is disconnected if mark_bit set otherwise the receive operation is not ready (empty)
-                        return if (tail & self.disconnect_bit != 0) error.disconnected else error.empty;
+                        return if (tail & disconnect_bit != 0) error.disconnected else error.empty;
                     }
 
                     backoff.spin();
@@ -395,7 +392,7 @@ pub fn Bounded(comptime T: type) type {
             //
             // Note: If the tail changes just before we load the head, that means there was a moment
             // when the channel was not full, so it is safe to just return `false`.
-            return head +| self.one_lap == tail & ~self.disconnect_bit;
+            return head +| self.one_lap == tail & ~disconnect_bit;
         }
 
         /// Returns whether or not channel is empty
@@ -407,22 +404,22 @@ pub fn Bounded(comptime T: type) type {
             //
             // Note: If the head changes just before we load the tail, that means there was a moment
             // when the channel was not empty, so it is safe to just return `false`.
-            return (tail & ~self.disconnect_bit) == head;
+            return (tail & ~disconnect_bit) == head;
         }
 
         /// Returns whether or not the channel is disconnected either by `release`(ing) senders/receivers
         /// or an explicit call to `disconnect()`.
         pub inline fn isDisconnected(self: *const Self) bool {
-            return self.tail.load(.SeqCst) & self.disconnect_bit != 0;
+            return self.tail.load(.SeqCst) & disconnect_bit != 0;
         }
 
         /// Attempts to disconnect the channel setting the `disconnect_bit` on the `tail`.
         pub inline fn disconnect(self: *Self) void {
-            var tail = self.tail.fetchOr(self.disconnect_bit, .SeqCst);
+            var tail = self.tail.fetchOr(disconnect_bit, .SeqCst);
 
             // if tail & disconnect_bit == 0 it means this is the first time
             // this was called so we should disconnect all sleepers
-            if (tail & self.disconnect_bit == 0) {
+            if (tail & disconnect_bit == 0) {
                 self.senders.disconnectAll();
                 self.receivers.disconnectAll();
             }
@@ -532,10 +529,6 @@ test "sync.bounded: buffer len is correct" {
 
 test "sync.bounded: disconnect bit is correct" {
     var capacity: usize = 0b01100100;
-    var disconnect_bit: usize = 0b10000000;
-    var fake_tail: usize = 0b01000100;
-    var disconnected_fake_tail: usize = fake_tail | disconnect_bit; // 0b11000100;
-    var disconnected: usize = disconnected_fake_tail & disconnect_bit;
 
     var chan = try Bounded(usize).init(.{
         .allocator = std.testing.allocator,
@@ -543,7 +536,6 @@ test "sync.bounded: disconnect bit is correct" {
     });
     defer chan.deinit();
 
-    try std.testing.expectEqual(chan.disconnect_bit, disconnect_bit);
     try std.testing.expect(!chan.isDisconnected());
     chan.disconnect();
 
@@ -552,17 +544,10 @@ test "sync.bounded: disconnect bit is correct" {
     try std.testing.expectError(error.disconnected, chan.trySend(1));
     try std.testing.expectError(error.disconnected, chan.receive(null));
     try std.testing.expectError(error.disconnected, chan.tryReceive());
-
-    try std.testing.expectEqual(capacity, 100);
-    try std.testing.expectEqual(disconnect_bit, try std.math.ceilPowerOfTwo(usize, capacity + 1));
-    try std.testing.expectEqual(disconnected_fake_tail, 0b11000100);
-    try std.testing.expect(disconnected != 0);
 }
 
 test "sync.bounded: one_lap is correct" {
     var capacity: usize = 0b01100100;
-    var disconnect_bit: usize = 0b10000000;
-    var one_lap: usize = disconnect_bit * 2; // 0b100000000
 
     var chan = try Bounded(usize).init(.{
         .allocator = std.testing.allocator,
@@ -570,7 +555,7 @@ test "sync.bounded: one_lap is correct" {
     });
     defer chan.deinit();
 
-    try std.testing.expectEqual(one_lap, chan.one_lap);
+    try std.testing.expectEqual(capacity, chan.one_lap);
 }
 
 test "sync.bounded: mpsc" {
