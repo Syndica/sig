@@ -80,7 +80,7 @@ pub const Histogram = struct {
 
     /// Writes a value into the histogram.
     pub fn observe(self: *Self, value: f64) void {
-        const shard_sync = self.incrementCount(.Acquire); // acquires lock. must be first step.
+        const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (0.., self.upper_bounds.items) |i, bound| {
             if (value <= bound) {
@@ -109,7 +109,7 @@ pub const Histogram = struct {
 
         // Wait until all writers are done writing to the cold shard
         // TODO: switch to a condvar. see: `std.Thread.Condition`
-        while (cold_shard.count.tryCompareAndSwap(shard_sync.count, 0, .Acquire, .monotonic)) |_| {
+        while (cold_shard.count.tryCompareAndSwap(shard_sync.count, 0, .acquire, .monotonic)) |_| {
             // Acquire on success: keeps shard usage after.
         }
 

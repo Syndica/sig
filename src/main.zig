@@ -1,4 +1,5 @@
 const cmd = @import("cmd/cmd.zig");
+const logger = @import("./trace/log.zig");
 const std = @import("std");
 pub const lib = @import("lib.zig");
 
@@ -10,5 +11,8 @@ pub const std_options: std.Options = .{
 };
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    logger.default_logger.* = logger.Logger.init(allocator, .debug);
     try cmd.run();
 }

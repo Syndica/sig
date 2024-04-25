@@ -72,8 +72,8 @@ pub fn OnceCell(comptime T: type) type {
         /// - false if write lock is not acquirable because a write was already completed.
         /// - waits if another thread has a write in progress. if the other thread fails, this may acquire the lock.
         fn acquire(self: *Self) bool {
-            while (self.started.compareAndSwap(false, true, .Acquire, .monotonic)) |_| {
-                if (self.finished.load(.Acquire)) {
+            while (self.started.cmpxchgWeak(false, true, .acquire, .monotonic)) |_| {
+                if (self.finished.load(.acquire)) {
                     return false;
                 }
             }
@@ -84,11 +84,11 @@ pub fn OnceCell(comptime T: type) type {
         /// Returns error if not initialized.
         /// Blocks while other threads are in the process of initialization.
         pub fn get(self: *Self) error{NotInitialized}!*T {
-            if (self.finished.load(.Acquire)) {
+            if (self.finished.load(.acquire)) {
                 return &self.value;
             }
             while (self.started.load(.monotonic)) {
-                if (self.finished.load(.Acquire)) {
+                if (self.finished.load(.acquire)) {
                     return &self.value;
                 }
             }

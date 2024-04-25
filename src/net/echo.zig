@@ -3,13 +3,14 @@ const builtin = @import("builtin");
 const net = @import("net.zig");
 const ShredVersion = @import("../core/shred.zig").ShredVersion;
 const SocketAddr = @import("net.zig").SocketAddr;
-const Logger = @import("../trace/log.zig").Logger;
+const logger = @import("../trace/log.zig").default_logger;
 const Channel = @import("../sync/channel.zig").Channel;
 const Atomic = std.atomic.Value;
 const assert = std.debug.assert;
 const testing = std.testing;
 const http = std.http;
 const bincode = @import("../bincode/bincode.zig");
+const httpz = @import("httpz");
 
 const MAX_PORT_COUNT_PER_MSG: usize = 4;
 const MAX_REQ_HEADER_SIZE = 8192;
@@ -51,30 +52,19 @@ const IpEchoServerResponse = struct {
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
-    logger: Logger,
-    server: http.Server,
-    port: u16,
-    conns: *Channel(*Response),
-    conns_in_flight: Atomic(usize),
+    server: httpz.ServerCtx(void, void),
     exit: *const Atomic(bool),
 
     const Self = @This();
-    const Response = http.Server.Response;
-    const Request = http.Server.Request;
 
     pub fn init(
         allocator: std.mem.Allocator,
         port: u16,
-        logger: Logger,
         exit: *const Atomic(bool),
     ) Self {
         return Self{
             .allocator = allocator,
-            .server = http.Server.init(allocator, .{ .kernel_backlog = 1024 }),
-            .port = port,
-            .logger = logger,
-            .conns = Channel(*Response).init(allocator, 1024),
-            .conns_in_flight = Atomic(usize).init(0),
+            .server = httpz.Server().init(allocator, .{ .port = port }) catch unreachable,
             .exit = exit,
         };
     }
@@ -82,216 +72,55 @@ pub const Server = struct {
     pub fn deinit(
         self: *Self,
     ) void {
-        self.conns.deinit();
-        self.server.deinit();
+        self.kill();
     }
 
     pub fn kill(
         self: *Self,
     ) void {
-        self.logger.debug("closing server");
-        self.conns.close();
-        // trigger acceptor loop to get new conn
-        const conn = std.net.tcpConnectToAddress(
-            std.net.Address.parseIp4("127.0.0.1", self.port) catch unreachable,
-        ) catch return;
-        conn.close();
-    }
-
-    fn handleConn(
-        self: *Self,
-        response: *Response,
-    ) void {
-        self.logger.debug("handling new connection");
-        defer {
-            self.logger.debug("connection done");
-            response.deinit();
-            self.allocator.destroy(response);
-            _ = self.conns_in_flight.fetchSub(1, .seq_cst);
-        }
-
-        // if "Connection" header is "keep-alive", we don't close conn
-        while (response.reset() != .closing and !self.conns.isClosed()) {
-            // Handle errors during request processing.
-            response.wait() catch |err| switch (err) {
-                error.HttpHeadersInvalid => return,
-                error.EndOfStream => continue,
-                else => {
-                    self.logger.errf("error waiting: {any}\n", .{err});
-                    return;
-                },
-            };
-
-            // Process the request.
-            handleRequest(self.allocator, self.logger, response) catch |err| {
-                self.logger.errf("error trying to handle req: {any}", .{err});
-                return;
-            };
-        }
-    }
-
-    fn acceptorThread(
-        self: *Self,
-    ) !void {
-        self.logger.debug("accepting new connections");
-        while (!self.conns.isClosed() and !self.exit.load(.unordered)) {
-            // TODO: change to non-blocking socket
-            const response = self.server.accept(.{
-                .allocator = self.allocator,
-                .header_strategy = .{ .dynamic = MAX_REQ_HEADER_SIZE },
-            }) catch |err| {
-                switch (err) {
-                    error.ConnectionAborted => {
-                        continue;
-                    },
-                    else => {
-                        self.logger.errf("error trying to accept new conn: {any}\n", .{err});
-                        return err;
-                    },
-                }
-            };
-
-            const resp = try self.allocator.create(Response);
-            resp.* = response;
-
-            // we track how many conns in flight
-            _ = self.conns_in_flight.fetchAdd(1, .seq_cst);
-
-            self.conns.send(resp) catch |err| {
-                // in any error case, we destroy Response and decrement conns in flight
-                self.allocator.destroy(resp);
-                _ = self.conns_in_flight.fetchSub(1, .seq_cst);
-
-                switch (err) {
-                    error.ChannelClosed => {
-                        return;
-                    },
-                    else => {
-                        self.logger.errf("error sending Response to conns channel: {any}\n", .{err});
-                        return err;
-                    },
-                }
-            };
-        }
+        self.server.stop();
+        logger.debug("closing server");
     }
 
     pub fn listenAndServe(
         self: *Self,
     ) !void {
-        try self.server.listen(std.net.Address.initIp4(.{ 0, 0, 0, 0 }, self.port));
-        self.logger.debugf("started server listener on 0.0.0.0:{d}", .{self.port});
-
-        // launch acceptor thread
-        var acceptor_thread_handle = try std.Thread.spawn(.{}, Self.acceptorThread, .{self});
-
-        // listen for conns, as we receive we handle them in own threads
-        while (self.conns.receive()) |conn| {
-            var handle = try std.Thread.spawn(.{}, Self.handleConn, .{ self, conn });
-            handle.detach();
-        }
-
-        acceptor_thread_handle.join();
-
-        const acceptor_closed_at = std.time.Instant.now() catch unreachable;
-        // wait for connections in flight to complete before exiting listener
-        while (self.conns_in_flight.load(.seq_cst) != 0) {
-            var now = std.time.Instant.now() catch unreachable;
-
-            // we wait for N time before breaking out of conns_in_flight wait guard
-            if (now.since(acceptor_closed_at) > SERVER_LISTENER_LINGERING_TIMEOUT) {
-                break;
-            }
-
-            // sleep 1ms to give conns in flight time
-            std.time.sleep(std.time.ns_per_ms * 5);
-        }
-
-        self.logger.debug("listener done");
+        var router = self.server.router();
+        router.post("/", handleEchoRequest);
+        return self.server.listen();
     }
 };
 
-pub fn returnBadRequest(
-    resp: *http.Server.Response,
-    logger: Logger,
-) !void {
-    resp.status = .bad_request;
-    try resp.headers.append("content-type", "application/json");
-    try resp.do();
-    resp.writeAll("{\"error\":\"bad request.\"}") catch |err| {
-        logger.errf("could not return bad request: {any}", .{err});
+pub fn handleEchoRequest(req: *httpz.Request, res: *httpz.Response) !void {
+    const body = req.body() orelse return error.NoBody;
+    var ip_echo_server_message = try std.json.parseFromSlice(IpEchoServerMessage, res.arena, body, .{});
+    defer ip_echo_server_message.deinit();
+
+    logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
+
+    // convert a u32 to Ipv4
+    const socket_addr = SocketAddr.fromIpV4Address(res.conn.address);
+
+    std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, res.writer()) catch |err| {
+        logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
+        return try returnBadRequest(res);
     };
-    try resp.finish();
+}
+
+pub fn returnBadRequest(
+    resp: *httpz.Response,
+) !void {
+    resp.status = 400;
+    resp.headers.add("content-type", "application/json");
+    resp.body =
+        \\ "{\"error\":\"bad request.\"}"
+    ;
 }
 
 pub fn returnNotFound(
-    resp: *http.Server.Response,
-    logger: Logger,
+    resp: *httpz.Response,
 ) !void {
-    _ = logger;
-    resp.status = .not_found;
-    try resp.headers.append("content-type", "text/plain");
-    try resp.do();
-    try resp.finish();
-}
-
-pub fn handleRequest(
-    alloc: std.mem.Allocator,
-    logger: Logger,
-    resp: *http.Server.Response,
-) !void {
-    logger.debug("starting handling request");
-
-    var req = resp.request;
-    // Read the request body.
-    const body = try resp.reader().readAllAlloc(alloc, 8192);
-    defer alloc.free(body);
-
-    // Route: POST /
-    if (req.method == .POST and std.mem.eql(u8, req.target, "/")) {
-        var ip_echo_server_message = try std.json.parseFromSlice(IpEchoServerMessage, alloc, body, .{});
-        defer ip_echo_server_message.deinit();
-
-        logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
-
-        var buff = [_]u8{0} ** 1024;
-        var buffer = std.io.fixedBufferStream(&buff);
-
-        // convert a u32 to Ipv4
-        const socket_addr = SocketAddr.fromIpV4Address(resp.address);
-
-        std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, buffer.writer()) catch |err| {
-            logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
-            return try returnBadRequest(resp, logger);
-        };
-
-        resp.status = .ok;
-
-        var chunked = false;
-        try resp.headers.append("content-type", "application/json");
-        if (req.headers.getFirstValue("transfer-encoding")) |connection_header_val| {
-            if (std.mem.indexOf(u8, connection_header_val, "chunked") != null) {
-                chunked = true;
-                resp.transfer_encoding = .chunked;
-            }
-        }
-
-        if (!chunked) {
-            const content_length = try std.fmt.allocPrint(alloc, "{d}", .{buffer.getWritten().len});
-            try resp.headers.append("content-length", content_length);
-            alloc.free(content_length);
-        }
-        // write response body
-        try resp.do();
-        resp.writeAll(buffer.getWritten()) catch |err| {
-            logger.errf("could not write all buffer: {any}\n", .{err});
-            return try returnBadRequest(resp, logger);
-        };
-        try resp.finish();
-    } else {
-        try returnNotFound(resp, logger);
-    }
-
-    logger.debug("done handling request");
+    resp.status = 404;
 }
 
 pub fn requestIpEcho(
@@ -303,7 +132,7 @@ pub fn requestIpEcho(
     const conn = try std.net.tcpConnectToAddress(addr);
     defer conn.close();
     try conn.writeAll(&(.{0} ** HEADER_LENGTH));
-    try bincode.write(allocator, conn.writer(), message, .{});
+    try bincode.write(conn.writer(), message, .{});
     try conn.writeAll("\n");
 
     // get response
@@ -316,14 +145,9 @@ pub fn requestIpEcho(
 test "net.echo: Server works" {
     const port: u16 = 34333;
 
-    // initialize logger
-    var logger = Logger.init(testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
-
     var exit = Atomic(bool).init(false);
 
-    var server = Server.init(testing.allocator, port, logger, &exit);
+    var server = Server.init(testing.allocator, port, logger(), &exit);
     defer server.deinit();
     var server_thread_handle = try std.Thread.spawn(.{}, Server.listenAndServe, .{&server});
     if (builtin.os.tag == .linux) try server_thread_handle.setName("server_thread");

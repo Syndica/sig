@@ -43,7 +43,7 @@ const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 
 const config = @import("config.zig");
-// var validator_config = config.validator_config;
+// var validator_config = config.current;
 
 const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 const socket_tag = sig.gossip.socket_tag;
@@ -57,13 +57,13 @@ const gossip_host = struct {
     var option = cli.Option{
         .long_name = "gossip-host",
         .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
-        .value_ref = cli.mkRef(&config.validator_config.gossip.host),
+        .value_ref = cli.mkRef(&config.current.gossip.host),
         .required = false,
         .value_name = "Gossip Host",
     };
 
     fn get() !?IpAddr {
-        if (option.value.string) |str| {
+        if (config.current.gossip.host) |str| {
             var buf: [15]u8 = undefined;
             @memcpy(buf[0..str.len], str);
             @memcpy(buf[str.len .. str.len + 2], ":0");
@@ -78,7 +78,7 @@ var gossip_port_option = cli.Option{
     .long_name = "gossip-port",
     .help = "The port to run gossip listener - default: 8001",
     .short_alias = 'p',
-    .value_ref = cli.mkRef(&config.validator_config.gossip.port),
+    .value_ref = cli.mkRef(&config.current.gossip.port),
     .required = false,
     .value_name = "Gossip Port",
 };
@@ -86,7 +86,7 @@ var gossip_port_option = cli.Option{
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
     .help = "The port to run tvu repair listener - default: 8002",
-    .value_ref = cli.mkRef(&config.validator_config.repair.port),
+    .value_ref = cli.mkRef(&config.current.repair.port),
     .required = false,
     .value_name = "Repair Port",
 };
@@ -94,7 +94,7 @@ var repair_port_option = cli.Option{
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value_ref = cli.mkRef(&config.validator_config.repair.test_repair_slot),
+    .value_ref = cli.mkRef(&config.current.repair.test_repair_slot),
     .required = false,
     .value_name = "slot number",
 };
@@ -103,7 +103,7 @@ var gossip_entrypoints_option = cli.Option{
     .long_name = "entrypoint",
     .help = "gossip address of the entrypoint validators",
     .short_alias = 'e',
-    .value_ref = cli.mkRef(&config.validator_config.gossip.entrypoints),
+    .value_ref = cli.mkRef(&config.current.gossip.entrypoints),
     .required = false,
     .value_name = "Entrypoints",
 };
@@ -112,7 +112,7 @@ var trusted_validators_option = cli.Option{
     .long_name = "trusted_validator",
     .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
     .short_alias = 't',
-    .value_ref = cli.mkRef(&config.validator_config.gossip.trusted_validators),
+    .value_ref = cli.mkRef(&config.current.gossip.trusted_validators),
     .required = false,
     .value_name = "Trusted Validator",
 };
@@ -120,7 +120,7 @@ var trusted_validators_option = cli.Option{
 var gossip_spy_node_option = cli.Option{
     .long_name = "spy-node",
     .help = "run as a gossip spy node (minimize outgoing packets)",
-    .value_ref = cli.mkRef(&config.validator_config.gossip.spy_node),
+    .value_ref = cli.mkRef(&config.current.gossip.spy_node),
     .required = false,
     .value_name = "Spy Node",
 };
@@ -128,7 +128,7 @@ var gossip_spy_node_option = cli.Option{
 var gossip_dump_option = cli.Option{
     .long_name = "dump-gossip",
     .help = "periodically dump gossip table to csv files and logs",
-    .value_ref = cli.mkRef(&config.validator_config.gossip.dump),
+    .value_ref = cli.mkRef(&config.current.gossip.dump),
     .required = false,
     .value_name = "Gossip Table Dump",
 };
@@ -137,7 +137,7 @@ var log_level_option = cli.Option{
     .long_name = "log-level",
     .help = "The amount of detail to log (default = debug)",
     .short_alias = 'l',
-    .value_ref = cli.mkRef(&config.validator_config.log_level),
+    .value_ref = cli.mkRef(&config.current.log_level),
     .required = false,
     .value_name = "err|warn|info|debug",
 };
@@ -146,7 +146,7 @@ var metrics_port_option = cli.Option{
     .long_name = "metrics-port",
     .help = "port to expose prometheus metrics via http - default: 12345",
     .short_alias = 'm',
-    .value_ref = cli.mkRef(&config.validator_config.metrics_port),
+    .value_ref = cli.mkRef(&config.current.metrics_port),
     .required = false,
     .value_name = "port_number",
 };
@@ -156,7 +156,7 @@ var n_threads_snapshot_load_option = cli.Option{
     .long_name = "n-threads-snapshot-load",
     .help = "number of threads to load incremental snapshots: - default: ncpus",
     .short_alias = 't',
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.num_threads_snapshot_load),
+    .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_load),
     .required = false,
     .value_name = "n_threads_snapshot_load",
 };
@@ -165,7 +165,7 @@ var n_threads_snapshot_unpack_option = cli.Option{
     .long_name = "n-threads-snapshot-unpack",
     .help = "number of threads to unpack incremental snapshots - default: ncpus * 2",
     .short_alias = 'u',
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.num_threads_snapshot_unpack),
+    .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_unpack),
     .required = false,
     .value_name = "n_threads_snapshot_unpack",
 };
@@ -174,7 +174,7 @@ var disk_index_path_option = cli.Option{
     .long_name = "disk-index-path",
     .help = "path to disk index - default: no disk index, index will use ram",
     .short_alias = 'd',
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.disk_index_path),
+    .value_ref = cli.mkRef(&config.current.accounts_db.disk_index_path),
     .required = false,
     .value_name = "disk_index_path",
 };
@@ -183,7 +183,7 @@ var force_unpack_snapshot_option = cli.Option{
     .long_name = "force-unpack-snapshot",
     .help = "force unpack snapshot even if it exists",
     .short_alias = 'f',
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.force_unpack_snapshot),
+    .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
     .required = false,
     .value_name = "force_unpack_snapshot",
 };
@@ -191,7 +191,7 @@ var force_unpack_snapshot_option = cli.Option{
 var force_new_snapshot_download_option = cli.Option{
     .long_name = "force-new-snapshot-download",
     .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.force_new_snapshot_download),
+    .value_ref = cli.mkRef(&config.current.accounts_db.force_new_snapshot_download),
     .required = false,
     .value_name = "force_new_snapshot_download",
 };
@@ -200,7 +200,7 @@ var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
     .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/",
     .short_alias = 's',
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.snapshot_dir),
+    .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
     .required = false,
     .value_name = "snapshot_dir",
 };
@@ -208,7 +208,7 @@ var snapshot_dir_option = cli.Option{
 var min_snapshot_download_speed_mb_option = cli.Option{
     .long_name = "min-snapshot-download-speed",
     .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.min_snapshot_download_speed_mbs),
+    .value_ref = cli.mkRef(&config.current.accounts_db.min_snapshot_download_speed_mbs),
     .required = false,
     .value_name = "min_snapshot_download_speed_mb",
 };
@@ -216,7 +216,7 @@ var min_snapshot_download_speed_mb_option = cli.Option{
 var storage_cache_size_option = cli.Option{
     .long_name = "storage-cache-size",
     .help = "number of accounts preallocate for the storage cache for accounts-db (used when writing accounts whose slot has not been rooted) - default: 10k",
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.storage_cache_size),
+    .value_ref = cli.mkRef(&config.current.accounts_db.storage_cache_size),
     .required = false,
     .value_name = "storage_cache_size",
 };
@@ -224,7 +224,7 @@ var storage_cache_size_option = cli.Option{
 var number_of_index_bins_option = cli.Option{
     .long_name = "number-of-index-bins",
     .help = "number of bins to shard the index pubkeys across",
-    .value_ref = cli.mkRef(&config.validator_config.accounts_db.num_account_index_bins),
+    .value_ref = cli.mkRef(&config.current.accounts_db.num_account_index_bins),
     .required = false,
     .value_name = "number_of_index_bins",
 };
@@ -342,7 +342,7 @@ var app = &cli.App{
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.validator_config.log_level));
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
     defer logger.deinit();
     logger.spawn();
 
@@ -394,7 +394,7 @@ fn validator() !void {
     defer entrypoints.deinit();
     const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
-    const repair_port: u16 = @intCast(repair_port_option.value.int.?);
+    const repair_port: u16 = config.current.repair.port;
 
     // gossip
     var gossip_service = try initGossip(
@@ -519,7 +519,7 @@ fn initGossip(
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: u8, port: u16 },
 ) !GossipService {
-    const gossip_port: u16 = @intCast(gossip_port_option.value.int.?);
+    const gossip_port: u16 = config.current.gossip.port;
     logger.infof("gossip host: {any}", .{gossip_host_ip});
     logger.infof("gossip port: {d}", .{gossip_port});
 
@@ -567,17 +567,17 @@ fn initRepair(
         .peer_provider = peer_provider,
         .logger = logger,
         .exit = exit,
-        .slot_to_request = if (test_repair_option.value.int) |n| @intCast(n) else null,
+        .slot_to_request = if (config.current.repair.test_repair_slot) |n| @intCast(n) else null,
     };
 }
 
 /// Spawn a thread to run gossip and configure with CLI arguments
 fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread {
-    const spy_node = gossip_spy_node_option.value.bool;
+    const spy_node = config.current.gossip.spy_node;
     return try std.Thread.spawn(
         .{},
         GossipService.run,
-        .{ gossip_service, spy_node, gossip_dump_option.value.bool },
+        .{ gossip_service, spy_node, config.current.gossip.dump },
     );
 }
 
@@ -614,7 +614,7 @@ fn getMyDataFromIpEcho(
 
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
-    for (config.validator_config.gossip.entrypoints) |entrypoint| {
+    for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
             // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
             var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
@@ -669,14 +669,14 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 /// Initializes the global registry. Returns error if registry was already initialized.
 /// Spawns a thread to serve the metrics over http on the CLI configured port.
 fn spawnMetrics(logger: Logger) !std.Thread {
-    const metrics_port: u16 = config.validator_config.metrics_port;
+    const metrics_port: u16 = config.current.metrics_port;
     logger.infof("metrics port: {d}", .{metrics_port});
     const registry = globalRegistry();
     return try std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port });
 }
 
 fn spawnLogger() !Logger {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.validator_config.log_level));
+    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
     logger.spawn();
     return logger;
 }
@@ -747,8 +747,8 @@ fn downloadSnapshot() !void {
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
 
-    const snapshot_dir_str = snapshot_dir_option.value.string.?;
-    const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const min_mb_per_sec = config.current.accounts_db.min_snapshot_download_speed_mbs;
     try downloadSnapshotsFromGossip(
         gpa_allocator,
         logger,
@@ -765,12 +765,12 @@ fn getTrustedValidators(
     allocator: std.mem.Allocator,
 ) !?std.ArrayList(Pubkey) {
     var trusted_validators: ?std.ArrayList(Pubkey) = null;
-    if (trusted_validators_option.value.string_list) |trusted_validator_strs| {
+    if (config.current.gossip.trusted_validators.len > 0) {
         trusted_validators = try std.ArrayList(Pubkey).initCapacity(
             allocator,
-            trusted_validator_strs.len,
+            config.current.gossip.trusted_validators.len,
         );
-        for (trusted_validator_strs) |trusted_validator_str| {
+        for (config.current.gossip.trusted_validators) |trusted_validator_str| {
             trusted_validators.?.appendAssumeCapacity(
                 try Pubkey.fromString(trusted_validator_str),
             );
@@ -786,12 +786,12 @@ fn getOrDownloadSnapshots(
     gossip_service: ?*GossipService,
 ) !SnapshotFieldsAndPaths {
     // arg parsing
-    const snapshot_dir_str = snapshot_dir_option.value.string.?;
-    const force_unpack_snapshot = force_unpack_snapshot_option.value.bool;
-    const force_new_snapshot_download = force_new_snapshot_download_option.value.bool;
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot;
+    const force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download;
 
     const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_unpack: u32 = @intCast(n_threads_snapshot_unpack_option.value.int.?);
+    var n_threads_snapshot_unpack: u32 = @intCast(config.current.accounts_db.num_threads_snapshot_unpack);
     if (n_threads_snapshot_unpack == 0) {
         n_threads_snapshot_unpack = n_cpus * 2;
     }
@@ -823,7 +823,7 @@ fn getOrDownloadSnapshots(
         const trusted_validators = try getTrustedValidators(gpa_allocator);
         defer if (trusted_validators) |*tvs| tvs.deinit();
 
-        const min_mb_per_sec = min_snapshot_download_speed_mb_option.value.int.?;
+        const min_mb_per_sec = config.current.accounts_db.min_snapshot_download_speed_mbs;
         try downloadSnapshotsFromGossip(
             allocator,
             logger,

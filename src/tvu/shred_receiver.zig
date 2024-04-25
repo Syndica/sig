@@ -49,7 +49,7 @@ pub const ShredReceiver = struct {
         receiver: *Channel(ArrayList(Packet)),
         sender: *Channel(ArrayList(Packet)),
     ) !void {
-        while (!self.exit.load(.Unordered)) {
+        while (!self.exit.load(.unordered)) {
             var responses = ArrayList(Packet).init(self.allocator);
             if (try receiver.try_drain()) |batches| {
                 for (batches) |batch| for (batch.items) |*packet| {

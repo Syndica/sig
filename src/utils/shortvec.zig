@@ -9,7 +9,7 @@ pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
             const len: u16 = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
             try serialize_short_u16(writer, len, params);
             for (data) |item| {
-                try bincode.write(null, writer, item, params);
+                try bincode.write(writer, item, params);
             }
         }
 
@@ -43,7 +43,7 @@ pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig(std.Arr
             const len = std.math.cast(u16, list.items.len) orelse return error.DataTooLarge;
             try serialize_short_u16(writer, len, params);
             for (list.items) |item| {
-                try bincode.write(null, writer, item, params);
+                try bincode.write(writer, item, params);
             }
         }
 

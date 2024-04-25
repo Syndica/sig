@@ -145,7 +145,7 @@ pub fn parallelUntarToFileSystem(
 
     // wait for all tasks
     for (tasks) |*task| {
-        while (!task.done.load(std.atomic.Ordering.Acquire)) {
+        while (!task.done.load(std.atomic.Ordering.acquire)) {
             // wait
         }
     }

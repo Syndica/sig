@@ -8,8 +8,14 @@ const testing = std.testing;
 const Mutex = std.Thread.Mutex;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
+const OnceCell = @import("../sync/once_cell.zig").OnceCell;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa_allocator = gpa.allocator();
 
 const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
+
+pub const default_logger: *Logger = &global;
+var global: Logger = .{ .standard = undefined };
 
 pub const Logger = union(enum) {
     standard: *StandardErrLogger,

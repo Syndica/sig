@@ -10,7 +10,7 @@ pub const Config = struct {
     metrics_port: u16 = 12345,
 };
 
-pub const validator_config: *Config = &default_validator_config;
+pub const current: *Config = &default_validator_config;
 var default_validator_config: Config = .{};
 
 const IdentityConfig = struct {};

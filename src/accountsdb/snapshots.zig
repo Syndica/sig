@@ -807,8 +807,10 @@ pub const SnapshotFiles = struct {
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, snapshot_dir: []const u8) !Self {
-        var snapshot_dir_iter = try std.fs.cwd().openIterableDir(snapshot_dir, .{});
-        defer snapshot_dir_iter.close();
+        var snapshot_directory = try std.fs.cwd().openDir(snapshot_dir, .{});
+        defer snapshot_directory.close();
+
+        var snapshot_dir_iter = snapshot_directory.iterate();
 
         const files = try readDirectory(allocator, snapshot_dir_iter);
         var filenames = files.filenames;
@@ -1006,7 +1008,7 @@ pub fn parallelUnpackZstdTarBall(
         null,
         file_size,
         std.posix.PROT.READ,
-        std.posix.MAP.SHARED,
+        std.posix.MAP{ .TYPE = .SHARED },
         file.handle,
         0,
     );

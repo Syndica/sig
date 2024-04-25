@@ -244,7 +244,7 @@ pub fn waitForExit(exit: *AtomicBool) void {
     exit.store(true, .unordered);
 }
 
-pub fn main() !void {
+pub fn run() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 

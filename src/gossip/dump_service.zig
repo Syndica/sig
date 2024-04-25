@@ -23,7 +23,7 @@ pub const GossipDumpService = struct {
         defer self.allocator.free(dir);
         try std.fs.cwd().makePath(dir);
         while (true) {
-            if (self.exit.load(.Unordered)) return;
+            if (self.exit.load(.unordered)) return;
             try self.dumpGossip(dir, start_time);
             std.time.sleep(10_000_000_000);
         }

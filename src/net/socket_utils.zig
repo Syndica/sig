@@ -176,7 +176,7 @@ pub const SocketThread = struct {
     }
 
     pub fn deinit(self: Self) void {
-        self.exit.store(true, .Unordered);
+        self.exit.store(true, .unordered);
         self.handle.join();
     }
 };

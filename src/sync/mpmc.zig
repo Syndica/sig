@@ -151,7 +151,7 @@ pub fn UnboundedChannel(comptime T: type) type {
                     stack = self.stack.tryCompareAndSwap(
                         stack,
                         new_stack,
-                        .Acquire,
+                        .acquire,
                         .monotonic,
                     ) orelse return self.cache.* orelse @as(*Node, @ptrFromInt(stack & PTR_MASK));
                 }
@@ -186,7 +186,7 @@ pub fn UnboundedChannel(comptime T: type) type {
                     }
 
                     // Nodes have been pushed to the stack, grab then with an Acquire barrier to see the Node links.
-                    stack = self.stack.swap(HAS_CACHE | IS_CONSUMING, .Acquire);
+                    stack = self.stack.swap(HAS_CACHE | IS_CONSUMING, .acquire);
                     assert(stack & IS_CONSUMING != 0);
                     assert(stack & PTR_MASK != 0);
 

@@ -251,7 +251,7 @@ pub const GossipPullFilter = struct {
 
 pub fn hashToU64(hash: *const Hash) u64 {
     const buf = hash.data[0..8];
-    return std.mem.readIntLittle(u64, buf);
+    return std.mem.readInt(u64, buf, .little);
 }
 
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;

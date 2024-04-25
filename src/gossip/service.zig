@@ -169,7 +169,7 @@ pub const GossipService = struct {
         const failed_pull_hashes = HashTimeQueue.init(allocator);
         const push_msg_q = ArrayList(SignedGossipData).init(allocator);
 
-        const echo_server = echo.Server.init(allocator, gossip_address.port(), logger, exit);
+        const echo_server = echo.Server.init(allocator, gossip_address.port(), exit);
 
         var entrypoint_list = ArrayList(Entrypoint).init(allocator);
         if (entrypoints) |eps| {
@@ -327,9 +327,9 @@ pub const GossipService = struct {
         done: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
         pub fn callback(task: *Task) void {
-            var self: @This() = @fieldParentPtr("task", task);
-            std.debug.assert(!self.done.load(std.atomic.Ordering.Acquire));
-            defer self.done.store(true, std.atomic.Ordering.release);
+            var self: *@This() = @fieldParentPtr("task", task);
+            std.debug.assert(!self.done.load(.acquire));
+            defer self.done.store(true, .release);
             defer self.packet_batch.deinit();
 
             for (self.packet_batch.items) |*packet| {
@@ -369,10 +369,10 @@ pub const GossipService = struct {
 
         /// waits for the task to be done, then resets the done state to false
         fn awaitAndReset(self: *VerifyMessageTask) void {
-            while (!self.done.load(std.atomic.Ordering.Acquire)) {
+            while (!self.done.load(.acquire)) {
                 // wait
             }
-            self.done.store(false, std.atomic.Ordering.release);
+            self.done.store(false, .release);
         }
     };
 
@@ -420,12 +420,12 @@ pub const GossipService = struct {
             for (packet_batches) |packet_batch| {
                 // find a free task
                 var task_ptr = &tasks[task_i];
-                while (!task_ptr.done.load(std.atomic.Ordering.Acquire)) {
+                while (!task_ptr.done.load(.acquire)) {
                     task_i = (task_i + 1) % n_tasks;
                     task_ptr = &tasks[task_i];
                 }
                 // schedule it
-                task_ptr.done.store(false, std.atomic.Ordering.release);
+                task_ptr.done.store(false, .release);
                 task_ptr.packet_batch = packet_batch;
 
                 const batch = Batch.from(&task_ptr.task);
@@ -1146,14 +1146,14 @@ pub const GossipService = struct {
         done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
         pub fn deinit(this: *PullRequestTask) void {
-            if (!this.output_consumed.load(.Acquire)) {
+            if (!this.output_consumed.load(.acquire)) {
                 this.output.deinit();
             }
         }
 
         pub fn callback(task: *Task) void {
-            var self: @This() = @fieldParentPtr("task", task);
-            defer self.done.store(true, std.atomic.Ordering.release);
+            var self: *@This() = @fieldParentPtr("task", task);
+            defer self.done.store(true, .release);
 
             const output_limit = self.output_limit.load(.unordered);
             if (output_limit <= 0) {
@@ -1173,7 +1173,7 @@ pub const GossipService = struct {
 
             _ = self.output_limit.fetchSub(
                 @as(i64, @intCast(response_gossip_values.items.len)),
-                std.atomic.Ordering.release,
+                .release,
             );
 
             const packets = gossipDataToPackets(
@@ -1285,7 +1285,7 @@ pub const GossipService = struct {
 
             // wait for them to be done to release the lock
             for (tasks) |*task| {
-                while (!task.done.load(std.atomic.Ordering.Acquire)) {
+                while (!task.done.load(.acquire)) {
                     // wait
                 }
             }

@@ -41,7 +41,7 @@ pub const RepairService = struct {
     pub fn run(self: *Self) !void {
         self.logger.info("starting repair service");
         defer self.logger.info("exiting repair service");
-        while (!self.exit.load(.Unordered)) {
+        while (!self.exit.load(.unordered)) {
             if (try self.initialSnapshotRepair()) |request| {
                 try self.requester.sendRepairRequest(request);
             }
@@ -270,7 +270,7 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
     };
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.Unordered));
+    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
     try peer_contact_info.setSocket(sig.gossip.socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
     try peer_contact_info.setSocket(sig.gossip.socket_tag.TVU, SocketAddr.fromEndpoint(&peer_endpoint));
     try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
@@ -336,7 +336,7 @@ test "tvu.repair_service: RepairPeerProvider selects correct peers" {
         .allocator = allocator,
         .gossip = &gossip,
         .random = random,
-        .shred_version = my_shred_version.load(.Unordered),
+        .shred_version = my_shred_version.load(.unordered),
         .slot = 13579,
     };
     const good_peers = .{

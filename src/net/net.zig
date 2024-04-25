@@ -248,10 +248,10 @@ pub const SocketAddr = union(enum(u8)) {
     pub fn isUnspecified(self: *const Self) bool {
         switch (self.*) {
             .V4 => |addr| {
-                return std.mem.readIntBig(u32, &addr.ip.octets) == 0;
+                return std.mem.readInt(u32, &addr.ip.octets, .big) == 0;
             },
             .V6 => |addr| {
-                return std.mem.readIntBig(u128, &addr.ip.octets) == 0;
+                return std.mem.readInt(u128, &addr.ip.octets, .big) == 0;
             },
         }
     }
@@ -383,7 +383,7 @@ pub const Ipv6Addr = struct {
         }
         const big_endian_parts: *align(1) const [8]u16 = @ptrCast(&self.octets);
         const native_endian_parts = switch (builtin.target.cpu.arch.endian()) {
-            .Big => big_endian_parts.*,
+            .big => big_endian_parts.*,
             .little => blk: {
                 var buf: [8]u16 = undefined;
                 for (big_endian_parts, 0..) |part, i| {

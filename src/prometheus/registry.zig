@@ -144,7 +144,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 return GetMetricError.InvalidType;
             }
 
-            return @as(MetricType, @fieldParentPtr("metric", gop.value_ptr.*.metric));
+            return @as(*MetricType, @fieldParentPtr("metric", gop.value_ptr.*.metric));
         }
 
         pub fn write(self: *Self, allocator: mem.Allocator, writer: anytype) !void {

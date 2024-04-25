@@ -70,7 +70,7 @@ pub fn serializeRepairRequest(
     };
     const buf = try allocator.alloc(u8, RepairMessage.MAX_SERIALIZED_SIZE);
     var stream = std.io.fixedBufferStream(buf);
-    try bincode.write(null, stream.writer(), msg, .{});
+    try bincode.write(stream.writer(), msg, .{});
     var serialized = try allocator.realloc(buf, stream.pos);
 
     var signer = try keypair.signer(null); // TODO noise

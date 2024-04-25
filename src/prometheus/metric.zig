@@ -96,7 +96,9 @@ pub fn floatMetric(value: anytype) struct {
         if (@as(f64, @floatFromInt(as_int)) == self.value) {
             try fmt.formatInt(as_int, 10, .lower, options, writer);
         } else {
-            try fmt.formatFloatDecimal(self.value, options, writer);
+            var buf = [_]u8{0} ** 64;
+            const output = try fmt.formatFloat(&buf, self.value, .{});
+            try fmt.formatBuf(output, options, writer);
         }
     }
 } {

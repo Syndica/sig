@@ -132,7 +132,7 @@ pub fn build(b: *std.Build) void {
     const exec_commands = [_]ExecCommand{
         ExecCommand{
             .name = "fuzz",
-            .path = "src/gossip/fuzz.zig",
+            .path = "src/fuzz.zig",
             .description = "gossip fuzz testing",
         },
         ExecCommand{

@@ -763,8 +763,8 @@ pub const GossipTable = struct {
         }
 
         pub fn callback(task: *Task) void {
-            const self: @This() = @fieldParentPtr("task", task);
-            defer self.done.store(true, std.atomic.Ordering.release);
+            const self: *@This() = @fieldParentPtr("task", task);
+            defer self.done.store(true, .release);
 
             // get assocaited entries
             const entry = self.table.pubkey_to_values.getEntry(self.key).?;
@@ -835,7 +835,7 @@ pub const GossipTable = struct {
         // wait for them to be done to release the lock
         var output_length: u64 = 0;
         for (tasks) |*task| {
-            while (!task.done.load(std.atomic.Ordering.Acquire)) {
+            while (!task.done.load(.acquire)) {
                 // wait
             }
             output_length += task.old_labels.items.len;

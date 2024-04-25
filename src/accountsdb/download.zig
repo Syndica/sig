@@ -308,7 +308,7 @@ const DownloadProgress = struct {
             null,
             download_size,
             std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP.SHARED,
+            std.posix.MAP{ .TYPE = .SHARED },
             file.handle,
             0,
         );

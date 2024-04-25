@@ -40,7 +40,7 @@ pub const Counter = struct {
     }
 
     fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
-        const self: Self = @fieldParentPtr("metric", metric);
+        const self: *Self = @fieldParentPtr("metric", metric);
         return Metric.Result{ .counter = self.get() };
     }
 };
