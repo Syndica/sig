@@ -6,7 +6,7 @@ const Metric = @import("metric.zig").Metric;
 /// Read and write operations are atomic and monotonic.
 pub fn Gauge(comptime T: type) type {
     return struct {
-        value: std.atomic.Value(T) = .{ .value = 0 },
+        value: std.atomic.Value(T) = .{ .raw = 0 },
         metric: Metric = .{ .getResultFn = getResult },
 
         const Self = @This();
@@ -38,7 +38,7 @@ pub fn Gauge(comptime T: type) type {
         fn getResult(metric: *Metric, allocator: std.mem.Allocator) Metric.Error!Metric.Result {
             _ = allocator;
 
-            const self: Self = @fieldParentPtr("metric", metric);
+            const self: *Self = @fieldParentPtr("metric", metric);
 
             return switch (T) {
                 f64 => Metric.Result{ .gauge = self.get() },

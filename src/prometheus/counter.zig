@@ -85,7 +85,7 @@ test "prometheus.counter: concurrent" {
 }
 
 test "prometheus.counter: write" {
-    var counter = Counter{ .value = .{ .value = 340 } };
+    var counter = Counter{ .value = .{ .raw = 340 } };
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();

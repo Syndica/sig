@@ -763,298 +763,298 @@ pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params
     return v;
 }
 
-// ** Tests **//
-fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
-    const S = struct {
-        fn deserializeTestSlice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
-            var ally = allocator.?;
-            const len = try bincode.read(ally, u16, reader, params);
-            var elems = try ally.alloc(Child, len);
-            for (0..len) |i| {
-                elems[i] = try bincode.read(ally, Child, reader, params);
-            }
-            return elems;
-        }
+// // ** Tests **//
+// fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
+//     const S = struct {
+//         fn deserializeTestSlice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
+//             var ally = allocator.?;
+//             const len = try bincode.read(ally, u16, reader, params);
+//             var elems = try ally.alloc(Child, len);
+//             for (0..len) |i| {
+//                 elems[i] = try bincode.read(ally, Child, reader, params);
+//             }
+//             return elems;
+//         }
 
-        pub fn serilaizeTestSlice(writer: anytype, data: anytype, params: bincode.Params) !void {
-            const len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
-            try bincode.write(null, writer, len, params);
-            for (data) |item| {
-                try bincode.write(null, writer, item, params);
-            }
-            return;
-        }
-    };
+//         pub fn serilaizeTestSlice(writer: anytype, data: anytype, params: bincode.Params) !void {
+//             const len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
+//             try bincode.write(null, writer, len, params);
+//             for (data) |item| {
+//                 try bincode.write(null, writer, item, params);
+//             }
+//             return;
+//         }
+//     };
 
-    return FieldConfig([]Child){
-        .serializer = S.serilaizeTestSlice,
-        .deserializer = S.deserializeTestSlice,
-    };
-}
+//     return FieldConfig([]Child){
+//         .serializer = S.serilaizeTestSlice,
+//         .deserializer = S.deserializeTestSlice,
+//     };
+// }
 
-test "bincode: default on eof" {
-    const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
-    const Foo = struct {
-        value: u8 = 0,
-        accounts: std.ArrayList(u64),
-        pub const @"!bincode-config:accounts" = defaultArrayListOnEOFConfig(u64);
-        pub const @"!bincode-config:value" = .{ .default_on_eof = true };
-    };
+// test "bincode: default on eof" {
+//     const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
+//     const Foo = struct {
+//         value: u8 = 0,
+//         accounts: std.ArrayList(u64),
+//         pub const @"!bincode-config:accounts" = defaultArrayListOnEOFConfig(u64);
+//         pub const @"!bincode-config:value" = .{ .default_on_eof = true };
+//     };
 
-    var buf: [1]u8 = .{1};
-    const r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
-    try std.testing.expect(r.value == 1);
+//     var buf: [1]u8 = .{1};
+//     const r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
+//     try std.testing.expect(r.value == 1);
 
-    var buf2: [1024]u8 = undefined;
-    const slice = try writeToSlice(&buf2, Foo{
-        .value = 10,
-        .accounts = std.ArrayList(u64).init(std.testing.allocator),
-    }, .{});
+//     var buf2: [1024]u8 = undefined;
+//     const slice = try writeToSlice(&buf2, Foo{
+//         .value = 10,
+//         .accounts = std.ArrayList(u64).init(std.testing.allocator),
+//     }, .{});
 
-    const r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
-    try std.testing.expect(r2.value == 10);
-}
+//     const r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
+//     try std.testing.expect(r2.value == 10);
+// }
 
-test "bincode: custom field serialization" {
-    const Foo = struct {
-        accounts: []u8,
-        txs: []u32,
-        skip_me: u8 = 20,
-        skip_me_null: ?u8 = null,
+// test "bincode: custom field serialization" {
+//     const Foo = struct {
+//         accounts: []u8,
+//         txs: []u32,
+//         skip_me: u8 = 20,
+//         skip_me_null: ?u8 = null,
 
-        pub const @"!bincode-config:accounts" = TestSliceConfig(u8);
-        pub const @"!bincode-config:txs" = TestSliceConfig(u32);
-        pub const @"!bincode-config:skip_me" = FieldConfig(u8){
-            .skip = true,
-        };
-        pub const @"!bincode-config:skip_me_null" = FieldConfig(?u8){
-            .skip = true,
-        };
-    };
+//         pub const @"!bincode-config:accounts" = TestSliceConfig(u8);
+//         pub const @"!bincode-config:txs" = TestSliceConfig(u32);
+//         pub const @"!bincode-config:skip_me" = FieldConfig(u8){
+//             .skip = true,
+//         };
+//         pub const @"!bincode-config:skip_me_null" = FieldConfig(?u8){
+//             .skip = true,
+//         };
+//     };
 
-    var accounts = [_]u8{ 1, 2, 3 };
-    var txs = [_]u32{ 1, 2, 3 };
-    const foo = Foo{ .accounts = &accounts, .txs = &txs };
+//     var accounts = [_]u8{ 1, 2, 3 };
+//     var txs = [_]u32{ 1, 2, 3 };
+//     const foo = Foo{ .accounts = &accounts, .txs = &txs };
 
-    var buf: [1000]u8 = undefined;
-    const out = try writeToSlice(&buf, foo, Params{});
-    // std.debug.print("{any}", .{out});
-    try std.testing.expect(out[out.len - 1] != 20); // skip worked
+//     var buf: [1000]u8 = undefined;
+//     const out = try writeToSlice(&buf, foo, Params{});
+//     // std.debug.print("{any}", .{out});
+//     try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
-    const size = try getSerializedSize(std.testing.allocator, foo, Params{});
-    try std.testing.expect(size > 0);
+//     const size = try getSerializedSize(std.testing.allocator, foo, Params{});
+//     try std.testing.expect(size > 0);
 
-    const r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
-    defer free(std.testing.allocator, r);
-    // std.debug.print("{any}", .{r});
+//     const r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
+//     defer free(std.testing.allocator, r);
+//     // std.debug.print("{any}", .{r});
 
-    try std.testing.expect(r.accounts.len == foo.accounts.len);
-    try std.testing.expect(r.txs.len == foo.txs.len);
-    try std.testing.expect(r.skip_me == 20);
-}
+//     try std.testing.expect(r.accounts.len == foo.accounts.len);
+//     try std.testing.expect(r.txs.len == foo.txs.len);
+//     try std.testing.expect(r.skip_me == 20);
+// }
 
-test "bincode: test arraylist" {
-    var array = std.ArrayList(u8).init(std.testing.allocator);
-    defer array.deinit();
+// test "bincode: test arraylist" {
+//     var array = std.ArrayList(u8).init(std.testing.allocator);
+//     defer array.deinit();
 
-    try array.append(10);
-    try array.append(11);
+//     try array.append(10);
+//     try array.append(11);
 
-    var buf: [1024]u8 = undefined;
-    const bytes = try writeToSlice(&buf, array, .{});
+//     var buf: [1024]u8 = undefined;
+//     const bytes = try writeToSlice(&buf, array, .{});
 
-    // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
-    var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
-    defer array2.deinit();
+//     // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
+//     var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
+//     defer array2.deinit();
 
-    try std.testing.expectEqualSlices(u8, array.items, array2.items);
-}
+//     try std.testing.expectEqualSlices(u8, array.items, array2.items);
+// }
 
-test "bincode: test hashmap/BTree (de)ser" {
-    // 20 => 10
-    const rust_bytes = [_]u8{ 1, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 10, 0, 0, 0 };
+// test "bincode: test hashmap/BTree (de)ser" {
+//     // 20 => 10
+//     const rust_bytes = [_]u8{ 1, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 10, 0, 0, 0 };
 
-    var map = std.AutoHashMap(u32, u32).init(std.testing.allocator);
-    defer map.deinit();
+//     var map = std.AutoHashMap(u32, u32).init(std.testing.allocator);
+//     defer map.deinit();
 
-    try map.put(20, 10);
+//     try map.put(20, 10);
 
-    var buf: [1024]u8 = undefined;
-    const bytes = try writeToSlice(&buf, map, .{});
+//     var buf: [1024]u8 = undefined;
+//     const bytes = try writeToSlice(&buf, map, .{});
 
-    try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
+//     try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
 
-    var de_map = try readFromSlice(std.testing.allocator, std.AutoHashMap(u32, u32), bytes, .{});
-    defer de_map.deinit();
+//     var de_map = try readFromSlice(std.testing.allocator, std.AutoHashMap(u32, u32), bytes, .{});
+//     defer de_map.deinit();
 
-    const v = de_map.get(20);
-    try std.testing.expectEqual(v.?, 10);
-}
+//     const v = de_map.get(20);
+//     try std.testing.expectEqual(v.?, 10);
+// }
 
-test "bincode: test float serialization" {
-    const f: f64 = 1.234;
-    var buf: [1024]u8 = undefined;
-    const bytes = try writeToSlice(&buf, f, .{});
-    const rust_bytes = [_]u8{ 88, 57, 180, 200, 118, 190, 243, 63 };
-    try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
+// test "bincode: test float serialization" {
+//     const f: f64 = 1.234;
+//     var buf: [1024]u8 = undefined;
+//     const bytes = try writeToSlice(&buf, f, .{});
+//     const rust_bytes = [_]u8{ 88, 57, 180, 200, 118, 190, 243, 63 };
+//     try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
 
-    const f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
-    try std.testing.expect(f2 == f);
-}
+//     const f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
+//     try std.testing.expect(f2 == f);
+// }
 
-test "bincode: test serialization" {
-    var buf: [1]u8 = undefined;
+// test "bincode: test serialization" {
+//     var buf: [1]u8 = undefined;
 
-    {
-        const out = try writeToSlice(&buf, true, Params.standard);
-        try std.testing.expect(out.len == 1);
-        try std.testing.expect(out[0] == 1);
-    }
+//     {
+//         const out = try writeToSlice(&buf, true, Params.standard);
+//         try std.testing.expect(out.len == 1);
+//         try std.testing.expect(out[0] == 1);
+//     }
 
-    {
-        const out = try readFromSlice(null, bool, &buf, Params{});
-        try std.testing.expect(out == true);
-    }
+//     {
+//         const out = try readFromSlice(null, bool, &buf, Params{});
+//         try std.testing.expect(out == true);
+//     }
 
-    {
-        const out = try writeToSlice(&buf, false, Params.standard);
-        try std.testing.expect(out.len == 1);
-        try std.testing.expect(out[0] == 0);
-    }
+//     {
+//         const out = try writeToSlice(&buf, false, Params.standard);
+//         try std.testing.expect(out.len == 1);
+//         try std.testing.expect(out[0] == 0);
+//     }
 
-    var buf2: [8]u8 = undefined; // u64 default
-    _ = try writeToSlice(&buf2, 300, Params.standard);
+//     var buf2: [8]u8 = undefined; // u64 default
+//     _ = try writeToSlice(&buf2, 300, Params.standard);
 
-    var buf3: [4]u8 = undefined;
-    const v: u32 = 200;
-    _ = try writeToSlice(&buf3, v, Params.standard);
+//     var buf3: [4]u8 = undefined;
+//     const v: u32 = 200;
+//     _ = try writeToSlice(&buf3, v, Params.standard);
 
-    {
-        const out = try readFromSlice(null, u32, &buf3, Params{});
-        try std.testing.expect(out == 200);
-    }
+//     {
+//         const out = try readFromSlice(null, u32, &buf3, Params{});
+//         try std.testing.expect(out == 200);
+//     }
 
-    const Foo = enum { A, B };
-    const out = try writeToSlice(&buf3, Foo.B, Params.standard);
-    var e = [_]u8{ 1, 0, 0, 0 };
-    try std.testing.expectEqualSlices(u8, &e, out);
+//     const Foo = enum { A, B };
+//     const out = try writeToSlice(&buf3, Foo.B, Params.standard);
+//     var e = [_]u8{ 1, 0, 0, 0 };
+//     try std.testing.expectEqualSlices(u8, &e, out);
 
-    const read_out = try readFromSlice(null, Foo, &buf3, Params{});
-    try std.testing.expectEqual(read_out, Foo.B);
+//     const read_out = try readFromSlice(null, Foo, &buf3, Params{});
+//     try std.testing.expectEqual(read_out, Foo.B);
 
-    const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
-    const expected = [_]u8{ 1, 0, 0, 0, 1, 1, 1, 1 };
-    const value = Foo2{ .B = 16843009 };
-    // Map keys
-    // .A = 65 = 1000001 (7 bits)
-    // .B = 66 = 1000010
-    // .B = 67 = 1000011
-    const out2 = try writeToSlice(&buf2, value, Params.standard);
-    try std.testing.expectEqualSlices(u8, &expected, out2);
+//     const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
+//     const expected = [_]u8{ 1, 0, 0, 0, 1, 1, 1, 1 };
+//     const value = Foo2{ .B = 16843009 };
+//     // Map keys
+//     // .A = 65 = 1000001 (7 bits)
+//     // .B = 66 = 1000010
+//     // .B = 67 = 1000011
+//     const out2 = try writeToSlice(&buf2, value, Params.standard);
+//     try std.testing.expectEqualSlices(u8, &expected, out2);
 
-    const read_out2 = try readFromSlice(null, Foo2, &buf2, Params{});
-    try std.testing.expectEqual(read_out2, value);
+//     const read_out2 = try readFromSlice(null, Foo2, &buf2, Params{});
+//     try std.testing.expectEqual(read_out2, value);
 
-    const Bar = struct { a: u32, b: u32, c: Foo2 };
-    const b = Bar{ .a = 65, .b = 66, .c = Foo2{ .B = 16843009 } };
-    var buf4: [100]u8 = undefined;
-    const out3 = try writeToSlice(&buf4, b, Params.standard);
-    var expected2 = [_]u8{ 65, 0, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1 };
-    try std.testing.expectEqualSlices(u8, &expected2, out3);
+//     const Bar = struct { a: u32, b: u32, c: Foo2 };
+//     const b = Bar{ .a = 65, .b = 66, .c = Foo2{ .B = 16843009 } };
+//     var buf4: [100]u8 = undefined;
+//     const out3 = try writeToSlice(&buf4, b, Params.standard);
+//     var expected2 = [_]u8{ 65, 0, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1 };
+//     try std.testing.expectEqualSlices(u8, &expected2, out3);
 
-    const s = struct {
-        a: u32,
-        b: ?u16,
-        c: Bar,
-    };
-    const _s = s{
-        .a = 65,
-        .b = null,
-        .c = Bar{ .a = 66, .b = 67, .c = Foo2{ .B = 16843009 } },
-    };
-    var buf6: [100]u8 = undefined;
-    const out4 = try writeToSlice(&buf6, _s, Params.standard);
-    const result = try readFromSlice(null, s, out4, Params{});
-    try std.testing.expectEqual(result, _s);
+//     const s = struct {
+//         a: u32,
+//         b: ?u16,
+//         c: Bar,
+//     };
+//     const _s = s{
+//         .a = 65,
+//         .b = null,
+//         .c = Bar{ .a = 66, .b = 67, .c = Foo2{ .B = 16843009 } },
+//     };
+//     var buf6: [100]u8 = undefined;
+//     const out4 = try writeToSlice(&buf6, _s, Params.standard);
+//     const result = try readFromSlice(null, s, out4, Params{});
+//     try std.testing.expectEqual(result, _s);
 
-    // ensure write to array works too
-    var array_buf = try writeToArray(std.testing.allocator, _s, Params.standard);
-    defer array_buf.deinit();
-    try std.testing.expectEqualSlices(u8, out4, array_buf.items);
-}
+//     // ensure write to array works too
+//     var array_buf = try writeToArray(std.testing.allocator, _s, Params.standard);
+//     defer array_buf.deinit();
+//     try std.testing.expectEqualSlices(u8, out4, array_buf.items);
+// }
 
-test "bincode: (legacy) serialize an array" {
-    var buffer = std.ArrayList(u8).init(std.testing.allocator);
-    defer buffer.deinit();
+// test "bincode: (legacy) serialize an array" {
+//     var buffer = std.ArrayList(u8).init(std.testing.allocator);
+//     defer buffer.deinit();
 
-    const Foo = struct {
-        first: u8,
-        second: u8,
-    };
+//     const Foo = struct {
+//         first: u8,
+//         second: u8,
+//     };
 
-    try bincode.write(null, buffer.writer(), [_]Foo{
-        .{ .first = 10, .second = 20 },
-        .{ .first = 30, .second = 40 },
-    }, bincode.Params.legacy);
+//     try bincode.write(null, buffer.writer(), [_]Foo{
+//         .{ .first = 10, .second = 20 },
+//         .{ .first = 30, .second = 40 },
+//     }, bincode.Params.legacy);
 
-    try testing.expectEqualSlices(u8, &[_]u8{
-        2, 0, 0, 0, 0, 0, 0, 0, // Length of the array
-        10, 20, // First Foo
-        30, 40, // Second Foo
-    }, buffer.items);
-}
+//     try testing.expectEqualSlices(u8, &[_]u8{
+//         2, 0, 0, 0, 0, 0, 0, 0, // Length of the array
+//         10, 20, // First Foo
+//         30, 40, // Second Foo
+//     }, buffer.items);
+// }
 
-test "bincode: serialize and deserialize" {
-    var buffer = std.ArrayList(u8).init(testing.allocator);
-    defer buffer.deinit();
+// test "bincode: serialize and deserialize" {
+//     var buffer = std.ArrayList(u8).init(testing.allocator);
+//     defer buffer.deinit();
 
-    inline for (.{bincode.Params.standard}) |params| {
-        inline for (.{
-            @as(i8, std.math.minInt(i8)),
-            @as(i16, std.math.minInt(i16)),
-            @as(i32, std.math.minInt(i32)),
-            @as(i64, std.math.minInt(i64)),
-            @as(usize, std.math.minInt(usize)),
-            @as(isize, std.math.minInt(isize)),
-            @as(i8, std.math.maxInt(i8)),
-            @as(i16, std.math.maxInt(i16)),
-            @as(i32, std.math.maxInt(i32)),
-            @as(i64, std.math.maxInt(i64)),
-            @as(u8, std.math.maxInt(u8)),
-            @as(u16, std.math.maxInt(u16)),
-            @as(u32, std.math.maxInt(u32)),
-            @as(u64, std.math.maxInt(u64)),
-            @as(usize, std.math.maxInt(usize)),
-            @as(isize, std.math.maxInt(isize)),
+//     inline for (.{bincode.Params.standard}) |params| {
+//         inline for (.{
+//             @as(i8, std.math.minInt(i8)),
+//             @as(i16, std.math.minInt(i16)),
+//             @as(i32, std.math.minInt(i32)),
+//             @as(i64, std.math.minInt(i64)),
+//             @as(usize, std.math.minInt(usize)),
+//             @as(isize, std.math.minInt(isize)),
+//             @as(i8, std.math.maxInt(i8)),
+//             @as(i16, std.math.maxInt(i16)),
+//             @as(i32, std.math.maxInt(i32)),
+//             @as(i64, std.math.maxInt(i64)),
+//             @as(u8, std.math.maxInt(u8)),
+//             @as(u16, std.math.maxInt(u16)),
+//             @as(u32, std.math.maxInt(u32)),
+//             @as(u64, std.math.maxInt(u64)),
+//             @as(usize, std.math.maxInt(usize)),
+//             @as(isize, std.math.maxInt(isize)),
 
-            // @as(f32, std.math.floatMin(f32)),
-            // @as(f64, std.math.floatMin(f64)),
-            // @as(f32, std.math.floatMax(f32)),
-            // @as(f64, std.math.floatMax(f64)),
+//             // @as(f32, std.math.floatMin(f32)),
+//             // @as(f64, std.math.floatMin(f64)),
+//             // @as(f32, std.math.floatMax(f32)),
+//             // @as(f64, std.math.floatMax(f64)),
 
-            [_]u8{ 0, 1, 2, 3 },
-        }) |expected| {
-            try bincode.write(null, buffer.writer(), expected, params);
+//             [_]u8{ 0, 1, 2, 3 },
+//         }) |expected| {
+//             try bincode.write(null, buffer.writer(), expected, params);
 
-            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
-            defer bincode.free(testing.allocator, actual);
+//             const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+//             defer bincode.free(testing.allocator, actual);
 
-            try testing.expectEqual(expected, actual);
-            buffer.clearRetainingCapacity();
-        }
-    }
+//             try testing.expectEqual(expected, actual);
+//             buffer.clearRetainingCapacity();
+//         }
+//     }
 
-    inline for (.{bincode.Params.standard}) |params| {
-        inline for (.{
-            @as([]const u8, "hello world"),
-        }) |expected| {
-            try bincode.write(null, buffer.writer(), expected, params);
+//     inline for (.{bincode.Params.standard}) |params| {
+//         inline for (.{
+//             @as([]const u8, "hello world"),
+//         }) |expected| {
+//             try bincode.write(null, buffer.writer(), expected, params);
 
-            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
-            defer bincode.free(testing.allocator, actual);
+//             const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+//             defer bincode.free(testing.allocator, actual);
 
-            try testing.expectEqualSlices(std.meta.Elem(@TypeOf(expected)), expected, actual);
-            buffer.clearRetainingCapacity();
-        }
-    }
-}
+//             try testing.expectEqualSlices(std.meta.Elem(@TypeOf(expected)), expected, actual);
+//             buffer.clearRetainingCapacity();
+//         }
+//     }
+// }

@@ -193,7 +193,7 @@ test "sync.channel: channel works properly" {
     join1.join();
     join2.join();
 
-    try testing.expectEqual(send_count, recv_count.value);
+    try testing.expectEqual(send_count, recv_count.raw);
 }
 
 pub const BenchmarkChannel = struct {

@@ -314,9 +314,7 @@ pub const SnapshotFields = struct {
         const contents = try file.readToEndAlloc(allocator, size);
         defer allocator.free(contents);
 
-        // TODO: Brennan
-        // var snapshot_fields: SnapshotFields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
-        var snapshot_fields: SnapshotFields = undefined;
+        var snapshot_fields: SnapshotFields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
 
         // if these are available, we push them onto the banks
         var bank_fields = &snapshot_fields.bank_fields;

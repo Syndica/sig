@@ -297,13 +297,13 @@ test "prometheus.registry: write" {
         // Add some counters
         {
             const counter = try registry.getOrCreateCounter(tc.counter_name);
-            counter.* = .{ .value = .{ .value = 2 } };
+            counter.* = .{ .value = .{ .raw = 2 } };
         }
 
         // Add some gauges
         {
             const counter = try registry.getOrCreateGauge(tc.gauge_name, u64);
-            counter.* = .{ .value = .{ .value = 13 } };
+            counter.* = .{ .value = .{ .raw = 13 } };
         }
 
         // Add some gauge_fns

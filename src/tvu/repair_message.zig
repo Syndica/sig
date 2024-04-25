@@ -155,7 +155,7 @@ pub const RepairMessage = union(enum(u8)) {
 
                 // message was generated recently
                 const time_diff = @as(i128, current_timestamp_millis) - @as(i128, header.timestamp);
-                const time_diff_abs = std.math.absInt(time_diff) catch unreachable;
+                const time_diff_abs = if (time_diff >= 0) time_diff else -time_diff;
                 if (time_diff_abs > SIGNED_REPAIR_TIME_WINDOW_SECS) {
                     return error.TimeSkew;
                 }

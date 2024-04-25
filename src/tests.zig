@@ -5,7 +5,7 @@ const logger = @import("./trace/log.zig");
 test {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    logger.global = logger.Logger.init(allocator, .debug);
+    logger.default_logger.* = logger.Logger.init(allocator, .debug);
 
     std.testing.log_level = std.log.Level.err;
     std.testing.refAllDecls(lib);

@@ -21,7 +21,7 @@ pub const Error = error{ InvalidRequest, ResponseNotStatusOk, InvalidHttpEndpoin
 pub const Client = struct {
     http_endpoint: Uri,
     client: http.Client,
-    default_http_headers: http.Headers,
+    default_http_headers: http.Client.Request.Headers,
     default_commitment: types.Commitment,
     allocator: std.mem.Allocator,
 

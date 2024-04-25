@@ -108,7 +108,7 @@ pub const Histogram = struct {
 
         // Wait until all writers are done writing to the cold shard
         // TODO: switch to a condvar. see: `std.Thread.Condition`
-        while (cold_shard.count.tryCompareAndSwap(shard_sync.count, 0, .acquire, .monotonic)) |_| {
+        while (cold_shard.count.cmpxchgStrong(shard_sync.count, 0, .acquire, .monotonic)) |_| {
             // Acquire on success: keeps shard usage after.
         }
 
@@ -135,7 +135,7 @@ pub const Histogram = struct {
     }
 
     fn getResult(metric: *Metric, allocator: Allocator) Metric.Error!Metric.Result {
-        const self: Self = @fieldParentPtr("metric", metric);
+        const self: *Self = @fieldParentPtr("metric", metric);
         const snapshot = try self.getSnapshot(allocator);
         return Metric.Result{ .histogram = snapshot };
     }

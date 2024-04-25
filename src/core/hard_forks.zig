@@ -53,7 +53,7 @@ pub const HardForks = struct {
 
         if (fork_count > 0) {
             var buf: [8]u8 = undefined;
-            std.mem.writeIntLittle(u64, &buf, fork_count);
+            std.mem.writeInt(u64, &buf, fork_count, .little);
             return buf;
         } else {
             return null;

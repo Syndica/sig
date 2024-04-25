@@ -45,7 +45,7 @@ pub fn BitVecConfig(comptime T: type) bincode.FieldConfig(DynamicArrayBitSet(T))
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
             var bitset: DynamicArrayBitSet(T) = data;
             const bitvec = BitVec(T).initFromBitSet(&bitset);
-            try bincode.write(null, writer, bitvec, params);
+            try bincode.write(writer, bitvec, params);
         }
 
         pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !DynamicArrayBitSet(T) {
