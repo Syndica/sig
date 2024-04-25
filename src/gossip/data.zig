@@ -1502,7 +1502,7 @@ test "gossip.data: contact info serialization matches rust" {
 test "gossip.data: test RestartHeaviestFork serialization matches rust" {
     var rust_bytes = [_]u8{ 82, 182, 93, 119, 193, 123, 4, 235, 68, 64, 82, 233, 51, 34, 232, 123, 245, 237, 236, 142, 251, 1, 123, 124, 26, 40, 219, 84, 165, 116, 208, 63, 19, 0, 0, 0, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 20, 0 };
 
-    var x = RestartHeaviestFork{
+    const x = RestartHeaviestFork{
         .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 19,
         .last_slot = 12,
@@ -1524,11 +1524,11 @@ test "gossip.data: test RestartLastVotedForkSlots serialization matches rust" {
     x.setValue(20, false);
     x.setValue(40, false);
 
-    var offsets = SlotsOffsets{
+    const offsets = SlotsOffsets{
         .RawOffsets = .{ .bits = x },
     };
 
-    var data = RestartLastVotedForkSlots{
+    const data = RestartLastVotedForkSlots{
         .from = try Pubkey.fromString("6ZsiX6YcwEa93yWtVwGRiK8Ceoxq2VieVh2pvEiUtpCW"),
         .wallclock = 0,
         .last_voted_slot = 0,
