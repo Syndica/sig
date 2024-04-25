@@ -5,7 +5,7 @@ const thread_context = @import("thread_context.zig");
 const ThreadLocalContext = thread_context.ThreadLocalContext;
 const ThreadState = thread_context.ThreadState;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Mutex = std.Thread.Mutex;
 
 pub const Waker = struct {
@@ -70,7 +70,7 @@ pub const Waker = struct {
 
     /// NOTE: This assumes we've already acquired the self.mutex lock
     inline fn tryAwakeSleeper(self: *Self) ?SleepingOperation {
-        var this_thread_id = std.Thread.getCurrentId();
+        const this_thread_id = std.Thread.getCurrentId();
 
         for (0.., self.sleepers.items) |i, sleeper| {
             // for each sleeping operation, try and find one that:

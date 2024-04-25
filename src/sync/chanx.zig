@@ -345,7 +345,7 @@ fn benchPacketSender(
     var i: usize = 0;
 
     while (i < total_send) : (i += 1) {
-        var packet = Packet.default();
+        const packet = Packet.default();
         sender.send(packet) catch unreachable;
     }
 }
@@ -439,9 +439,9 @@ pub const BenchmarkChannel = struct {
 
     pub fn benchmarkBoundedUsizeChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        var n_items = argss.n_items;
-        var senders_count = argss.n_senders;
-        var receivers_count = argss.n_receivers;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
         var channel = try ChannelX(usize).init(.bounded, .{
@@ -450,8 +450,8 @@ pub const BenchmarkChannel = struct {
         });
         defer channel.deinit();
 
-        var sends_per_sender: usize = n_items / senders_count;
-        var received_per_sender: usize = n_items / receivers_count;
+        const sends_per_sender: usize = n_items / senders_count;
+        const received_per_sender: usize = n_items / receivers_count;
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
@@ -476,9 +476,9 @@ pub const BenchmarkChannel = struct {
 
     pub fn benchmarkBoundedPacketChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        var n_items = argss.n_items;
-        var senders_count = argss.n_senders;
-        var receivers_count = argss.n_receivers;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
         var channel = try ChannelX(Packet).init(.bounded, .{
@@ -487,8 +487,8 @@ pub const BenchmarkChannel = struct {
         });
         defer channel.deinit();
 
-        var sends_per_sender: usize = n_items / senders_count;
-        var received_per_sender: usize = n_items / receivers_count;
+        const sends_per_sender: usize = n_items / senders_count;
+        const received_per_sender: usize = n_items / receivers_count;
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
@@ -588,8 +588,8 @@ test "sync.chanx.bounded buffer len is correct" {
 }
 
 test "sync.chanx.bounded mpmc" {
-    var capacity: usize = 100;
-    var n_items: usize = 1000;
+    const capacity: usize = 100;
+    const n_items: usize = 1000;
     var chan = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = capacity,
@@ -609,8 +609,8 @@ test "sync.chanx.bounded mpmc" {
 }
 
 test "sync.chanx.bounded: mpmc" {
-    var capacity: usize = 100;
-    var n_items: usize = 1000;
+    const capacity: usize = 100;
+    const n_items: usize = 1000;
     var chan = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = capacity,
@@ -632,8 +632,8 @@ test "sync.chanx.bounded: mpmc" {
 }
 
 test "sync.chanx.bounded: spsc" {
-    var capacity: usize = 100;
-    var n_items: usize = 1000;
+    const capacity: usize = 100;
+    const n_items: usize = 1000;
     var chan = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = capacity,
@@ -653,8 +653,8 @@ test "sync.chanx.bounded: spsc" {
 }
 
 test "sync.chanx.bounded: spmc" {
-    var capacity: usize = 100;
-    var n_items: usize = 1000;
+    const capacity: usize = 100;
+    const n_items: usize = 1000;
     var chan = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = capacity,
@@ -731,7 +731,7 @@ test "sync.chanx.bounded: send timeout works" {
     });
     defer chan.deinit();
 
-    var timeout: u64 = std.time.ns_per_ms * 100;
+    const timeout: u64 = std.time.ns_per_ms * 100;
 
     var sender = chan.initSender();
     defer sender.deinit();
@@ -739,7 +739,7 @@ test "sync.chanx.bounded: send timeout works" {
     try sender.send(1);
     var timer = try std.time.Timer.start();
     try std.testing.expectError(error.timeout, sender.sendTimeout(2, timeout));
-    var time = timer.read();
+    const time = timer.read();
 
     try std.testing.expect(time >= std.time.ns_per_ms * 95);
 }
@@ -812,10 +812,10 @@ test "sync.chanx.bounded: receive while empty with timeout" {
     defer sender.deinit();
     var receiver = chan.initReceiver();
     defer receiver.deinit();
-    var timeout: u64 = std.time.ns_per_ms * 100;
+    const timeout: u64 = std.time.ns_per_ms * 100;
 
     var timer = try std.time.Timer.start();
     try std.testing.expectError(error.timeout, receiver.receiveTimeout(timeout));
-    var time = timer.read();
+    const time = timer.read();
     try std.testing.expect(time >= std.time.ns_per_ms * 95);
 }

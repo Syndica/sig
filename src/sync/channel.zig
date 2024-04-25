@@ -18,7 +18,7 @@ pub fn Channel(comptime T: type) type {
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, init_capacity: usize) *Self {
-            var self = allocator.create(Self) catch unreachable;
+            const self = allocator.create(Self) catch unreachable;
             self.* = .{
                 .buffer = Mux(std.ArrayList(T)).init(std.ArrayList(T).initCapacity(allocator, init_capacity) catch unreachable),
                 .allocator = allocator,
@@ -65,7 +65,7 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
+            while (buffer.get().items.len == 0 and !self.closed.load(.seq_cst)) {
                 buffer.condition(&self.has_value);
             }
 
@@ -84,7 +84,7 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            while (buffer.get().items.len == 0 and !self.closed.load(.SeqCst)) {
+            while (buffer.get().items.len == 0 and !self.closed.load(.seq_cst)) {
                 buffer.condition(&self.has_value);
             }
 
@@ -93,9 +93,9 @@ pub fn Channel(comptime T: type) type {
                 return null;
             }
 
-            var num_items_to_drain = buffer.get().items.len;
+            const num_items_to_drain = buffer.get().items.len;
 
-            var out = self.allocator.alloc(T, num_items_to_drain) catch @panic("could not alloc");
+            const out = self.allocator.alloc(T, num_items_to_drain) catch @panic("could not alloc");
             @memcpy(out, buffer.get().items);
 
             buffer.mut().shrinkRetainingCapacity(0);
@@ -109,16 +109,16 @@ pub fn Channel(comptime T: type) type {
             var buffer = self.buffer.lock();
             defer buffer.unlock();
 
-            if (self.closed.load(.SeqCst)) {
+            if (self.closed.load(.seq_cst)) {
                 return error.ChannelClosed;
             }
 
-            var num_items_to_drain = buffer.get().items.len;
+            const num_items_to_drain = buffer.get().items.len;
             if (num_items_to_drain == 0) {
                 return null;
             }
 
-            var out = try self.allocator.alloc(T, num_items_to_drain);
+            const out = try self.allocator.alloc(T, num_items_to_drain);
             @memcpy(out, buffer.get().items);
             buffer.mut().clearRetainingCapacity();
 
@@ -126,12 +126,12 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn close(self: *Self) void {
-            self.closed.store(true, .SeqCst);
+            self.closed.store(true, .seq_cst);
             self.has_value.broadcast();
         }
 
         pub fn isClosed(self: *Self) bool {
-            return self.closed.load(.SeqCst);
+            return self.closed.load(.seq_cst);
         }
     };
 }
@@ -141,7 +141,7 @@ const Packet = @import("../net/packet.zig").Packet;
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
-        var packet = Packet.default();
+        const packet = Packet.default();
         chan.send(packet) catch unreachable;
     }
 }
@@ -228,17 +228,17 @@ pub const BenchmarkChannel = struct {
 
     pub fn benchmarkSimpleUsizeChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        var n_items = argss.n_items;
-        var senders_count = argss.n_senders;
-        var receivers_count = argss.n_receivers;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
         var channel = Channel(usize).init(allocator, n_items / 2);
         defer channel.deinit();
 
-        var sends_per_sender: usize = n_items / senders_count;
-        var receives_per_receiver: usize = n_items / receivers_count;
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {
@@ -264,17 +264,17 @@ pub const BenchmarkChannel = struct {
 
     pub fn benchmarkSimplePacketChannel(argss: BenchmarkArgs) !usize {
         var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
-        var n_items = argss.n_items;
-        var senders_count = argss.n_senders;
-        var receivers_count = argss.n_receivers;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
         var channel = Channel(Packet).init(allocator, n_items / 2);
         defer channel.deinit();
 
-        var sends_per_sender: usize = n_items / senders_count;
-        var receives_per_receiver: usize = n_items / receivers_count;
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
 
         var thread_index: usize = 0;
         while (thread_index < senders_count) : (thread_index += 1) {

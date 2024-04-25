@@ -4,7 +4,7 @@ const OperationId = @import("waker.zig").OperationId;
 const Token = @import("bounded.zig").TempSlot;
 const Backoff = @import("backoff.zig").Backoff;
 const Parker = parker.Parker;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 threadlocal var thread_local_context: ThreadLocalContext = .{
     .state = Atomic(usize).init(0),
@@ -53,7 +53,7 @@ pub const ThreadLocalContext = struct {
         var backoff = Backoff.init();
 
         while (true) {
-            var state = ThreadState.fromUsize(self.state.load(.Acquire));
+            const state = ThreadState.fromUsize(self.state.load(.Acquire));
             if (state != .waiting) return state;
 
             if (backoff.isCompleted())
@@ -64,11 +64,11 @@ pub const ThreadLocalContext = struct {
 
         // park the thread as we are waiting longer
         while (true) {
-            var state = ThreadState.fromUsize(self.state.load(.Acquire));
+            const state = ThreadState.fromUsize(self.state.load(.Acquire));
             if (state != .waiting) return state;
 
             if (timeout) |end| {
-                var now = std.time.Instant.now() catch unreachable;
+                const now = std.time.Instant.now() catch unreachable;
 
                 if (now.timestamp.tv_sec < end.timestamp.tv_sec and now.timestamp.tv_nsec < end.timestamp.tv_nsec)
                     self.parker.parkTimeout(timespecDifferenceInNs(end, now))
@@ -80,9 +80,9 @@ pub const ThreadLocalContext = struct {
 };
 
 fn timespecDifferenceInNs(a: std.time.Instant, b: std.time.Instant) u64 {
-    var sec_diff = a.timestamp.tv_sec - b.timestamp.tv_sec;
-    var nsec_diff = a.timestamp.tv_nsec - b.timestamp.tv_nsec;
-    var total_nsec = sec_diff * std.time.ns_per_s + nsec_diff;
+    const sec_diff = a.timestamp.tv_sec - b.timestamp.tv_sec;
+    const nsec_diff = a.timestamp.tv_nsec - b.timestamp.tv_nsec;
+    const total_nsec = sec_diff * std.time.ns_per_s + nsec_diff;
     return @intCast(total_nsec);
 }
 
@@ -121,8 +121,8 @@ test "thread state conversion to/from usize" {
     var token = Token(u64).uninitialized();
 
     var state = ThreadState{ .operation = token.toOperationId() };
-    var as_usize = state.toUsize();
-    var other_state = ThreadState.fromUsize(as_usize);
+    const as_usize = state.toUsize();
+    const other_state = ThreadState.fromUsize(as_usize);
 
     try std.testing.expectEqual(state, other_state);
     try std.testing.expectEqual(&token, Token(u64).fromOperationId(other_state.operation));
