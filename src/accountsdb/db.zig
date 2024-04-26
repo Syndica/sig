@@ -28,7 +28,7 @@ const readDirectory = @import("../utils/directory.zig").readDirectory;
 const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
 const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
 const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
-const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
+const parallelUnpackZstdTarBall = @import("snapshots.zig").parallelUnpackZstdTarBall;
 const Logger = @import("../trace/log.zig").Logger;
 const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
 

@@ -189,9 +189,7 @@ pub const GenesisConfig = struct {
     }
 
     pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-        // bincode.free(allocator, self);
+        bincode.free(allocator, self);
     }
 };
 

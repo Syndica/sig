@@ -3,7 +3,6 @@ const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const dns = @import("zigdig");
 const network = @import("zig-network");
-const sig = @import("../lib.zig");
 const helpers = @import("helpers.zig");
 
 const Atomic = std.atomic.Value;
@@ -11,42 +10,42 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
 
-const ContactInfo = sig.gossip.ContactInfo;
-const GossipService = sig.gossip.GossipService;
-const IpAddr = sig.net.IpAddr;
-const Level = sig.trace.Level;
-const Logger = sig.trace.Logger;
-const Pubkey = sig.core.Pubkey;
-const Registry = sig.prometheus.Registry;
-const RepairService = sig.tvu.RepairService;
-const RepairPeerProvider = sig.tvu.RepairPeerProvider;
-const RepairRequester = sig.tvu.RepairRequester;
-const ShredReceiver = sig.tvu.ShredReceiver;
-const SocketAddr = sig.net.SocketAddr;
-const SnapshotFiles = sig.accounts_db.SnapshotFiles;
-const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
-const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
-const AccountsDB = sig.accounts_db.AccountsDB;
-const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
-const GenesisConfig = sig.accounts_db.GenesisConfig;
-const StatusCache = sig.accounts_db.StatusCache;
-const SnapshotFields = sig.accounts_db.SnapshotFields;
-const Bank = sig.accounts_db.Bank;
-
-const enumFromName = sig.utils.enumFromName;
+const ContactInfo = @import("../gossip/data.zig").ContactInfo;
+const GossipService = @import("../gossip/service.zig").GossipService;
+const IpAddr = @import("../net/net.zig").IpAddr;
+const Level = @import("../trace/level.zig").Level;
+const Logger = @import("../trace/log.zig").Logger;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const Registry = @import("../prometheus/registry.zig").Registry;
+const RepairService = @import("../tvu/repair_service.zig").RepairService;
+const RepairPeerProvider = @import("../tvu/repair_service.zig").RepairPeerProvider;
+const RepairRequester = @import("../tvu/repair_service.zig").RepairRequester;
+const ShredReceiver = @import("../tvu/shred_receiver.zig").ShredReceiver;
+const SocketAddr = @import("../net/net.zig").SocketAddr;
+const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
+const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
+const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
+const AccountsDB = @import("../accountsdb/db.zig").AccountsDB;
+const AccountsDBConfig = @import("../accountsdb/db.zig").AccountsDBConfig;
+const GenesisConfig = @import("../accountsdb/genesis_config.zig").GenesisConfig;
+const StatusCache = @import("../accountsdb/snapshots.zig").StatusCache;
+const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
+const Bank = @import("../accountsdb/bank.zig").Bank;
+const enumFromName = @import("../utils/types.zig").enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
-const globalRegistry = sig.prometheus.globalRegistry;
-const getWallclockMs = sig.gossip.getWallclockMs;
-const requestIpEcho = sig.net.requestIpEcho;
-const servePrometheus = sig.prometheus.servePrometheus;
-const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
-const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
+const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
+const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
+const requestIpEcho = @import("../net/echo.zig").requestIpEcho;
+const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
+const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
+const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
+const SOCKET_TIMEOUT = @import("../net/socket_utils.zig").SOCKET_TIMEOUT;
 
 const config = @import("config.zig");
 // var validator_config = config.current;
 
-const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
-const socket_tag = sig.gossip.socket_tag;
+const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
+const socket_tag = @import("../gossip/data.zig").socket_tag;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
@@ -412,7 +411,7 @@ fn validator() !void {
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
     try repair_socket.bindToPort(repair_port);
-    try repair_socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
+    try repair_socket.setReadTimeout(SOCKET_TIMEOUT);
 
     var repair_svc = try initRepair(
         logger,

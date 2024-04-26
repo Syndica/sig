@@ -359,12 +359,20 @@ pub fn free(allocator: std.mem.Allocator, value: anytype) void {
                     @compileError("array_list must have a deinit func");
                 }
                 var val = @constCast(&value);
+                for (val.items) |item| {
+                    bincode.free(allocator, item);
+                }
                 val.deinit();
             } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
                 if (!@hasDecl(@TypeOf(value), "deinit")) {
                     @compileError("hash_map must have a deinit func");
                 }
                 var val = @constCast(&value);
+                var iter = val.iterator();
+                while (iter.next()) |item| {
+                    bincode.free(allocator, item.key_ptr.*);
+                    bincode.free(allocator, item.value_ptr.*);
+                }
                 val.deinit();
             } else inline for (info.fields) |field| {
                 if (getFieldConfig(T, field)) |config| {
@@ -412,6 +420,7 @@ pub fn free(allocator: std.mem.Allocator, value: anytype) void {
                     allocator.free(value);
                 },
                 .One => {
+                    bincode.free(allocator, value.*);
                     allocator.destroy(value);
                 },
                 else => unreachable,

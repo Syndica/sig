@@ -1,15 +1,14 @@
 const std = @import("std");
 const curl = @import("curl");
-const lib = @import("../lib.zig");
-const Pubkey = lib.core.Pubkey;
-const GossipService = lib.gossip.GossipService;
-const ContactInfo = lib.gossip.ContactInfo;
-const GossipTable = lib.gossip.GossipTable;
-const SlotAndHash = lib.accounts_db.SlotAndHash;
-const setReadTimeout = lib.net.setReadTimeout;
-const Logger = lib.trace.Logger;
-const socket_tag = lib.gossip.socket_tag;
-const Hash = lib.core.Hash;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const gossip = @import("../gossip/service.zig");
+const GossipService = gossip.GossipService;
+const ContactInfo = @import("../gossip/data.zig").ContactInfo;
+const GossipTable = @import("../gossip/table.zig").GossipTable;
+const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
+const Logger = @import("../trace/log.zig").Logger;
+const socket_tag = @import("../gossip/data.zig").socket_tag;
+const Hash = @import("../core/hash.zig").Hash;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 

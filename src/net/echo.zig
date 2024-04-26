@@ -73,13 +73,13 @@ pub const Server = struct {
         self: *Self,
     ) void {
         self.kill();
+        self.server.deinit();
     }
 
     pub fn kill(
         self: *Self,
     ) void {
         self.server.stop();
-        logger.debug("closing server");
     }
 
     pub fn listenAndServe(

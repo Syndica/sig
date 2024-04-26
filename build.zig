@@ -17,9 +17,6 @@ pub fn build(b: *std.Build) void {
     const zig_cli = b.dependency("zig-cli", opts);
     const zig_cli_module = zig_cli.module("zig-cli");
 
-    const getty = b.dependency("getty", opts);
-    const getty_mod = getty.module("getty");
-
     const httpz = b.dependency("httpz", opts);
     const httpz_mod = httpz.module("httpz");
 
@@ -51,10 +48,6 @@ pub fn build(b: *std.Build) void {
                 .module = zig_cli_module,
             },
             .{
-                .name = "getty",
-                .module = getty_mod,
-            },
-            .{
                 .name = "httpz",
                 .module = httpz_mod,
             },
@@ -83,7 +76,6 @@ pub fn build(b: *std.Build) void {
     tests.root_module.addImport("zig-network", zig_network_module);
     tests.root_module.addImport("base58-zig", base58_module);
     tests.root_module.addImport("zig-cli", zig_cli_module);
-    tests.root_module.addImport("getty", getty_mod);
     tests.root_module.addImport("httpz", httpz_mod);
     tests.root_module.addImport("zigdig", zigdig_mod);
     tests.root_module.addImport("zstd", zstd_mod);
@@ -106,7 +98,6 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("base58-zig", base58_module);
     exe.root_module.addImport("zig-network", zig_network_module);
     exe.root_module.addImport("zig-cli", zig_cli_module);
-    exe.root_module.addImport("getty", getty_mod);
     exe.root_module.addImport("httpz", httpz_mod);
     exe.root_module.addImport("zigdig", zigdig_mod);
     exe.root_module.addImport("zstd", zstd_mod);
@@ -156,7 +147,6 @@ pub fn build(b: *std.Build) void {
         exec.root_module.addImport("base58-zig", base58_module);
         exec.root_module.addImport("zig-network", zig_network_module);
         exec.root_module.addImport("zig-cli", zig_cli_module);
-        exec.root_module.addImport("getty", getty_mod);
         exec.root_module.addImport("httpz", httpz_mod);
         exec.root_module.addImport("zigdig", zigdig_mod);
         exec.root_module.addImport("zstd", zstd_mod);

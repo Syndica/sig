@@ -19,10 +19,6 @@
             .url = "https://github.com/sam701/zig-cli/archive/8c7a798c0f7fa0358d7ab41106fc872fca4cd995.tar.gz",
             .hash = "1220c008492d9460c3be2b209600a948181e6efb3bf0d79a1633def499632e708f4b",
         },
-        .getty = .{
-            .url = "https://github.com/getty-zig/getty/archive/805c4be6eacb988c968911a1cdfd585a8f54ae00.tar.gz",
-            .hash = "1220a5465b323d39df3cdfdc2a77d086d5079d142de48044da1b1feac87531fd6f1c",
-        },
         .httpz = .{
             .url = "https://github.com/karlseguin/http.zig/archive/d05b9889382d240c826c7654a999e4da515bd20a.tar.gz",
             .hash = "1220833d40f1767fa46b0efc4ae1af9bd5880a8e6fe7a66ee0215be916263f149e40",

@@ -1,19 +1,17 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
 
-const bincode = sig.bincode;
+const bincode = @import("../bincode/bincode.zig");
 
 const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const LegacyContactInfo = sig.gossip.LegacyContactInfo;
-const Nonce = sig.core.Nonce;
-const Pong = sig.gossip.Pong;
-const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
-const Slot = sig.core.Slot;
-
-const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
+const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
+const Nonce = @import("../core/shred.zig").Nonce;
+const Pong = @import("../gossip/ping_pong.zig").Pong;
+const Pubkey = @import("../core/pubkey.zig").Pubkey;
+const Signature = @import("../core/signature.zig").Signature;
+const Slot = @import("../core/time.zig").Slot;
+const SIGNATURE_LENGTH = @import("../core/signature.zig").SIGNATURE_LENGTH;
 
 /// Analogous to `SIGNED_REPAIR_TIME_WINDOW`
 const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
@@ -231,7 +229,7 @@ test "tvu.repair_message: signed/serialized RepairRequest is valid" {
 
 test "tvu.repair_message: RepairRequestHeader serialization round trip" {
     var rng = std.rand.DefaultPrng.init(5224);
-    var signature: [sig.core.SIGNATURE_LENGTH]u8 = undefined;
+    var signature: [SIGNATURE_LENGTH]u8 = undefined;
     rng.fill(&signature);
 
     const header = RepairRequestHeader{
@@ -398,7 +396,7 @@ const testHelpers = struct {
     }
 
     fn randomRepairRequestHeader(rng: std.rand.Random) RepairRequestHeader {
-        var signature: [sig.core.SIGNATURE_LENGTH]u8 = undefined;
+        var signature: [SIGNATURE_LENGTH]u8 = undefined;
         rng.bytes(&signature);
 
         return RepairRequestHeader{
