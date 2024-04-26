@@ -149,9 +149,7 @@ pub const GossipTable = struct {
 
         var store_iter = self.store.iterator();
         while (store_iter.next()) |entry| {
-            _ = entry;
-            // TODO: Brennan
-            // bincode.free(self.allocator, entry.value_ptr.value.data);
+            bincode.free(self.allocator, entry.value_ptr.value.data);
         }
         self.store.deinit();
     }
@@ -698,8 +696,7 @@ pub const GossipTable = struct {
             std.debug.assert(did_remove);
             new_entry_indexs.put(entry_index, {}) catch unreachable;
         }
-        // TODO: Brennan
-        // bincode.free(self.allocator, versioned_value.value.data);
+        bincode.free(self.allocator, versioned_value.value.data);
     }
 
     pub fn shouldTrim(self: *const Self, max_pubkey_capacity: usize) bool {

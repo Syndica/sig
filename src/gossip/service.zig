@@ -345,8 +345,7 @@ pub const GossipService = struct {
 
                 message.sanitize() catch {
                     self.logger.errf("gossip: packet_verify: failed to sanitize", .{});
-                    // TODO: Brennan
-                    // bincode.free(self.allocator, message);
+                    bincode.free(self.allocator, message);
                     continue;
                 };
 
@@ -355,8 +354,7 @@ pub const GossipService = struct {
                         "gossip: packet_verify: failed to verify signature: {} from {}",
                         .{ e, packet.addr },
                     );
-                    // TODO: Brennan
-                    // bincode.free(self.allocator, message);
+                    bincode.free(self.allocator, message);
                     continue;
                 };
 
