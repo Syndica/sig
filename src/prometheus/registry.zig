@@ -247,7 +247,7 @@ test "prometheus.registry: write" {
         \\http_request_size_bucket{le="2.5"} 1
         \\http_request_size_bucket{le="5"} 1
         \\http_request_size_bucket{le="10"} 2
-        \\http_request_size_sum 18.703600
+        \\http_request_size_sum 18.703599999999998
         \\http_request_size_count 3
         \\http_requests 2
         \\
@@ -267,7 +267,7 @@ test "prometheus.registry: write" {
         \\http_request_size_bucket{route="/api/v2/users",le="2.5"} 1
         \\http_request_size_bucket{route="/api/v2/users",le="5"} 1
         \\http_request_size_bucket{route="/api/v2/users",le="10"} 2
-        \\http_request_size_sum{route="/api/v2/users"} 18.703600
+        \\http_request_size_sum{route="/api/v2/users"} 18.703599999999998
         \\http_request_size_count{route="/api/v2/users"} 3
         \\http_requests{route="/api/v2/users"} 2
         \\
