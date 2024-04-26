@@ -275,9 +275,10 @@ pub const GossipService = struct {
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
     pub fn run(self: *Self, spy_node: bool, dump: bool) !void {
-        // TODO: Ahmad - fix ip echo server
-        // var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        // defer self.joinAndExit(&ip_echo_server_listener_handle);
+        // TODO(Ahmad): need new server impl, for now we don't join server thread
+        // because http.zig's server doesn't stop when you call server.stop() - it's broken
+        // const echo_server_thread = try self.echo_server.listenAndServe();
+        // _ = echo_server_thread;
 
         var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,

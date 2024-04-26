@@ -75,7 +75,7 @@ pub const Server = struct {
     pub fn deinit(
         self: *Self,
     ) void {
-        self.kill();
+        // self.kill();
         self.server.deinit();
     }
 
@@ -89,26 +89,29 @@ pub const Server = struct {
 
     pub fn listenAndServe(
         self: *Self,
-    ) !void {
+    ) !std.Thread {
         var router = self.server.router();
         router.post("/", handleEchoRequest);
-        return self.server.listen();
+        return self.server.listenInNewThread();
     }
 };
 
 pub fn handleEchoRequest(req: *httpz.Request, res: *httpz.Response) !void {
-    const body = req.body() orelse return error.NoBody;
+    std.debug.print("handling echo request\n", .{});
+
+    const body = req.body() orelse return try returnBadRequest(res);
     var ip_echo_server_message = try std.json.parseFromSlice(IpEchoServerMessage, res.arena, body, .{});
     defer ip_echo_server_message.deinit();
 
-    logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
+    std.debug.print("ip echo server message received: {}\n", .{ip_echo_server_message});
+    // logger.debugf("ip echo server message: {any}", .{ip_echo_server_message.value});
 
     // convert a u32 to Ipv4
     const socket_addr = SocketAddr.fromIpV4Address(res.conn.address);
 
     std.json.stringify(IpEchoServerResponse.init(net.IpAddr{ .ipv4 = socket_addr.V4.ip }), .{}, res.writer()) catch |err| {
-        logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
-        return try returnBadRequest(res);
+        // logger.errf("could not json stringify IpEchoServerResponse: {any}", .{err});
+        std.debug.print("could not json stringify ip echo server response message: {}\n", .{err});
     };
 }
 
@@ -153,28 +156,34 @@ pub fn requestIpEcho(
 
 //     var exit = Atomic(bool).init(false);
 
-//     var server = Server.init(testing.allocator, port, logger(), &exit);
+//     var server = Server.init(testing.allocator, port, &exit);
 //     defer server.deinit();
-//     var server_thread_handle = try std.Thread.spawn(.{}, Server.listenAndServe, .{&server});
+
+//     var server_thread_handle = try server.listenAndServe();
 //     if (builtin.os.tag == .linux) try server_thread_handle.setName("server_thread");
 
 //     var client = std.http.Client{ .allocator = testing.allocator };
 //     defer client.deinit();
 
+//     var server_header_buff = [_]u8{0} ** 1024;
+
 //     // create request
-//     const headers = std.http.Headers.init(testing.allocator);
-//     var req = try client.request(.POST, try std.Uri.parse("http://localhost:34333/"), headers, .{});
+//     var req = try client.open(.POST, try std.Uri.parse("http://localhost:34333/"), .{
+//         .server_header_buffer = &server_header_buff,
+//         .headers = .{
+//             .content_type = .{ .override = "text/plain" },
+//             // .accept_encoding = .{ .override = "*/*" },
+//         },
+//         .extra_headers = &.{
+//             // .{
+//             //     .name = "connection",
+//             //     .value = "close",
+//             // },
+//         },
+//     });
 //     defer req.deinit();
-//     defer req.headers.deinit(); // we have to do this otherwise leaks (not sure why)
-//     req.transfer_encoding = .chunked;
-//     try req.headers.append("content-type", "text/plain");
-//     try req.headers.append("accept", "*/*");
 
-//     // tell server we want connection closed after response
-//     try req.headers.append("connection", "close");
-
-//     // start the request
-//     try req.start();
+//     // req.transfer_encoding = .chunked;
 
 //     var tcp_ports = [4]u16{ 1000, 2000, 3000, 4000 };
 //     var udp_port = [4]u16{ 1000, 2000, 3000, 4000 };
@@ -186,19 +195,21 @@ pub fn requestIpEcho(
 //     try std.json.stringify(ip_echo_server_msg, .{}, buffer.writer());
 
 //     // write body
+//     try req.send();
+
 //     try req.writeAll(buffer.getWritten());
 //     try req.finish();
 //     try req.wait();
 
 //     if (req.response.status != .ok) {
-//         std.debug.print("req.response.status: {any}", .{req.response.status});
+//         std.debug.print("req.response.status: {any}\n", .{req.response.status});
 //         return error.ResponseStatusNot200;
 //     }
 
 //     // read body
 //     const body = try req.reader().readAllAlloc(testing.allocator, 819200);
 //     defer testing.allocator.free(body);
-//     logger.field("body_length", body.len).field("body", body).debugf("received body", .{});
+//     // logger.field("body_length", body.len).field("body", body).debugf("received body", .{});
 
 //     // deserialize json into type
 //     var resp = try std.json.parseFromSlice(IpEchoServerResponse, testing.allocator, body, .{});
@@ -207,6 +218,5 @@ pub fn requestIpEcho(
 //     try testing.expectEqual([4]u8{ 127, 0, 0, 1 }, resp.value.address.asV4());
 //     try testing.expectEqual(@as(u16, 0), resp.value.shred_version.?.value);
 
-//     server.kill();
-//     server_thread_handle.join();
+//     // server.kill();
 // }
