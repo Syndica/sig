@@ -80,7 +80,7 @@ pub const Pubkey = struct {
         return Self.fromBytes(&public_key.bytes) catch unreachable;
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.posix.WriteError!void {
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return writer.print("{s}", .{self.string()});
     }
 

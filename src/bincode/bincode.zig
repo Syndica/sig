@@ -18,35 +18,6 @@ pub const Params = struct {
     include_fixed_array_length: bool = false,
 };
 
-/// An optional type whose enum tag is 32 bits wide.
-pub fn Option(comptime T: type) type {
-    return union(enum(u32)) {
-        none: T,
-        some: T,
-
-        pub fn from(inner: ?T) @This() {
-            if (inner) |payload| {
-                return .{ .some = payload };
-            }
-            return .{ .none = std.mem.zeroes(T) };
-        }
-
-        pub fn into(self: @This()) ?T {
-            return switch (self) {
-                .some => |payload| payload,
-                .none => null,
-            };
-        }
-
-        pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            return switch (self) {
-                .none => writer.writeAll("null"),
-                .some => |payload| writer.print("{any}", .{payload}),
-            };
-        }
-    };
-}
-
 pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     var stream = std.io.countingWriter(std.io.null_writer);
     bincode.write(stream.writer(), data, params) catch unreachable;
@@ -440,7 +411,15 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
     switch (@typeInfo(T)) {
         .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
         .Bool => return writer.writeByte(@intFromBool(data)),
-        .Enum => |_| return bincode.write(writer, @as(u32, @intFromEnum(data)), params),
+        .Enum => |_| {
+            if (getConfig(T)) |config| {
+                if (config.serializer) |serialize_fcn| {
+                    return serialize_fcn(writer, data, params);
+                }
+            }
+
+            return bincode.write(writer, @as(u32, @intFromEnum(data)), params);
+        },
         .Union => |info| {
             try bincode.write(writer, @as(u32, @intFromEnum(data)), params);
             inline for (info.fields) |field| {
@@ -610,6 +589,15 @@ pub fn FieldConfig(comptime T: type) type {
     };
 }
 
+pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
+    const bincode_field = "!bincode-config";
+    if (@hasDecl(struct_type, bincode_field)) {
+        const config = @field(struct_type, bincode_field);
+        return config;
+    }
+    return null;
+}
+
 pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
     const bincode_field = "!bincode-config:" ++ field.name;
     if (@hasDecl(struct_type, bincode_field)) {
@@ -676,6 +664,37 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
         .serializer = S.serilaizeTestSlice,
         .deserializer = S.deserializeTestSlice,
     };
+}
+
+fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            try bincode.write(writer, @intFromEnum(data), params);
+            return;
+        }
+    };
+
+    return bincode.FieldConfig(ShredType){
+        .serializer = S.serialize,
+    };
+}
+
+const ShredType = enum(u8) {
+    Data = 0b1010_0101,
+    Code = 0b0101_1010,
+
+    pub const @"!bincode-config" = ShredTypeConfig();
+};
+
+test "bincode: custom enum" { 
+    const x = ShredType.Data;
+    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    defer buf.deinit();
+
+    try bincode.write(buf.writer(), x, .{});
+
+    std.debug.print("{any}\n", .{buf});
+
 }
 
 test "bincode: default on eof" {
@@ -867,6 +886,17 @@ test "bincode: test serialization" {
     var array_buf = try writeToArray(std.testing.allocator, _s, Params.standard);
     defer array_buf.deinit();
     try std.testing.expectEqualSlices(u8, out4, array_buf.items);
+}
+
+test "bincode: tuples" { 
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const Foo = struct { u16, u16 };
+    try bincode.write(buffer.writer(), Foo{ 10, 20 }, bincode.Params.standard);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        10, 0, 20, 0,
+    }, buffer.items);
 }
 
 test "bincode: (legacy) serialize an array" {

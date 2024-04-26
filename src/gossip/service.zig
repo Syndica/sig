@@ -2611,7 +2611,7 @@ test "gossip.gossip_service: test packet verification" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    var id = Pubkey.fromPublicKey(&keypair.public_key);
+    const id = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(id);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2691,6 +2691,12 @@ test "gossip.gossip_service: test packet verification" {
         var dshred = gossip.DuplicateShred.random(rng.random());
         var chunk: [32]u8 = .{1} ** 32;
         dshred.chunk = &chunk;
+        dshred.wallclock = 1714155765121;
+        dshred.slot = 16592333628234015598;
+        dshred.shred_index = 3853562894;
+        dshred.shred_type = gossip.ShredType.Data;
+        dshred.num_chunks = 99;
+        dshred.chunk_index = 69;
         dshred.from = rand_pubkey;
         const dshred_data = gossip.GossipData{
             .DuplicateShred = .{ 1, dshred },
@@ -2708,6 +2714,7 @@ test "gossip.gossip_service: test packet verification" {
     try packet_channel.send(packet_batch_2);
 
     var msg_count: usize = 0;
+    var attempt_count: usize = 0;
     while (msg_count < 4) {
         if (try verified_channel.try_drain()) |msgs| {
             defer verified_channel.allocator.free(msgs);
@@ -2718,10 +2725,13 @@ test "gossip.gossip_service: test packet verification" {
             }
         }
         std.time.sleep(10);
+        attempt_count += 1;
+        if (attempt_count > 10_000) {
+            try std.testing.expect(false);
+        }
     }
 
-    var attempt_count: u16 = 0;
-
+    attempt_count = 0;
     while (packet_channel.buffer.private.v.items.len != 0) {
         std.time.sleep(std.time.ns_per_ms * 10);
         attempt_count += 1;
@@ -2830,9 +2840,12 @@ test "gossip.gossip_service: init, exit, and deinit" {
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
+
     var contact_info = try LegacyContactInfo.random(rng.random()).toContactInfo(std.testing.allocator);
     try contact_info.setSocket(socket_tag.GOSSIP, gossip_address);
+
     var exit = AtomicBool.init(false);
+
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     logger.spawn();

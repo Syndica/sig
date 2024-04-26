@@ -884,24 +884,27 @@ pub const NodeInstance = struct {
     }
 };
 
+fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            try bincode.write(writer, @intFromEnum(data), params);
+            return;
+        }
+    };
+
+    return bincode.FieldConfig(ShredType){
+        .serializer = S.serialize,
+    };
+}
+
 pub const ShredType = enum(u8) {
     Data = 0b1010_0101,
     Code = 0b0101_1010,
 
-    /// Enables bincode deserializer to deserialize this data from a single byte instead of 4.
     pub const BincodeSize = u8;
 
     /// Enables bincode serializer to serialize this data into a single byte instead of 4.
-    pub const @"getty.sb" = struct {
-        pub fn serialize(
-            allocator: ?std.mem.Allocator,
-            value: anytype,
-            serializer: anytype,
-        ) @TypeOf(serializer).Error!@TypeOf(serializer).Ok {
-            _ = allocator;
-            return try serializer.serializeInt(@intFromEnum(value));
-        }
-    };
+    pub const @"!bincode-config" = ShredTypeConfig();
 };
 
 pub const DuplicateShred = struct {
