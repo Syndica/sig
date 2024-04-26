@@ -89,15 +89,19 @@ pub const Metric = struct {
 pub fn floatMetric(value: anytype) struct {
     value: @TypeOf(value),
 
-    pub fn format(self: @This(), comptime format_string: []const u8, options: fmt.FormatOptions, writer: anytype) !void {
-        _ = format_string;
-
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        options: fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         const as_int: u64 = @intFromFloat(self.value);
         if (@as(f64, @floatFromInt(as_int)) == self.value) {
             try fmt.formatInt(as_int, 10, .lower, options, writer);
         } else {
-            var buf = [_]u8{0} ** 64;
-            const output = try fmt.formatFloat(&buf, self.value, .{});
+            const str_size = fmt.format_float.bufferSize(.decimal, @TypeOf(value));
+            var buf: [str_size]u8 = undefined;
+            const output = try fmt.formatFloat(&buf, self.value, .{ .mode = .decimal });
             try fmt.formatBuf(output, options, writer);
         }
     }

@@ -849,7 +849,7 @@ fn getOrDownloadSnapshots(
     if (should_unpack_snapshot) {
         logger.infof("unpacking snapshots...", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
-        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
+        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{ .iterate = true });
         defer snapshot_dir.close();
 
         // TODO: delete old accounts/ dir if it exists

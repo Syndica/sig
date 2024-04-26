@@ -185,15 +185,19 @@ test "sync.channel: channel works properly" {
     defer ch.deinit();
 
     var recv_count: Atomic(usize) = Atomic(usize).init(0);
-    const send_count: usize = 100_000;
+    const send_count: usize = 1_000_000;
 
-    var join2 = try std.Thread.spawn(.{}, testSender, .{ ch, send_count });
-    var join1 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
+    var join1 = try std.Thread.spawn(.{}, testSender, .{ ch, send_count });
+    var join2 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
+    var join3 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
+    var join4 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
 
     join1.join();
     join2.join();
+    join3.join();
+    join4.join();
 
-    try testing.expectEqual(send_count, recv_count.raw);
+    try testing.expectEqual(send_count, recv_count.load(.seq_cst));
 }
 
 pub const BenchmarkChannel = struct {

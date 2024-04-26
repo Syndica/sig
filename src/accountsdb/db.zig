@@ -175,7 +175,7 @@ pub const AccountsDB = struct {
         timer.reset();
 
         // read the account files
-        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{});
+        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
 
         const accounts_dir_iter = accounts_dir.iterate();
@@ -987,7 +987,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     var allocator = std.testing.allocator;
 
     const dir_path = "test_data";
-    const dir = try std.fs.cwd().openDir(dir_path, .{});
+    const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
     // unpack both snapshots to get the acccount files
     try parallelUnpackZstdTarBall(

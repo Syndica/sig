@@ -275,8 +275,9 @@ pub const GossipService = struct {
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
     pub fn run(self: *Self, spy_node: bool, dump: bool) !void {
-        var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
-        defer self.joinAndExit(&ip_echo_server_listener_handle);
+        // TODO: Ahmad - fix ip echo server
+        // var ip_echo_server_listener_handle = try Thread.spawn(.{}, echo.Server.listenAndServe, .{&self.echo_server});
+        // defer self.joinAndExit(&ip_echo_server_listener_handle);
 
         var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
@@ -2128,7 +2129,7 @@ pub fn chunkValuesIntoPacketIndexes(
     return packet_indexs;
 }
 
-test "gossip.gossip_service: build messages startup and shutdown" {
+test "gossip.service: build messages startup and shutdown" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
@@ -2179,7 +2180,7 @@ test "gossip.gossip_service: build messages startup and shutdown" {
     build_messages_handle.join();
 }
 
-test "gossip.gossip_service: tests handling prune messages" {
+test "gossip.service: tests handling prune messages" {
     var rng = std.rand.DefaultPrng.init(91);
 
     const allocator = std.testing.allocator;
@@ -2253,7 +2254,7 @@ test "gossip.gossip_service: tests handling prune messages" {
     as_lock2.unlock();
 }
 
-test "gossip.gossip_service: tests handling pull responses" {
+test "gossip.service: tests handling pull responses" {
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2312,7 +2313,7 @@ test "gossip.gossip_service: tests handling pull responses" {
     lg.unlock();
 }
 
-test "gossip.gossip_service: tests handle pull request" {
+test "gossip.service: tests handle pull request" {
     const allocator = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(91);
@@ -2404,7 +2405,7 @@ test "gossip.gossip_service: tests handle pull request" {
     }
 }
 
-test "gossip.gossip_service: test build prune messages and handle push messages" {
+test "gossip.service: test build prune messages and handle push messages" {
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2491,7 +2492,7 @@ test "gossip.gossip_service: test build prune messages and handle push messages"
     try std.testing.expectEqual(prune_data.prunes.len, 10);
 }
 
-test "gossip.gossip_service: test build pull requests" {
+test "gossip.service: test build pull requests" {
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2533,7 +2534,7 @@ test "gossip.gossip_service: test build pull requests" {
     try std.testing.expect(!std.mem.eql(u8, &packets.items[0].data, &packets.items[1].data));
 }
 
-test "gossip.gossip_service: test build push messages" {
+test "gossip.service: test build push messages" {
     const allocator = std.testing.allocator;
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
@@ -2836,7 +2837,7 @@ test "gossip.gossip_service: process contact info push packet" {
     packet_handle.join();
 }
 
-test "gossip.gossip_service: init, exit, and deinit" {
+test "gossip.service: init, exit, and deinit" {
     const gossip_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 0);
     const my_keypair = try KeyPair.create(null);
     var rng = std.rand.DefaultPrng.init(getWallclockMs());
