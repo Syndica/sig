@@ -8,7 +8,6 @@ const Channel = @import("../sync/channel.zig").Channel;
 const Atomic = std.atomic.Value;
 const assert = std.debug.assert;
 const testing = std.testing;
-const http = std.http;
 const bincode = @import("../bincode/bincode.zig");
 const httpz = @import("httpz");
 
@@ -54,6 +53,8 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     server: httpz.ServerCtx(void, void),
     exit: *const Atomic(bool),
+    port: u16,
+    killed: Atomic(bool),
 
     const Self = @This();
 
@@ -66,6 +67,8 @@ pub const Server = struct {
             .allocator = allocator,
             .server = httpz.Server().init(allocator, .{ .port = port }) catch unreachable,
             .exit = exit,
+            .port = port,
+            .killed = Atomic(bool).init(false),
         };
     }
 
@@ -79,7 +82,9 @@ pub const Server = struct {
     pub fn kill(
         self: *Self,
     ) void {
-        self.server.stop();
+        if (!self.killed.swap(true, .seq_cst)) {
+            self.server.stop();
+        }
     }
 
     pub fn listenAndServe(
