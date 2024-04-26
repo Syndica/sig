@@ -807,7 +807,7 @@ pub const SnapshotFiles = struct {
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, snapshot_dir: []const u8) !Self {
-        var snapshot_directory = try std.fs.cwd().openDir(snapshot_dir, .{});
+        var snapshot_directory = try std.fs.cwd().openDir(snapshot_dir, .{ .iterate = true });
         defer snapshot_directory.close();
 
         var snapshot_dir_iter = snapshot_directory.iterate();
