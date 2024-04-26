@@ -30,7 +30,7 @@ pub fn filterSignedGossipDatas(
         return ArrayList(SignedGossipData).init(allocator);
     }
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
@@ -77,7 +77,7 @@ const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 test "gossip.pull_response: test filtering values works" {
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
-    var gossip_table = try GossipTable.init(std.testing.allocator, &tp);
+    const gossip_table = try GossipTable.init(std.testing.allocator, &tp);
     var gossip_table_rw = RwMux(GossipTable).init(gossip_table);
     defer {
         var lg = gossip_table_rw.write();
@@ -87,13 +87,13 @@ test "gossip.pull_response: test filtering values works" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = 18;
+    const seed: u64 = 18;
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
     var lg = gossip_table_rw.write();
     for (0..100) |_| {
-        var gossip_value = try SignedGossipData.random(rng, &kp);
+        const gossip_value = try SignedGossipData.random(rng, &kp);
         try lg.mut().insert(gossip_value, 0);
     }
     lg.unlock();
@@ -114,7 +114,7 @@ test "gossip.pull_response: test filtering values works" {
 
     // corresponding value
     const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromPublicKey(&pk);
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
     // TODO: make this consistent across tests
@@ -126,7 +126,7 @@ test "gossip.pull_response: test filtering values works" {
     // insert more values which the filters should be missing
     lg = gossip_table_rw.write();
     for (0..64) |_| {
-        var v2 = try SignedGossipData.random(rng, &kp);
+        const v2 = try SignedGossipData.random(rng, &kp);
         try lg.mut().insert(v2, 0);
     }
 

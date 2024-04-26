@@ -19,7 +19,7 @@ pub const ShredVersion = struct {
             accum[0] ^= chunk[0];
             accum[1] ^= chunk[1];
         }
-        var version = (@as(u16, accum[0]) << 8) | accum[1];
+        const version = (@as(u16, accum[0]) << 8) | accum[1];
         return version +| 1;
     }
 
@@ -28,8 +28,8 @@ pub const ShredVersion = struct {
         if (maybe_hard_forks) |hard_forks| {
             var buf: [16]u8 = undefined;
             for (hard_forks.get_forks()) |hard_fork| {
-                std.mem.writeIntLittle(u64, buf[0..8], hard_fork.slot);
-                std.mem.writeIntLittle(u64, buf[8..], @as(u64, hard_fork.count));
+                std.mem.writeInt(u64, buf[0..8], hard_fork.slot, .little);
+                std.mem.writeInt(u64, buf[8..], @as(u64, hard_fork.count), .little);
                 hash = Hash.extendAndHash(hash, &buf);
             }
         }

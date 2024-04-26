@@ -68,10 +68,10 @@ pub const ActiveSet = struct {
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            var entry = try self.pruned_peers.getOrPut(peers[i].pubkey);
+            const entry = try self.pruned_peers.getOrPut(peers[i].pubkey);
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
-                var bloom = try Bloom.random(
+                const bloom = try Bloom.random(
                     self.allocator,
                     bloom_num_items,
                     BLOOM_FALSE_RATE,
@@ -128,7 +128,7 @@ pub const ActiveSet = struct {
 };
 
 test "gossip.active_set: init/deinit" {
-    var alloc = std.testing.allocator;
+    const alloc = std.testing.allocator;
 
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
     var tp = ThreadPool.init(.{});
@@ -148,7 +148,7 @@ test "gossip.active_set: init/deinit" {
         try gossip_peers.append(try data.toContactInfo(alloc));
 
         var keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.initSigned(.{
+        const value = try SignedGossipData.initSigned(.{
             .LegacyContactInfo = data,
         }, &keypair);
         try table.insert(value, getWallclockMs());
@@ -177,7 +177,7 @@ test "gossip.active_set: init/deinit" {
 }
 
 test "gossip.active_set: gracefully rotates with duplicate contact ids" {
-    var alloc = std.testing.allocator;
+    const alloc = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ContactInfo).initCapacity(alloc, 10);

@@ -67,7 +67,7 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
             const last_pad_bits = mask_len * num_masks - size;
             const last_item_mask = ~@as(MaskInt, 0) >> @intCast(last_pad_bits);
 
-            var masks = try allocator.alloc(MaskInt, num_masks);
+            const masks = try allocator.alloc(MaskInt, num_masks);
             @memset(masks, 0);
 
             return .{

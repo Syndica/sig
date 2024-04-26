@@ -1,664 +1,574 @@
 const std = @import("std");
-pub const getty = @import("getty");
-const bincode = @This();
+
 const testing = std.testing;
+
+const bincode = @This();
 
 pub const Params = struct {
     pub const legacy: Params = .{
-        .endian = .Little,
+        .endian = .little,
         .int_encoding = .fixed,
         .include_fixed_array_length = true,
     };
 
-    pub const standard: Params = .{
-        .endian = .Little,
-        .int_encoding = .fixed,
-        .include_fixed_array_length = false,
-    };
+    pub const standard: Params = .{};
 
-    endian: std.builtin.Endian = .Little,
+    endian: std.builtin.Endian = .little,
     int_encoding: enum { variable, fixed } = .fixed,
     include_fixed_array_length: bool = false,
 };
 
-pub fn deserializer(r: anytype, params: Params) Deserializer(@TypeOf(r)) {
-    return Deserializer(@TypeOf(r)).init(r, params);
+pub fn sizeOf(data: anytype, params: bincode.Params) usize {
+    var stream = std.io.countingWriter(std.io.null_writer);
+    bincode.write(stream.writer(), data, params) catch unreachable;
+    return @as(usize, @intCast(stream.bytes_written));
 }
 
-pub fn Deserializer(comptime Reader: type) type {
-    return struct {
-        reader: Reader,
-        params: Params,
+pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
+    var stream = std.io.fixedBufferStream(slice);
+    return bincode.read(allocator, T, stream.reader(), params);
+}
 
-        const Self = @This();
-        const Error = getty.de.Error || error{
-            EOF,
-        };
+pub fn writeToSlice(slice: []u8, data: anytype, params: bincode.Params) ![]u8 {
+    var stream = std.io.fixedBufferStream(slice);
+    try bincode.write(stream.writer(), data, params);
+    return stream.getWritten();
+}
 
-        const De = Self.@"getty.Deserializer";
+pub inline fn writeAlloc(allocator: std.mem.Allocator, data: anytype, params: bincode.Params) ![]u8 {
+    const buffer = try allocator.alloc(u8, bincode.sizeOf(data, params));
+    errdefer allocator.free(buffer);
+    return try bincode.writeToSlice(buffer, data, params);
+}
 
-        pub fn init(reader: Reader, params: Params) Self {
-            std.debug.assert(params.int_encoding == .fixed);
-            return Self{ .reader = reader, .params = params };
-        }
+pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, params: bincode.Params) !U {
+    const T = switch (U) {
+        usize => u64,
+        isize => i64,
+        else => U,
+    };
 
-        pub usingnamespace getty.Deserializer(
-            *Self,
-            Error,
-            CustomDeser,
-            null,
-            .{
-                .deserializeBool = deserializeBool,
-                .deserializeInt = deserializeInt,
-                .deserializeEnum = deserializeEnum,
-                .deserializeOptional = deserializeOptional,
-                .deserializeVoid = deserializeVoid,
-                .deserializeSeq = deserializeSeq,
-                .deserializeMap = deserializeMap,
-                .deserializeFloat = deserializeFloat,
-            },
-        );
-
-        fn deserializeMap(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const T = u64;
-            const len = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(T),
-                .Big => self.reader.readIntBig(T),
-            } catch {
-                return Error.EOF;
-            };
-
-            var ma = MapAccess{ .d = self, .len = len };
-            return visitor.visitMap(allocator, De, ma.mapAccess());
-        }
-
-        fn deserializeSeq(self: *Self, allocator: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const len = blk: {
-                const visitor_value = @TypeOf(visitor).Value;
-                const tmp: visitor_value = undefined; // TODO: fix without stack alloc?
-                if (@hasField(visitor_value, "len")) {
-                    // a lil hacky but works
-                    break :blk tmp.len;
-                } else {
-                    // try self.deserializeInt(allocator, getty.de.blocks.Int.Visitor(u64){});
-                    const T = u64;
-                    const len = switch (self.params.endian) {
-                        .Little => self.reader.readIntLittle(T),
-                        .Big => self.reader.readIntBig(T),
-                    } catch {
-                        return Error.EOF;
-                    };
-                    break :blk len;
-                }
-            };
-
-            var s = SeqAccess{ .d = self, .len = len };
-            const result = try visitor.visitSeq(allocator.?, De, s.seqAccess());
-
-            return result;
-        }
-
-        pub fn deserializeVoid(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            _ = self;
-            return try visitor.visitVoid(ally, De);
-        }
-
-        pub fn deserializeOptional(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const byte = self.reader.readByte() catch {
-                return Error.EOF;
-            };
-            return switch (byte) {
-                0 => try visitor.visitNull(ally, De),
-                1 => try visitor.visitSome(ally, self.deserializer()),
-                else => getty.de.Error.InvalidValue,
-            };
-        }
-
-        pub fn deserializeEnum(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const T = @TypeOf(visitor).Value;
+    switch (@typeInfo(T)) {
+        .Void => return {},
+        .Bool => return switch (try reader.readByte()) {
+            0 => false,
+            1 => true,
+            else => error.BadBoolean,
+        },
+        .Enum => |_| {
             comptime var SerializedSize = u32;
             comptime if (@hasDecl(T, "BincodeSize")) {
                 SerializedSize = T.BincodeSize;
             };
-            const tag = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(SerializedSize),
-                .Big => self.reader.readIntBig(SerializedSize),
-            } catch {
-                return Error.EOF;
-            };
-            return try visitor.visitInt(ally, De, tag);
-        }
 
-        pub fn deserializeFloat(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const T = @TypeOf(visitor).Value;
-            const info = @typeInfo(T).Float;
+            const tag = switch (params.endian) {
+                .little => reader.readInt(SerializedSize, .little),
+                .big => reader.readInt(SerializedSize, .big),
+            } catch {
+                return error.EOF;
+            };
+            return std.meta.intToEnum(T, tag);
+        },
+        .Union => |info| {
+            const tag_type = info.tag_type orelse @compileError("Only tagged unions may be read.");
+            const raw_tag = try bincode.read(allocator, tag_type, reader, params);
+
+            inline for (info.fields) |field| {
+                if (raw_tag == @field(tag_type, field.name)) {
+                    // https://github.com/ziglang/zig/issues/7866
+                    if (field.type == void) return @unionInit(T, field.name, {});
+                    const payload = try bincode.read(allocator, field.type, reader, params);
+                    return @unionInit(T, field.name, payload);
+                }
+            }
+
+            return error.UnknownUnionTag;
+        },
+        .Struct => |info| {
+            var data: T = undefined;
+
+            if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
+                const ElementType = @typeInfo(T.Slice).Pointer.child;
+                const len = try bincode.read(allocator, u64, reader, params);
+                data = try T.initCapacity(allocator, len);
+                for (0..len) |_| {
+                    data.appendAssumeCapacity(try bincode.read(allocator, ElementType, reader, params));
+                }
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
+                const K = std.meta.fieldInfo(T.KV, .key).type;
+                const V = std.meta.fieldInfo(T.KV, .value).type;
+                const len = try bincode.read(allocator, u64, reader, params);
+
+                data = T.init(allocator);
+                try data.ensureTotalCapacity(@intCast(len));
+                for (0..len) |_| {
+                    const key = try bincode.read(allocator, K, reader, params);
+                    const value = try bincode.read(allocator, V, reader, params);
+                    data.putAssumeCapacity(key, value);
+                }
+            } else {
+                inline for (info.fields) |field| {
+                    if (field.is_comptime) continue;
+                    if (getFieldConfig(T, field)) |config| {
+                        if (shouldUseDefaultValue(field, config)) |default_value| {
+                            @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
+                            continue;
+                        }
+
+                        if (config.deserializer) |deser_fcn| {
+                            @field(data, field.name) = try deser_fcn(allocator, reader, params);
+                            continue;
+                        }
+
+                        if (config.default_on_eof) {
+                            const field_type = field.type;
+                            @field(data, field.name) = bincode.read(allocator, field_type, reader, params) catch |err| blk: {
+                                if (err == error.EndOfStream) {
+                                    if (field.default_value) |default_value| {
+                                        break :blk @as(*const field_type, @ptrCast(@alignCast(default_value))).*;
+                                    } else if (config.default_fn) |default_fcn| {
+                                        break :blk default_fcn(allocator);
+                                    } else {
+                                        return error.MissingFieldDefaultValue;
+                                    }
+                                } else {
+                                    return err;
+                                }
+                            };
+                            continue;
+                        }
+                    }
+                    errdefer {
+                        std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                    }
+                    @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
+                }
+            }
+            return data;
+        },
+        .Optional => |info| {
+            return switch (try reader.readByte()) {
+                0 => null,
+                1 => try bincode.read(allocator, info.child, reader, params),
+                else => error.BadOptionalBoolean,
+            };
+        },
+        .Array => |info| {
+            var data: T = undefined;
+            if (params.include_fixed_array_length) {
+                const fixed_array_len = try bincode.read(allocator, u64, reader, params);
+                if (fixed_array_len != info.len) {
+                    return error.UnexpectedFixedArrayLen;
+                }
+            }
+            for (&data) |*element| {
+                element.* = try bincode.read(allocator, info.child, reader, params);
+            }
+            return data;
+        },
+        .Vector => |info| {
+            var data: T = undefined;
+            if (params.include_fixed_array_length) {
+                const fixed_array_len = try bincode.read(allocator, u64, reader, params);
+                if (fixed_array_len != info.len) {
+                    return error.UnexpectedFixedArrayVectorLen;
+                }
+            }
+            for (&data) |*element| {
+                element.* = try bincode.read(allocator, info.child, reader, params);
+            }
+            return data;
+        },
+        .Pointer => |info| {
+            switch (info.size) {
+                .One => {
+                    const data = try allocator.create(info.child);
+                    errdefer allocator.destroy(data);
+                    data.* = try bincode.read(allocator, info.child, reader, params);
+                    return data;
+                },
+                .Slice => {
+                    const entries = try allocator.alloc(info.child, try bincode.read(allocator, usize, reader, params));
+                    errdefer allocator.free(entries);
+                    for (entries) |*entry| {
+                        entry.* = try bincode.read(allocator, info.child, reader, params);
+                    }
+                    return entries;
+                },
+                else => {},
+            }
+        },
+        .ComptimeFloat => return bincode.read(allocator, f64, reader, params),
+        .Float => |info| {
             if (info.bits != 32 and info.bits != 64) {
                 @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
             }
-            const bytes = self.reader.readBytesNoEof((info.bits + 7) / 8) catch return Error.EOF;
-            const f = @as(T, @bitCast(bytes));
-            return visitor.visitFloat(ally, De, f);
-        }
-
-        pub fn deserializeInt(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const T = @TypeOf(visitor).Value;
-
-            const value = switch (self.params.endian) {
-                .Little => self.reader.readIntLittle(T),
-                .Big => self.reader.readIntBig(T),
-            } catch {
-                return Error.EOF;
-            };
-            return try visitor.visitInt(ally, De, value);
-        }
-
-        pub fn deserializeBool(self: *Self, ally: ?std.mem.Allocator, visitor: anytype) Error!@TypeOf(visitor).Value {
-            const byte = self.reader.readByte() catch {
-                return Error.EOF;
-            };
-            const value = switch (byte) {
-                0 => false,
-                1 => true,
-                else => return Error.InvalidValue,
-            };
-
-            return try visitor.visitBool(ally, De, value);
-        }
-
-        const CustomDeser = struct {
-            pub fn is(comptime T: type) bool {
-                return switch (@typeInfo(T)) {
-                    .Union => true,
-                    .Struct => {
-                        // see comments in CustomSer serialization struct
-                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "HashMap")) {
-                            return false;
-                        }
-                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "ArrayList")) {
-                            return false;
-                        }
-                        return true;
-                    },
-                    .Pointer => |*info| {
-                        // should never be called but compiler complains
-                        if (info.size == .Many) {
-                            return true;
-                        }
-                        return info.size == .Slice;
-                    },
-                    else => false,
-                };
+            const bytes = try reader.readBytesNoEof((info.bits + 7) / 8);
+            return @as(T, @bitCast(bytes));
+        },
+        .ComptimeInt => return bincode.read(allocator, u64, reader, params),
+        .Int => |info| {
+            if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
+                @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be deserialized, but attempted to deserialize " ++ @typeName(T) ++ ".");
             }
 
-            pub fn Visitor(comptime Value: type) type {
-                return struct {
-                    pub usingnamespace getty.de.Visitor(
-                        @This(),
-                        Value,
-                        .{},
-                    );
-                };
-            }
-
-            pub fn free(
-                allocator: std.mem.Allocator,
-                comptime d: type,
-                value: anytype,
-            ) void {
-                const T = @TypeOf(value);
-                switch (@typeInfo(T)) {
-                    .Union => |*info| {
-                        inline for (info.fields) |field| {
-                            if (value == @field(T, field.name)) {
-                                return getty.de.free(allocator, d, @field(value, field.name));
-                            }
-                        }
-                    },
-                    .Struct => |*info| {
-                        inline for (info.fields) |field| {
-                            if (getFieldConfig(T, field)) |config| {
-                                if (config.free) |free_fcn| {
-                                    var field_value = @field(value, field.name);
-                                    switch (@typeInfo(field.type)) {
-                                        .Pointer => |*field_info| {
-                                            if (field_info.size == .Slice) {
-                                                free_fcn(allocator, field_value);
-                                                continue;
-                                            }
-                                        },
-                                        else => {},
-                                    }
-                                    free_fcn(allocator, &field_value);
-                                    continue;
+            switch (params.int_encoding) {
+                .variable => {
+                    const b = try reader.readByte();
+                    if (b < 251) {
+                        return switch (info.signedness) {
+                            .unsigned => b,
+                            .signed => zigzag: {
+                                if (b % 2 == 0) {
+                                    break :zigzag @as(T, @intCast(b / 2));
+                                } else {
+                                    break :zigzag ~@as(T, @bitCast(@as(std.meta.Int(.unsigned, info.bits), b / 2)));
                                 }
-                            }
-
-                            if (!field.is_comptime) {
-                                getty.de.free(allocator, d, @field(value, field.name));
-                            }
-                        }
-                    },
-                    .Pointer => |*info| {
-                        if (info.size == .Many) {
-                            unreachable;
-                        }
-                        std.debug.assert(info.size == .Slice);
-                        for (value) |item| {
-                            getty.de.free(allocator, d, item);
-                        }
-                        allocator.free(value);
-                    },
-                    else => {},
-                }
-            }
-
-            pub fn deserialize(
-                alloc: ?std.mem.Allocator,
-                comptime T: type,
-                dd: anytype,
-                visitor: anytype,
-            ) Error!@TypeOf(visitor).Value {
-                switch (@typeInfo(T)) {
-                    .Union => |*info| {
-                        const tag_type = info.tag_type orelse @compileError("unions must have a tag type");
-                        const raw_tag = try getty.deserialize(alloc, tag_type, dd);
-
-                        inline for (info.fields) |field| {
-                            if (raw_tag == @field(tag_type, field.name)) {
-                                const payload = try getty.deserialize(alloc, field.type, dd);
-                                return @unionInit(T, field.name, payload);
-                            }
-                        }
-                        return getty.de.Error.InvalidValue;
-                    },
-                    .Struct => |*info| {
-                        const reader = dd.context.reader;
-                        const params = dd.context.params;
-                        var data: T = undefined;
-
-                        inline for (info.fields) |field| {
-                            if (!field.is_comptime) {
-                                if (getFieldConfig(T, field)) |config| {
-                                    if (shouldUseDefaultValue(field, config)) |default_value| {
-                                        @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-                                        continue;
-                                    }
-
-                                    if (config.deserializer) |deser_fcn| {
-                                        @field(data, field.name) = deser_fcn(alloc, reader, params) catch return getty.de.Error.InvalidValue;
-                                        continue;
-                                    }
-
-                                    if (config.default_on_eof) {
-                                        const field_type = field.type;
-
-                                        @field(data, field.name) = getty.deserialize(alloc, field_type, dd) catch |err| blk: {
-                                            if (err == Error.EOF) {
-                                                if (config.default_fn) |default_fn| {
-                                                    break :blk default_fn(alloc.?);
-                                                } else {
-                                                    if (field.default_value) |default_value| {
-                                                        break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-                                                    } else {
-                                                        @compileError("field " ++ field.name ++ " has no default value");
-                                                    }
-                                                }
-                                            } else {
-                                                return err;
-                                            }
-                                        };
-                                        continue;
-                                    }
+                            },
+                        };
+                    } else if (b == 251) {
+                        const z = try switch (params.endian) {
+                            .little => reader.readInt(u16, .little),
+                            .big => reader.readInt(u16, .big),
+                        };
+                        return switch (info.signedness) {
+                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                            .signed => zigzag: {
+                                if (z % 2 == 0) {
+                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                                } else {
+                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
                                 }
-                                errdefer {
-                                    std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                            },
+                        };
+                    } else if (b == 252) {
+                        const z = try switch (params.endian) {
+                            .little => reader.readInt(u32, .little),
+                            .big => reader.readInt(u32, .big),
+                        };
+                        return switch (info.signedness) {
+                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                            .signed => zigzag: {
+                                if (z % 2 == 0) {
+                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                                } else {
+                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
                                 }
-                                @field(data, field.name) = try getty.deserialize(alloc, field.type, dd);
-                            }
-                        }
-                        return data;
-                    },
-                    .Pointer => |*info| {
-                        std.debug.assert(info.size == .Slice);
-
-                        const len = try getty.deserialize(alloc, u64, dd);
-                        const ally = alloc.?;
-
-                        const entries = try ally.alloc(info.child, len);
-                        errdefer ally.free(entries);
-
-                        for (entries) |*entry| {
-                            entry.* = try getty.deserialize(alloc, info.child, dd);
-                        }
-
-                        return entries;
-                    },
-                    else => unreachable,
-                }
-            }
-        };
-
-        const SeqAccess = struct {
-            d: *Self,
-            len: usize,
-            idx: usize = 0,
-
-            const Seq = @This();
-
-            pub usingnamespace getty.de.SeqAccess(
-                *Seq,
-                Error,
-                .{ .nextElementSeed = nextElementSeed },
-            );
-
-            fn nextElementSeed(self: *Seq, ally: ?std.mem.Allocator, seed: anytype) Error!?@TypeOf(seed).Value {
-                if (self.idx == self.len) {
-                    return null;
-                }
-                const element = try seed.deserialize(ally, self.d.deserializer());
-                self.idx += 1;
-
-                return element;
-            }
-        };
-
-        const MapAccess = struct {
-            d: *Self,
-            len: usize,
-            count: usize = 0,
-
-            pub usingnamespace getty.de.MapAccess(
-                *@This(),
-                Self.Error,
-                .{
-                    .nextKeySeed = nextKeySeed,
-                    .nextValueSeed = nextValueSeed,
-                },
-            );
-
-            fn nextKeySeed(self: *@This(), allocator: ?std.mem.Allocator, seed: anytype) Self.Error!?@TypeOf(seed).Value {
-                if (self.count == self.len) return null;
-
-                const key = try seed.deserialize(allocator, self.d.deserializer());
-                self.count += 1;
-                return key;
-            }
-
-            fn nextValueSeed(self: *@This(), allocator: ?std.mem.Allocator, seed: anytype) Self.Error!@TypeOf(seed).Value {
-                return try seed.deserialize(allocator, self.d.deserializer());
-            }
-        };
-    };
-}
-
-pub fn free(
-    ally: std.mem.Allocator,
-    v: anytype,
-) void {
-    const D = Deserializer(
-        std.io.FixedBufferStream([]u8).Reader,
-    );
-    return getty.de.free(ally, D.De, v);
-}
-
-// for ref: https://github.com/getty-zig/json/blob/a5c4d9f996dc3f472267f6210c30f96c39da576b/src/ser/serializer.zig
-pub fn serializer(w: anytype, params: Params) Serializer(@TypeOf(w)) {
-    return Serializer(@TypeOf(w)).init(w, params);
-}
-
-pub fn Serializer(
-    comptime Writer: type,
-) type {
-    return struct {
-        writer: Writer,
-        params: Params,
-
-        const Self = @This();
-        const Ok = void;
-        const Error = getty.ser.Error || error{IO};
-
-        pub fn init(w: Writer, params: Params) Self {
-            std.debug.assert(params.int_encoding == .fixed);
-            return .{ .writer = w, .params = params };
-        }
-
-        pub usingnamespace getty.Serializer(
-            *Self,
-            Ok,
-            Error,
-            CustomSer,
-            null,
-            Map,
-            Aggregate,
-            null,
-            .{
-                .serializeBool = serializeBool,
-                .serializeInt = serializeInt,
-                .serializeEnum = serializeEnum,
-                .serializeSome = serializeSome,
-                .serializeNull = serializeNull,
-                .serializeSeq = serializeSeq,
-                .serializeVoid = serializeVoid,
-                .serializeMap = serializeMap,
-                .serializeFloat = serializeFloat,
-            },
-        );
-
-        fn serializeSeq(self: *Self, len: ?usize) Error!Aggregate {
-            if (self.params.include_fixed_array_length) {
-                try self.serializeInt(@as(u64, len.?));
-            }
-            return Aggregate{ .ser = self };
-        }
-
-        fn serializeVoid(self: *Self) Error!Ok {
-            _ = self;
-        }
-
-        fn serializeNull(self: *Self) Error!Ok {
-            try (self.writer.writeByte(0) catch Error.IO);
-        }
-
-        fn serializeSome(self: *Self, value: anytype) Error!Ok {
-            try (self.writer.writeByte(1) catch Error.IO);
-            const ss = self.serializer();
-            return try getty.serialize(null, value, ss);
-        }
-
-        fn serializeMap(self: *Self, len: ?usize) Error!Map {
-            // should always have a len
-            try self.serializeInt(@as(u64, len.?));
-            return Map{ .ser = self };
-        }
-
-        fn serializeBool(self: *Self, value: bool) Error!Ok {
-            try (self.writer.writeByte(@intFromBool(value)) catch Error.IO);
-        }
-
-        fn serializeFloat(self: *Self, value: anytype) Error!Ok {
-            const T = @TypeOf(value);
-            switch (@typeInfo(T)) {
-                .ComptimeFloat => {
-                    return self.serializeFloat(@as(f64, value));
-                },
-                .Float => |*info| {
-                    if (info.bits != 32 and info.bits != 64) {
-                        @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+                            },
+                        };
+                    } else if (b == 253) {
+                        const z = try switch (params.endian) {
+                            .little => reader.readInt(u64, .little),
+                            .big => reader.readInt(u64, .big),
+                        };
+                        return switch (info.signedness) {
+                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                            .signed => zigzag: {
+                                if (z % 2 == 0) {
+                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                                } else {
+                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                                }
+                            },
+                        };
+                    } else if (b == 254) {
+                        const z = try switch (params.endian) {
+                            .little => reader.readInt(u128, .little),
+                            .big => reader.readInt(u128, .big),
+                        };
+                        return switch (info.signedness) {
+                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                            .signed => zigzag: {
+                                if (z % 2 == 0) {
+                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                                } else {
+                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                                }
+                            },
+                        };
+                    } else {
+                        const z = try switch (params.endian) {
+                            .little => reader.readInt(u256, .little),
+                            .big => reader.readInt(u256, .big),
+                        };
+                        return switch (info.signedness) {
+                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                            .signed => zigzag: {
+                                if (z % 2 == 0) {
+                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                                } else {
+                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                                }
+                            },
+                        };
                     }
-                    return self.writer.writeAll(std.mem.asBytes(&value)) catch Error.IO;
+                },
+                .fixed => return switch (params.endian) {
+                    .little => reader.readInt(T, .little),
+                    .big => reader.readInt(T, .big),
+                },
+            }
+        },
+        else => {},
+    }
+
+    @compileError("Deserializing '" ++ @typeName(T) ++ "' is unsupported.");
+}
+
+pub fn free(allocator: std.mem.Allocator, value: anytype) void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .Array, .Vector => {
+            for (value) |element| {
+                bincode.free(allocator, element);
+            }
+        },
+        .Struct => |info| {
+            if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                if (!@hasDecl(@TypeOf(value), "deinit")) {
+                    @compileError("array_list must have a deinit func");
+                }
+                var val = @constCast(&value);
+                for (val.items) |item| {
+                    bincode.free(allocator, item);
+                }
+                val.deinit();
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
+                if (!@hasDecl(@TypeOf(value), "deinit")) {
+                    @compileError("hash_map must have a deinit func");
+                }
+                var val = @constCast(&value);
+                var iter = val.iterator();
+                while (iter.next()) |item| {
+                    bincode.free(allocator, item.key_ptr.*);
+                    bincode.free(allocator, item.value_ptr.*);
+                }
+                val.deinit();
+            } else inline for (info.fields) |field| {
+                if (getFieldConfig(T, field)) |config| {
+                    if (config.free) |free_fcn| {
+                        var field_value = @field(value, field.name);
+                        switch (@typeInfo(field.type)) {
+                            .Pointer => |*field_info| {
+                                // TODO: Why do we do only slice?
+                                if (field_info.size == .Slice) {
+                                    free_fcn(allocator, field_value);
+                                }
+                            },
+                            else => {
+                                free_fcn(allocator, &field_value);
+                            },
+                        }
+
+                        continue;
+                    }
+                }
+
+                if (!field.is_comptime) {
+                    bincode.free(allocator, @field(value, field.name));
+                }
+            }
+        },
+        .Optional => {
+            if (value) |v| {
+                bincode.free(allocator, v);
+            }
+        },
+        .Union => |info| {
+            inline for (info.fields) |field| {
+                if (value == @field(T, field.name)) {
+                    return bincode.free(allocator, @field(value, field.name));
+                }
+            }
+        },
+        .Pointer => |info| {
+            switch (info.size) {
+                .Slice => {
+                    for (value) |item| {
+                        bincode.free(allocator, item);
+                    }
+                    allocator.free(value);
+                },
+                .One => {
+                    bincode.free(allocator, value.*);
+                    allocator.destroy(value);
                 },
                 else => unreachable,
             }
-        }
+        },
+        else => {},
+    }
+}
 
-        fn serializeInt(self: *Self, value: anytype) Error!Ok {
-            const T = @TypeOf(value);
-            switch (@typeInfo(T)) {
-                .ComptimeInt => {
-                    if (value < 0) {
-                        @compileError("Signed comptime integers can not be serialized.");
-                    }
-                    try self.serializeInt(@as(u64, value));
-                },
-                .Int => |info| {
-                    if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
-                        @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
-                    }
+pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
+    const T = switch (@TypeOf(data)) {
+        usize => u64,
+        isize => i64,
+        else => @TypeOf(data),
+    };
 
-                    switch (self.params.int_encoding) {
-                        .fixed => {
-                            try (switch (self.params.endian) {
-                                .Little => self.writer.writeIntLittle(T, value),
-                                .Big => self.writer.writeIntBig(T, value),
-                            } catch Error.IO);
-                        },
-                        else => unreachable,
-                    }
-                },
-                else => {
-                    unreachable;
-                },
-            }
-        }
-
-        fn serializeEnum(self: *Self, index: anytype, name: []const u8) Error!Ok {
-            _ = name;
-            switch (self.params.int_encoding) {
-                .fixed => {
-                    return try self.serializeInt(@as(u32, index));
-                },
-                .variable => {
-                    unreachable;
-                },
-            }
-        }
-
-        const CustomSer = struct {
-            pub fn is(comptime T: type) bool {
-                return switch (@typeInfo(T)) {
-                    .Union => true,
-                    .Struct => {
-                        // we want to use Map{} to ser HashMaps and want to use custom logic
-                        // for structs -- but, getty's HashMap is processed as a struct
-                        // so we use this kinda hack
-                        // TODO: figure out a better way to do this
-                        if (std.mem.containsAtLeast(u8, @typeName(T), 1, "HashMap")) {
-                            return false;
-                        }
-                        return true;
-                    },
-                    .Pointer => |*info| {
-                        return info.size == .Slice;
-                    },
-                    else => false,
-                };
-            }
-
-            pub fn serialize(alloc: ?std.mem.Allocator, value: anytype, ss: anytype) Error!Ok {
-                const T = @TypeOf(value);
-                switch (@typeInfo(T)) {
-                    .Union => |*info| {
-                        try getty.serialize(alloc, @as(u32, @intFromEnum(value)), ss);
-                        inline for (info.fields) |field| {
-                            if (value == @field(T, field.name)) {
-                                return try getty.serialize(alloc, @field(value, field.name), ss);
-                            }
-                        }
-                    },
-                    .Struct => |*info| {
-                        // note: need comptime here for it to compile
-                        if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
-                            try getty.serialize(alloc, @as(u64, value.items.len), ss);
-                            for (value.items) |element| {
-                                try getty.serialize(alloc, element, ss);
-                            }
-                            return;
-                        }
-
-                        var params = ss.context.params;
-                        var writer = ss.context.writer;
-
-                        inline for (info.fields) |field| {
-                            if (!field.is_comptime) {
-                                if (getFieldConfig(T, field)) |config| {
-                                    if (config.skip) {
-                                        continue;
-                                    }
-                                    if (config.serializer) |ser_fcn| {
-                                        ser_fcn(writer, @field(value, field.name), params) catch return Error.IO;
-                                        continue;
-                                    }
-                                }
-                                try getty.serialize(alloc, @field(value, field.name), ss);
-                            }
-                        }
-                    },
-                    .Pointer => |*info| {
-                        std.debug.assert(info.size == .Slice);
-
-                        try getty.serialize(alloc, @as(u64, value.len), ss);
-                        for (value) |element| {
-                            try getty.serialize(alloc, element, ss);
-                        }
-                    },
-                    else => unreachable,
+    switch (@typeInfo(T)) {
+        .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
+        .Bool => return writer.writeByte(@intFromBool(data)),
+        .Enum => |_| {
+            if (getConfig(T)) |config| {
+                if (config.serializer) |serialize_fcn| {
+                    return serialize_fcn(writer, data, params);
                 }
             }
-        };
 
-        const Map = struct {
-            pub usingnamespace getty.ser.Map(
-                Context,
-                Ok,
-                Error,
-                .{
-                    .serializeKey = serializeKey,
-                    .serializeValue = serializeValue,
-                    .end = end,
+            return bincode.write(writer, @as(u32, @intFromEnum(data)), params);
+        },
+        .Union => |info| {
+            try bincode.write(writer, @as(u32, @intFromEnum(data)), params);
+            inline for (info.fields) |field| {
+                if (data == @field(T, field.name)) {
+                    return bincode.write(writer, @field(data, field.name), params);
+                }
+            }
+            return;
+        },
+        .Struct => |info| {
+            if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
+                try bincode.write(writer, data.items.len, params);
+                for (data.items) |item| {
+                    try bincode.write(writer, item, params);
+                }
+            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
+                // NOTE: we need to use unmanaged here because managed requires a mutable reference
+                const len: u64 = @intCast(data.count());
+                try bincode.write(writer, len, params);
+                var iter = data.iterator();
+                while (iter.next()) |entry| {
+                    try bincode.write(writer, entry.key_ptr.*, params);
+                    try bincode.write(writer, entry.value_ptr.*, params);
+                }
+            } else {
+                inline for (info.fields) |field| {
+                    if (field.is_comptime) continue;
+
+                    if (getFieldConfig(T, field)) |config| {
+                        if (config.skip) {
+                            continue;
+                        } else if (config.serializer) |ser_fcn| {
+                            try ser_fcn(writer, @field(data, field.name), params);
+                            continue;
+                        }
+                    }
+                    try bincode.write(writer, @field(data, field.name), params);
+                }
+            }
+            return;
+        },
+        .Optional => {
+            if (data) |value| {
+                try writer.writeByte(1);
+                try bincode.write(writer, value, params);
+            } else {
+                try writer.writeByte(0);
+            }
+            return;
+        },
+        .Array, .Vector => {
+            if (params.include_fixed_array_length) {
+                try bincode.write(writer, std.math.cast(u64, data.len) orelse return error.DataTooLarge, params);
+            }
+            for (data) |element| {
+                try bincode.write(writer, element, params);
+            }
+            return;
+        },
+        .Pointer => |info| {
+            switch (info.size) {
+                .One => return bincode.write(writer, data.*, params), // TODO: wouldn't this panic if null?
+                .Many => return bincode.write(writer, std.mem.span(data), params),
+                .Slice => {
+                    try bincode.write(writer, @as(u64, data.len), params);
+                    for (data) |element| {
+                        try bincode.write(writer, element, params);
+                    }
+                    return;
                 },
-            );
-
-            ser: *Self,
-            const Context = *@This();
-
-            fn serializeKey(c: Context, value: anytype) Error!void {
-                const ss = c.ser.serializer();
-                try getty.serialize(null, value, ss);
+                else => @compileError("Pointer must be type of One, Many or Slice!"),
+            }
+        },
+        .ComptimeFloat => return bincode.write(writer, @as(f64, data), params),
+        .Float => |info| {
+            if (info.bits != 32 and info.bits != 64) {
+                @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+            }
+            return writer.writeAll(std.mem.asBytes(&data));
+        },
+        .ComptimeInt => {
+            if (data < 0) {
+                @compileError("Signed comptime integers can not be serialized.");
+            }
+            return bincode.write(writer, @as(u64, data), params);
+        },
+        .Int => |info| {
+            if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
+                @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
             }
 
-            fn serializeValue(c: Context, value: anytype) Error!void {
-                const ss = c.ser.serializer();
-                try getty.serialize(null, value, ss);
-            }
+            switch (params.int_encoding) {
+                .variable => {
+                    const z = switch (info.signedness) {
+                        .unsigned => data,
+                        .signed => zigzag: {
+                            if (data < 0) {
+                                break :zigzag ~@as(std.meta.Int(.unsigned, info.bits), @bitCast(data)) * 2 + 1;
+                            } else {
+                                break :zigzag @as(std.meta.Int(.unsigned, info.bits), @intCast(data)) * 2;
+                            }
+                        },
+                    };
 
-            fn end(_: Context) Error!Ok {}
-        };
-
-        const Aggregate = struct {
-            ser: *Self,
-
-            const A = @This();
-
-            pub usingnamespace getty.ser.Seq(
-                *A,
-                Ok,
-                Error,
-                .{
-                    .serializeElement = serializeElement,
-                    .end = end,
+                    if (z < 251) {
+                        return writer.writeByte(@as(u8, @intCast(z)));
+                    } else if (z <= std.math.maxInt(u16)) {
+                        try writer.writeByte(251);
+                        return switch (params.endian) {
+                            .little => writer.writeInt(u16, @as(u16, @intCast(z)), .little),
+                            .big => writer.writeInt(u16, @as(u16, @intCast(z)), .big),
+                        };
+                    } else if (z <= std.math.maxInt(u32)) {
+                        try writer.writeByte(252);
+                        return switch (params.endian) {
+                            .little => writer.writeInt(u32, @as(u32, @intCast(z)), .little),
+                            .big => writer.writeInt(u32, @as(u32, @intCast(z)), .big),
+                        };
+                    } else if (z <= std.math.maxInt(u64)) {
+                        try writer.writeByte(253);
+                        return switch (params.endian) {
+                            .little => writer.writeInt(u64, @as(u64, @intCast(z)), .little),
+                            .big => writer.writeInt(u64, @as(u64, @intCast(z)), .big),
+                        };
+                    } else if (z <= std.math.maxInt(u128)) {
+                        try writer.writeByte(254);
+                        return switch (params.endian) {
+                            .little => writer.writeInt(u128, @as(u128, @intCast(z)), .little),
+                            .big => writer.writeInt(u128, @as(u128, @intCast(z)), .big),
+                        };
+                    } else {
+                        try writer.writeByte(255);
+                        return switch (params.endian) {
+                            .little => writer.writeInt(u256, @as(u256, @intCast(z)), .little),
+                            .big => writer.writeInt(u256, @as(u256, @intCast(z)), .big),
+                        };
+                    }
                 },
-            );
-
-            fn serializeElement(self: *A, value: anytype) Error!Ok {
-                const ss = self.ser.serializer();
-                try getty.serialize(null, value, ss);
+                .fixed => return switch (params.endian) {
+                    .little => writer.writeInt(T, data, .little),
+                    .big => writer.writeInt(T, data, .big),
+                },
             }
+        },
+        else => {},
+    }
 
-            fn end(self: *A) Error!Ok {
-                _ = self;
-            }
-        };
-    };
+    @compileError("Serializing '" ++ @typeName(T) ++ "' is unsupported.");
 }
 
 // need this fn to define the return type T
@@ -668,7 +578,6 @@ pub fn DeserializeFunction(comptime T: type) type {
 pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
 pub const FreeFunction = fn (allocator: std.mem.Allocator, data: anytype) void;
 
-// ** Field Functions ** //
 pub fn FieldConfig(comptime T: type) type {
     return struct {
         deserializer: ?DeserializeFunction(T) = null,
@@ -678,6 +587,15 @@ pub fn FieldConfig(comptime T: type) type {
         default_on_eof: bool = false,
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
     };
+}
+
+pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
+    const bincode_field = "!bincode-config";
+    if (@hasDecl(struct_type, bincode_field)) {
+        const config = @field(struct_type, bincode_field);
+        return config;
+    }
+    return null;
 }
 
 pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
@@ -701,40 +619,16 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
     }
 }
 
-// ** Writer/Reader functions ** //
-/// note: will fail if the slice is too small to hold the serialized data
-pub fn writeToSlice(slice: []u8, data: anytype, params: Params) ![]u8 {
-    var stream = std.io.fixedBufferStream(slice);
-    var writer = stream.writer();
-
-    var s = serializer(writer, params);
-    const ss = s.serializer();
-
-    try getty.serialize(null, data, ss);
-    return stream.getWritten();
+pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !usize {
+    const ser_slice = try writeToSlice(slice, data, params);
+    return ser_slice.len;
 }
 
 pub fn writeToArray(alloc: std.mem.Allocator, data: anytype, params: Params) !std.ArrayList(u8) {
-    // var array_buf = try std.ArrayList(u8).initCapacity(alloc, @bitSizeOf(@TypeOf(data)));
     var array_buf = try std.ArrayList(u8).initCapacity(alloc, 2048);
-
-    var s = serializer(array_buf.writer(), params);
-    const ss = s.serializer();
-
-    try getty.serialize(alloc, data, ss);
+    try bincode.write(array_buf.writer(), data, params);
 
     return array_buf;
-}
-
-pub fn write(alloc: ?std.mem.Allocator, writer: anytype, data: anytype, params: Params) !void {
-    var s = serializer(writer, params);
-    const ss = s.serializer();
-    try getty.serialize(alloc, data, ss);
-}
-
-pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !usize {
-    var ser_slice = try writeToSlice(slice, data, params);
-    return ser_slice.len;
 }
 
 pub fn getSerializedSize(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
@@ -743,32 +637,12 @@ pub fn getSerializedSize(alloc: std.mem.Allocator, data: anytype, params: Params
     return list.items.len;
 }
 
-// can call if dont require an allocator
-pub fn readFromSlice(alloc: ?std.mem.Allocator, comptime T: type, slice: []const u8, params: Params) !T {
-    var stream = std.io.fixedBufferStream(slice);
-    var reader = stream.reader();
-    var d = deserializer(reader, params);
-    const dd = d.deserializer();
-    const v = try getty.deserialize(alloc, T, dd);
-
-    return v;
-}
-
-pub fn read(alloc: ?std.mem.Allocator, comptime T: type, reader: anytype, params: Params) !T {
-    var d = deserializer(reader, params);
-    const dd = d.deserializer();
-    const v = try getty.deserialize(alloc, T, dd);
-    errdefer getty.de.free(alloc, @TypeOf(dd), v);
-
-    return v;
-}
-
 // ** Tests **//
 fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     const S = struct {
         fn deserializeTestSlice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
             var ally = allocator.?;
-            var len = try bincode.read(ally, u16, reader, params);
+            const len = try bincode.read(ally, u16, reader, params);
             var elems = try ally.alloc(Child, len);
             for (0..len) |i| {
                 elems[i] = try bincode.read(ally, Child, reader, params);
@@ -777,10 +651,10 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
         }
 
         pub fn serilaizeTestSlice(writer: anytype, data: anytype, params: bincode.Params) !void {
-            var len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
-            try bincode.write(null, writer, len, params);
+            const len = std.math.cast(u16, data.len) orelse return error.DataTooLarge;
+            try bincode.write(writer, len, params);
             for (data) |item| {
-                try bincode.write(null, writer, item, params);
+                try bincode.write(writer, item, params);
             }
             return;
         }
@@ -790,6 +664,36 @@ fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
         .serializer = S.serilaizeTestSlice,
         .deserializer = S.deserializeTestSlice,
     };
+}
+
+fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
+    const S = struct {
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            try bincode.write(writer, @intFromEnum(data), params);
+            return;
+        }
+    };
+
+    return bincode.FieldConfig(ShredType){
+        .serializer = S.serialize,
+    };
+}
+
+const ShredType = enum(u8) {
+    Data = 0b1010_0101,
+    Code = 0b0101_1010,
+
+    pub const @"!bincode-config" = ShredTypeConfig();
+};
+
+test "bincode: custom enum" {
+    const x = ShredType.Data;
+    var buf = std.ArrayList(u8).init(std.testing.allocator);
+    defer buf.deinit();
+
+    try bincode.write(buf.writer(), x, .{});
+
+    std.debug.print("{any}\n", .{buf});
 }
 
 test "bincode: default on eof" {
@@ -802,7 +706,7 @@ test "bincode: default on eof" {
     };
 
     var buf: [1]u8 = .{1};
-    var r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
+    const r = try readFromSlice(std.testing.allocator, Foo, &buf, .{});
     try std.testing.expect(r.value == 1);
 
     var buf2: [1024]u8 = undefined;
@@ -811,7 +715,7 @@ test "bincode: default on eof" {
         .accounts = std.ArrayList(u64).init(std.testing.allocator),
     }, .{});
 
-    var r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
+    const r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
     try std.testing.expect(r2.value == 10);
 }
 
@@ -834,17 +738,17 @@ test "bincode: custom field serialization" {
 
     var accounts = [_]u8{ 1, 2, 3 };
     var txs = [_]u32{ 1, 2, 3 };
-    var foo = Foo{ .accounts = &accounts, .txs = &txs };
+    const foo = Foo{ .accounts = &accounts, .txs = &txs };
 
     var buf: [1000]u8 = undefined;
-    var out = try writeToSlice(&buf, foo, Params{});
+    const out = try writeToSlice(&buf, foo, Params{});
     // std.debug.print("{any}", .{out});
     try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
-    var size = try getSerializedSize(std.testing.allocator, foo, Params{});
+    const size = try getSerializedSize(std.testing.allocator, foo, Params{});
     try std.testing.expect(size > 0);
 
-    var r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
+    const r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
     defer free(std.testing.allocator, r);
     // std.debug.print("{any}", .{r});
 
@@ -861,7 +765,7 @@ test "bincode: test arraylist" {
     try array.append(11);
 
     var buf: [1024]u8 = undefined;
-    var bytes = try writeToSlice(&buf, array, .{});
+    const bytes = try writeToSlice(&buf, array, .{});
 
     // var bytes = [_]u8{ 2, 0, 0, 0, 0, 0, 0, 0, 10, 11};
     var array2 = try readFromSlice(std.testing.allocator, std.ArrayList(u8), bytes, .{});
@@ -880,7 +784,7 @@ test "bincode: test hashmap/BTree (de)ser" {
     try map.put(20, 10);
 
     var buf: [1024]u8 = undefined;
-    var bytes = try writeToSlice(&buf, map, .{});
+    const bytes = try writeToSlice(&buf, map, .{});
 
     try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
 
@@ -894,11 +798,11 @@ test "bincode: test hashmap/BTree (de)ser" {
 test "bincode: test float serialization" {
     const f: f64 = 1.234;
     var buf: [1024]u8 = undefined;
-    var bytes = try writeToSlice(&buf, f, .{});
+    const bytes = try writeToSlice(&buf, f, .{});
     const rust_bytes = [_]u8{ 88, 57, 180, 200, 118, 190, 243, 63 };
     try std.testing.expectEqualSlices(u8, &rust_bytes, bytes);
 
-    var f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
+    const f2 = try readFromSlice(std.testing.allocator, f64, bytes, .{});
     try std.testing.expect(f2 == f);
 }
 
@@ -906,18 +810,18 @@ test "bincode: test serialization" {
     var buf: [1]u8 = undefined;
 
     {
-        var out = try writeToSlice(&buf, true, Params.standard);
+        const out = try writeToSlice(&buf, true, Params.standard);
         try std.testing.expect(out.len == 1);
         try std.testing.expect(out[0] == 1);
     }
 
     {
-        var out = try readFromSlice(null, bool, &buf, Params{});
+        const out = try readFromSlice(std.testing.allocator, bool, &buf, Params{});
         try std.testing.expect(out == true);
     }
 
     {
-        var out = try writeToSlice(&buf, false, Params.standard);
+        const out = try writeToSlice(&buf, false, Params.standard);
         try std.testing.expect(out.len == 1);
         try std.testing.expect(out[0] == 0);
     }
@@ -926,20 +830,20 @@ test "bincode: test serialization" {
     _ = try writeToSlice(&buf2, 300, Params.standard);
 
     var buf3: [4]u8 = undefined;
-    var v: u32 = 200;
+    const v: u32 = 200;
     _ = try writeToSlice(&buf3, v, Params.standard);
 
     {
-        var out = try readFromSlice(null, u32, &buf3, Params{});
+        const out = try readFromSlice(std.testing.allocator, u32, &buf3, Params{});
         try std.testing.expect(out == 200);
     }
 
     const Foo = enum { A, B };
-    var out = try writeToSlice(&buf3, Foo.B, Params.standard);
+    const out = try writeToSlice(&buf3, Foo.B, Params.standard);
     var e = [_]u8{ 1, 0, 0, 0 };
     try std.testing.expectEqualSlices(u8, &e, out);
 
-    var read_out = try readFromSlice(null, Foo, &buf3, Params{});
+    const read_out = try readFromSlice(std.testing.allocator, Foo, &buf3, Params{});
     try std.testing.expectEqual(read_out, Foo.B);
 
     const Foo2 = union(enum(u8)) { A: u32, B: u32, C: u32 };
@@ -949,16 +853,16 @@ test "bincode: test serialization" {
     // .A = 65 = 1000001 (7 bits)
     // .B = 66 = 1000010
     // .B = 67 = 1000011
-    var out2 = try writeToSlice(&buf2, value, Params.standard);
+    const out2 = try writeToSlice(&buf2, value, Params.standard);
     try std.testing.expectEqualSlices(u8, &expected, out2);
 
-    var read_out2 = try readFromSlice(null, Foo2, &buf2, Params{});
+    const read_out2 = try readFromSlice(std.testing.allocator, Foo2, &buf2, Params{});
     try std.testing.expectEqual(read_out2, value);
 
     const Bar = struct { a: u32, b: u32, c: Foo2 };
     const b = Bar{ .a = 65, .b = 66, .c = Foo2{ .B = 16843009 } };
     var buf4: [100]u8 = undefined;
-    var out3 = try writeToSlice(&buf4, b, Params.standard);
+    const out3 = try writeToSlice(&buf4, b, Params.standard);
     var expected2 = [_]u8{ 65, 0, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1 };
     try std.testing.expectEqualSlices(u8, &expected2, out3);
 
@@ -973,14 +877,25 @@ test "bincode: test serialization" {
         .c = Bar{ .a = 66, .b = 67, .c = Foo2{ .B = 16843009 } },
     };
     var buf6: [100]u8 = undefined;
-    var out4 = try writeToSlice(&buf6, _s, Params.standard);
-    var result = try readFromSlice(null, s, out4, Params{});
+    const out4 = try writeToSlice(&buf6, _s, Params.standard);
+    const result = try readFromSlice(std.testing.allocator, s, out4, Params{});
     try std.testing.expectEqual(result, _s);
 
     // ensure write to array works too
     var array_buf = try writeToArray(std.testing.allocator, _s, Params.standard);
     defer array_buf.deinit();
     try std.testing.expectEqualSlices(u8, out4, array_buf.items);
+}
+
+test "bincode: tuples" {
+    var buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer buffer.deinit();
+
+    const Foo = struct { u16, u16 };
+    try bincode.write(buffer.writer(), Foo{ 10, 20 }, bincode.Params.standard);
+    try testing.expectEqualSlices(u8, &[_]u8{
+        10, 0, 20, 0,
+    }, buffer.items);
 }
 
 test "bincode: (legacy) serialize an array" {
@@ -992,7 +907,7 @@ test "bincode: (legacy) serialize an array" {
         second: u8,
     };
 
-    try bincode.write(null, buffer.writer(), [_]Foo{
+    try bincode.write(buffer.writer(), [_]Foo{
         .{ .first = 10, .second = 20 },
         .{ .first = 30, .second = 40 },
     }, bincode.Params.legacy);
@@ -1004,11 +919,70 @@ test "bincode: (legacy) serialize an array" {
     }, buffer.items);
 }
 
+// TODO: Fix bincode.Option to use ? instead
+// test "bincode: decode arbitrary object" {
+//     const Mint = struct {
+//         authority: bincode.Option([32]u8),
+//         supply: u64,
+//         decimals: u8,
+//         is_initialized: bool,
+//         freeze_authority: bincode.Option([32]u8),
+//     };
+
+//     const bytes = [_]u8{
+//         1,   0,   0,   0,   83,  18,  223, 14,  150, 112, 155, 39,  143, 181,
+//         58,  12,  16,  228, 56,  110, 253, 193, 149, 16,  253, 81,  214, 206,
+//         246, 126, 227, 182, 123, 225, 246, 203, 1,   0,   0,   0,   0,   0,
+//         0,   0,   0,   1,   1,   0,   0,   0,   0,   0,   0,   83,  18,  223,
+//         14,  150, 112, 155, 39,  143, 181, 58,  12,  16,  228, 56,  110, 253,
+//         193, 149, 16,  253, 81,  214, 206, 246, 126, 227, 182, 123,
+//     };
+//     const mint = try bincode.readFromSlice(testing.allocator, Mint, &bytes, .{});
+//     defer bincode.free(testing.allocator, mint);
+
+//     try std.testing.expectEqual(@as(u64, 1), mint.supply);
+//     try std.testing.expectEqual(@as(u8, 0), mint.decimals);
+//     try std.testing.expectEqual(true, mint.is_initialized);
+//     try std.testing.expect(mint.authority == .some);
+//     try std.testing.expect(mint.freeze_authority == .some);
+// }
+
+// TODO: Fix bincode.Option to use ? instead
+// test "bincode: option serialize and deserialize" {
+//     const Mint = struct {
+//         authority: bincode.Option([32]u8),
+//         supply: u64,
+//         decimals: u8,
+//         is_initialized: bool,
+//         freeze_authority: bincode.Option([32]u8),
+//     };
+
+//     var buffer = std.ArrayList(u8).init(testing.allocator);
+//     defer buffer.deinit();
+
+//     const expected: Mint = .{
+//         .authority = bincode.Option([32]u8).from([_]u8{ 1, 2, 3, 4 } ** 8),
+//         .supply = 1,
+//         .decimals = 0,
+//         .is_initialized = true,
+//         .freeze_authority = bincode.Option([32]u8).from([_]u8{ 5, 6, 7, 8 } ** 8),
+//     };
+
+//     try bincode.write(buffer.writer(), expected, .{});
+
+//     try std.testing.expectEqual(@as(usize, 82), buffer.items.len);
+
+//     const actual = try bincode.readFromSlice(testing.allocator, Mint, buffer.items, .{});
+//     defer bincode.free(testing.allocator, actual);
+
+//     try std.testing.expectEqual(expected, actual);
+// }
+
 test "bincode: serialize and deserialize" {
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();
 
-    inline for (.{bincode.Params.standard}) |params| {
+    inline for (.{ .{}, .{ .int_encoding = .variable }, bincode.Params.legacy, bincode.Params.standard }) |params| {
         inline for (.{
             @as(i8, std.math.minInt(i8)),
             @as(i16, std.math.minInt(i16)),
@@ -1027,14 +1001,14 @@ test "bincode: serialize and deserialize" {
             @as(usize, std.math.maxInt(usize)),
             @as(isize, std.math.maxInt(isize)),
 
-            // @as(f32, std.math.floatMin(f32)),
-            // @as(f64, std.math.floatMin(f64)),
-            // @as(f32, std.math.floatMax(f32)),
-            // @as(f64, std.math.floatMax(f64)),
+            @as(f32, std.math.floatMin(f32)),
+            @as(f64, std.math.floatMin(f64)),
+            @as(f32, std.math.floatMax(f32)),
+            @as(f64, std.math.floatMax(f64)),
 
             [_]u8{ 0, 1, 2, 3 },
         }) |expected| {
-            try bincode.write(null, buffer.writer(), expected, params);
+            try bincode.write(buffer.writer(), expected, params);
 
             const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
             defer bincode.free(testing.allocator, actual);
@@ -1044,11 +1018,12 @@ test "bincode: serialize and deserialize" {
         }
     }
 
-    inline for (.{bincode.Params.standard}) |params| {
+    inline for (.{ .{}, bincode.Params.legacy, bincode.Params.standard }) |params| {
         inline for (.{
+            "hello world",
             @as([]const u8, "hello world"),
         }) |expected| {
-            try bincode.write(null, buffer.writer(), expected, params);
+            try bincode.write(buffer.writer(), expected, params);
 
             const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
             defer bincode.free(testing.allocator, actual);

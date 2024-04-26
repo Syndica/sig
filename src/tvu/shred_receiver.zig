@@ -1,22 +1,22 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
 const network = @import("zig-network");
 
-const bincode = sig.bincode;
+const bincode = @import("../bincode/bincode.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Socket = network.Socket;
 
-const Channel = sig.sync.Channel;
-const Logger = sig.trace.Logger;
-const Packet = sig.net.Packet;
-const Ping = sig.gossip.Ping;
-const Pong = sig.gossip.Pong;
-const RepairMessage = sig.tvu.RepairMessage;
-const SocketThread = sig.net.SocketThread;
+const Channel = @import("../sync/channel.zig").Channel;
+const Logger = @import("../trace/log.zig").Logger;
+const Packet = @import("../net/packet.zig").Packet;
+const Ping = @import("../gossip/ping_pong.zig").Ping;
+const Pong = @import("../gossip/ping_pong.zig").Pong;
+const RepairMessage = @import("repair_message.zig").RepairMessage;
+const SocketThread = @import("../net/socket_utils.zig").SocketThread;
+const endpointToString = @import("../net/net.zig").endpointToString;
 
 /// Analogous to `ShredFetchStage`
 pub const ShredReceiver = struct {
@@ -49,7 +49,7 @@ pub const ShredReceiver = struct {
         receiver: *Channel(ArrayList(Packet)),
         sender: *Channel(ArrayList(Packet)),
     ) !void {
-        while (!self.exit.load(.Unordered)) {
+        while (!self.exit.load(.unordered)) {
             var responses = ArrayList(Packet).init(self.allocator);
             if (try receiver.try_drain()) |batches| {
                 for (batches) |batch| for (batch.items) |*packet| {
@@ -69,7 +69,7 @@ pub const ShredReceiver = struct {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             try self.handlePing(packet, responses);
         } else {
-            const endpoint_str = try sig.net.endpointToString(self.allocator, &packet.addr);
+            const endpoint_str = try endpointToString(self.allocator, &packet.addr);
             defer endpoint_str.deinit();
             self.logger.field("from_endpoint", endpoint_str.items)
                 .infof("tvu: recv unknown shred message: {} bytes", .{packet.size});
@@ -94,7 +94,7 @@ pub const ShredReceiver = struct {
         const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
         reply_packet.size = reply_bytes.len;
 
-        const endpoint_str = try sig.net.endpointToString(self.allocator, &packet.addr);
+        const endpoint_str = try endpointToString(self.allocator, &packet.addr);
         defer endpoint_str.deinit();
         self.logger.field("from_endpoint", endpoint_str.items)
             .field("from_pubkey", &ping.from.string())

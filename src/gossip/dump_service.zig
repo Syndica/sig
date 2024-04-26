@@ -1,13 +1,11 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
+const GossipTable = @import("../gossip/table.zig").GossipTable;
+const Logger = @import("../trace/log.zig").Logger;
+const RwMux = @import("../sync/mux.zig").RwMux;
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Atomic;
-
-const GossipTable = sig.gossip.GossipTable;
-const Logger = sig.trace.Logger;
-const RwMux = sig.sync.RwMux;
-const SignedGossipData = sig.gossip.SignedGossipData;
+const Atomic = std.atomic.Value;
 
 pub const GossipDumpService = struct {
     allocator: Allocator,
@@ -23,7 +21,7 @@ pub const GossipDumpService = struct {
         defer self.allocator.free(dir);
         try std.fs.cwd().makePath(dir);
         while (true) {
-            if (self.exit.load(.Unordered)) return;
+            if (self.exit.load(.unordered)) return;
             try self.dumpGossip(dir, start_time);
             std.time.sleep(10_000_000_000);
         }
@@ -37,7 +35,7 @@ pub const GossipDumpService = struct {
 
             // allocate buffer to write records
             const table_len = gossip_table.store.count();
-            var buf = try self.allocator.alloc(u8, (1 + table_len) * 200);
+            const buf = try self.allocator.alloc(u8, (1 + table_len) * 200);
             errdefer self.allocator.free(buf);
             var stream = std.io.fixedBufferStream(buf);
             const writer = stream.writer();
@@ -47,7 +45,7 @@ pub const GossipDumpService = struct {
             const base58Encoder = @import("base58-zig").Encoder.init(.{});
             for (gossip_table.store.values()) |gossip_versioned_data| {
                 const val: SignedGossipData = gossip_versioned_data.value;
-                var size = try base58Encoder.encode(
+                const size = try base58Encoder.encode(
                     &gossip_versioned_data.value_hash.data,
                     &encoder_buf,
                 );

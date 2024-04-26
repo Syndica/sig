@@ -56,7 +56,7 @@ pub const Bloom = struct {
 
     pub fn add(self: *Self, key: []const u8) void {
         for (self.keys.items) |hash_index| {
-            var i = self.pos(key, hash_index);
+            const i = self.pos(key, hash_index);
             if (!self.bits.isSet(i)) {
                 self.num_bits_set +|= 1;
                 self.bits.set(i);
@@ -66,7 +66,7 @@ pub const Bloom = struct {
 
     pub fn contains(self: *const Self, key: []const u8) bool {
         for (self.keys.items) |hash_index| {
-            var i = self.pos(key, hash_index);
+            const i = self.pos(key, hash_index);
             if (self.bits.isSet(i)) {
                 continue;
             }
@@ -91,7 +91,7 @@ pub const Bloom = struct {
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
         const n_keys = Bloom.numKeys(@floatFromInt(n_bits), n_items_f);
 
-        var seed = @as(u64, @intCast(std.time.milliTimestamp()));
+        const seed = @as(u64, @intCast(std.time.milliTimestamp()));
         var rnd = RndGen.init(seed);
 
         var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
@@ -137,10 +137,10 @@ test "bloom.bloom: helper fcns match rust" {
 }
 
 test "bloom.bloom: serializes/deserializes correctly" {
-    var bloom = Bloom.init(testing.allocator, 0, null);
+    const bloom = Bloom.init(testing.allocator, 0, null);
 
     var buf: [10000]u8 = undefined;
-    var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    const out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
     var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
     defer bincode.free(testing.allocator, deserialized);
@@ -157,7 +157,7 @@ test "bloom.bloom: serializes/deserializes correctly with set bits" {
     defer bloom.deinit();
 
     var buf: [10000]u8 = undefined;
-    var out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
+    const out = try bincode.writeToSlice(buf[0..], bloom, bincode.Params.standard);
 
     var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, bincode.Params.standard);
     defer deserialized.deinit();
