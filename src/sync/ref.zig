@@ -169,7 +169,7 @@ pub fn Rc(comptime T: type) type {
         }
 
         inline fn innerPtr(self: *const Self) *Inner {
-            return @fieldParentPtr(Inner, "value", self.value);
+            return @fieldParentPtr("value", self.value);
         }
 
         /// A single threaded, weak reference to a reference-counted value.
@@ -187,7 +187,7 @@ pub fn Rc(comptime T: type) type {
             /// Creates a new weak reference object from a pointer to it's underlying value,
             /// without increasing the weak count.
             pub fn fromValuePtr(value: *T, alloc: std.mem.Allocator) Weak {
-                return .{ .inner = @fieldParentPtr(Inner, "value", value), .alloc = alloc };
+                return .{ .inner = @fieldParentPtr("value", value), .alloc = alloc };
             }
 
             /// Gets the number of strong references to this value.
@@ -317,23 +317,23 @@ pub fn Arc(comptime T: type) type {
             // otherwise.
             inner.value = data_fn(&weak);
 
-            std.debug.assert(@atomicRmw(usize, &inner.strong, .Add, 1, .Release) == 0);
+            std.debug.assert(@atomicRmw(usize, &inner.strong, .Add, 1, .release) == 0);
             return Self{ .value = &inner.value, .alloc = alloc };
         }
 
         /// Gets the number of strong references to this value.
         pub fn strongCount(self: *const Self) usize {
-            return @atomicLoad(usize, &self.innerPtr().strong, .Acquire);
+            return @atomicLoad(usize, &self.innerPtr().strong, .acquire);
         }
 
         /// Gets the number of weak references to this value.
         pub fn weakCount(self: *const Self) usize {
-            return @atomicLoad(usize, &self.innerPtr().weak, .Acquire) - 1;
+            return @atomicLoad(usize, &self.innerPtr().weak, .acquire) - 1;
         }
 
         /// Increments the strong count.
         pub fn retain(self: *Self) Self {
-            _ = @atomicRmw(usize, &self.innerPtr().strong, .Add, 1, .AcqRel);
+            _ = @atomicRmw(usize, &self.innerPtr().strong, .Add, 1, .acq_rel);
             return self.*;
         }
 
@@ -347,8 +347,8 @@ pub fn Arc(comptime T: type) type {
         pub fn release(self: Self) void {
             const ptr = self.innerPtr();
 
-            if (@atomicRmw(usize, &ptr.strong, .Sub, 1, .AcqRel) == 1) {
-                if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .AcqRel) == 1) {
+            if (@atomicRmw(usize, &ptr.strong, .Sub, 1, .acq_rel) == 1) {
+                if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .acq_rel) == 1) {
                     self.alloc.destroy(ptr);
                 }
             }
@@ -360,9 +360,9 @@ pub fn Arc(comptime T: type) type {
         pub fn releaseWithFn(self: Self, comptime f: fn (T) void) void {
             const ptr = self.innerPtr();
 
-            if (@atomicRmw(usize, &ptr.strong, .Sub, 1, .AcqRel) == 1) {
+            if (@atomicRmw(usize, &ptr.strong, .Sub, 1, .acq_rel) == 1) {
                 f(self.value.*);
-                if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .AcqRel) == 1) {
+                if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .acq_rel) == 1) {
                     self.alloc.destroy(ptr);
                 }
             }
@@ -375,10 +375,10 @@ pub fn Arc(comptime T: type) type {
         pub fn tryUnwrap(self: Self) ?T {
             const ptr = self.innerPtr();
 
-            if (@cmpxchgStrong(usize, &ptr.strong, 1, 0, .Monotonic, .Monotonic) == null) {
+            if (@cmpxchgStrong(usize, &ptr.strong, 1, 0, .monotonic, .monotonic) == null) {
                 ptr.strong = 0;
                 const tmp = self.value.*;
-                if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .AcqRel) == 1) {
+                if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .acq_rel) == 1) {
                     self.alloc.destroy(ptr);
                 }
                 return tmp;
@@ -400,7 +400,7 @@ pub fn Arc(comptime T: type) type {
         }
 
         inline fn innerPtr(self: *const Self) *Inner {
-            return @fieldParentPtr(Inner, "value", self.value);
+            return @fieldParentPtr("value", self.value);
         }
 
         /// A multi-threaded, weak reference to a reference-counted value.
@@ -411,28 +411,28 @@ pub fn Arc(comptime T: type) type {
             /// Creates a new weak reference.
             pub fn init(parent: *Arc(T)) Weak {
                 const ptr = parent.innerPtr();
-                _ = @atomicRmw(usize, &ptr.weak, .Add, 1, .AcqRel);
+                _ = @atomicRmw(usize, &ptr.weak, .Add, 1, .acq_rel);
                 return Weak{ .inner = ptr, .alloc = parent.alloc };
             }
 
             /// Creates a new weak reference object from a pointer to it's underlying value,
             /// without increasing the weak count.
             pub fn fromValuePtr(value: *T, alloc: std.mem.Allocator) Weak {
-                return .{ .inner = @fieldParentPtr(Inner, "value", value), .alloc = alloc };
+                return .{ .inner = @fieldParentPtr("value", value), .alloc = alloc };
             }
 
             /// Gets the number of strong references to this value.
             pub fn strongCount(self: *const Weak) usize {
                 const ptr = self.innerPtr() orelse return 0;
-                return @atomicLoad(usize, &ptr.strong, .Acquire);
+                return @atomicLoad(usize, &ptr.strong, .acquire);
             }
 
             /// Gets the number of weak references to this value.
             pub fn weakCount(self: *const Weak) usize {
                 const ptr = self.innerPtr() orelse return 1;
-                const weak = @atomicLoad(usize, &ptr.weak, .Acquire);
+                const weak = @atomicLoad(usize, &ptr.weak, .acquire);
 
-                if (@atomicLoad(usize, &ptr.strong, .Acquire) == 0) {
+                if (@atomicLoad(usize, &ptr.strong, .acquire) == 0) {
                     return weak;
                 } else {
                     return weak - 1;
@@ -442,7 +442,7 @@ pub fn Arc(comptime T: type) type {
             /// Increments the weak count.
             pub fn retain(self: *Weak) Weak {
                 if (self.innerPtr()) |ptr| {
-                    _ = @atomicRmw(usize, &ptr.weak, .Add, 1, .AcqRel);
+                    _ = @atomicRmw(usize, &ptr.weak, .Add, 1, .acq_rel);
                 }
                 return self.*;
             }
@@ -454,17 +454,17 @@ pub fn Arc(comptime T: type) type {
                 const ptr = self.innerPtr() orelse return null;
 
                 while (true) {
-                    const prev = @atomicLoad(usize, &ptr.strong, .Acquire);
+                    const prev = @atomicLoad(usize, &ptr.strong, .acquire);
 
                     if (prev == 0) {
-                        if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .AcqRel) == 1) {
+                        if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .acq_rel) == 1) {
                             self.alloc.destroy(ptr);
                             self.inner = null;
                         }
                         return null;
                     }
 
-                    if (@cmpxchgStrong(usize, &ptr.strong, prev, prev + 1, .Acquire, .Monotonic) == null) {
+                    if (@cmpxchgStrong(usize, &ptr.strong, prev, prev + 1, .acquire, .monotonic) == null) {
                         return Arc(T){
                             .value = &ptr.value,
                             .alloc = self.alloc,
@@ -479,7 +479,7 @@ pub fn Arc(comptime T: type) type {
             /// The continued use of the pointer after calling `release` is undefined behaviour.
             pub fn release(self: Weak) void {
                 if (self.innerPtr()) |ptr| {
-                    if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .AcqRel) == 1) {
+                    if (@atomicRmw(usize, &ptr.weak, .Sub, 1, .acq_rel) == 1) {
                         self.alloc.destroy(ptr);
                     }
                 }

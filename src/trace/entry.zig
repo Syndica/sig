@@ -7,7 +7,7 @@ const Logger = @import("./log.zig").Logger;
 const Channel = @import("../sync/channel.zig").Channel;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
-const AtomicBool = std.atomic.Atomic(bool);
+const AtomicBool = std.atomic.Value(bool);
 
 pub const Entry = union(enum) {
     standard: *StandardEntry,
@@ -128,7 +128,7 @@ pub const StandardEntry = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, channel: *Channel(*StandardEntry), max_level: Level) *Self {
-        var self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
+        const self = allocator.create(Self) catch @panic("could not allocate.Create Entry");
         self.* = Self{
             .allocator = allocator,
             .fields = std.ArrayList(Field).init(allocator),
@@ -206,7 +206,7 @@ test "trace.entry: should info log correctly" {
     var entry = StandardEntry.init(testing.allocator, logger.standard.channel, .debug);
     defer entry.deinit();
 
-    var anull: ?u8 = null;
+    const anull: ?u8 = null;
 
     entry
         .field("some_val", true)

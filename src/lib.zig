@@ -1,5 +1,6 @@
 pub const rpc = struct {
-    pub usingnamespace @import("rpc/client.zig");
+    // TODO: FIXME
+    // pub usingnamespace @import("rpc/client.zig");
     pub const types = struct {
         pub usingnamespace @import("rpc/types.zig");
     };
@@ -24,6 +25,7 @@ pub const accounts_db = struct {
     pub usingnamespace @import("accountsdb/index.zig");
     pub usingnamespace @import("accountsdb/snapshots.zig");
     pub usingnamespace @import("accountsdb/sysvars.zig");
+    pub usingnamespace @import("accountsdb/download.zig");
 };
 
 pub const gossip = struct {
@@ -40,7 +42,8 @@ pub const gossip = struct {
 };
 
 pub const bloom = struct {
-    pub usingnamespace @import("bloom/bitvec.zig");
+    pub usingnamespace @import("bloom/bit_vec.zig");
+    pub usingnamespace @import("bloom/bit_set.zig");
     pub usingnamespace @import("bloom/bloom.zig");
 };
 

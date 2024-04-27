@@ -144,7 +144,7 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 return GetMetricError.InvalidType;
             }
 
-            return @fieldParentPtr(MetricType, "metric", gop.value_ptr.*.metric);
+            return @as(*MetricType, @fieldParentPtr("metric", gop.value_ptr.*.metric));
         }
 
         pub fn write(self: *Self, allocator: mem.Allocator, writer: anytype) !void {
@@ -247,7 +247,7 @@ test "prometheus.registry: write" {
         \\http_request_size_bucket{le="2.5"} 1
         \\http_request_size_bucket{le="5"} 1
         \\http_request_size_bucket{le="10"} 2
-        \\http_request_size_sum 18.703600
+        \\http_request_size_sum 18.703599999999998
         \\http_request_size_count 3
         \\http_requests 2
         \\
@@ -267,7 +267,7 @@ test "prometheus.registry: write" {
         \\http_request_size_bucket{route="/api/v2/users",le="2.5"} 1
         \\http_request_size_bucket{route="/api/v2/users",le="5"} 1
         \\http_request_size_bucket{route="/api/v2/users",le="10"} 2
-        \\http_request_size_sum{route="/api/v2/users"} 18.703600
+        \\http_request_size_sum{route="/api/v2/users"} 18.703599999999998
         \\http_request_size_count{route="/api/v2/users"} 3
         \\http_requests{route="/api/v2/users"} 2
         \\
@@ -296,14 +296,14 @@ test "prometheus.registry: write" {
 
         // Add some counters
         {
-            var counter = try registry.getOrCreateCounter(tc.counter_name);
-            counter.* = .{ .value = .{ .value = 2 } };
+            const counter = try registry.getOrCreateCounter(tc.counter_name);
+            counter.* = .{ .value = .{ .raw = 2 } };
         }
 
         // Add some gauges
         {
-            var counter = try registry.getOrCreateGauge(tc.gauge_name, u64);
-            counter.* = .{ .value = .{ .value = 13 } };
+            const counter = try registry.getOrCreateGauge(tc.gauge_name, u64);
+            counter.* = .{ .value = .{ .raw = 13 } };
         }
 
         // Add some gauge_fns

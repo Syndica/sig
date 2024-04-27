@@ -4,6 +4,7 @@ const GenesisConfig = @import("genesis_config.zig").GenesisConfig;
 const BankFields = @import("snapshots.zig").BankFields;
 const SnapshotFields = @import("snapshots.zig").SnapshotFields;
 
+// TODO: we can likley come up with a better name for this struct
 pub const Bank = struct {
     accounts_db: *AccountsDB,
     bank_fields: *const BankFields,
@@ -56,7 +57,7 @@ pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 
 }
 
 test "core.bank: load and validate from test snapshot" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
     const full_metadata_path = "test_data/10";
     var full_snapshot_fields = try SnapshotFields.readFromFilePath(

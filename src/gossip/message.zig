@@ -43,7 +43,7 @@ pub const GossipMessage = union(enum(u32)) {
                 }
             },
             .PullResponse => |*pull| {
-                var values = pull[1];
+                const values = pull[1];
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
                     if (!is_verified) {
@@ -52,7 +52,7 @@ pub const GossipMessage = union(enum(u32)) {
                 }
             },
             .PushMessage => |*push| {
-                var values = push[1];
+                const values = push[1];
                 for (values) |*value| {
                     const is_verified = try value.verify(value.id());
                     if (!is_verified) {
@@ -176,13 +176,13 @@ pub const PruneData = struct {
     pub fn sign(self: *PruneData, keypair: *const KeyPair) !void {
         // should always be enough space of is invalid msg
         var slice: [PACKET_DATA_SIZE]u8 = undefined;
-        var signable_data = PruneSignableData{
+        const signable_data = PruneSignableData{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
             .destination = self.destination,
             .wallclock = self.wallclock,
         };
-        var out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
+        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
         var sig = try keypair.sign(out, null);
         self.signature.data = sig.toBytes();
     }
@@ -190,13 +190,13 @@ pub const PruneData = struct {
     pub fn verify(self: *const PruneData) !void {
         // should always be enough space of is invalid msg
         var slice: [PACKET_DATA_SIZE]u8 = undefined;
-        var signable_data = PruneSignableData{
+        const signable_data = PruneSignableData{
             .pubkey = self.pubkey,
             .prunes = self.prunes,
             .destination = self.destination,
             .wallclock = self.wallclock,
         };
-        var out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
+        const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
         if (!self.signature.verify(self.pubkey, out)) {
             return error.InvalidSignature;
         }
@@ -205,18 +205,18 @@ pub const PruneData = struct {
 
 test "gossip.message: push message serialization is predictable" {
     var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
-    var pubkey = Pubkey.random(rng.random());
+    const pubkey = Pubkey.random(rng.random());
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
 
-    var msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
+    const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const empty_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg,
         bincode.Params{},
     );
 
-    var value = try SignedGossipData.random(rng.random(), &(try KeyPair.create(null)));
+    const value = try SignedGossipData.random(rng.random(), &(try KeyPair.create(null)));
     const value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         value,
@@ -225,7 +225,7 @@ test "gossip.message: push message serialization is predictable" {
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
 
-    var msg_with_value = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
+    const msg_with_value = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
     const msg_value_size = try bincode.getSerializedSize(
         std.testing.allocator,
         msg_with_value,
@@ -271,7 +271,7 @@ test "gossip.message: ping message serializes and deserializes correctly" {
     var original = GossipMessage{ .PingMessage = try Ping.random(rng.random(), &keypair) };
     var buf = [_]u8{0} ** 1232;
 
-    var serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
+    const serialized = try bincode.writeToSlice(buf[0..], original, bincode.Params.standard);
 
     var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
 
@@ -300,12 +300,12 @@ test "gossip.message: pull request serializes and deserializes" {
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-    var pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
 
     // pull requests only use ContactInfo data
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();
-    var legacy_contact_info = LegacyContactInfo{
+    const legacy_contact_info = LegacyContactInfo{
         .id = pubkey,
         .gossip = gossip_addr,
         .tvu = unspecified_addr,
@@ -320,29 +320,29 @@ test "gossip.message: pull request serializes and deserializes" {
         .wallclock = 0,
         .shred_version = 0,
     };
-    var data = GossipData{
+    const data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
-    var value = try SignedGossipData.initSigned(data, &keypair);
+    const value = try SignedGossipData.initSigned(data, &keypair);
 
     var filter = GossipPullFilter.init(testing.allocator);
     defer filter.deinit();
 
-    var pull = GossipMessage{ .PullRequest = .{
+    const pull = GossipMessage{ .PullRequest = .{
         filter,
         value,
     } };
 
     var buf = [_]u8{0} ** 1232;
-    var serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
+    const serialized = try bincode.writeToSlice(buf[0..], pull, bincode.Params.standard);
     try testing.expectEqualSlices(u8, rust_bytes[0..], serialized);
 
-    var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
+    const deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
     try testing.expect(std.meta.eql(pull, deserialized));
 }
 
 test "gossip.message: push message serializes and deserializes correctly" {
-    var kp_bytes = [_]u8{1} ** 32;
+    const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     const id = Pubkey.fromPublicKey(&pk);
@@ -352,7 +352,7 @@ test "gossip.message: push message serializes and deserializes correctly" {
 
     var buf = [_]u8{0} ** 1024;
 
-    var legacy_contact_info = LegacyContactInfo{
+    const legacy_contact_info = LegacyContactInfo{
         .id = id,
         .gossip = gossip_addr,
         .tvu = unspecified_addr,
@@ -368,14 +368,14 @@ test "gossip.message: push message serializes and deserializes correctly" {
         .shred_version = 0,
     };
 
-    var data = GossipData{
+    const data = GossipData{
         .LegacyContactInfo = legacy_contact_info,
     };
 
     var rust_bytes = [_]u8{ 2, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 1, 0, 0, 0, 0, 0, 0, 0, 247, 119, 8, 235, 122, 255, 148, 105, 239, 205, 20, 32, 112, 227, 208, 92, 37, 18, 5, 71, 105, 58, 203, 18, 69, 196, 217, 80, 56, 47, 2, 45, 166, 139, 244, 114, 132, 206, 156, 187, 206, 205, 0, 176, 167, 196, 11, 17, 22, 77, 142, 176, 215, 8, 110, 221, 30, 206, 219, 80, 196, 217, 118, 13, 0, 0, 0, 0, 138, 136, 227, 221, 116, 9, 241, 149, 253, 82, 219, 45, 60, 186, 93, 114, 202, 103, 9, 191, 29, 148, 18, 27, 243, 116, 136, 1, 180, 15, 111, 92, 0, 0, 0, 0, 127, 0, 0, 1, 210, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-    var gossip_value = try SignedGossipData.initSigned(data, &kp);
+    const gossip_value = try SignedGossipData.initSigned(data, &kp);
     var values = [_]SignedGossipData{gossip_value};
-    var pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
+    const pushmsg = GossipMessage{ .PushMessage = .{ id, &values } };
     var bytes = try bincode.writeToSlice(buf[0..], pushmsg, bincode.Params.standard);
     try testing.expectEqualSlices(u8, bytes[0..bytes.len], &rust_bytes);
 }

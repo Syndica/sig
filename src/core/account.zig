@@ -10,7 +10,7 @@ pub const Account = struct {
     rent_epoch: Epoch,
 
     pub fn random(allocator: std.mem.Allocator, rng: std.rand.Random, data_len: usize) !Account {
-        var data = try allocator.alloc(u8, data_len);
+        const data = try allocator.alloc(u8, data_len);
         rng.bytes(data);
 
         return .{
@@ -95,17 +95,13 @@ pub fn writeIntLittleMem(
 ) !usize {
     const Tx = @TypeOf(x);
     const x_size: usize = @bitSizeOf(Tx) / 8;
-    std.mem.writeIntLittle(
-        Tx,
-        memory[0..x_size],
-        x,
-    );
+    std.mem.writeInt(Tx, memory[0..x_size], x, .little);
     return x_size;
 }
 
 const std = @import("std");
 const Blake3 = std.crypto.hash.Blake3;
-const Hash = @import("./hash.zig").Hash;
+const Hash = @import("hash.zig").Hash;
 
 pub fn hashAccount(
     lamports: u64,
@@ -119,10 +115,10 @@ pub fn hashAccount(
     var hash_buf: [32]u8 = undefined;
 
     var int_buf: [8]u8 = undefined;
-    std.mem.writeIntLittle(u64, &int_buf, lamports);
+    std.mem.writeInt(u64, &int_buf, lamports, .little);
     hasher.update(&int_buf);
 
-    std.mem.writeIntLittle(u64, &int_buf, rent_epoch);
+    std.mem.writeInt(u64, &int_buf, rent_epoch, .little);
     hasher.update(&int_buf);
 
     hasher.update(data);

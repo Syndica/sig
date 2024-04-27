@@ -1,11 +1,10 @@
 const std = @import("std");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;
 const Mux = @import("mux.zig").Mux;
-const Ordering = std.atomic.Ordering;
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
 pub fn Channel(comptime T: type) type {
@@ -36,7 +35,7 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn send(self: *Self, value: T) error{ OutOfMemory, ChannelClosed }!void {
-            if (self.closed.load(.Monotonic)) {
+            if (self.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
             var buffer_lock = self.buffer.lock();
@@ -49,7 +48,7 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn sendBatch(self: *Self, value: std.ArrayList(T)) error{ OutOfMemory, ChannelClosed }!void {
-            if (self.closed.load(.Monotonic)) {
+            if (self.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
             var buffer_lock = self.buffer.lock();

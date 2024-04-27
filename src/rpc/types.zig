@@ -85,7 +85,7 @@ const AccountValue = struct {
             const dataDecoded = try allocator.alloc(u8, dataSize);
             try base64.Decoder.decode(dataDecoded, self.data[0]);
 
-            var owner = try Pubkey.fromString(allocator, self.owner);
+            const owner = try Pubkey.fromString(allocator, self.owner);
 
             return Account.new(self.lamports, dataDecoded, owner, self.executable, self.rentEpoch);
         }
