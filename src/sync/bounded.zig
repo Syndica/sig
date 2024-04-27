@@ -126,7 +126,7 @@ pub fn Bounded(comptime T: type) type {
                         return;
                     }
                 } else if (tail + 1 == (stamp +| self.one_lap_bit)) {
-                    std.atomic.fence(.seq_cst);
+                    @fence(.seq_cst);
                     const head = self.head.load(.unordered);
 
                     if (head +| self.one_lap_bit == tail) {
@@ -254,7 +254,7 @@ pub fn Bounded(comptime T: type) type {
                         return;
                     }
                 } else if (stamp == head) {
-                    std.atomic.fence(.seq_cst);
+                    @fence(.seq_cst);
                     const tail = self.tail.load(.unordered);
 
                     // If the tail equals the head, that means the channel is empty.

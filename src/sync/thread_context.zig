@@ -35,25 +35,25 @@ pub const ThreadLocalContext = struct {
     /// if comparison failed (or state isn't `.waiting`), meaning it failed to update the state successfully.
     /// If successful, returns `null`.
     pub inline fn tryUpdateFromWaitingStateTo(self: *Self, new_state: ThreadState) ?ThreadState {
-        return ThreadState.fromUsize(self.state.compareAndSwap(
+        return ThreadState.fromUsize(self.state.cmpxchgStrong(
             ThreadState.toUsize(.waiting),
             new_state.toUsize(),
-            .AcqRel,
-            .Acquire,
+            .acq_rel,
+            .acquire,
         ) orelse return null);
     }
 
     pub fn reset(self: *Self) void {
         self.parker = parker.getThreadLocal();
         self.id = std.Thread.getCurrentId();
-        self.state.store(ThreadState.toUsize(.waiting), .Release);
+        self.state.store(ThreadState.toUsize(.waiting), .release);
     }
 
     pub fn waitUntil(self: *Self, timeout: ?std.time.Instant) ThreadState {
         var backoff = Backoff.init();
 
         while (true) {
-            const state = ThreadState.fromUsize(self.state.load(.Acquire));
+            const state = ThreadState.fromUsize(self.state.load(.acquire));
             if (state != .waiting) return state;
 
             if (backoff.isCompleted())
@@ -64,7 +64,7 @@ pub const ThreadLocalContext = struct {
 
         // park the thread as we are waiting longer
         while (true) {
-            const state = ThreadState.fromUsize(self.state.load(.Acquire));
+            const state = ThreadState.fromUsize(self.state.load(.acquire));
             if (state != .waiting) return state;
 
             if (timeout) |end| {

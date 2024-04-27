@@ -1,6 +1,6 @@
 const std = @import("std");
 const Bounded = @import("bounded.zig").Bounded;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const page_allocator = std.heap.page_allocator;
 
 /// `ChannelX` is an enum that unifies channel API across different kinds of backing
@@ -534,7 +534,7 @@ fn testUsizeReceiver(
 
     while (receiver.receive()) |v| {
         _ = v;
-        _ = received_count.fetchAdd(1, .SeqCst);
+        _ = received_count.fetchAdd(1, .seq_cst);
     }
 }
 
@@ -574,7 +574,7 @@ test "sync.chanx.bounded channel sends/received in different threads" {
     sender_handle.join();
     receiver_handle.join();
 
-    try std.testing.expect(received_count.load(.SeqCst) == items_to_send);
+    try std.testing.expect(received_count.load(.seq_cst) == items_to_send);
 }
 
 test "sync.chanx.bounded buffer len is correct" {
@@ -605,7 +605,7 @@ test "sync.chanx.bounded mpmc" {
     sender_2_handle.join();
     receiver_handle.join();
 
-    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+    try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
 test "sync.chanx.bounded: mpmc" {
@@ -628,7 +628,7 @@ test "sync.chanx.bounded: mpmc" {
     receiver_1_handle.join();
     receiver_2_handle.join();
 
-    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+    try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
 test "sync.chanx.bounded: spsc" {
@@ -649,7 +649,7 @@ test "sync.chanx.bounded: spsc" {
     receiver_1_handle.join();
     receiver_2_handle.join();
 
-    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+    try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
 test "sync.chanx.bounded: spmc" {
@@ -670,7 +670,7 @@ test "sync.chanx.bounded: spmc" {
     receiver_1_handle.join();
     receiver_2_handle.join();
 
-    try std.testing.expectEqual(n_items, received_count.load(.SeqCst));
+    try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
 test "sync.chanx.bounded: disconnect after all senders released" {

@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const c = std.c;
 const CLOCK_MONOTONIC = c.CLOCK.MONOTONIC;
 const CLOCK_REALTIME = c.CLOCK.REALTIME;
@@ -55,24 +55,24 @@ pub const Parker = struct {
 
     pub fn park(self: *Self) void {
         // if we were previously notified, we return early
-        if (self.state.compareAndSwap(
+        if (self.state.cmpxchgStrong(
             @intFromEnum(State.notified),
             @intFromEnum(State.empty),
-            .SeqCst,
-            .SeqCst,
+            .seq_cst,
+            .seq_cst,
         ) == null) {
             return;
         }
 
         assertEq(c.pthread_mutex_lock(&self.lock), SUCCESS);
 
-        if (self.state.compareAndSwap(
+        if (self.state.cmpxchgStrong(
             @intFromEnum(State.empty),
             @intFromEnum(State.parked),
-            .SeqCst,
-            .SeqCst,
+            .seq_cst,
+            .seq_cst,
         )) |other| {
-            var other_state: State = @enumFromInt(other);
+            const other_state: State = @enumFromInt(other);
             switch (other_state) {
                 .notified => {
                     // We must read here, even though we know it will be `NOTIFIED`.
@@ -81,7 +81,7 @@ pub const Parker = struct {
                     // acquire operation that synchronizes with that `unpark` to observe
                     // any writes it made before the call to unpark. To do that we must
                     // read from the write it made to `state`.
-                    var old: State = @enumFromInt(self.state.swap(@intFromEnum(State.empty), .SeqCst));
+                    const old: State = @enumFromInt(self.state.swap(@intFromEnum(State.empty), .seq_cst));
                     assertEq(c.pthread_mutex_unlock(&self.lock), SUCCESS);
                     assertEq(old, State.notified);
                     return;
@@ -96,11 +96,11 @@ pub const Parker = struct {
         while (true) {
             assertEq(c.pthread_cond_wait(&self.cond, &self.lock), SUCCESS);
 
-            if (self.state.compareAndSwap(
+            if (self.state.cmpxchgStrong(
                 @intFromEnum(State.notified),
                 @intFromEnum(State.empty),
-                .SeqCst,
-                .SeqCst,
+                .seq_cst,
+                .seq_cst,
             )) |_| {
                 continue; // spurious wakeup, go back to sleep
             }
@@ -114,24 +114,24 @@ pub const Parker = struct {
         // Like `park` above we have a fast path for an already-notified thread, and
         // afterwards we start coordinating for a sleep.
         // return quickly.
-        if (self.state.compareAndSwap(
+        if (self.state.cmpxchgStrong(
             @intFromEnum(State.notified),
             @intFromEnum(State.empty),
-            .SeqCst,
-            .SeqCst,
+            .seq_cst,
+            .seq_cst,
         ) == null) {
             return;
         }
 
         assertEq(c.pthread_mutex_lock(&self.lock), SUCCESS);
 
-        if (self.state.compareAndSwap(
+        if (self.state.cmpxchgStrong(
             @intFromEnum(State.empty),
             @intFromEnum(State.parked),
-            .SeqCst,
-            .SeqCst,
+            .seq_cst,
+            .seq_cst,
         )) |other| {
-            var other_state: State = @enumFromInt(other);
+            const other_state: State = @enumFromInt(other);
             switch (other_state) {
                 .notified => {
                     // We must read here, even though we know it will be `NOTIFIED`.
@@ -140,7 +140,7 @@ pub const Parker = struct {
                     // acquire operation that synchronizes with that `unpark` to observe
                     // any writes it made before the call to unpark. To do that we must
                     // read from the write it made to `state`.
-                    var old: State = @enumFromInt(self.state.swap(@intFromEnum(State.empty), .SeqCst));
+                    const old: State = @enumFromInt(self.state.swap(@intFromEnum(State.empty), .seq_cst));
                     assertEq(c.pthread_mutex_unlock(&self.lock), SUCCESS);
                     assertEq(old, State.notified);
                 },
@@ -151,29 +151,29 @@ pub const Parker = struct {
             }
         }
 
-        var now = std.os.timespec{
+        var now = std.posix.timespec{
             .tv_sec = 0,
             .tv_nsec = 0,
         };
 
         if (builtin.os.tag == .macos) {
-            std.os.clock_gettime(@intCast(CLOCK_REALTIME), &now) catch unreachable;
+            std.posix.clock_gettime(@intCast(CLOCK_REALTIME), &now) catch unreachable;
         } else if (builtin.os.tag == .linux) {
-            std.os.clock_gettime(@intCast(CLOCK_MONOTONIC), &now) catch unreachable;
+            std.posix.clock_gettime(@intCast(CLOCK_MONOTONIC), &now) catch unreachable;
         } else {
             @compileError("only macos or linux supported!");
         }
 
-        var secs: u64 = duration_ns / std.time.ns_per_s;
-        var nsecs: u64 = duration_ns % std.time.ns_per_s;
+        const secs: u64 = duration_ns / std.time.ns_per_s;
+        const nsecs: u64 = duration_ns % std.time.ns_per_s;
 
         // add duration to now
         now.tv_sec +|= @intCast(secs);
         now.tv_nsec +|= @intCast(nsecs);
-        var out = c.pthread_cond_timedwait(&self.cond, &self.lock, &now);
+        const out = c.pthread_cond_timedwait(&self.cond, &self.lock, &now);
         std.debug.assert((out == SUCCESS) or (out == c.E.TIMEDOUT));
 
-        switch (@as(State, @enumFromInt(self.state.swap(@intFromEnum(State.empty), .SeqCst)))) {
+        switch (@as(State, @enumFromInt(self.state.swap(@intFromEnum(State.empty), .seq_cst)))) {
             .notified, .parked => assertEq(c.pthread_mutex_unlock(&self.lock), SUCCESS),
             else => {
                 assertEq(c.pthread_mutex_unlock(&self.lock), SUCCESS);
@@ -183,7 +183,7 @@ pub const Parker = struct {
     }
 
     pub fn unpark(self: *Self) void {
-        switch (@as(State, @enumFromInt(self.state.swap(@intFromEnum(State.notified), .SeqCst)))) {
+        switch (@as(State, @enumFromInt(self.state.swap(@intFromEnum(State.notified), .seq_cst)))) {
             .empty, .notified => return,
             .parked => {},
         }
@@ -223,7 +223,7 @@ pub fn testUnparkingThread(parker: *Parker) void {
 
 test "parker untimed" {
     std.debug.print("Parking test (no timeout):\n", .{});
-    var now = try std.time.Instant.now();
+    const now = try std.time.Instant.now();
     var parker = Parker.init();
 
     var parked_handle = try std.Thread.spawn(.{}, testParkedThread, .{&parker});
@@ -238,7 +238,7 @@ test "parker untimed" {
 
 test "parker timed" {
     std.debug.print("Parking test (1 second timeout):\n", .{});
-    var now = try std.time.Instant.now();
+    const now = try std.time.Instant.now();
 
     var parker = Parker.init();
 
@@ -251,12 +251,12 @@ test "parker timed" {
 }
 
 fn testParkerIsDifferentPerThread(out_ptr: *u64) void {
-    var parker = getThreadLocal();
+    const parker = getThreadLocal();
     out_ptr.* = @intFromPtr(parker);
 }
 
 test "parker should remain per-thread" {
-    var parker = getThreadLocal();
+    const parker = getThreadLocal();
     var out_ptr: usize = undefined;
     var other_thread_handle = try std.Thread.spawn(.{}, testParkerIsDifferentPerThread, .{&out_ptr});
 

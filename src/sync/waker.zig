@@ -40,7 +40,7 @@ pub const Waker = struct {
 
         self.is_empty.store(
             false,
-            .SeqCst,
+            .seq_cst,
         );
     }
 
@@ -54,7 +54,7 @@ pub const Waker = struct {
                 // if there's only a single item, then after this swapRemove, we'll be empty
                 self.is_empty.store(
                     self.sleepers.items.len == 1,
-                    .SeqCst,
+                    .seq_cst,
                 );
 
                 return self.sleepers.swapRemove(i);
@@ -63,7 +63,7 @@ pub const Waker = struct {
 
         self.is_empty.store(
             self.sleepers.items.len == 0,
-            .SeqCst,
+            .seq_cst,
         );
         return null;
     }
@@ -105,15 +105,15 @@ pub const Waker = struct {
     }
 
     pub inline fn notify(self: *Self) void {
-        if (!self.is_empty.load(.SeqCst)) {
+        if (!self.is_empty.load(.seq_cst)) {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            if (!self.is_empty.load(.SeqCst)) {
+            if (!self.is_empty.load(.seq_cst)) {
                 _ = self.tryAwakeSleeper();
                 self.is_empty.store(
                     self.sleepers.items.len == 0,
-                    .SeqCst,
+                    .seq_cst,
                 );
             }
         }
