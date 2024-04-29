@@ -167,7 +167,7 @@ test "gossip.gossip_shards: test shard find" {
     var values = try std.ArrayList(GossipVersionedData).initCapacity(std.testing.allocator, 1000);
     defer values.deinit();
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
@@ -179,7 +179,7 @@ test "gossip.gossip_shards: test shard find" {
     var gossip_shards = gossip_table.shards;
     // test find with different mask bit sizes  (< > == shard bits)
     for (0..10) |_| {
-        var mask = rng.int(u64);
+        const mask = rng.int(u64);
         for (0..12) |mask_bits| {
             var set = try filterGossipVersionedDatas(std.testing.allocator, values.items, mask, @intCast(mask_bits));
             defer set.deinit();

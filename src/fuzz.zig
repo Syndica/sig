@@ -1,12 +1,10 @@
-const std = @import("std");
-const lib = @import("lib.zig");
 const logger = @import("./trace/log.zig");
+const std = @import("std");
+const gossip_fuzz = @import("./gossip/fuzz.zig");
 
-test {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
-
-    std.testing.log_level = std.log.Level.err;
-    std.testing.refAllDecls(lib);
+    try gossip_fuzz.run();
 }

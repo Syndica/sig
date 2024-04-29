@@ -56,7 +56,7 @@ pub const AccountIndex = struct {
         // number of bins to shard across
         number_of_bins: usize,
     ) !Self {
-        var bins = try allocator.alloc(RefMap, number_of_bins);
+        const bins = try allocator.alloc(RefMap, number_of_bins);
         for (bins) |*bin| {
             bin.* = RefMap.init(allocator);
         }
@@ -125,7 +125,7 @@ pub const AccountIndex = struct {
     /// adds the reference to the index if there is not a duplicate (ie, the same slot)
     pub fn indexRefIfNotDuplicateSlot(self: *Self, account_ref: *AccountRef) bool {
         const bin = self.getBinFromPubkey(&account_ref.pubkey);
-        var result = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+        const result = bin.getOrPutAssumeCapacity(account_ref.pubkey);
         if (result.found_existing) {
             // traverse until you find the end
             var curr: *AccountRef = result.value_ptr.*;
@@ -151,7 +151,7 @@ pub const AccountIndex = struct {
     /// adds a reference to the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
         const bin = self.getBinFromPubkey(&account_ref.pubkey);
-        var result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+        const result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
         if (result.found_existing) {
             // traverse until you find the end
             var curr: *AccountRef = result.value_ptr.*;
@@ -392,7 +392,7 @@ pub fn SwissMap(
         pub fn get(self: *const @This(), key: Key) ?Value {
             if (self._capacity == 0) return null;
 
-            var hash = hash_fn(key);
+            const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
 
             // what we are searching for (get)
@@ -409,7 +409,7 @@ pub fn SwissMap(
                 const states = self.states[group_index];
 
                 // PERF: SIMD eq check: search for a match
-                var match_vec = search_state == states;
+                const match_vec = search_state == states;
                 if (@reduce(.Or, match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         // PERF: SIMD eq check across pubkeys
@@ -432,7 +432,7 @@ pub fn SwissMap(
         }
 
         pub fn putAssumeCapacity(self: *Self, key: Key, value: Value) void {
-            var hash = hash_fn(key);
+            const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
             std.debug.assert(self._capacity > self._count);
 
@@ -472,7 +472,7 @@ pub fn SwissMap(
         }
 
         pub fn getOrPutAssumeCapacity(self: *Self, key: Key) GetOrPutResult {
-            var hash = hash_fn(key);
+            const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
 
             std.debug.assert(self._capacity > self._count);
@@ -491,7 +491,7 @@ pub fn SwissMap(
                 const states = self.states[group_index];
 
                 // SIMD eq search for a match (get)
-                var match_vec = search_state == states;
+                const match_vec = search_state == states;
                 if (@reduce(.Or, match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
@@ -529,7 +529,7 @@ pub fn SwissMap(
 }
 
 pub inline fn pubkey_hash(key: Pubkey) u64 {
-    return std.mem.readIntLittle(u64, key.data[0..8]);
+    return std.mem.readInt(u64, key.data[0..8], .little);
 }
 
 pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
@@ -693,11 +693,11 @@ pub const DiskMemoryAllocator = struct {
             };
         }
 
-        var memory = std.os.mmap(
+        const memory = std.posix.mmap(
             null,
             aligned_size,
-            std.os.PROT.READ | std.os.PROT.WRITE,
-            std.os.MAP.SHARED,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.MAP{ .TYPE = .SHARED },
             file.handle,
             0,
         ) catch |err| {
@@ -713,7 +713,7 @@ pub const DiskMemoryAllocator = struct {
         _ = log2_align;
         _ = return_address;
         const buf_aligned_len = std.mem.alignForward(usize, buf.len, std.mem.page_size);
-        std.os.munmap(@alignCast(buf.ptr[0..buf_aligned_len]));
+        std.posix.munmap(@alignCast(buf.ptr[0..buf_aligned_len]));
     }
 
     /// not supported rn
