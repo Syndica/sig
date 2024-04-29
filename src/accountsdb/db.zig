@@ -1048,7 +1048,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     };
 }
 
-test "core.accounts_db: write and read an account" {
+test "accounts_db.db: write and read an account" {
     const allocator = std.testing.allocator;
 
     const result = try loadTestAccountsDB(false);
@@ -1084,7 +1084,7 @@ test "core.accounts_db: write and read an account" {
     try std.testing.expect(std.meta.eql(accounts[0], account_2));
 }
 
-test "core.accounts_db: load and validate from test snapshot using disk index" {
+test "accounts_db.db: load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
     const result = try loadTestAccountsDB(true);
@@ -1102,7 +1102,7 @@ test "core.accounts_db: load and validate from test snapshot using disk index" {
     );
 }
 
-test "core.accounts_db: load and validate from test snapshot" {
+test "accounts_db.db: load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
     const result = try loadTestAccountsDB(false);
@@ -1120,7 +1120,7 @@ test "core.accounts_db: load and validate from test snapshot" {
     );
 }
 
-test "core.accounts_db: load clock sysvar" {
+test "accounts_db.db: load clock sysvar" {
     const allocator = std.testing.allocator;
 
     const result = try loadTestAccountsDB(false);
@@ -1143,7 +1143,7 @@ test "core.accounts_db: load clock sysvar" {
     try std.testing.expectEqual(clock, expected_clock);
 }
 
-test "core.accounts_db: load other sysvars" {
+test "accounts_db.db: load other sysvars" {
     const allocator = std.testing.allocator;
 
     const result = try loadTestAccountsDB(false);
