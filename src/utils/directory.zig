@@ -6,9 +6,9 @@ const ArrayList = std.ArrayList;
 /// note: we prealloc the full underlying memory for all the filenames to be fast.
 pub fn readDirectory(
     allocator: std.mem.Allocator,
-    directory: std.fs.IterableDir,
+    directory_iter: std.fs.Dir.Iterator,
 ) !struct { filenames: ArrayList([]u8), filename_memory: []u8 } {
-    var dir_iter = directory.iterate();
+    var dir_iter = directory_iter;
     var total_name_size: usize = 0;
     var total_files: usize = 0;
     while (try dir_iter.next()) |entry| {
@@ -19,7 +19,7 @@ pub fn readDirectory(
     const filename_memory = try allocator.alloc(u8, total_name_size);
     errdefer allocator.free(filename_memory);
 
-    dir_iter = directory.iterate(); // reset
+    dir_iter.reset(); // reset
 
     var filenames = try ArrayList([]u8).initCapacity(allocator, total_files);
     errdefer filenames.deinit();
@@ -31,7 +31,7 @@ pub fn readDirectory(
         filenames.appendAssumeCapacity(filename_memory[index..(index + file_name_len)]);
         index += file_name_len;
     }
-    dir_iter = directory.iterate(); // reset
+    dir_iter.reset(); // reset
 
     return .{ .filenames = filenames, .filename_memory = filename_memory };
 }

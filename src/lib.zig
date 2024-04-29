@@ -1,5 +1,6 @@
 pub const rpc = struct {
-    pub usingnamespace @import("rpc/client.zig");
+    // TODO: FIXME
+    // pub usingnamespace @import("rpc/client.zig");
     pub const types = struct {
         pub usingnamespace @import("rpc/types.zig");
     };

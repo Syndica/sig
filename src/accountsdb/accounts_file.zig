@@ -64,7 +64,7 @@ pub const AccountInFile = struct {
             return error.InvalidExecutableFlag;
         }
 
-        var valid_lamports = self.account_info.lamports != 0 or (
+        const valid_lamports = self.account_info.lamports != 0 or (
         // ie, is default account
             self.data.len == 0 and
             self.owner().isDefault() and
@@ -122,11 +122,11 @@ pub const AccountFile = struct {
 
         try accounts_file_info.validate(file_size);
 
-        var memory = try std.os.mmap(
+        const memory = try std.posix.mmap(
             null,
             file_size,
-            std.os.PROT.READ | std.os.PROT.WRITE,
-            std.os.MAP.SHARED,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.MAP{ .TYPE = .SHARED },
             file.handle,
             0,
         );
@@ -142,7 +142,7 @@ pub const AccountFile = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        std.os.munmap(self.memory);
+        std.posix.munmap(self.memory);
         self.file.close();
     }
 
@@ -172,12 +172,12 @@ pub const AccountFile = struct {
         offset += @sizeOf(AccountInFile.StorageInfo);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        var lamports = try self.getType(&offset, u64);
+        const lamports = try self.getType(&offset, u64);
 
         offset += @sizeOf(AccountInFile.AccountInfo) - @sizeOf(u64);
         offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
 
-        var hash = try self.getType(&offset, Hash);
+        const hash = try self.getType(&offset, Hash);
 
         return .{
             .hash = hash,
@@ -212,12 +212,12 @@ pub const AccountFile = struct {
     pub fn readAccount(self: *const Self, start_offset: usize) error{EOF}!AccountInFile {
         var offset = start_offset;
 
-        var store_info = try self.getType(&offset, AccountInFile.StorageInfo);
-        var account_info = try self.getType(&offset, AccountInFile.AccountInfo);
-        var hash = try self.getType(&offset, Hash);
-        var data = try self.getSlice(&offset, store_info.data_len);
+        const store_info = try self.getType(&offset, AccountInFile.StorageInfo);
+        const account_info = try self.getType(&offset, AccountInFile.AccountInfo);
+        const hash = try self.getType(&offset, Hash);
+        const data = try self.getSlice(&offset, store_info.data_len);
 
-        var len = offset - start_offset;
+        const len = offset - start_offset;
 
         return AccountInFile{
             .store_info = store_info,
