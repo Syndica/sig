@@ -692,8 +692,6 @@ test "bincode: custom enum" {
     defer buf.deinit();
 
     try bincode.write(buf.writer(), x, .{});
-
-    std.debug.print("{any}\n", .{buf});
 }
 
 test "bincode: default on eof" {
@@ -742,7 +740,6 @@ test "bincode: custom field serialization" {
 
     var buf: [1000]u8 = undefined;
     const out = try writeToSlice(&buf, foo, Params{});
-    // std.debug.print("{any}", .{out});
     try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
     const size = try getSerializedSize(std.testing.allocator, foo, Params{});
@@ -750,7 +747,6 @@ test "bincode: custom field serialization" {
 
     const r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
     defer free(std.testing.allocator, r);
-    // std.debug.print("{any}", .{r});
 
     try std.testing.expect(r.accounts.len == foo.accounts.len);
     try std.testing.expect(r.txs.len == foo.txs.len);

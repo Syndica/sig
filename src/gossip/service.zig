@@ -2617,7 +2617,7 @@ test "gossip.gossip_service: test packet verification" {
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
-    var logger: Logger = .noop;
+    const logger: Logger = .noop;
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,

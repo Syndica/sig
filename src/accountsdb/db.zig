@@ -272,13 +272,11 @@ pub const AccountsDB = struct {
             handle.join();
         }
         handles.deinit();
-        std.debug.print("\n", .{});
         self.logger.infof("total time: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
         self.logger.infof("combining thread accounts...", .{});
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        std.debug.print("\n", .{});
         self.logger.debugf("combining thread indexes took: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
     }
@@ -581,7 +579,6 @@ pub const AccountsDB = struct {
             handle.join();
         }
         handles.deinit();
-        std.debug.print("\n", .{});
         self.logger.debugf("took: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
