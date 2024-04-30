@@ -121,7 +121,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         /// The task's inputs and state.
         /// TaskType.run is the task's logic, which uses the data in this struct.
         typed_task: TaskType,
-        
+
         /// the return value of the task
         /// - points to undefined data until the task is complete
         /// - memory address may become invalid after task is joined, if caller decides to deinit results
@@ -130,7 +130,7 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
         const Self = @This();
 
         fn run(pool_task: *ThreadPool.Task) void {
-            var self = @fieldParentPtr(Self, "pool_task", pool_task);
+            var self: *Self = @fieldParentPtr("pool_task", pool_task);
 
             self.result.* = self.typed_task.run();
 

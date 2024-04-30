@@ -20,6 +20,8 @@ const RepairMessage = sig.tvu.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
 
+const endpointToString = sig.net.endpointToString;
+
 /// Use this in a single thread where you want to keep accessing
 /// a value that's stored in an atomic, but you don't want to do
 /// an expensive `load` operation every time you read it, and
@@ -39,12 +41,12 @@ pub fn CachedAtomic(comptime T: type) type {
         pub fn init(atomic: *Atomic(T)) Self {
             return .{
                 .atomic = atomic,
-                .cache = atomic.load(.Monotonic),
+                .cache = atomic.load(.monotonic),
             };
         }
 
         pub fn update(self: *Self) void {
-            self.cache = self.atomic.load(.Monotonic);
+            self.cache = self.atomic.load(.monotonic);
         }
     };
 }
@@ -108,7 +110,7 @@ pub const ShredReceiver = struct {
         sender: *Channel(ArrayList(Packet)),
     ) !void {
         var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
-        while (!self.exit.load(.Unordered)) {
+        while (!self.exit.load(.unordered)) {
             inline for (receivers) |receiver| {
                 var responses = ArrayList(Packet).init(self.allocator);
                 try receiver.tryDrainRecycle(&buf);

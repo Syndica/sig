@@ -3,7 +3,7 @@ const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
 pub const Config = struct {
     identity: IdentityConfig = .{},
     gossip: GossipConfig = .{},
-    repair: RepairConfig = .{},
+    tvu: TvuConfig = .{},
     accounts_db: AccountsDbConfig = .{},
     // general config
     log_level: []const u8 = "debug",
@@ -24,8 +24,9 @@ const GossipConfig = struct {
     trusted_validators: [][]const u8 = &.{},
 };
 
-const RepairConfig = struct {
-    port: u16 = 8002,
+const TvuConfig = struct {
+    tvu_port: u16 = 8002,
+    repair_port: u16 = 8003,
     test_repair_slot: ?u64 = null,
 };
 

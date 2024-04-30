@@ -6,7 +6,7 @@ const shred_layout = sig.tvu.shred_layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
 const Packet = sig.net.Packet;
@@ -36,7 +36,7 @@ pub fn runShredSigVerify(
                 }
             }
             verified.send(packet_batch) catch unreachable; // TODO
-            if (exit.load(.Monotonic)) return;
+            if (exit.load(.monotonic)) return;
         }
     }
 }

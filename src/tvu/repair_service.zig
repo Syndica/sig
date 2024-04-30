@@ -2,6 +2,9 @@ const std = @import("std");
 const zig_network = @import("zig-network");
 const sig = @import("../lib.zig");
 
+const bincode = sig.bincode;
+const socket_tag = sig.gossip.socket_tag;
+
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
@@ -20,6 +23,7 @@ const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
+const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
@@ -130,7 +134,7 @@ pub const RepairService = struct {
         self.logger.info("starting repair service");
         defer self.logger.info("exiting repair service");
         var timer = try std.time.Timer.start();
-        while (!self.exit.load(.Unordered)) {
+        while (!self.exit.load(.unordered)) {
             try self.sendNecessaryRepairs();
             std.time.sleep(100 * std.time.ns_per_ms -| timer.lap());
         }
@@ -604,7 +608,7 @@ const TestPeerGenerator = struct {
         try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {
             inline .HasSlot, .MissingSlot => {
-                var lowest_slot = LowestSlot.random(self.random);
+                var lowest_slot = sig.gossip.LowestSlot.random(self.random);
                 lowest_slot.from = pubkey;
                 lowest_slot.lowest = switch (peer_type) {
                     .MissingSlot => self.slot + 1,

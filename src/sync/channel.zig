@@ -133,11 +133,11 @@ pub fn Channel(comptime T: type) type {
             defer buffer.unlock();
             buf.clearRetainingCapacity();
 
-            if (self.closed.load(.SeqCst)) {
+            if (self.closed.load(.seq_cst)) {
                 return error.ChannelClosed;
             }
 
-            var num_items_to_drain = buffer.get().items.len;
+            const num_items_to_drain = buffer.get().items.len;
             if (num_items_to_drain == 0) {
                 return;
             }

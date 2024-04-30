@@ -296,6 +296,6 @@ pub const shred_layout = struct {
         const end_index = start_index + @sizeOf(Int);
         if (data.len < end_index) return null;
         const bytes: *const [@sizeOf(Int)]u8 = @ptrCast(data[start_index..end_index]);
-        return std.mem.readInt(Int, bytes, .Little);
+        return std.mem.readInt(Int, bytes, .little);
     }
 };

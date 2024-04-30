@@ -44,11 +44,11 @@ pub const ReferenceCounter = struct {
             .Acquire,
         ));
         if (prior.refs > prior.acquirers) {
-            _ = self.state.fetchSub(@bitCast(State{ .acquirers = 1 }), .Monotonic);
+            _ = self.state.fetchSub(@bitCast(State{ .acquirers = 1 }), .monotonic);
             return true;
         }
         // resource was already destroyed
-        _ = self.state.fetchSub(@bitCast(State{ .acquirers = 1, .refs = 1 }), .Monotonic);
+        _ = self.state.fetchSub(@bitCast(State{ .acquirers = 1, .refs = 1 }), .monotonic);
         return false;
     }
 

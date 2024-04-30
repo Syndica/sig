@@ -37,7 +37,7 @@ pub const BasicShredTracker = struct {
         slot: Slot,
         logger: sig.trace.Logger,
     ) !*Self {
-        var self = try allocator.create(Self);
+        const self = try allocator.create(Self);
         self.* = .{
             .allocator = allocator,
             .start_slot = slot,

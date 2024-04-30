@@ -93,7 +93,7 @@ var gossip_port_option = cli.Option{
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
     .help = "The port to run tvu repair listener - default: 8002",
-    .value_ref = cli.mkRef(&config.current.repair.port),
+    .value_ref = cli.mkRef(&config.current.tvu.repair_port),
     .required = false,
     .value_name = "Repair Port",
 };
@@ -101,15 +101,15 @@ var repair_port_option = cli.Option{
 var tvu_port_option = cli.Option{
     .long_name = "tvu-port",
     .help = "The port to run turbine listener - default: 8003",
-    .value = cli.OptionValue{ .int = 8003 },
+    .value_ref = cli.mkRef(&config.current.tvu.tvu_port),
     .required = false,
-    .value_name = "Repair Port",
+    .value_name = "TVU Port",
 };
 
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value_ref = cli.mkRef(&config.current.repair.test_repair_slot),
+    .value_ref = cli.mkRef(&config.current.tvu.test_repair_slot),
     .required = false,
     .value_name = "slot number",
 };
@@ -411,8 +411,8 @@ fn validator() !void {
     defer entrypoints.deinit();
     const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
-    const repair_port: u16 = config.current.repair.port;
-    const tvu_port: u16 = config.current.tvu.port;
+    const repair_port: u16 = config.current.tvu.repair_port;
+    const tvu_port: u16 = config.current.tvu.repair_port;
 
     // gossip
     var gossip_service = try initGossip(
@@ -444,7 +444,7 @@ fn validator() !void {
 
     const shred_tracker = try sig.tvu.BasicShredTracker.init(
         gpa_allocator,
-        @intCast(test_repair_option.value.int orelse 0),
+        @intCast(config.current.tvu.test_repair_slot orelse 0),
         logger,
     );
     const unverified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(gpa_allocator, 1000);
@@ -460,7 +460,7 @@ fn validator() !void {
         &gossip_service.my_shred_version,
         &repair_socket,
         shred_tracker,
-        if (test_repair_option.value.int) |n| @intCast(n) else null,
+        if (config.current.tvu.test_repair_slot) |n| @intCast(n) else null,
     );
     defer repair_svc.deinit();
     var repair_handle = try std.Thread.spawn(.{}, RepairService.run, .{&repair_svc});
@@ -491,8 +491,6 @@ fn validator() !void {
         sig.tvu.processShreds,
         .{ gpa_allocator, verified_shreds_channel, shred_tracker },
     );
-    _ = process_shreds_handle;
-    _ = verify_shreds_handle;
 
     // accounts db
     var snapshots = try getOrDownloadSnapshots(
@@ -567,6 +565,8 @@ fn validator() !void {
     gossip_handle.join();
     repair_handle.join();
     shred_receive_handle.join();
+    process_shreds_handle.join();
+    verify_shreds_handle.join();
 }
 
 /// Initialize an instance of GossipService and configure with CLI arguments

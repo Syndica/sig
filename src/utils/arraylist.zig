@@ -104,7 +104,7 @@ pub fn RecyclingList(
                 self.len += 1;
                 return item;
             }
-            var item = try self.private.addOne();
+            const item = try self.private.addOne();
             item.* = initBlank(self.private.allocator);
             self.len += 1;
             return item;
