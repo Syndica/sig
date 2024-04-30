@@ -4,7 +4,7 @@ const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
@@ -393,11 +393,11 @@ pub const RepairPeerProvider = struct {
         var i: usize = 0;
         var infos = gossip_table.contactInfoIterator(0);
         while (infos.next()) |info| {
-            const serve_repair_socket = info.getSocket(sig.gossip.socket_tag.SERVE_REPAIR);
+            const serve_repair_socket = info.getSocket(socket_tag.SERVE_REPAIR);
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
-                info.shred_version == self.my_shred_version.load(.Monotonic) and // need compatible shreds
+                info.shred_version == self.my_shred_version.load(.monotonic) and // need compatible shreds
                 serve_repair_socket != null and // node must be able to receive repair requests
-                info.getSocket(sig.gossip.socket_tag.TVU) != null) // node needs access to shreds
+                info.getSocket(socket_tag.TVU) != null) // node needs access to shreds
             {
                 // exclude nodes that are known to be missing this slot
                 if (gossip_table.get(.{ .LowestSlot = info.pubkey })) |lsv| {
@@ -417,7 +417,6 @@ pub const RepairPeerProvider = struct {
 };
 
 test "tvu.repair_service: RepairService sends repair request to gossip peer" {
-    const SignedGossipData = sig.gossip.SignedGossipData;
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
@@ -449,15 +448,15 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
     };
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.Unordered));
-    try peer_contact_info.setSocket(sig.gossip.socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
-    try peer_contact_info.setSocket(sig.gossip.socket_tag.TVU, SocketAddr.fromEndpoint(&peer_endpoint));
+    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
+    try peer_contact_info.setSocket(socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(socket_tag.TVU, SocketAddr.fromEndpoint(&peer_endpoint));
     try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
 
     // init service
     var exit = Atomic(bool).init(false);
     var gossip_mux = RwMux(GossipTable).init(gossip);
-    var peers = try RepairPeerProvider.init(
+    const peers = try RepairPeerProvider.init(
         allocator,
         random,
         &gossip_mux,
@@ -490,13 +489,13 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
 
     // assertions
     try std.testing.expect(160 == size);
-    const msg = try sig.bincode.readFromSlice(allocator, sig.tvu.RepairMessage, buf[0..160], .{});
+    const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
     try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
     try std.testing.expect(msg.HighestWindowIndex.slot == 13579);
     try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);
 
     // exit
-    exit.store(true, .Monotonic);
+    exit.store(true, .monotonic);
     handle.join();
 }
 
@@ -518,7 +517,7 @@ test "tvu.repair_service: RepairPeerProvider selects correct peers" {
         .allocator = allocator,
         .gossip = &gossip,
         .random = random,
-        .shred_version = my_shred_version.load(.Unordered),
+        .shred_version = my_shred_version.load(.unordered),
         .slot = 13579,
     };
     const good_peers = .{
@@ -590,7 +589,6 @@ const TestPeerGenerator = struct {
     };
 
     fn addPeerToGossip(self: *const @This(), peer_type: PeerType) !struct { PeerType, RepairPeer } {
-        const SignedGossipData = sig.gossip.SignedGossipData;
         const wallclock = 1;
         const keypair = KeyPair.create(null) catch unreachable;
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
@@ -598,15 +596,15 @@ const TestPeerGenerator = struct {
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
-            try contact_info.setSocket(sig.gossip.socket_tag.SERVE_REPAIR, serve_repair_addr);
+            try contact_info.setSocket(socket_tag.SERVE_REPAIR, serve_repair_addr);
         }
         if (peer_type != .MissingTvuPort) {
-            try contact_info.setSocket(sig.gossip.socket_tag.TVU, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
+            try contact_info.setSocket(socket_tag.TVU, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
         try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {
             inline .HasSlot, .MissingSlot => {
-                var lowest_slot = sig.gossip.LowestSlot.random(self.random);
+                var lowest_slot = LowestSlot.random(self.random);
                 lowest_slot.from = pubkey;
                 lowest_slot.lowest = switch (peer_type) {
                     .MissingSlot => self.slot + 1,

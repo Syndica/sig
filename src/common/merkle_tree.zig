@@ -17,7 +17,7 @@ pub fn merkleTreeHash(hashes: []Hash, fanout: usize) !*Hash {
             for (start..end) |j| {
                 hasher.update(&hashes[j].data);
             }
-            var hash = hasher.finalResult();
+            const hash = hasher.finalResult();
             hashes[index] = Hash{ .data = hash };
             index += 1;
         }
@@ -73,7 +73,7 @@ pub const NestedHashTree = struct {
                     const h = self.getValue(j) catch unreachable;
                     hasher.update(&h.data);
                 }
-                var hash = hasher.finalResult();
+                const hash = hasher.finalResult();
                 (self.getValue(index) catch unreachable).data = hash;
                 index += 1;
             }
@@ -91,7 +91,7 @@ test "common.merkle_tree: test nested impl" {
     for (&hashes, 0..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    var hashes_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes);
+    const hashes_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes);
 
     var hashes_full = [_]std.ArrayList(Hash){hashes_list};
     var nested_hashes = NestedHashTree{
@@ -108,19 +108,19 @@ test "common.merkle_tree: test nested impl deeper" {
     for (&hashes, 0..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    var hashes_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes);
+    const hashes_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes);
 
     var hashes2: [4]Hash = undefined;
     for (&hashes2, 4..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    var hashes2_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes2);
+    const hashes2_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes2);
 
     var hashes3: [2]Hash = undefined;
     for (&hashes3, 8..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    var hashes3_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes3);
+    const hashes3_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes3);
 
     var hashes_full = [_]std.ArrayList(Hash){ hashes_list, hashes2_list, hashes3_list };
     var nested_hashes = NestedHashTree{

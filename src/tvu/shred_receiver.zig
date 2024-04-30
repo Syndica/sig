@@ -1,13 +1,13 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
 const network = @import("zig-network");
+const sig = @import("../lib.zig");
 
 const bincode = sig.bincode;
 const layout = sig.tvu.shred_layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Socket = network.Socket;
 
@@ -136,7 +136,7 @@ pub const ShredReceiver = struct {
             try self.handlePing(packet, responses);
             packet.set(.discard);
         } else {
-            const endpoint_str = try sig.net.endpointToString(self.allocator, &packet.addr);
+            const endpoint_str = try endpointToString(self.allocator, &packet.addr);
             defer endpoint_str.deinit();
             // self.logger.field("from_endpoint", endpoint_str.items)
             //     .debugf("tvu: recv shred message: {} bytes", .{packet.size});
@@ -168,7 +168,7 @@ pub const ShredReceiver = struct {
         const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
         reply_packet.size = reply_bytes.len;
 
-        const endpoint_str = try sig.net.endpointToString(self.allocator, &packet.addr);
+        const endpoint_str = try endpointToString(self.allocator, &packet.addr);
         defer endpoint_str.deinit();
         // self.logger.field("from_endpoint", endpoint_str.items)
         //     .field("from_pubkey", &ping.from.string())

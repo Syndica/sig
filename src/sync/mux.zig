@@ -383,7 +383,7 @@ test "sync.mux: Const is correct" {
     var arr = [4]u8{ 1, 2, 3, 4 };
     assert(@TypeOf(toConst(arr)) == Const([4]u8));
     assert(@TypeOf(toConst(&arr)) == Const([4]u8));
-    var slice_of_arr: []u8 = arr[0..];
+    const slice_of_arr: []u8 = arr[0..];
     assert(@TypeOf(toConst(slice_of_arr)) == Const([]u8));
 }
 
@@ -418,7 +418,7 @@ test "sync.mux: Mutable is correct" {
     assert(@TypeOf(&usize_1) == Mutable(usize));
     var arr: [4]u8 = [4]u8{ 1, 2, 3, 4 };
     assert(@TypeOf(&arr) == Mutable([4]u8));
-    var slice: []u8 = arr[0..];
+    const slice: []u8 = arr[0..];
     assert(@TypeOf(slice) == Mutable([]u8));
 }
 
@@ -435,7 +435,7 @@ test "sync.mux: Cluster info example" {
     var r_cluster_info = cluster_info.read();
     defer r_cluster_info.unlock();
 
-    var curr = r_cluster_info.get().current;
+    const curr = r_cluster_info.get().current;
     _ = curr;
 }
 

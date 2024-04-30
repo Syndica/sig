@@ -21,7 +21,7 @@ pub const Error = error{ InvalidRequest, ResponseNotStatusOk, InvalidHttpEndpoin
 pub const Client = struct {
     http_endpoint: Uri,
     client: http.Client,
-    default_http_headers: http.Headers,
+    default_http_headers: http.Client.Request.Headers,
     default_commitment: types.Commitment,
     allocator: std.mem.Allocator,
 
@@ -42,15 +42,15 @@ pub const Client = struct {
 
     pub fn init(allocator: std.mem.Allocator, config: Configuration) !Self {
         const uri = try std.Uri.parse(config.http_endpoint);
-        var client: http.Client = .{ .allocator = allocator };
+        const client: http.Client = .{ .allocator = allocator };
         var headers = http.Headers.init(allocator);
         try headers.append("Content-Type", "application/json; charset=utf-8");
         try headers.append("User-Agent", "sig/0.1");
 
         if (config.http_headers) |http_headers| {
             for (http_headers) |header| {
-                var name = header[0];
-                var value = header[1];
+                const name = header[0];
+                const value = header[1];
                 if (name.len == 0 or value.len == 0) {
                     headers.deinit();
                     return Error.InvalidHttpHeaders;
@@ -90,7 +90,7 @@ pub const Client = struct {
 
         const JrpcRequest = jsonrpc.Request(Params);
 
-        var out = try std.json.stringifyAlloc(self.allocator, JrpcRequest{
+        const out = try std.json.stringifyAlloc(self.allocator, JrpcRequest{
             .jsonrpc = "2.0",
             .id = id,
             .method = method,
@@ -115,7 +115,7 @@ pub const Client = struct {
         defer self.allocator.free(body);
 
         logger.debug("response body: {s}", .{body});
-        var resp = try std.json.parseFromSlice(jsonrpc.ResponsePayload(Result), self.allocator, body, .{ .ignore_unknown_fields = true });
+        const resp = try std.json.parseFromSlice(jsonrpc.ResponsePayload(Result), self.allocator, body, .{ .ignore_unknown_fields = true });
         return jsonrpc.Response(Result).init(self.allocator, resp);
     }
 
@@ -130,7 +130,7 @@ pub const Client = struct {
 
         const JrpcRequest = jsonrpc.Request(Params);
 
-        var out = try std.json.stringifyAlloc(self.allocator, JrpcRequest{
+        const out = try std.json.stringifyAlloc(self.allocator, JrpcRequest{
             .jsonrpc = "2.0",
             .id = id,
             .method = method,
@@ -158,7 +158,7 @@ pub const Client = struct {
         var parser = std.json.Parser.init(self.allocator, .alloc_always);
         defer parser.deinit();
 
-        var tree = try parser.parse(body);
+        const tree = try parser.parse(body);
         return tree;
     }
 
@@ -180,19 +180,19 @@ pub const Client = struct {
         var arrList = std.ArrayList(json.Value).init(self.allocator);
         defer arrList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try arrList.append(.{ .string = str });
         try arrList.append(.{ .object = optionsObj });
 
-        var params = .{ .array = arrList };
+        const params = .{ .array = arrList };
 
-        var resp = try self.makeRequestWithJRpcResponse(types.AccountInfo, json.Value, "getAccountInfo", "1", params);
+        const resp = try self.makeRequestWithJRpcResponse(types.AccountInfo, json.Value, "getAccountInfo", "1", params);
         return resp;
     }
 
     pub fn getBalance(self: *Self, pubkey: Pubkey) !jsonrpc.Response(types.BalanceInfo) {
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         var params: [1][]const u8 = [1][]const u8{str};
         return try self.makeRequestWithJRpcResponse(types.BalanceInfo, [][]const u8, "getBalance", "1", &params);
@@ -225,7 +225,7 @@ pub const Client = struct {
         try arrList.append(.{ .integer = @intCast(slot) });
         try arrList.append(.{ .object = optionsObj });
 
-        var params = .{ .array = arrList };
+        const params = .{ .array = arrList };
 
         return try self.makeRequestWithJRpcResponse(types.BlockInfo, json.Value, "getBlock", "1", params);
     }
@@ -261,14 +261,14 @@ pub const Client = struct {
         defer arrList.deinit();
         try arrList.append(.{ .object = optionsObj });
 
-        var params = .{ .array = arrList };
+        const params = .{ .array = arrList };
 
         var tree = try self.makeRequestWithJsonValueResponse(json.Value, "getBlockProduction", "1", params);
-        var errorObject = tree.root.object.get("error");
-        var id = tree.root.object.get("id").?.string;
+        const errorObject = tree.root.object.get("error");
+        const id = tree.root.object.get("id").?.string;
 
         var arena = std.heap.ArenaAllocator.init(self.allocator);
-        var responseAllocator = arena.allocator();
+        const responseAllocator = arena.allocator();
         if (errorObject) |errObj| {
             return jsonrpc.ResponseAlt(types.BlockProductionInfo).init(arena, Result{ .jsonrpc = "2.0", .id = id, .result = null, .@"error" = jsonrpc.ErrorObject{
                 .code = errObj.object.get("code").?.integer,
@@ -325,7 +325,7 @@ pub const Client = struct {
             try paramsList.append(.{ .integer = @as(i64, @intCast(slot)) });
         }
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse([]u64, json.Value, "getBlocks", "1", params);
     }
@@ -342,7 +342,7 @@ pub const Client = struct {
             try paramsList.append(.{ .integer = @as(i64, @intCast(v)) });
         }
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse([]u64, json.Value, "getBlocksWithLimit", "1", params);
     }
@@ -368,7 +368,7 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.EpochInfo, json.Value, "getEpochInfo", "1", params);
     }
 
@@ -389,7 +389,7 @@ pub const Client = struct {
         defer paramsList.deinit();
         try paramsList.append(.{ .string = base64EncodedMessage });
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.MessageFeeInfo, json.Value, "getFeeForMessage", "1", params);
     }
 
@@ -425,7 +425,7 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.InfaltionInfo, json.Value, "getInflationGovernor", "1", params);
     }
 
@@ -455,14 +455,14 @@ pub const Client = struct {
         var accountsList = std.ArrayList(json.Value).init(self.allocator);
         defer accountsList.deinit();
         for (pubkeys) |pubkey| {
-            var str = pubkey.string();
+            const str = pubkey.string();
 
             try accountsList.append(.{ .string = str });
         }
         try paramsList.append(.{ .array = accountsList });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse([]?types.InflationReward, json.Value, "getInflationReward", "1", params);
     }
@@ -478,7 +478,7 @@ pub const Client = struct {
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
 
         if (options.filter) |filter| {
-            var filterStr = switch (filter) {
+            const filterStr = switch (filter) {
                 .Circulating => "circulating",
                 .NonCirculating => "nonCirculating",
             };
@@ -488,7 +488,7 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse(types.LargestAccountsInfo, json.Value, "getLargestAccounts", "1", params);
     }
@@ -509,7 +509,7 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse(types.LatestBlockhashInfo, json.Value, "getLatestBlockhash", "1", params);
     }
@@ -532,15 +532,15 @@ pub const Client = struct {
             try arrList.append(.{ .integer = @as(i64, @intCast(v)) });
         }
         try arrList.append(.{ .object = optionsObj });
-        var params = .{ .array = arrList };
+        const params = .{ .array = arrList };
 
         var tree = try self.makeRequestWithJsonValueResponse(json.Value, "getLeaderSchedule", "1", params);
 
-        var errorObject = tree.root.object.get("error");
-        var id = tree.root.object.get("id").?.string;
+        const errorObject = tree.root.object.get("error");
+        const id = tree.root.object.get("id").?.string;
 
         var arena = std.heap.ArenaAllocator.init(self.allocator);
-        var responseAllocator = arena.allocator();
+        const responseAllocator = arena.allocator();
 
         if (errorObject) |errObj| {
             return jsonrpc.ResponseAlt(?std.StringArrayHashMap([]u64)).init(
@@ -617,14 +617,14 @@ pub const Client = struct {
         defer accountsList.deinit();
 
         for (pubkeys) |pubkey| {
-            var str = pubkey.string();
+            const str = pubkey.string();
 
             try accountsList.append(.{ .string = str });
         }
         try paramsList.append(.{ .array = accountsList });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = .{ .array = paramsList };
+        const params = .{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse(types.MultipleAccountsInfo, json.Value, "getMultipleAccounts", "1", params);
     }
@@ -704,12 +704,12 @@ pub const Client = struct {
         var accountsList = std.ArrayList(json.Value).init(self.allocator);
         defer accountsList.deinit();
 
-        var str = program.string();
+        const str = program.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = .{ .array = paramsList };
+        const params = .{ .array = paramsList };
 
         return try self.makeRequestWithJRpcResponse(types.IdentifiedAccountInfos, json.Value, "getProgramAccounts", "1", params);
     }
@@ -727,7 +727,7 @@ pub const Client = struct {
             defer accountsList.deinit();
 
             for (pks) |pubkey| {
-                var str = pubkey.string();
+                const str = pubkey.string();
                 try accountsList.append(str);
             }
             params = accountsList.items[0..];
@@ -765,11 +765,11 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = optionsObj });
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([]types.SignatureInfo, json.Value, "getSignaturesForAddress", "1", params);
     }
 
@@ -794,7 +794,7 @@ pub const Client = struct {
         try paramsList.append(.{ .array = sigsList });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.SignatureStatusesInfo, json.Value, "getSignatureStatuses", "1", params);
     }
 
@@ -816,7 +816,7 @@ pub const Client = struct {
 
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([]const u8, json.Value, "getSlotLeader", "1", params);
     }
 
@@ -827,7 +827,7 @@ pub const Client = struct {
         try paramsList.append(.{ .integer = @as(i64, @intCast(startSlot)) });
         try paramsList.append(.{ .integer = @as(i64, @intCast(limit)) });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([][]const u8, json.Value, "getSlotLeaders", "1", params);
     }
 
@@ -851,12 +851,12 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.StakeActivation, json.Value, "getStakeActivation", "1", params);
     }
 
@@ -873,7 +873,7 @@ pub const Client = struct {
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.StakeMinimumDelegationInfo, json.Value, "getStakeMinimumDelegation", "1", params);
     }
 
@@ -894,7 +894,7 @@ pub const Client = struct {
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.SupplyInfo, json.Value, "getSupply", "1", params);
     }
 
@@ -910,12 +910,12 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.TokenAccountBalanceInfo, json.Value, "getTokenAccountBalance", "1", params);
     }
 
@@ -952,11 +952,11 @@ pub const Client = struct {
         var mintOrPubkeyObj = std.StringArrayHashMap(json.Value).init(self.allocator);
         defer mintOrPubkeyObj.deinit();
         if (mintOrProgramId.mint) |mint| {
-            var str = mint.string();
+            const str = mint.string();
 
             try mintOrPubkeyObj.put("mint", .{ .string = str });
         } else if (mintOrProgramId.programId) |programId| {
-            var str = programId.string();
+            const str = programId.string();
 
             try mintOrPubkeyObj.put("programId", .{ .string = str });
         }
@@ -964,13 +964,13 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = mintOrPubkeyObj });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([]types.IdentifiedAccountInfos, json.Value, "getTokenAccountsByDelegate", "1", params);
     }
 
@@ -1002,11 +1002,11 @@ pub const Client = struct {
         var mintOrPubkeyObj = std.StringArrayHashMap(json.Value).init(self.allocator);
         defer mintOrPubkeyObj.deinit();
         if (mintOrProgramId.mint) |mint| {
-            var str = mint.string();
+            const str = mint.string();
 
             try mintOrPubkeyObj.put("mint", .{ .string = str });
         } else if (mintOrProgramId.programId) |programId| {
-            var str = programId.string();
+            const str = programId.string();
 
             try mintOrPubkeyObj.put("programId", .{ .string = str });
         }
@@ -1014,13 +1014,13 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = mintOrPubkeyObj });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.IdentifiedAccountInfos, json.Value, "getTokenAccountsByOwner", "1", params);
     }
 
@@ -1036,12 +1036,12 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = mint.string();
+        const str = mint.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.TokenAccountBalanceInfos, json.Value, "getTokenLargestAccounts", "1", params);
     }
 
@@ -1059,7 +1059,7 @@ pub const Client = struct {
         try paramsList.append(.{ .string = mint.string() });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.TokenAccountBalanceInfo, json.Value, "getTokenSupply", "1", params);
     }
 
@@ -1082,7 +1082,7 @@ pub const Client = struct {
         try paramsList.append(.{ .string = signature });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.Transaction, json.Value, "getTransaction", "1", params);
     }
 
@@ -1103,7 +1103,7 @@ pub const Client = struct {
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(u64, json.Value, "getTransactionCount", "1", params);
     }
 
@@ -1123,7 +1123,7 @@ pub const Client = struct {
         defer optionsObj.deinit();
         try optionsObj.put("commitment", .{ .string = self.defaultCommitmentOr(options.commitment).string() });
         if (options.votePubkey) |votePubkey| {
-            var str = votePubkey.string();
+            const str = votePubkey.string();
             try optionsObj.put("votePubkey", .{ .string = str });
         }
         if (options.keepUnstakedDelinquents) |keepUnstakedDelinquents| {
@@ -1137,7 +1137,7 @@ pub const Client = struct {
         defer paramsList.deinit();
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.VoteAccountsInfo, json.Value, "getVoteAccounts", "1", params);
     }
 
@@ -1161,7 +1161,7 @@ pub const Client = struct {
         try paramsList.append(.{ .string = blockhash });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.BlockhashInfo, json.Value, "isBlockhashValid", "1", params);
     }
 
@@ -1181,13 +1181,13 @@ pub const Client = struct {
         var paramsList = std.ArrayList(json.Value).init(self.allocator);
         defer paramsList.deinit();
 
-        var str = pubkey.string();
+        const str = pubkey.string();
 
         try paramsList.append(.{ .string = str });
         try paramsList.append(.{ .integer = @as(i64, @intCast(lamports)) });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([]const u8, json.Value, "requestAirdrop", "1", params);
     }
 
@@ -1224,7 +1224,7 @@ pub const Client = struct {
         try paramsList.append(.{ .string = payload });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse([]const u8, json.Value, "sendTransaction", "1", params);
     }
 
@@ -1268,7 +1268,7 @@ pub const Client = struct {
             defer addressesList.deinit();
 
             for (accounts.addresses) |address| {
-                var str = address.string();
+                const str = address.string();
 
                 try addressesList.append(.{ .string = str });
             }
@@ -1285,7 +1285,7 @@ pub const Client = struct {
         try paramsList.append(.{ .string = payload });
         try paramsList.append(.{ .object = optionsObj });
 
-        var params = json.Value{ .array = paramsList };
+        const params = json.Value{ .array = paramsList };
         return try self.makeRequestWithJRpcResponse(types.SimulatedTransactionInfo, json.Value, "simulateTransaction", "1", params);
     }
 };
@@ -1328,7 +1328,7 @@ test "pubkey equality works" {
 }
 
 test "pubkey randome works" {
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
@@ -2059,7 +2059,7 @@ test "make 'getTokenAccountBalance' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var pubkey = try Pubkey.fromString(
+    const pubkey = try Pubkey.fromString(
         "6A5NHCj1yF6urc9wZNe6Bcjj4LVszQNj5DwAWG97yzMu",
     );
     var resp = try client.getTokenAccountBalance(pubkey, .{});
@@ -2080,10 +2080,10 @@ test "make 'getTokenAccountsByDelegate' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var programPubkey = try Pubkey.fromString(
+    const programPubkey = try Pubkey.fromString(
         "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
     );
-    var pubkey = try Pubkey.fromString(
+    const pubkey = try Pubkey.fromString(
         "CTz5UMLQm2SRWHzQnU62Pi4yJqbNGjgRBHqqp6oDHfF7",
     );
     var resp = try client.getTokenAccountsByDelegate(pubkey, .{ .programId = programPubkey }, .{});
@@ -2104,10 +2104,10 @@ test "make 'getTokenAccountsByOwner' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var mintPubkey = try Pubkey.fromString(
+    const mintPubkey = try Pubkey.fromString(
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     );
-    var pubkey = try Pubkey.fromString(
+    const pubkey = try Pubkey.fromString(
         "CTz5UMLQm2SRWHzQnU62Pi4yJqbNGjgRBHqqp6oDHfF7",
     );
     var resp = try client.getTokenAccountsByOwner(pubkey, .{ .mint = mintPubkey }, .{});
@@ -2128,7 +2128,7 @@ test "make 'getTokenLargestAccounts' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var mintPubkey = try Pubkey.fromString(
+    const mintPubkey = try Pubkey.fromString(
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     );
     var resp = try client.getTokenLargestAccounts(mintPubkey, .{});
@@ -2149,7 +2149,7 @@ test "make 'getTokenSupply' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var mintPubkey = try Pubkey.fromString(
+    const mintPubkey = try Pubkey.fromString(
         "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     );
     var resp = try client.getTokenSupply(mintPubkey, .{});
@@ -2170,7 +2170,7 @@ test "make 'getTransaction' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var txSig = "5UfDuX7WXY18keiz9mZ6zKkY8JyNuLDFz2QycQcr7skRkgVaNmo6tgFbsePRrX5C6crvycJ2A3txSdGgjPHvPbTZ";
+    const txSig = "5UfDuX7WXY18keiz9mZ6zKkY8JyNuLDFz2QycQcr7skRkgVaNmo6tgFbsePRrX5C6crvycJ2A3txSdGgjPHvPbTZ";
     var resp = try client.getTransaction(txSig, .{});
     defer resp.deinit();
 
@@ -2225,7 +2225,7 @@ test "make 'getVoteAccounts' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var votePubkey = try Pubkey.fromString(
+    const votePubkey = try Pubkey.fromString(
         "CertusDeBmqN8ZawdkxK5kFGMwBXdudvWHYwtNgNhvLu",
     );
     var resp = try client.getVoteAccounts(.{ .votePubkey = votePubkey });
@@ -2282,7 +2282,7 @@ test "make 'requestAirdrop' rpc call successfully" {
     var client = try Client.init(testing.allocator, .{ .http_endpoint = HTTP_ENDPOINT });
     defer client.deinit();
 
-    var pubkey = try Pubkey.fromString(
+    const pubkey = try Pubkey.fromString(
         "Bvg7GuhqwNmV2JVyeZjhAcTPFqPktfmq25VBaZipozda",
     );
     var resp = try client.requestAirdrop(pubkey, 10000, .{});

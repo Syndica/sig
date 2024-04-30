@@ -1,4 +1,3 @@
-
 ### `core.Pubkey` - API Reference
 
 A struct which holds a Public Key of a Solana account (`[32]u8`).

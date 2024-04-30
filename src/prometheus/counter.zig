@@ -8,10 +8,10 @@ pub const Counter = struct {
     const Self = @This();
 
     metric: Metric = Metric{ .getResultFn = getResult },
-    value: std.atomic.Atomic(u64) = std.atomic.Atomic(u64).init(0),
+    value: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     pub fn inc(self: *Self) void {
-        _ = self.value.fetchAdd(1, .Monotonic);
+        _ = self.value.fetchAdd(1, .monotonic);
     }
 
     pub fn add(self: *Self, value: anytype) void {
@@ -20,15 +20,15 @@ pub const Counter = struct {
             else => @compileError("can't add a non-number"),
         }
 
-        _ = self.value.fetchAdd(@intCast(value), .Monotonic);
+        _ = self.value.fetchAdd(@intCast(value), .monotonic);
     }
 
     pub fn get(self: *const Self) u64 {
-        return self.value.load(.Monotonic);
+        return self.value.load(.monotonic);
     }
 
     pub fn reset(self: *Self) void {
-        _ = self.value.store(0, .Monotonic);
+        _ = self.value.store(0, .monotonic);
     }
 
     pub fn set(self: *Self, value: anytype) void {
@@ -36,11 +36,11 @@ pub const Counter = struct {
             .Int, .Float, .ComptimeInt, .ComptimeFloat => {},
             else => @compileError("can't set a non-number"),
         }
-        self.value.store(@intCast(value), .Monotonic);
+        self.value.store(@intCast(value), .monotonic);
     }
 
     fn getResult(metric: *Metric, _: mem.Allocator) Metric.Error!Metric.Result {
-        const self = @fieldParentPtr(Self, "metric", metric);
+        const self: *Self = @fieldParentPtr("metric", metric);
         return Metric.Result{ .counter = self.get() };
     }
 };
@@ -85,7 +85,7 @@ test "prometheus.counter: concurrent" {
 }
 
 test "prometheus.counter: write" {
-    var counter = Counter{ .value = .{ .value = 340 } };
+    var counter = Counter{ .value = .{ .raw = 340 } };
 
     var buffer = std.ArrayList(u8).init(testing.allocator);
     defer buffer.deinit();

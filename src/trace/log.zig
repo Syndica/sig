@@ -6,10 +6,16 @@ const Entry = entry.Entry;
 const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
 const Mutex = std.Thread.Mutex;
-const AtomicBool = std.atomic.Atomic(bool);
+const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
+const OnceCell = @import("../sync/once_cell.zig").OnceCell;
+var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+var gpa_allocator = gpa.allocator();
 
 const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
+
+pub const default_logger: *Logger = &global;
+var global: Logger = .{ .standard = undefined };
 
 pub const Logger = union(enum) {
     standard: *StandardErrLogger,
@@ -137,7 +143,7 @@ pub const StandardErrLogger = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, max_level: Level) *Self {
-        var self = allocator.create(Self) catch @panic("could not allocator.create Logger");
+        const self = allocator.create(Self) catch @panic("could not allocator.create Logger");
         self.* = .{
             .allocator = allocator,
             .max_level = max_level,
@@ -155,7 +161,7 @@ pub const StandardErrLogger = struct {
     pub fn deinit(self: *Self) void {
         self.channel.close();
         if (self.handle) |handle| {
-            self.exit_sig.store(true, .SeqCst);
+            self.exit_sig.store(true, .seq_cst);
             handle.join();
         }
         self.channel.deinit();
@@ -165,10 +171,10 @@ pub const StandardErrLogger = struct {
     fn run(self: *Self) void {
         const sink = StdErrSink{};
 
-        while (!self.exit_sig.load(.SeqCst)) {
+        while (!self.exit_sig.load(.seq_cst)) {
             std.time.sleep(std.time.ns_per_ms * 5);
 
-            var entries = self.channel.drain() orelse {
+            const entries = self.channel.drain() orelse {
                 // channel is closed
                 return;
             };
@@ -239,7 +245,7 @@ pub const StdErrSink = struct {
     const Self = @This();
 
     pub fn consumeEntries(_: Self, entries: []*StandardEntry) void {
-        var std_err_writer = std.io.getStdErr().writer();
+        const std_err_writer = std.io.getStdErr().writer();
         var std_err_mux = std.debug.getStderrMutex();
         std_err_mux.lock();
         defer std_err_mux.unlock();
