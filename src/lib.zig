@@ -55,7 +55,6 @@ pub const sync = struct {
     pub usingnamespace @import("sync/channel.zig");
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
-    pub usingnamespace @import("sync/ref_counter.zig");
     pub usingnamespace @import("sync/mux.zig");
     pub usingnamespace @import("sync/once_cell.zig");
     pub usingnamespace @import("sync/thread_pool.zig");
