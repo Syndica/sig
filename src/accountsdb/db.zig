@@ -69,11 +69,15 @@ pub const AccountsDB = struct {
     account_index: AccountIndex,
     disk_allocator_ptr: ?*DiskMemoryAllocator = null,
 
+    // track per-slot for purge/flush
+    account_cache: std.AutoHashMap(Slot, PubkeysAndAccounts),
+
     logger: Logger,
     config: AccountsDBConfig,
     fields: AccountsDbFields = undefined,
 
     const Self = @This();
+    const PubkeysAndAccounts = struct { []Pubkey, []Account };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -107,6 +111,7 @@ pub const AccountsDB = struct {
             .account_index = account_index,
             .logger = logger,
             .config = config,
+            .account_cache = std.AutoHashMap(Slot, PubkeysAndAccounts).init(allocator),
         };
     }
 
@@ -116,6 +121,7 @@ pub const AccountsDB = struct {
         if (self.disk_allocator_ptr) |ptr| {
             self.allocator.destroy(ptr);
         }
+        self.account_cache.deinit();
     }
 
     /// easier to use load function
@@ -737,10 +743,11 @@ pub const AccountsDB = struct {
         slot: Slot,
     ) !void {
         std.debug.assert(accounts.len == pubkeys.len);
+        if (accounts.len == 0) return;
 
         // store account
-        const cache_index_start = self.storage.cache.items.len;
-        try self.storage.cache.appendSlice(accounts);
+        // TODO: handle when slot already exists in the index
+        try self.account_cache.putNoClobber(slot, .{ pubkeys, accounts });
 
         // prealloc the bins
         const n_bins = self.account_index.numberOfBins();
@@ -768,14 +775,60 @@ pub const AccountsDB = struct {
             const account_ref = AccountRef{
                 .pubkey = pubkeys[i],
                 .slot = slot,
-                .location = .{
-                    .Cache = .{ .index = cache_index_start + i },
-                },
+                .location = .{ .Cache = .{ .slot = slot } },
             };
             refs.appendAssumeCapacity(account_ref);
             self.account_index.indexRef(&refs.items[i]);
         }
         _ = try self.account_index.addMemoryBlock(refs);
+    }
+
+    /// remove all accounts and associated reference memory.
+    /// note: should only be called on non-rooted slots (ie, slots which
+    /// only exist in the cache, and not on disk).
+    pub fn purgeSlot(self: *Self, slot: Slot, allocator: std.mem.Allocator) void {
+        if (self.account_cache.get(slot)) |r| {
+            const pubkeys, const accounts = r;
+
+            // remove the account_ref from the index
+            for (pubkeys) |*pubkey| {
+                self.account_index.removeReference(pubkey, slot) catch |err| {
+                    switch (err) {
+                        error.PubkeyNotFound => {
+                            std.debug.panic("pubkey not found in index while purging: {any}", .{pubkey});
+                        },
+                        error.SlotNotFound => {
+                            std.debug.panic(
+                                "pubkey @ slot not found in index while purging: {any} @ {d}",
+                                .{ pubkey, slot },
+                            );
+                        },
+                    }
+                };
+            }
+
+            // free the account memory
+            for (accounts) |account| {
+                allocator.free(account.data);
+            }
+            allocator.free(accounts);
+            allocator.free(pubkeys);
+
+            // remove slot from cache map
+            _ = self.account_cache.remove(slot);
+        } else {
+            // its an account file
+            @panic("TODO");
+        }
+
+        // free the account *reference* memory
+        self.account_index.removeMemoryBlock(slot) catch |err| {
+            switch (err) {
+                error.MemoryNotFound => {
+                    std.debug.panic("memory block @ slot not found: {d}", .{slot});
+                },
+            }
+        };
     }
 
     inline fn lessThanIf(
@@ -853,8 +906,10 @@ pub const AccountsDB = struct {
                 return account;
             },
             .Cache => |ref_info| {
-                const account = self.storage.cache.items[ref_info.index];
-                return account;
+                _ = ref_info;
+                @panic("TODO");
+                // const account = self.storage.cache.items[ref_info.index];
+                // return account;
             },
         }
     }
@@ -1166,6 +1221,59 @@ test "accounts_db.db: load other sysvars" {
     // // not always included in local snapshot
     // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
     // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
+}
+
+test "accounts_db.db: purge accounts in cache works" {
+    const allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
+    var accounts_db = try AccountsDB.init(allocator, logger, .{
+        .number_of_index_bins = 4,
+        .storage_cache_size = 10,
+    });
+    defer accounts_db.deinit();
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+    const n_accounts = 3;
+
+    // we dont defer deinit to make sure that they are cleared on purge
+    var pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    var accounts = try allocator.alloc(Account, n_accounts);
+
+    for (0..n_accounts) |i| {
+        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, rng, i % 1_000);
+    }
+
+    const pubkey_copy = try allocator.alloc(Pubkey, n_accounts);
+    defer allocator.free(pubkey_copy);
+    @memcpy(pubkey_copy, pubkeys);
+
+    const slot = @as(u64, @intCast(0));
+    try accounts_db.putAccountBatch(
+        accounts,
+        pubkeys,
+        slot,
+    );
+
+    for (0..n_accounts) |i| {
+        try std.testing.expect(
+            accounts_db.account_index.getReference(&pubkeys[i]) != null,
+        );
+    }
+
+    accounts_db.purgeSlot(slot, allocator);
+
+    // ref backing memory is cleared
+    try std.testing.expect(accounts_db.account_index.memory_linked_list == null);
+    // account cache is cleared
+    try std.testing.expect(accounts_db.account_cache.count() == 0);
+
+    // // TODO: when hashmap remove is fixed
+    // // ref hashmap is cleared
+    // for (0..n_accounts) |i| {
+    //     try std.testing.expect(accounts_db.account_index.getReference(&pubkey_copy[i]) == null);
+    // }
 }
 
 pub const BenchmarkAccountsDB = struct {

@@ -20,7 +20,8 @@ pub const AccountRef = struct {
             offset: usize,
         },
         Cache: struct {
-            index: usize,
+            // index: usize,
+            slot: usize, // used to lookup in the slot map
         },
     };
 
@@ -29,7 +30,7 @@ pub const AccountRef = struct {
             .pubkey = Pubkey.default(),
             .slot = 0,
             .location = .{
-                .Cache = .{ .index = 0 },
+                .Cache = .{ .slot = 0 },
             },
         };
     }
@@ -102,6 +103,85 @@ pub const AccountIndex = struct {
         return &node.memory;
     }
 
+    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
+        var current_reference = self.getReference(pubkey) orelse return error.PubkeyNotFound;
+        const previous_reference: ?AccountRef = null;
+
+        while (true) {
+            // found the slot
+            if (current_reference.slot == slot) {
+                // remove it from the index (eg, remove [b])
+                const b = current_reference;
+                if (previous_reference) |a| {
+                    // .. -> a -> [b] -> c  => ... -> a -> c
+                    const c = b.next_ptr;
+                    a.next_ptr = c;
+                } else {
+                    if (b.next_ptr) |a| {
+                        // head: [b] -> a => a
+                        b.* = a.*;
+                    } else {
+                        // head: [b] => { remove entry from hashmap }
+                        // @panic("TODO");
+                        std.debug.print("[WARN] TODO: remove entry from hashmap\n", .{});
+                    }
+                }
+                return;
+            } else {
+                // keep traversing
+                if (current_reference.next_ptr) |next_ptr| {
+                    current_reference = next_ptr;
+                } else {
+                    return error.SlotNotFound;
+                }
+            }
+        }
+    }
+
+    pub fn removeMemoryBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
+        // find the memory block associated with the slot
+        var prev: ?*RefMemoryLinkedList = null;
+        var curr = self.memory_linked_list;
+        while (true) {
+            if (curr) |memory_node| {
+                if (memory_node.memory.items.len == 0) {
+                    std.debug.panic("memory block with zero length found, something went wrong", .{});
+                }
+
+                // found the memory block
+                if (memory_node.memory.items[0].slot == slot) {
+                    // remove it from the index (eg, remove [b])
+                    const b = memory_node;
+                    if (prev) |a| {
+                        // ... -> a -> [b] -> c  => ... -> a -> c
+                        const c = b.next_ptr;
+                        a.next_ptr = c;
+                    } else {
+                        if (b.next_ptr) |a| {
+                            // head: [b] -> a => head: a
+                            b.memory.deinit();
+                            // SAFE: the only way we get here is if curr (ie, memory_ll) != null
+                            self.memory_linked_list.?.* = a.*;
+                            return;
+                        } else {
+                            // head: [b] => head: { set linked list to null }
+                            self.memory_linked_list = null;
+                        }
+                    }
+
+                    // deinit the memory block
+                    b.memory.deinit();
+                    self.allocator.destroy(b);
+                    return;
+                }
+                prev = curr;
+                curr = curr.?.next_ptr;
+            } else {
+                return error.MemoryNotFound;
+            }
+        }
+    }
+
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
         return self.calculator.binIndex(pubkey);
     }
@@ -166,6 +246,11 @@ pub const AccountIndex = struct {
         } else {
             result.value_ptr.* = account_ref;
         }
+    }
+
+    pub fn getReference(self: *Self, pubkey: *const Pubkey) ?*AccountRef {
+        const bin = self.getBinFromPubkey(pubkey);
+        return bin.get(pubkey.*);
     }
 
     pub fn validateAccountFile(
