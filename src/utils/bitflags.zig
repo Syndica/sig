@@ -1,5 +1,5 @@
 pub fn BitFlags(comptime FlagEnum: type) type {
-    return struct {
+    return packed struct {
         state: @typeInfo(FlagEnum).Enum.tag_type,
 
         const Self = @This();

@@ -49,7 +49,6 @@ pub const version = struct {
 };
 
 pub const sync = struct {
-    pub usingnamespace @import("sync/bit_array.zig");
     pub usingnamespace @import("sync/channel.zig");
     pub usingnamespace @import("sync/mpmc.zig");
     pub usingnamespace @import("sync/ref.zig");
@@ -60,8 +59,10 @@ pub const sync = struct {
 };
 
 pub const utils = struct {
+    pub usingnamespace @import("utils/arraylist.zig");
     pub usingnamespace @import("utils/bitflags.zig");
     pub usingnamespace @import("utils/shortvec.zig");
+    pub usingnamespace @import("utils/thread.zig");
     pub usingnamespace @import("utils/types.zig");
     pub usingnamespace @import("utils/varint.zig");
 };

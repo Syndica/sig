@@ -48,7 +48,7 @@ pub const RepairRequest = union(enum) {
 ///
 /// Analogous to `ServeRepair::map_repair_request`
 pub fn serializeRepairRequest(
-    allocator: Allocator,
+    buf: []u8,
     request: RepairRequest,
     keypair: *const KeyPair,
     recipient: Pubkey,
@@ -78,10 +78,7 @@ pub fn serializeRepairRequest(
             .slot = r,
         } },
     };
-    var buf = try allocator.alloc(u8, RepairMessage.MAX_SERIALIZED_SIZE);
-    var stream = std.io.fixedBufferStream(buf);
-    try bincode.write(null, stream.writer(), msg, .{});
-    var serialized = try allocator.realloc(buf, stream.pos);
+    var serialized = try bincode.writeToSlice(buf, msg, .{});
 
     var signer = try keypair.signer(null); // TODO noise
     signer.update(serialized[0..4]);

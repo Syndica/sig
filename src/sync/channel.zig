@@ -125,6 +125,27 @@ pub fn Channel(comptime T: type) type {
             return out;
         }
 
+        pub fn tryDrainRecycle(
+            self: *Self,
+            buf: *std.ArrayList(T),
+        ) error{ ChannelClosed, OutOfMemory }!void {
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
+            buf.clearRetainingCapacity();
+
+            if (self.closed.load(.SeqCst)) {
+                return error.ChannelClosed;
+            }
+
+            var num_items_to_drain = buffer.get().items.len;
+            if (num_items_to_drain == 0) {
+                return;
+            }
+
+            try buf.appendSlice(buffer.get().items);
+            buffer.mut().clearRetainingCapacity();
+        }
+
         pub fn close(self: *Self) void {
             self.closed.store(true, .SeqCst);
             self.has_value.broadcast();

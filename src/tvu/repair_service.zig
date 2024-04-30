@@ -12,16 +12,61 @@ const Socket = zig_network.Socket;
 const BasicShredTracker = sig.tvu.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const GossipTable = sig.gossip.GossipTable;
+const HomogeneousThreadPool = sig.utils.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
 const LruCacheCustom = sig.common.LruCacheCustom;
+const MultiSlotReport = sig.tvu.MultiSlotReport;
 const Nonce = sig.core.Nonce;
+const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const SocketAddr = sig.net.SocketAddr;
+const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
 
 const RepairRequest = sig.tvu.RepairRequest;
+const RepairMessage = sig.tvu.RepairMessage;
+
 const serializeRepairRequest = sig.tvu.serializeRepairRequest;
+
+/// TODO: redundant?
+pub fn initRepair(
+    allocator: Allocator,
+    logger: Logger,
+    my_keypair: *const KeyPair,
+    exit: *Atomic(bool),
+    random: Random,
+    gossip_table_rw: *RwMux(GossipTable),
+    my_shred_version: *Atomic(u16),
+    socket: *Socket,
+    shred_tracker: *BasicShredTracker,
+    start_slot: ?Slot,
+) !RepairService {
+    const peer_provider = try RepairPeerProvider.init(
+        allocator,
+        random,
+        gossip_table_rw,
+        Pubkey.fromPublicKey(&my_keypair.public_key),
+        my_shred_version,
+    );
+    const requester = try RepairRequester.init(
+        allocator,
+        logger,
+        random,
+        my_keypair,
+        socket,
+        exit,
+    );
+    return RepairService.init(
+        allocator,
+        logger,
+        exit,
+        requester,
+        peer_provider,
+        shred_tracker,
+        start_slot,
+    );
+}
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
@@ -33,9 +78,48 @@ pub const RepairService = struct {
     shred_tracker: *BasicShredTracker,
     logger: Logger,
     exit: *Atomic(bool),
-    slot_to_request: ?u64,
+    start_slot: ?Slot,
+
+    /// memory to re-use across iterations. initialized to empty
+    report: MultiSlotReport,
+
+    thread_pool: RequestBatchThreadPool,
+
+    pub const RequestBatchThreadPool = HomogeneousThreadPool(struct {
+        requester: *RepairRequester,
+        requests: []AddressedRepairRequest,
+
+        pub fn run(self: *@This()) !void {
+            return self.requester.sendRepairRequestBatch(
+                self.requester.allocator,
+                self.requests,
+            );
+        }
+    });
 
     const Self = @This();
+
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        exit: *Atomic(bool),
+        requester: RepairRequester,
+        peer_provider: RepairPeerProvider,
+        shred_tracker: *BasicShredTracker,
+        start_slot: ?Slot,
+    ) Self {
+        return RepairService{
+            .allocator = allocator,
+            .requester = requester,
+            .peer_provider = peer_provider,
+            .shred_tracker = shred_tracker,
+            .logger = logger,
+            .exit = exit,
+            .start_slot = start_slot, // TODO: do nothing if null
+            .report = MultiSlotReport.init(allocator),
+            .thread_pool = RequestBatchThreadPool.init(allocator, 4),
+        };
+    }
 
     pub fn deinit(self: *Self) void {
         self.peer_provider.deinit();
@@ -45,59 +129,69 @@ pub const RepairService = struct {
     pub fn run(self: *Self) !void {
         self.logger.info("starting repair service");
         defer self.logger.info("exiting repair service");
+        var timer = try std.time.Timer.start();
         while (!self.exit.load(.Unordered)) {
             try self.sendNecessaryRepairs();
-            // TODO sleep?
-            std.time.sleep(100_000_000);
+            std.time.sleep(100 * std.time.ns_per_ms -| timer.lap());
         }
     }
 
     /// Identifies which repairs are needed based on the current state,
     /// and sends those repairs, then returns.
     fn sendNecessaryRepairs(self: *Self) !void {
-        // if (try self.initialSnapshotRepair()) |request| {
-        //     try self.requester.sendRepairRequest(request);
-        // }
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
         const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
         defer addressed_requests.deinit();
-        for (addressed_requests.items) |addressed_request| {
-            try self.requester.sendRepairRequest(addressed_request);
-        }
-    }
 
-    fn initialSnapshotRepair(self: *Self) !?AddressedRepairRequest {
-        if (self.slot_to_request == null) return null;
-        const request: RepairRequest = .{ .HighestShred = .{ self.slot_to_request.?, 0 } };
-        const maybe_peer = try self.peer_provider.getRandomPeer(self.slot_to_request.?);
-
-        if (maybe_peer) |peer| return .{
-            .request = request,
-            .recipient = peer.pubkey,
-            .recipient_addr = peer.serve_repair_socket,
+        if (addressed_requests.items.len < 4) {
+            try self.requester.sendRepairRequestBatch(self.allocator, addressed_requests.items);
         } else {
-            return null;
+            for (0..4) |i| {
+                const start = (addressed_requests.items.len * i) / 4;
+                const end = (addressed_requests.items.len * (i + 1)) / 4;
+                try self.thread_pool.schedule(.{
+                    .requester = &self.requester,
+                    .requests = addressed_requests.items[start..end],
+                });
+                try self.thread_pool.joinFallible();
+            }
         }
+
+        // TODO less often
+        self.logger.infof("sent {} repair requests", .{addressed_requests.items.len});
     }
+
+    const MAX_SHRED_REPAIRS = 1000;
+    const MAX_HIGHEST_REPAIRS = 100;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
-        const all_missing = try self.shred_tracker.identifyMissing(self.allocator);
-        defer all_missing.deinit();
         var repairs = ArrayList(RepairRequest).init(self.allocator);
+        try self.shred_tracker.identifyMissing(&self.report);
         var individual_count: usize = 0;
-        for (all_missing.reports.items) |report| {
-            const slot = report.slot;
+        var highest_count: usize = 0;
+        var slot: Slot = 0;
+        for (self.report.items()) |*report| outer: {
+            slot = report.slot;
             for (report.missing_shreds.items) |shred_window| {
                 if (shred_window.end) |end| {
                     for (shred_window.start..end) |i| {
-                        if (individual_count > 500) break;
                         individual_count += 1;
                         try repairs.append(.{ .Shred = .{ slot, i } });
+                        if (individual_count > MAX_SHRED_REPAIRS) {
+                            break :outer;
+                        }
                     }
-                } else {
-                    try repairs.append(.{ .HighestShred = .{ slot, shred_window.start } });
                 }
+            }
+            if (highest_count < MAX_HIGHEST_REPAIRS) {
+                highest_count += 1;
+                try repairs.append(.{ .HighestShred = .{ slot, 0 } });
+            }
+        }
+        if (highest_count < MAX_HIGHEST_REPAIRS) {
+            for (slot..slot + MAX_HIGHEST_REPAIRS - highest_count) |s| {
+                try repairs.append(.{ .HighestShred = .{ s, 0 } });
             }
         }
         return repairs;
@@ -116,7 +210,7 @@ pub const RepairService = struct {
                     .recipient_addr = peer.serve_repair_socket,
                 });
             }
-            // TODO do something if a peer is not found
+            // TODO do something if a peer is not found?
         }
         return addressed;
     }
@@ -125,35 +219,61 @@ pub const RepairService = struct {
 /// Signs and serializes repair requests. Sends them over the network.
 pub const RepairRequester = struct {
     allocator: Allocator,
+    logger: Logger,
     rng: Random,
     keypair: *const KeyPair,
-    udp_send_socket: *Socket,
-    logger: Logger,
+    sender: SocketThread,
 
     const Self = @This();
 
-    /// TODO: send batch
-    pub fn sendRepairRequest(
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        rng: Random,
+        keypair: *const KeyPair,
+        udp_send_socket: *Socket,
+        exit: *Atomic(bool),
+    ) !Self {
+        const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
+        return .{
+            .allocator = allocator,
+            .logger = logger,
+            .rng = rng,
+            .keypair = keypair,
+            .sender = sndr,
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.sender.deinit();
+    }
+
+    pub fn sendRepairRequestBatch(
         self: *const Self,
-        request: AddressedRepairRequest,
+        allocator: Allocator,
+        requests: []AddressedRepairRequest,
     ) !void {
+        var packet_batch = try std.ArrayList(Packet).initCapacity(allocator, requests.len);
         const timestamp = std.time.milliTimestamp();
-        const data = try serializeRepairRequest(
-            self.allocator,
-            request.request,
-            self.keypair,
-            request.recipient,
-            @intCast(timestamp),
-            self.rng.int(Nonce),
-        );
-        defer self.allocator.free(data);
-        const addr = request.recipient_addr.toString();
-        _ = addr;
-        // self.logger.infof(
-        //     "sending repair request to {s} - {}",
-        //     .{ addr[0][0..addr[1]], request.request },
-        // );
-        _ = try self.udp_send_socket.sendTo(request.recipient_addr.toEndpoint(), data);
+        for (requests) |request| {
+            const packet = packet_batch.addOneAssumeCapacity();
+            packet.* = Packet{
+                .addr = request.recipient_addr.toEndpoint(),
+                .flags = 0,
+                .data = undefined,
+                .size = undefined,
+            };
+            const data = try serializeRepairRequest(
+                &packet.data,
+                request.request,
+                self.keypair,
+                request.recipient,
+                @intCast(timestamp),
+                self.rng.int(Nonce),
+            );
+            packet.size = data.len;
+        }
+        try self.sender.channel.send(packet_batch);
     }
 };
 
@@ -358,7 +478,7 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
         .peer_provider = peers,
         .logger = logger,
         .exit = &exit,
-        .slot_to_request = 13579,
+        .start_slot = 13579,
         .shred_tracker = &tracker,
     };
     defer service.deinit();

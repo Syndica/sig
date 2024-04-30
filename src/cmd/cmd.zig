@@ -30,6 +30,7 @@ const enumFromName = sig.utils.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
+const initRepair = sig.tvu.initRepair;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 
@@ -344,11 +345,26 @@ fn validator(_: []const []const u8) !void {
     try tvu_socket.bindToPort(tvu_port);
     try tvu_socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
 
-    var shred_tracker = try sig.tvu.BasicShredTracker.init(gpa_allocator, @intCast(test_repair_option.value.int orelse 0));
+    var shred_tracker = try sig.tvu.BasicShredTracker.init(
+        gpa_allocator,
+        @intCast(test_repair_option.value.int orelse 0),
+        logger,
+    );
     const unverified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(gpa_allocator, 1000);
     const verified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(gpa_allocator, 1000);
 
-    var repair_svc = try initRepair(logger, &my_keypair, &exit, rand.random(), &gossip_service, &repair_socket, &shred_tracker);
+    var repair_svc = try initRepair(
+        gpa_allocator,
+        logger,
+        &my_keypair,
+        &exit,
+        rand.random(),
+        &gossip_service.gossip_table_rw,
+        &gossip_service.my_shred_version,
+        &repair_socket,
+        shred_tracker,
+        if (test_repair_option.value.int) |n| @intCast(n) else null,
+    );
     defer repair_svc.deinit();
     var repair_handle = try std.Thread.spawn(.{}, RepairService.run, .{&repair_svc});
 
@@ -363,9 +379,21 @@ fn validator(_: []const []const u8) !void {
         .shred_version = shred_version,
     };
 
-    var shred_receive_handle = try std.Thread.spawn(.{}, ShredReceiver.run, .{&shred_receiver});
-    var verify_shreds_handle = try std.Thread.spawn(.{}, sig.tvu.runShredSigVerify, .{ &exit, unverified_shreds_channel, verified_shreds_channel });
-    var process_shreds_handle = try std.Thread.spawn(.{}, sig.tvu.processShreds, .{ gpa_allocator, logger, verified_shreds_channel, &shred_tracker });
+    var shred_receive_handle = try std.Thread.spawn(
+        .{},
+        ShredReceiver.run,
+        .{&shred_receiver},
+    );
+    var verify_shreds_handle = try std.Thread.spawn(
+        .{},
+        sig.tvu.runShredSigVerify,
+        .{ &exit, unverified_shreds_channel, verified_shreds_channel, .{} },
+    );
+    var process_shreds_handle = try std.Thread.spawn(
+        .{},
+        sig.tvu.processShreds,
+        .{ gpa_allocator, verified_shreds_channel, shred_tracker },
+    );
     _ = process_shreds_handle;
     _ = verify_shreds_handle;
 
@@ -403,39 +431,6 @@ fn initGossip(
         exit,
         logger,
     );
-}
-
-fn initRepair(
-    logger: Logger,
-    my_keypair: *const KeyPair,
-    exit: *Atomic(bool),
-    random: Random,
-    gossip_service: *GossipService,
-    socket: *Socket,
-    shred_tracker: *sig.tvu.BasicShredTracker,
-) !RepairService {
-    var peer_provider = try RepairPeerProvider.init(
-        gpa_allocator,
-        random,
-        &gossip_service.gossip_table_rw,
-        Pubkey.fromPublicKey(&my_keypair.public_key),
-        &gossip_service.my_shred_version,
-    );
-    return RepairService{
-        .allocator = gpa_allocator,
-        .requester = RepairRequester{
-            .allocator = gpa_allocator,
-            .rng = random,
-            .udp_send_socket = socket,
-            .keypair = my_keypair,
-            .logger = logger,
-        },
-        .peer_provider = peer_provider,
-        .shred_tracker = shred_tracker,
-        .logger = logger,
-        .exit = exit,
-        .slot_to_request = if (test_repair_option.value.int) |n| @intCast(n) else null,
-    };
 }
 
 /// Spawn a thread to run gossip and configure with CLI arguments

@@ -15,25 +15,36 @@ const Shred = sig.tvu.Shred;
 /// analogous to `WindowService`
 pub fn processShreds(
     allocator: Allocator,
-    logger: Logger,
     verified_shreds: *Channel(ArrayList(Packet)),
     tracker: *BasicShredTracker,
 ) !void {
-    _ = logger;
     // TODO unreachables
-    while (verified_shreds.receive()) |packet_batch| {
-        for (packet_batch.items) |*packet| if (!packet.isSet(.discard)) {
-            const shred_payload = layout.getShred(packet) orelse unreachable;
-            const slot = layout.getSlot(shred_payload) orelse unreachable;
-            const index = layout.getIndex(shred_payload) orelse unreachable;
-            tracker.registerShred(slot, index) catch |e| {
-                if (e != error.SlotUnderflow) return e;
-                continue;
+    var processed_count: usize = 0;
+    var buf = ArrayList(ArrayList(Packet)).init(allocator);
+    while (true) {
+        try verified_shreds.tryDrainRecycle(&buf);
+        if (buf.items.len == 0) {
+            std.time.sleep(10 * std.time.ns_per_ms);
+            continue;
+        }
+        for (buf.items) |packet_batch| {
+            for (packet_batch.items) |*packet| if (!packet.isSet(.discard)) {
+                const shred_payload = layout.getShred(packet) orelse unreachable;
+                const slot = layout.getSlot(shred_payload) orelse unreachable;
+                const index = layout.getIndex(shred_payload) orelse unreachable;
+                tracker.registerShred(slot, index) catch |err| switch (err) {
+                    error.SlotUnderflow, error.SlotOverflow => continue,
+                    else => return err,
+                };
+                const shred = try Shred.fromPayload(allocator, shred_payload);
+                if (shred.isLastInSlot()) {
+                    tracker.setLastShred(slot, index) catch |err| switch (err) {
+                        error.SlotUnderflow, error.SlotOverflow => continue,
+                        else => return err,
+                    };
+                }
+                processed_count += 1;
             };
-            const shred = try Shred.fromPayload(allocator, shred_payload);
-            if (shred.isLastInSlot()) {
-                try tracker.setLastShred(slot, index);
-            }
-        };
+        }
     }
 }

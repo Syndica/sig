@@ -19,6 +19,7 @@ pub const MAX_DATA_SHREDS_PER_SLOT: usize = 32_768;
 pub const MAX_CODE_SHREDS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT;
 pub const MAX_SHREDS_PER_SLOT: usize = MAX_CODE_SHREDS_PER_SLOT + MAX_DATA_SHREDS_PER_SLOT;
 
+/// TODO this can be restructured with shared code lifted
 pub const Shred = union(enum) {
     code: ShredCode,
     data: ShredData,
@@ -33,6 +34,12 @@ pub const Shred = union(enum) {
         };
     }
 
+    pub fn header(self: *const Self) *const ShredCommonHeader {
+        return switch (self.*) {
+            .code, .data => |s| &s.common_header,
+        };
+    }
+
     pub fn isLastInSlot(self: *const Self) bool {
         return switch (self.*) {
             .code => false,
@@ -44,14 +51,14 @@ pub const Shred = union(enum) {
 pub const ShredData = struct {
     common_header: ShredCommonHeader,
     custom_header: DataShredHeader,
-    payload: ArrayList(u8),
+    // payload: ArrayList(u8),
 
     const SIZE_OF_PAYLOAD: usize = 1203; // TODO this can be calculated like solana
 
     const Self = @This();
 
     pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-        return try someShredFromPayload(Self, DataShredHeader, SIZE_OF_PAYLOAD, allocator, payload);
+        return try eitherShredFromPayload(Self, DataShredHeader, SIZE_OF_PAYLOAD, allocator, payload);
     }
 
     pub fn isLastInSlot(self: *const Self) bool {
@@ -67,14 +74,14 @@ pub const ShredData = struct {
 pub const ShredCode = struct {
     common_header: ShredCommonHeader,
     custom_header: CodingShredHeader,
-    payload: ArrayList(u8),
+    // payload: ArrayList(u8),
 
     const SIZE_OF_PAYLOAD: usize = 1228; // TODO this can be calculated like solana
 
     const Self = @This();
 
     pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-        return try someShredFromPayload(Self, CodingShredHeader, SIZE_OF_PAYLOAD, allocator, payload);
+        return try eitherShredFromPayload(Self, CodingShredHeader, SIZE_OF_PAYLOAD, allocator, payload);
     }
 
     fn sanitize(self: *const Self) !void {
@@ -83,7 +90,7 @@ pub const ShredCode = struct {
     }
 };
 
-fn someShredFromPayload(
+fn eitherShredFromPayload(
     comptime Self: type,
     comptime Header: type,
     comptime SIZE_OF_PAYLOAD: usize,
@@ -97,12 +104,12 @@ fn someShredFromPayload(
     var buf = std.io.fixedBufferStream(exact_payload);
     const common_header = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{});
     const custom_header = try bincode.read(allocator, Header, buf.reader(), .{});
-    var owned_payload = ArrayList(u8).init(allocator);
-    try owned_payload.appendSlice(exact_payload); // TODO this is expensive, but necessary, unless packet allocations are changed
+    // var owned_payload = ArrayList(u8).init(allocator);  // TODO: find a cheaper way to get the payload in here
+    // try owned_payload.appendSlice(exact_payload);
     var self = Self{
         .common_header = common_header,
         .custom_header = custom_header,
-        .payload = owned_payload,
+        // .payload = owned_payload,
     };
     try self.sanitize();
     return self;
@@ -189,8 +196,12 @@ pub const ShredVariant = struct {
 
 pub const ShredVariantConfig = blk: {
     const S = struct {
-        pub fn serialize(_: anytype, _: anytype, _: bincode.Params) !void {
-            @panic("todo");
+        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
+            _ = writer;
+            _ = params;
+            _ = data;
+            @panic("todo - not implemented"); // TODO
+            // try writer.writeByte(0);
         }
 
         pub fn deserialize(_: ?std.mem.Allocator, reader: anytype, _: bincode.Params) !ShredVariant {
@@ -288,5 +299,3 @@ pub const shred_layout = struct {
         return std.mem.readInt(Int, bytes, .Little);
     }
 };
-
-//new_from_serialized_shred

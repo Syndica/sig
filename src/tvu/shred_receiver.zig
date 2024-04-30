@@ -49,7 +49,7 @@ pub fn CachedAtomic(comptime T: type) type {
     };
 }
 
-/// Analogous to `ShredFetchStage`
+/// Analogous to `ShredFetchStage`  TODO permalinks
 pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
@@ -68,14 +68,36 @@ pub const ShredReceiver = struct {
         defer self.logger.err("exiting shred receiver");
         errdefer self.logger.err("error in shred receiver");
 
-        var sender = try SocketThread.initSender(self.allocator, self.logger, self.repair_socket, self.exit);
+        var sender = try SocketThread
+            .initSender(self.allocator, self.logger, self.repair_socket, self.exit);
         defer sender.deinit();
-        var repair_receiver = try SocketThread.initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
+        var repair_receiver = try SocketThread
+            .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit();
-        var tvu_receiver = try SocketThread.initReceiver(self.allocator, self.logger, self.tvu_socket, self.exit);
-        defer tvu_receiver.deinit();
 
-        try self.runPacketHandler(.{ tvu_receiver.channel, repair_receiver.channel }, sender.channel);
+        const num_tvu_receivers = 2;
+        var tvu_receivers: [num_tvu_receivers]*Channel(ArrayList(Packet)) = undefined;
+        for (0..num_tvu_receivers) |i| {
+            tvu_receivers[i] = (try SocketThread.initReceiver(
+                self.allocator,
+                self.logger,
+                self.tvu_socket,
+                self.exit,
+            )).channel;
+        }
+        defer for (tvu_receivers) |r| r.deinit();
+        const x = try std.Thread.spawn(
+            .{},
+            Self.runPacketHandler,
+            .{ self, tvu_receivers, sender.channel },
+        );
+        const y = try std.Thread.spawn(
+            .{},
+            Self.runPacketHandler,
+            .{ self, .{repair_receiver.channel}, sender.channel },
+        );
+        x.join();
+        y.join();
     }
 
     /// Keep looping over packet channel and process the incoming packets.
@@ -85,11 +107,13 @@ pub const ShredReceiver = struct {
         receivers: anytype,
         sender: *Channel(ArrayList(Packet)),
     ) !void {
+        var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
         while (!self.exit.load(.Unordered)) {
             inline for (receivers) |receiver| {
                 var responses = ArrayList(Packet).init(self.allocator);
-                if (try receiver.try_drain()) |batches| {
-                    for (batches) |batch| {
+                try receiver.tryDrainRecycle(&buf);
+                if (buf.items.len > 0) {
+                    for (buf.items) |batch| {
                         for (batch.items) |*packet| {
                             try self.handlePacket(packet, &responses);
                         }
