@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
-const Atomic = std.atomic.Atomic;
 const Condition = std.Thread.Condition;
 const Mutex = std.Thread.Mutex;
 
