@@ -320,9 +320,23 @@ pub fn SwissMap(
         pub const Self = @This();
 
         pub const State = packed struct(u8) {
-            state: enum(u1) { empty, occupied },
+            // TODO: change to empty_or_deleted
+            state: enum(u1) { empty_or_deleted, occupied },
             control_bytes: u7,
         };
+
+        // specific state/control_bytes values
+        pub const EMPTY_STATE = State{
+            .state = .empty_or_deleted,
+            .control_bytes = 0b0000000,
+        };
+        pub const DELETED_STATE = State{
+            .state = .empty_or_deleted,
+            .control_bytes = 0b1111111,
+        };
+
+        const EMPTY_STATE_VEC: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(EMPTY_STATE));
+        const DELETED_STATE_VEC: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(DELETED_STATE));
 
         pub const KeyValue = struct {
             key: Key,
@@ -474,6 +488,58 @@ pub fn SwissMap(
             value_ptr: *Value,
         };
 
+        pub fn remove(self: *@This(), key: Key) !void {
+            if (self._capacity == 0) return error.KeyNotFound;
+            const hash = hash_fn(key);
+            var group_index = hash & self.bit_mask;
+
+            const control_bytes: u7 = @intCast(hash >> (64 - 7));
+            const key_state = State{
+                .state = .occupied,
+                .control_bytes = control_bytes,
+            };
+            const key_vec: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
+
+            for (0..self.groups.len) |_| {
+                const state_vec = self.states[group_index];
+
+                const match_vec = key_vec == state_vec;
+                if (@reduce(.Or, match_vec)) {
+                    inline for (0..GROUP_SIZE) |j| {
+                        // remove here
+                        if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
+                            //
+                            // search works by searching each group starting from group_index until an empty state is found
+                            // because if theres an empty state, the key DNE
+                            //
+                            // if theres an empty state in this group already, then the search would early exit anyway,
+                            // so we can change this state to 'empty' as well.
+                            //
+                            // if theres no empty state in this group, then there could be additional keys in a higher group,
+                            // which if we changed this state to empty would cause the search to early exit,
+                            // so we need to change this state to 'deleted'.
+                            //
+                            const new_state = if (@reduce(.Or, EMPTY_STATE_VEC == state_vec)) EMPTY_STATE else DELETED_STATE;
+                            self.states[group_index][j] = @bitCast(new_state);
+                            self._count -= 1;
+                            return;
+                        }
+                    }
+                }
+
+                // if theres a free state, then the key DNE
+                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_empty_vec)) {
+                    return error.KeyNotFound;
+                }
+
+                // otherwise try the next group
+                group_index = (group_index + 1) & self.bit_mask;
+            }
+
+            return error.KeyNotFound;
+        }
+
         pub fn get(self: *const @This(), key: Key) ?Value {
             if (self._capacity == 0) return null;
 
@@ -487,14 +553,13 @@ pub fn SwissMap(
                 .state = .occupied,
                 .control_bytes = control_bytes,
             };
-            const search_state: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
-            const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
+            const key_vec: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
 
             for (0..self.groups.len) |_| {
-                const states = self.states[group_index];
+                const state_vec = self.states[group_index];
 
                 // PERF: SIMD eq check: search for a match
-                const match_vec = search_state == states;
+                const match_vec = key_vec == state_vec;
                 if (@reduce(.Or, match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         // PERF: SIMD eq check across pubkeys
@@ -505,8 +570,8 @@ pub fn SwissMap(
                 }
 
                 // PERF: SIMD eq check: if theres a free state, then the key DNE
-                const free_vec = free_state == states;
-                if (@reduce(.Or, free_vec)) {
+                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_empty_vec)) {
                     return null;
                 }
 
@@ -523,30 +588,36 @@ pub fn SwissMap(
 
             // what we are searching for (get)
             const control_bytes: u7 = @intCast(hash >> (64 - 7));
-            // PERF: this struct is represented by a u8
             const key_state = State{
                 .state = .occupied,
                 .control_bytes = control_bytes,
             };
-            const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
             for (0..self.groups.len) |_| {
-                const states = self.states[group_index];
+                const state_vec = self.states[group_index];
 
                 // if theres an free then insert
-                const free_vec = free_state == states;
-                if (@reduce(.Or, free_vec)) {
-                    const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
-                    const indices = @select(u8, free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
-                    const free_index = @reduce(.Min, indices);
+                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_empty_vec)) {
+                    _ = self.fill(
+                        key,
+                        value,
+                        key_state,
+                        group_index,
+                        is_empty_vec,
+                    );
+                    return;
+                }
 
-                    // occupy it
-                    self.groups[group_index][free_index] = .{
-                        .key = key,
-                        .value = value,
-                    };
-                    self.states[group_index][free_index] = @bitCast(key_state);
-                    self._count += 1;
+                const is_deleted_vec = DELETED_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_deleted_vec)) {
+                    _ = self.fill(
+                        key,
+                        value,
+                        key_state,
+                        group_index,
+                        is_deleted_vec,
+                    );
                     return;
                 }
 
@@ -554,6 +625,30 @@ pub fn SwissMap(
                 group_index = (group_index + 1) & self.bit_mask;
             }
             unreachable;
+        }
+
+        /// fills a group with a key value and increments count
+        /// where the fill index requires is_free_vec[index] == true
+        pub fn fill(
+            self: *Self,
+            key: Key,
+            value: Value,
+            key_state: State,
+            group_index: usize,
+            is_free_vec: @Vector(GROUP_SIZE, bool),
+        ) usize {
+            const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
+            const indices = @select(u8, is_free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
+            const index = @reduce(.Min, indices);
+
+            self.groups[group_index][index] = .{
+                .key = key,
+                .value = value,
+            };
+            self.states[group_index][index] = @bitCast(key_state);
+            self._count += 1;
+
+            return index;
         }
 
         pub fn getOrPutAssumeCapacity(self: *Self, key: Key) GetOrPutResult {
@@ -568,15 +663,13 @@ pub fn SwissMap(
                 .state = .occupied,
                 .control_bytes = control_bytes,
             };
-            const search_state: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
-            // or looking for an empty space (ie, put)
-            const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
+            const key_vec: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
 
             for (0..self.groups.len) |_| {
-                const states = self.states[group_index];
+                const state_vec = self.states[group_index];
 
                 // SIMD eq search for a match (get)
-                const match_vec = search_state == states;
+                const match_vec = key_vec == state_vec;
                 if (@reduce(.Or, match_vec)) {
                     inline for (0..GROUP_SIZE) |j| {
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
@@ -589,19 +682,33 @@ pub fn SwissMap(
                 }
 
                 // if theres an free then insert (put)
-                const free_vec = free_state == states;
-                if (@reduce(.Or, free_vec)) {
-                    const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
-                    const indices = @select(u8, free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
-                    const free_index = @reduce(.Min, indices);
-
-                    // occupy it
-                    self.groups[group_index][free_index].key = key; // 2)
-                    self.states[group_index][free_index] = @bitCast(key_state);
-                    self._count += 1;
+                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_empty_vec)) {
+                    const index = self.fill(
+                        key,
+                        undefined,
+                        key_state,
+                        group_index,
+                        is_empty_vec,
+                    );
                     return .{
                         .found_existing = false,
-                        .value_ptr = &self.groups[group_index][free_index].value,
+                        .value_ptr = &self.groups[group_index][index].value,
+                    };
+                }
+
+                const is_deleted_vec = DELETED_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_deleted_vec)) {
+                    const index = self.fill(
+                        key,
+                        undefined,
+                        key_state,
+                        group_index,
+                        is_deleted_vec,
+                    );
+                    return .{
+                        .found_existing = false,
+                        .value_ptr = &self.groups[group_index][index].value,
                     };
                 }
 
@@ -818,7 +925,7 @@ pub const DiskMemoryAllocator = struct {
     }
 };
 
-test "core.accounts_db.index: tests disk allocator on hashmaps" {
+test "accounts_db.index: tests disk allocator on hashmaps" {
     var allocator = try DiskMemoryAllocator.init("test_data/tmp");
     defer allocator.deinit(null);
 
@@ -828,7 +935,7 @@ test "core.accounts_db.index: tests disk allocator on hashmaps" {
     const ref = AccountRef{
         .pubkey = Pubkey.default(),
         .location = .{
-            .Cache = .{ .index = 2 },
+            .Cache = .{ .slot = 2 },
         },
         .slot = 144,
     };
@@ -839,7 +946,7 @@ test "core.accounts_db.index: tests disk allocator on hashmaps" {
     try std.testing.expect(std.meta.eql(r, ref));
 }
 
-test "core.accounts_db.index: tests disk allocator" {
+test "accounts_db.index: tests disk allocator" {
     var allocator = try DiskMemoryAllocator.init("test_data/tmp");
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
@@ -851,7 +958,7 @@ test "core.accounts_db.index: tests disk allocator" {
     const ref = AccountRef{
         .pubkey = Pubkey.default(),
         .location = .{
-            .Cache = .{ .index = 2 },
+            .Cache = .{ .slot = 2 },
         },
         .slot = 10,
     };
@@ -862,7 +969,7 @@ test "core.accounts_db.index: tests disk allocator" {
     const ref2 = AccountRef{
         .pubkey = Pubkey.default(),
         .location = .{
-            .Cache = .{ .index = 4 },
+            .Cache = .{ .slot = 4 },
         },
         .slot = 14,
     };
@@ -892,6 +999,109 @@ test "core.accounts_db.index: tests disk allocator" {
     try std.testing.expect(did_error);
 }
 
+test "accounts_db.index: tests swissmap read/write/delete" {
+    const allocator = std.testing.allocator;
+
+    const n_accounts = 10_000;
+    const account_refs, const pubkeys = try generateData(allocator, n_accounts);
+    defer {
+        allocator.free(account_refs);
+        allocator.free(pubkeys);
+    }
+
+    var map = try SwissMap(
+        Pubkey,
+        *AccountRef,
+        pubkey_hash,
+        pubkey_eql,
+    ).initCapacity(allocator, n_accounts);
+    defer map.deinit();
+
+    // write all
+    for (0..account_refs.len) |i| {
+        const result = map.getOrPutAssumeCapacity(account_refs[i].pubkey);
+        try std.testing.expect(!result.found_existing); // shouldnt be found
+        result.value_ptr.* = &account_refs[i];
+    }
+
+    // read all - slots should be the same
+    for (0..account_refs.len) |i| {
+        const result = map.getOrPutAssumeCapacity(pubkeys[i]);
+        try std.testing.expect(result.found_existing); // should be found
+        try std.testing.expectEqual(result.value_ptr.*.slot, account_refs[i].slot);
+    }
+
+    // remove half
+    for (0..account_refs.len / 2) |i| {
+        try map.remove(pubkeys[i]);
+    }
+
+    // read removed half
+    for (0..account_refs.len / 2) |i| {
+        const result = map.get(pubkeys[i]);
+        try std.testing.expect(result == null);
+    }
+
+    // read remaining half
+    for (account_refs.len / 2..account_refs.len) |i| {
+        const result = map.get(pubkeys[i]);
+        try std.testing.expect(result != null);
+        try std.testing.expectEqual(result.?.slot, account_refs[i].slot);
+    }
+}
+
+test "accounts_db.index: tests swissmap read/write" {
+    const allocator = std.testing.allocator;
+
+    const n_accounts = 10_000;
+    const account_refs, const pubkeys = try generateData(allocator, n_accounts);
+    defer {
+        allocator.free(account_refs);
+        allocator.free(pubkeys);
+    }
+
+    var map = try SwissMap(
+        Pubkey,
+        *AccountRef,
+        pubkey_hash,
+        pubkey_eql,
+    ).initCapacity(allocator, n_accounts);
+    defer map.deinit();
+
+    // write all
+    for (0..account_refs.len) |i| {
+        const result = map.getOrPutAssumeCapacity(account_refs[i].pubkey);
+        try std.testing.expect(!result.found_existing); // shouldnt be found
+        result.value_ptr.* = &account_refs[i];
+    }
+
+    // read all - slots should be the same
+    for (0..account_refs.len) |i| {
+        const result = map.getOrPutAssumeCapacity(pubkeys[i]);
+        try std.testing.expect(result.found_existing); // should be found
+        try std.testing.expectEqual(result.value_ptr.*.slot, account_refs[i].slot);
+    }
+}
+
+fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
+    []AccountRef,
+    []Pubkey,
+} {
+    var random = std.rand.DefaultPrng.init(0);
+    const rng = random.random();
+
+    const accounts = try allocator.alloc(AccountRef, n_accounts);
+    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    for (0..n_accounts) |i| {
+        rng.bytes(&pubkeys[i].data);
+        accounts[i] = AccountRef.default();
+        accounts[i].pubkey = pubkeys[i];
+    }
+    rng.shuffle(Pubkey, pubkeys);
+
+    return .{ accounts, pubkeys };
+}
+
 pub const BenchmarkSwissMap = struct {
     pub const min_iterations = 1;
     pub const max_iterations = 1;
@@ -916,30 +1126,11 @@ pub const BenchmarkSwissMap = struct {
         },
     };
 
-    fn generateData(n_accounts: usize, allocator: std.mem.Allocator) !struct {
-        []AccountRef,
-        []Pubkey,
-    } {
-        var random = std.rand.DefaultPrng.init(0);
-        const rng = random.random();
-
-        const accounts = try allocator.alloc(AccountRef, n_accounts);
-        const pubkeys = try allocator.alloc(Pubkey, n_accounts);
-        for (0..n_accounts) |i| {
-            rng.bytes(&pubkeys[i].data);
-            accounts[i] = AccountRef.default();
-            accounts[i].pubkey = pubkeys[i];
-        }
-        rng.shuffle(Pubkey, pubkeys);
-
-        return .{ accounts, pubkeys };
-    }
-
-    pub fn swissmapBenchmark(bench_args: BenchArgs) !u64 {
+    pub fn swissmapReadWriteBenchmark(bench_args: BenchArgs) !u64 {
         const allocator = std.heap.page_allocator;
         const n_accounts = bench_args.n_accounts;
 
-        const accounts, const pubkeys = try generateData(n_accounts, allocator);
+        const accounts, const pubkeys = try generateData(allocator, n_accounts);
 
         const write_time, const read_time = try benchGetOrPut(
             SwissMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql),
@@ -1024,9 +1215,10 @@ pub fn BenchHashMap(T: type) type {
     return struct {
         inner: T,
 
-        // const T = std.AutoHashMap(Pubkey, AccountRef);
-        // const T = std.AutoArrayHashMap(Pubkey, AccountRef);
-        // const T = std.ArrayHashMap(Pubkey, AccountRef, struct {
+        // other T types that might be useful
+        // const T = std.AutoHashMap(Pubkey, *AccountRef);
+        // const T = std.AutoArrayHashMap(Pubkey, *AccountRef);
+        // const T = std.ArrayHashMap(Pubkey, *AccountRef, struct {
         //     pub fn hash(self: @This(), key: Pubkey) u32 {
         //         _ = self;
         //         return std.mem.readIntLittle(u32, key[0..4]);
