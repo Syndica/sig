@@ -35,6 +35,14 @@ pub fn main() !void {
     // if we have more benchmarks we can make this more efficient
     const max_time_per_bench = 2 * std.time.ms_per_s; // !!
 
+    if (std.mem.startsWith(u8, "swissmap", filter)) {
+        try benchmark(
+            @import("accountsdb/index.zig").BenchmarkSwissMap,
+            max_time_per_bench,
+            TimeUnits.nanoseconds,
+        );
+    }
+
     if (std.mem.startsWith(u8, "accounts_db", filter)) {
         try benchmark(
             @import("accountsdb/db.zig").BenchmarkAccountsDB,

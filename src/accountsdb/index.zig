@@ -891,3 +891,176 @@ test "core.accounts_db.index: tests disk allocator" {
     };
     try std.testing.expect(did_error);
 }
+
+pub const BenchmarkSwissMap = struct {
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
+
+    pub const BenchArgs = struct {
+        n_accounts: usize,
+        name: []const u8 = "",
+    };
+
+    pub const args = [_]BenchArgs{
+        BenchArgs{
+            .n_accounts = 100_000,
+            .name = "100k accounts",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .name = "500k accounts",
+        },
+        BenchArgs{
+            .n_accounts = 1_000_000,
+            .name = "1m accounts",
+        },
+    };
+
+    fn generateData(n_accounts: usize, allocator: std.mem.Allocator) !struct {
+        []AccountRef,
+        []Pubkey,
+    } {
+        var random = std.rand.DefaultPrng.init(0);
+        const rng = random.random();
+
+        const accounts = try allocator.alloc(AccountRef, n_accounts);
+        const pubkeys = try allocator.alloc(Pubkey, n_accounts);
+        for (0..n_accounts) |i| {
+            rng.bytes(&pubkeys[i].data);
+            accounts[i] = AccountRef.default();
+            accounts[i].pubkey = pubkeys[i];
+        }
+        rng.shuffle(Pubkey, pubkeys);
+
+        return .{ accounts, pubkeys };
+    }
+
+    pub fn swissmapBenchmark(bench_args: BenchArgs) !u64 {
+        const allocator = std.heap.page_allocator;
+        const n_accounts = bench_args.n_accounts;
+
+        const accounts, const pubkeys = try generateData(n_accounts, allocator);
+
+        const write_time, const read_time = try benchGetOrPut(
+            SwissMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql),
+            allocator,
+            accounts,
+            pubkeys,
+            null,
+        );
+
+        // this is what we compare the swiss map to
+        // this type was the best one I could find
+        const InnerT = std.HashMap(Pubkey, *AccountRef, struct {
+            pub fn hash(self: @This(), key: Pubkey) u64 {
+                _ = self;
+                return pubkey_hash(key);
+            }
+            pub fn eql(self: @This(), key1: Pubkey, key2: Pubkey) bool {
+                _ = self;
+                return pubkey_eql(key1, key2);
+            }
+        }, std.hash_map.default_max_load_percentage);
+
+        const std_write_time, const std_read_time = try benchGetOrPut(
+            BenchHashMap(InnerT),
+            allocator,
+            accounts,
+            pubkeys,
+            null,
+        );
+
+        std.debug.print("\tWRITE: {} ({d:.2}x faster than std)\n", .{
+            std.fmt.fmtDuration(write_time),
+            @as(f32, @floatFromInt(std_write_time)) / @as(f32, @floatFromInt(write_time)),
+        });
+        std.debug.print("\tREAD: {} ({d:.2}x faster than std)\n", .{
+            std.fmt.fmtDuration(read_time),
+            @as(f32, @floatFromInt(std_read_time)) / @as(f32, @floatFromInt(read_time)),
+        });
+
+        return write_time;
+    }
+};
+
+fn benchGetOrPut(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    accounts: []AccountRef,
+    pubkeys: []Pubkey,
+    read_amount: ?usize,
+) !struct { usize, usize } {
+    var t = try T.initCapacity(allocator, accounts.len);
+
+    var timer = try std.time.Timer.start();
+    for (0..accounts.len) |i| {
+        const result = t.getOrPutAssumeCapacity(accounts[i].pubkey);
+        if (!result.found_existing) {
+            result.value_ptr.* = &accounts[i];
+        } else {
+            std.debug.panic("found something that shouldn't exist", .{});
+        }
+    }
+    const write_time = timer.read();
+    timer.reset();
+
+    var count: usize = 0;
+    const read_len = read_amount orelse accounts.len;
+    for (0..read_len) |i| {
+        const result = t.getOrPutAssumeCapacity(pubkeys[i]);
+        if (result.found_existing) {
+            count += result.value_ptr.*.slot;
+        } else {
+            std.debug.panic("not found", .{});
+        }
+    }
+    std.mem.doNotOptimizeAway(count);
+    const read_time = timer.read();
+
+    return .{ write_time, read_time };
+}
+
+pub fn BenchHashMap(T: type) type {
+    return struct {
+        inner: T,
+
+        // const T = std.AutoHashMap(Pubkey, AccountRef);
+        // const T = std.AutoArrayHashMap(Pubkey, AccountRef);
+        // const T = std.ArrayHashMap(Pubkey, AccountRef, struct {
+        //     pub fn hash(self: @This(), key: Pubkey) u32 {
+        //         _ = self;
+        //         return std.mem.readIntLittle(u32, key[0..4]);
+        //     }
+        //     pub fn eql(self: @This(), key1: Pubkey, key2: Pubkey, b_index: usize) bool {
+        //         _ = b_index;
+        //         _ = self;
+        //         return equals(key1, key2);
+        //     }
+        // }, false);
+
+        pub fn initCapacity(allocator: std.mem.Allocator, n: usize) !@This() {
+            var refs = T.init(allocator);
+            try refs.ensureTotalCapacity(@intCast(n));
+            return @This(){ .inner = refs };
+        }
+
+        pub fn write(self: *@This(), accounts: []AccountRef) !void {
+            for (0..accounts.len) |i| {
+                self.inner.putAssumeCapacity(accounts[i].pubkey, accounts[i]);
+            }
+        }
+
+        pub fn read(self: *@This(), pubkey: *Pubkey) !usize {
+            if (self.inner.get(pubkey.*)) |acc| {
+                return 1 + @as(usize, @intCast(acc.offset));
+            } else {
+                unreachable;
+            }
+        }
+
+        pub fn getOrPutAssumeCapacity(self: *@This(), pubkey: Pubkey) T.GetOrPutResult {
+            const result = self.inner.getOrPutAssumeCapacity(pubkey);
+            return result;
+        }
+    };
+}

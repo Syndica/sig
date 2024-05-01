@@ -808,7 +808,7 @@ pub const AccountsDB = struct {
             }
 
             // free the account memory
-            for (accounts) |account| {
+            for (accounts) |*account| {
                 allocator.free(account.data);
             }
             allocator.free(accounts);
