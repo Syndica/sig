@@ -59,6 +59,8 @@ pub const AccountsDB = struct {
     // track per-slot for purge/flush
     account_cache: std.AutoHashMap(Slot, PubkeysAndAccounts),
     file_map: std.AutoArrayHashMap(FileId, AccountFile),
+    // used for filenames when flushing accounts to disk
+    largest_file_id: u32 = 0,
 
     logger: Logger,
     config: AccountsDBConfig,
@@ -109,11 +111,11 @@ pub const AccountsDB = struct {
         self.file_map.deinit();
         self.account_index.deinit(true);
         if (self.disk_allocator_ptr) |ptr| {
-            // note: we dont always deinit the allocator so we keep the index files 
+            // note: we dont always deinit the allocator so we keep the index files
             // because they are expensive to generate
-            if (delete_index_files) { 
-                ptr.deinit(self.allocator); 
-            } else { 
+            if (delete_index_files) {
+                ptr.deinit(self.allocator);
+            } else {
                 self.allocator.free(ptr.filepath);
             }
             self.allocator.destroy(ptr);
@@ -336,7 +338,7 @@ pub const AccountsDB = struct {
                 self.logger.warnf("failed to parse slot from {s}", .{file_name});
                 return err;
             };
-            const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+            const file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
             const file_infos: ArrayList(AccountFileInfo) = self.fields.file_map.get(slot) orelse {
@@ -351,8 +353,8 @@ pub const AccountsDB = struct {
                 std.debug.panic("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
             }
             const file_info = file_infos.items[0];
-            if (file_info.id != accounts_file_id) {
-                std.debug.panic("file_info.id ({d}) != accounts_file_id ({d})\n", .{ file_info.id, accounts_file_id });
+            if (file_info.id != file_id) {
+                std.debug.panic("file_info.id ({d}) != file_id ({d})\n", .{ file_info.id, file_id });
             }
 
             // read accounts file
@@ -367,8 +369,9 @@ pub const AccountsDB = struct {
                 std.debug.panic("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
             };
 
-            const file_id_u32: u32 = @intCast(accounts_file_id);
+            const file_id_u32: u32 = @intCast(file_id);
             file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
+            self.largest_file_id = @max(self.largest_file_id, file_id_u32);
 
             if (file_count % 100 == 0 or (file_names.len - file_count) < 100) {
                 printTimeEstimate(&timer, file_names.len, file_count, "reading account files", null);
@@ -448,6 +451,7 @@ pub const AccountsDB = struct {
             while (iter.next()) |entry| {
                 try self.file_map.putNoClobber(entry.key_ptr.*, entry.value_ptr.*);
             }
+            self.largest_file_id = @max(self.largest_file_id, thread_db.largest_file_id);
         }
 
         for (handles.items) |handle| {
@@ -833,22 +837,77 @@ pub const AccountsDB = struct {
         };
     }
 
-    /// flushes a slot from the cache onto disk
+    /// flushes a slot account data from the cache onto disk, and updates the index
     pub fn flushSlot(self: *Self, slot: Slot) !void {
-        _ = self;
-        _ = slot;
-        // const pubkeys, const accounts = self.account_cache.get(slot) orelse return error.SlotNotFound;
+        const pubkeys, const accounts = self.account_cache.get(slot) orelse return error.SlotNotFound;
+        std.debug.assert(accounts.len == pubkeys.len);
+        defer {
+            self.allocator.free(pubkeys);
+            for (accounts) |account| {
+                self.allocator.free(account.data);
+            }
+            self.allocator.free(accounts);
+        }
 
-        // // write to disk
-        // var size: usize = 0;
-        // for (0..accounts.len) |i| {
-        //     size += std.mem.alignForward(
-        //         usize,
-        //         AccountInFile.STATIC_SIZE + accounts[i].data.len,
-        //         @sizeOf(u64),
-        //     );
-        // }
+        // create account file which is big enough
+        var size: usize = 0;
+        for (0..accounts.len) |i| {
+            size += std.mem.alignForward(
+                usize,
+                AccountInFile.STATIC_SIZE + accounts[i].data.len,
+                @sizeOf(u64),
+            );
+        }
 
+        self.largest_file_id += 1;
+        const file_id = self.largest_file_id;
+        const accounts_file_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/accounts/{d}.{d}",
+            .{ self.config.snapshot_dir, slot, file_id },
+        );
+        defer self.allocator.free(accounts_file_path);
+        self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
+
+        var file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
+        defer file.close();
+
+        // resize the file
+        const file_size = (try file.stat()).size;
+        if (file_size < size) {
+            try file.seekTo(size - 1);
+            _ = try file.write(&[_]u8{1});
+            try file.seekTo(0);
+        }
+
+        var memory = try std.posix.mmap(
+            null,
+            size,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.MAP{ .TYPE = .SHARED },
+            file.handle,
+            0,
+        );
+
+        // TODO: will likely need locks here when updating the references
+        var offset: usize = 0;
+        for (0..accounts.len) |i| {
+            // update the reference
+            var ref = self.account_index.getReference(&pubkeys[i]) orelse unreachable;
+            ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
+
+            // write the account to the file
+            const account = &accounts[i];
+            offset += try account.writeToBuf(&pubkeys[i], memory[offset..]);
+        }
+        try file.sync();
+
+        const account_file = try AccountFile.init(file, .{
+            .id = @intCast(file_id),
+            .length = offset,
+        }, slot);
+
+        try self.file_map.putNoClobber(file_id, account_file);
     }
 
     inline fn lessThanIf(
@@ -1068,11 +1127,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     const snapshot = try snapshots.all_fields.collapse();
     const logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
-        .num_index_bins = 4,
-        .use_disk_index = use_disk,
-        .snapshot_dir = "test_data/tmp"
-    });
+    var accounts_db = try AccountsDB.init(allocator, logger, .{ .num_index_bins = 4, .use_disk_index = use_disk, .snapshot_dir = "test_data/tmp" });
 
     const accounts_path = "test_data/accounts";
     try accounts_db.loadFromSnapshot(
@@ -1206,6 +1261,46 @@ test "accounts_db.db: load other sysvars" {
     // // not always included in local snapshot
     // _ = try accounts_db.getTypeFromAccount(sysvars.LastRestartSlot, &sysvars.IDS.last_restart_slot);
     // _ = try accounts_db.getTypeFromAccount(sysvars.EpochRewards, &sysvars.IDS.epoch_rewards);
+}
+
+test "accounts_db.db: flushing slots works" {
+    const allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
+    var accounts_db = try AccountsDB.init(allocator, logger, .{
+        .num_index_bins = 4,
+        .snapshot_dir = "test_data",
+    });
+    defer accounts_db.deinit(true);
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+    const n_accounts = 3;
+
+    // we dont defer deinit to make sure that they are cleared on purge
+    var pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    var accounts = try allocator.alloc(Account, n_accounts);
+    for (0..n_accounts) |i| {
+        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, rng, i % 1_000);
+    }
+
+    // this gets written to cache
+    const slot = @as(u64, @intCast(0));
+    try accounts_db.putAccountBatch(
+        accounts,
+        pubkeys,
+        slot,
+    );
+
+    // this writes to disk
+    try accounts_db.flushSlot(slot);
+
+    // try the validation
+    const file_id = accounts_db.file_map.keys()[0];
+    var account_file = accounts_db.file_map.get(file_id).?;
+    try account_file.validate();
+
+    try std.testing.expect(account_file.number_of_accounts == n_accounts);
 }
 
 test "accounts_db.db: purge accounts in cache works" {
