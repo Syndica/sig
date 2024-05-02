@@ -452,7 +452,7 @@ fn validator() !void {
         logger,
         config.current.accounts_db,
     );
-    defer accounts_db.deinit();
+    defer accounts_db.deinit(false); // keep index files on disk
 
     const snapshot_fields = try accounts_db.loadWithDefaults(
         &snapshots,

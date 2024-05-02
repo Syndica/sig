@@ -105,11 +105,17 @@ pub const AccountsDB = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, delete_index_files: bool) void {
         self.file_map.deinit();
         self.account_index.deinit(true);
         if (self.disk_allocator_ptr) |ptr| {
-            ptr.deinit(self.allocator);
+            // note: we dont always deinit the allocator so we keep the index files 
+            // because they are expensive to generate
+            if (delete_index_files) { 
+                ptr.deinit(self.allocator); 
+            } else { 
+                self.allocator.free(ptr.filepath);
+            }
             self.allocator.destroy(ptr);
         }
         self.account_cache.deinit();
@@ -244,7 +250,6 @@ pub const AccountsDB = struct {
             for (loading_threads.items) |*loading_thread| {
                 // NOTE: deinit hashmap, dont close the files
                 loading_thread.file_map.deinit();
-                loading_thread.account_cache.deinit(); // note: this will be empty
                 // NOTE: important `false` (ie, 1))
                 loading_thread.account_index.deinit(false);
             }
@@ -1090,7 +1095,7 @@ test "accounts_db.db: write and read an account" {
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
-        accounts_db.deinit();
+        accounts_db.deinit(true);
         snapshots.deinit(allocator);
     }
 
@@ -1126,7 +1131,7 @@ test "accounts_db.db: load and validate from test snapshot using disk index" {
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
-        accounts_db.deinit();
+        accounts_db.deinit(true);
         snapshots.deinit(allocator);
     }
 
@@ -1144,7 +1149,7 @@ test "accounts_db.db: load and validate from test snapshot" {
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
-        accounts_db.deinit();
+        accounts_db.deinit(true);
         snapshots.deinit(allocator);
     }
 
@@ -1162,7 +1167,7 @@ test "accounts_db.db: load clock sysvar" {
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
-        accounts_db.deinit();
+        accounts_db.deinit(true);
         snapshots.deinit(allocator);
     }
 
@@ -1185,7 +1190,7 @@ test "accounts_db.db: load other sysvars" {
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
-        accounts_db.deinit();
+        accounts_db.deinit(true);
         snapshots.deinit(allocator);
     }
 
@@ -1209,7 +1214,7 @@ test "accounts_db.db: purge accounts in cache works" {
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .num_index_bins = 4,
     });
-    defer accounts_db.deinit();
+    defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -1385,7 +1390,7 @@ pub const BenchmarkAccountsDB = struct {
             // std.debug.print("using ram index\n", .{});
             accounts_db = try AccountsDB.init(allocator, logger, .{});
         }
-        defer accounts_db.deinit();
+        defer accounts_db.deinit(true);
 
         var random = std.rand.DefaultPrng.init(19);
         const rng = random.random();
