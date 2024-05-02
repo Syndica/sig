@@ -169,15 +169,6 @@ var n_threads_snapshot_unpack_option = cli.Option{
     .value_name = "n_threads_snapshot_unpack",
 };
 
-var disk_index_path_option = cli.Option{
-    .long_name = "disk-index-path",
-    .help = "path to disk index - default: no disk index, index will use ram",
-    .short_alias = 'd',
-    .value_ref = cli.mkRef(&config.current.accounts_db.disk_index_path),
-    .required = false,
-    .value_name = "disk_index_path",
-};
-
 var force_unpack_snapshot_option = cli.Option{
     .long_name = "force-unpack-snapshot",
     .help = "force unpack snapshot even if it exists",
@@ -185,6 +176,14 @@ var force_unpack_snapshot_option = cli.Option{
     .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
     .required = false,
     .value_name = "force_unpack_snapshot",
+};
+
+var use_disk_index_option = cli.Option{
+    .long_name = "use-disk-index",
+    .help = "use disk based index for accounts index",
+    .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
+    .required = false,
+    .value_name = "use_disk_index",
 };
 
 var force_new_snapshot_download_option = cli.Option{
@@ -212,18 +211,10 @@ var min_snapshot_download_speed_mb_option = cli.Option{
     .value_name = "min_snapshot_download_speed_mb",
 };
 
-var storage_cache_size_option = cli.Option{
-    .long_name = "storage-cache-size",
-    .help = "number of accounts preallocate for the storage cache for accounts-db (used when writing accounts whose slot has not been rooted) - default: 10k",
-    .value_ref = cli.mkRef(&config.current.accounts_db.storage_cache_size),
-    .required = false,
-    .value_name = "storage_cache_size",
-};
-
 var number_of_index_bins_option = cli.Option{
     .long_name = "number-of-index-bins",
     .help = "number of bins to shard the index pubkeys across",
-    .value_ref = cli.mkRef(&config.current.accounts_db.num_account_index_bins),
+    .value_ref = cli.mkRef(&config.current.accounts_db.num_index_bins),
     .required = false,
     .value_name = "number_of_index_bins",
 };
@@ -297,9 +288,9 @@ var app = &cli.App{
                         &test_repair_option,
                         // accounts-db
                         &snapshot_dir_option,
+                        &use_disk_index_option,
                         &n_threads_snapshot_load_option,
                         &n_threads_snapshot_unpack_option,
-                        &disk_index_path_option,
                         &force_unpack_snapshot_option,
                         &min_snapshot_download_speed_mb_option,
                         &force_new_snapshot_download_option,
@@ -459,11 +450,7 @@ fn validator() !void {
     var accounts_db = try AccountsDB.init(
         gpa_allocator,
         logger,
-        AccountsDBConfig{
-            .disk_index_path = config.current.accounts_db.disk_index_path,
-            .storage_cache_size = @intCast(config.current.accounts_db.storage_cache_size),
-            .number_of_index_bins = @intCast(config.current.accounts_db.num_account_index_bins),
-        },
+        config.current.accounts_db,
     );
     defer accounts_db.deinit();
 

@@ -808,7 +808,7 @@ pub const DiskMemoryAllocator = struct {
         };
     }
 
-    /// deletes all allocated files + optionally frees the filepath
+    /// deletes all allocated files + optionally frees the filepath with the allocator
     pub fn deinit(self: *Self, str_allocator: ?std.mem.Allocator) void {
         self.mux.lock();
         defer self.mux.unlock();
@@ -822,7 +822,6 @@ pub const DiskMemoryAllocator = struct {
                 std.debug.print("Disk Memory Allocator deinit: error: {}\n", .{err});
             };
         }
-        // TODO: remove
         if (str_allocator) |a| {
             a.free(self.filepath);
         }
