@@ -775,7 +775,7 @@ pub const AccountsDB = struct {
             const account_ref = AccountRef{
                 .pubkey = pubkeys[i],
                 .slot = slot,
-                .location = .{ .Cache = .{ .slot = slot } },
+                .location = .{ .Cache = .{ .index = i } },
             };
             refs.appendAssumeCapacity(account_ref);
             self.account_index.indexRef(&refs.items[i]);
@@ -817,8 +817,9 @@ pub const AccountsDB = struct {
             // remove slot from cache map
             _ = self.account_cache.remove(slot);
         } else {
-            // its an account file
-            @panic("TODO");
+            // the way it works right now, account files only exist for rooted slots
+            // rooted slots should never need to be purged so we should never get here
+            @panic("purging an account file not supported");
         }
 
         // free the account *reference* memory
@@ -906,10 +907,9 @@ pub const AccountsDB = struct {
                 return account;
             },
             .Cache => |ref_info| {
-                _ = ref_info;
-                @panic("TODO");
-                // const account = self.storage.cache.items[ref_info.index];
-                // return account;
+                _, const accounts = self.account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
+                const account = accounts[ref_info.index];
+                return account;
             },
         }
     }
@@ -1269,11 +1269,10 @@ test "accounts_db.db: purge accounts in cache works" {
     // account cache is cleared
     try std.testing.expect(accounts_db.account_cache.count() == 0);
 
-    // // TODO: when hashmap remove is fixed
-    // // ref hashmap is cleared
-    // for (0..n_accounts) |i| {
-    //     try std.testing.expect(accounts_db.account_index.getReference(&pubkey_copy[i]) == null);
-    // }
+    // ref hashmap is cleared
+    for (0..n_accounts) |i| {
+        try std.testing.expect(accounts_db.account_index.getReference(&pubkey_copy[i]) == null);
+    }
 }
 
 pub const BenchmarkAccountsDB = struct {

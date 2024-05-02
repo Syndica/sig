@@ -20,8 +20,7 @@ pub const AccountRef = struct {
             offset: usize,
         },
         Cache: struct {
-            // index: usize,
-            slot: usize, // used to lookup in the slot map
+            index: usize, // used to lookup in the slice
         },
     };
 
@@ -30,7 +29,7 @@ pub const AccountRef = struct {
             .pubkey = Pubkey.default(),
             .slot = 0,
             .location = .{
-                .Cache = .{ .slot = 0 },
+                .Cache = .{ .index = 0 },
             },
         };
     }
@@ -122,8 +121,8 @@ pub const AccountIndex = struct {
                         b.* = a.*;
                     } else {
                         // head: [b] => { remove entry from hashmap }
-                        // @panic("TODO");
-                        std.debug.print("[WARN] TODO: remove entry from hashmap\n", .{});
+                        var bin = self.getBinFromPubkey(pubkey);
+                        bin.remove(pubkey.*) catch unreachable;
                     }
                 }
                 return;
@@ -442,7 +441,6 @@ pub fn SwissMap(
 
             pub fn next(it: *Iterator) ?KeyValuePtr {
                 const self = it.hm;
-                const free_state: @Vector(GROUP_SIZE, u8) = @splat(0);
 
                 if (self.capacity() == 0) return null;
 
@@ -451,8 +449,11 @@ pub fn SwissMap(
                         return null;
                     }
 
-                    const states = self.states[it.group_index];
-                    const occupied_states = free_state != states;
+                    const state_vec = self.states[it.group_index];
+
+                    const is_not_empty = EMPTY_STATE_VEC != state_vec;
+                    const is_not_deleted = DELETED_STATE_VEC != state_vec;
+                    const occupied_states = andSIMD(is_not_empty, is_not_deleted);
 
                     if (@reduce(.Or, occupied_states)) {
                         for (it.position..GROUP_SIZE) |j| {
@@ -471,6 +472,24 @@ pub fn SwissMap(
             }
         };
 
+        /// simd helper function to OR two bool vectors
+        pub fn orSIMD(a: @Vector(GROUP_SIZE, bool), b: @Vector(GROUP_SIZE, bool)) @Vector(GROUP_SIZE, bool) {
+            const is_a: @Vector(GROUP_SIZE, u8) = @intFromBool(a);
+            const is_b: @Vector(GROUP_SIZE, u8) = @intFromBool(b);
+            const ones: @Vector(GROUP_SIZE, u8) = @splat(1);
+            const a_or_b: @Vector(GROUP_SIZE, bool) = (is_a | is_b) == ones;
+            return a_or_b;
+        }
+
+        /// simd helper function to AND two bool vectors
+        pub fn andSIMD(a: @Vector(GROUP_SIZE, bool), b: @Vector(GROUP_SIZE, bool)) @Vector(GROUP_SIZE, bool) {
+            const is_a: @Vector(GROUP_SIZE, u8) = @intFromBool(a);
+            const is_b: @Vector(GROUP_SIZE, u8) = @intFromBool(b);
+            const ones: @Vector(GROUP_SIZE, u8) = @splat(1);
+            const a_and_b: @Vector(GROUP_SIZE, bool) = (is_a & is_b) == ones;
+            return a_and_b;
+        }
+
         pub fn iterator(self: *const @This()) Iterator {
             return .{ .hm = self };
         }
@@ -488,7 +507,7 @@ pub fn SwissMap(
             value_ptr: *Value,
         };
 
-        pub fn remove(self: *@This(), key: Key) !void {
+        pub fn remove(self: *@This(), key: Key) error{KeyNotFound}!void {
             if (self._capacity == 0) return error.KeyNotFound;
             const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
@@ -581,6 +600,9 @@ pub fn SwissMap(
             return null;
         }
 
+        /// puts a key into the index with the value
+        /// note: this assumes the key is not already in the index, if it is, then
+        /// the map might contain two keys, and the behavior is undefined
         pub fn putAssumeCapacity(self: *Self, key: Key, value: Value) void {
             const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
@@ -597,26 +619,19 @@ pub fn SwissMap(
                 const state_vec = self.states[group_index];
 
                 // if theres an free then insert
+                // note: if theres atleast on empty state, then there wont be any deleted states
+                // due to how remove works, so we dont need to prioritize deleted over empty
                 const is_empty_vec = EMPTY_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_empty_vec)) {
-                    _ = self.fill(
-                        key,
-                        value,
-                        key_state,
-                        group_index,
-                        is_empty_vec,
-                    );
-                    return;
-                }
-
+                // note: duplicate keys may occur because we fill in deleted states
                 const is_deleted_vec = DELETED_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_deleted_vec)) {
+                const is_free_vec = orSIMD(is_deleted_vec, is_empty_vec);
+                if (@reduce(.Or, is_free_vec)) {
                     _ = self.fill(
                         key,
                         value,
                         key_state,
                         group_index,
-                        is_deleted_vec,
+                        is_free_vec,
                     );
                     return;
                 }
@@ -681,7 +696,9 @@ pub fn SwissMap(
                     }
                 }
 
-                // if theres an free then insert (put)
+                // note: we cant insert into deleted states because
+                // the value of the `get` part of this function - and
+                // because the key might exist in another group
                 const is_empty_vec = EMPTY_STATE_VEC == state_vec;
                 if (@reduce(.Or, is_empty_vec)) {
                     const index = self.fill(
@@ -690,21 +707,6 @@ pub fn SwissMap(
                         key_state,
                         group_index,
                         is_empty_vec,
-                    );
-                    return .{
-                        .found_existing = false,
-                        .value_ptr = &self.groups[group_index][index].value,
-                    };
-                }
-
-                const is_deleted_vec = DELETED_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_deleted_vec)) {
-                    const index = self.fill(
-                        key,
-                        undefined,
-                        key_state,
-                        group_index,
-                        is_deleted_vec,
                     );
                     return .{
                         .found_existing = false,
@@ -932,13 +934,9 @@ test "accounts_db.index: tests disk allocator on hashmaps" {
     var refs = std.AutoHashMap(Pubkey, AccountRef).init(allocator.allocator());
     try refs.ensureTotalCapacity(100);
 
-    const ref = AccountRef{
-        .pubkey = Pubkey.default(),
-        .location = .{
-            .Cache = .{ .slot = 2 },
-        },
-        .slot = 144,
-    };
+    var ref = AccountRef.default();
+    ref.location.Cache.index = 2;
+    ref.slot = 144;
 
     try refs.put(Pubkey.default(), ref);
 
@@ -955,24 +953,16 @@ test "accounts_db.index: tests disk allocator" {
     );
     defer disk_account_refs.deinit();
 
-    const ref = AccountRef{
-        .pubkey = Pubkey.default(),
-        .location = .{
-            .Cache = .{ .slot = 2 },
-        },
-        .slot = 10,
-    };
+    var ref = AccountRef.default();
+    ref.location.Cache.index = 2;
+    ref.slot = 10;
     disk_account_refs.appendAssumeCapacity(ref);
 
     try std.testing.expect(std.meta.eql(disk_account_refs.items[0], ref));
 
-    const ref2 = AccountRef{
-        .pubkey = Pubkey.default(),
-        .location = .{
-            .Cache = .{ .slot = 4 },
-        },
-        .slot = 14,
-    };
+    var ref2 = AccountRef.default();
+    ref2.location.Cache.index = 4;
+    ref2.slot = 14;
     // this will lead to another allocation
     try disk_account_refs.append(ref2);
 
@@ -1161,13 +1151,20 @@ pub const BenchmarkSwissMap = struct {
             null,
         );
 
-        std.debug.print("\tWRITE: {} ({d:.2}x faster than std)\n", .{
+        const write_speedup = @as(f32, @floatFromInt(std_write_time)) / @as(f32, @floatFromInt(write_time));
+        const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
+        std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
             std.fmt.fmtDuration(write_time),
-            @as(f32, @floatFromInt(std_write_time)) / @as(f32, @floatFromInt(write_time)),
+            write_speedup,
+            write_faster_or_slower,
         });
-        std.debug.print("\tREAD: {} ({d:.2}x faster than std)\n", .{
+
+        const read_speedup = @as(f32, @floatFromInt(std_read_time)) / @as(f32, @floatFromInt(read_time));
+        const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
+        std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
             std.fmt.fmtDuration(read_time),
-            @as(f32, @floatFromInt(std_read_time)) / @as(f32, @floatFromInt(read_time)),
+            read_speedup,
+            read_faster_or_slower,
         });
 
         return write_time;
