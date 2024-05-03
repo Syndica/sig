@@ -525,6 +525,7 @@ pub const AccountsDB = struct {
                     "combining thread indexes",
                     "thread0",
                 );
+                progress_timer.reset();
             }
         }
     }
