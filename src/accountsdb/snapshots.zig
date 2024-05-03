@@ -32,9 +32,7 @@ pub const StakeHistoryEntry = struct {
     deactivating: u64, // requested to be cooled down, not fully deactivated yet
 };
 
-pub const StakeHistory = struct { 
-    history: ArrayList(struct { Epoch, StakeHistoryEntry })
-};
+pub const StakeHistory = struct { history: ArrayList(struct { Epoch, StakeHistoryEntry }) };
 
 pub const Stakes = struct {
     /// vote accounts
