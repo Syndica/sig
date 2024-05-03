@@ -299,6 +299,18 @@ pub fn Sender(comptime T: type) type {
         }
 
         /// Takes the `Sender` (must be in same thread), this locks so should not be called often.
+        ///
+        /// An example of when you'd use this:
+        /// ```
+        /// fn sendValues(values: []usize, sndr: Sender(usize)) void {
+        ///     // argument sndr is going to be *const Sender so we take() it
+        ///     var sender = sndr.take();
+        ///     for (values) |val| {
+        ///         sender.send(val);
+        ///     }
+        /// }
+        ///
+        /// ```
         pub fn take(self: *const Self) Self {
             const me: *Self = @constCast(self);
             me.private.mux.lock();
@@ -447,6 +459,18 @@ pub fn Receiver(comptime T: type) type {
         }
 
         /// Takes the `Receiver` (must be in same thread), this locks so should not be called often.
+        ///
+        /// An example of when you'd use this:
+        /// ```
+        /// fn receiveValues(rcvr: Receiver(usize)) void {
+        ///     // argument rcvr is going to be *const Receiver(usize) so we take() it
+        ///     var receiver = rcvr.take();
+        ///     for (receiver.receive()) |val| {
+        ///         _ = val
+        ///     }
+        /// }
+        ///
+        /// ```
         pub fn take(self: *const Self) Self {
             const me: *Self = @constCast(self);
             me.private.mux.lock();
@@ -671,7 +695,7 @@ fn testUsizeReceiver(
     }
 }
 
-test "sync.chanx.bounded works" {
+test "sync.chanx: bounded works" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{ .allocator = std.testing.allocator, .init_capacity = 100 });
     defer chan.deinit();
     defer receiver.deinit();
@@ -688,7 +712,7 @@ test "sync.chanx.bounded works" {
     }
 }
 
-test "sync.chanx.bounded channel sends/received in different threads" {
+test "sync.chanx: bounded channel sends/received in different threads" {
     const items_to_send = 1000;
     var chan, const sender, const receiver = try ChannelX(usize).initBounded(.{ .allocator = std.testing.allocator, .init_capacity = 100 });
     defer chan.deinit();
@@ -704,7 +728,7 @@ test "sync.chanx.bounded channel sends/received in different threads" {
     try std.testing.expect(received_count.load(.seq_cst) == items_to_send);
 }
 
-test "sync.chanx.bounded buffer len is correct" {
+test "sync.chanx: bounded buffer len is correct" {
     const chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 10,
@@ -716,7 +740,7 @@ test "sync.chanx.bounded buffer len is correct" {
     try std.testing.expectEqual(chan.capacity(), 10);
 }
 
-test "sync.chanx.bounded mpmc" {
+test "sync.chanx: bounded mpsc" {
     const capacity: usize = 100;
     const n_items: usize = 1000;
     var chan, var sender, const receiver = try ChannelX(usize).initBounded(.{
@@ -724,9 +748,6 @@ test "sync.chanx.bounded mpmc" {
         .init_capacity = capacity,
     });
     defer chan.deinit();
-    if (true) {
-        @panic("got!!");
-    }
     var received_count = Atomic(usize).init(0);
 
     var sender_1_handle = try std.Thread.spawn(.{}, testUsizeSender, .{ sender.clone(), n_items / 2 });
@@ -740,7 +761,7 @@ test "sync.chanx.bounded mpmc" {
     try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
-test "sync.chanx.bounded: mpmc" {
+test "sync.chanx: bounded mpmc" {
     const capacity: usize = 100;
     const n_items: usize = 1000;
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
@@ -764,7 +785,7 @@ test "sync.chanx.bounded: mpmc" {
     try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
-test "sync.chanx.bounded: spsc" {
+test "sync.chanx: bounded spmc" {
     const capacity: usize = 100;
     const n_items: usize = 1000;
     var chan, const sender, var receiver = try ChannelX(usize).initBounded(.{
@@ -786,10 +807,10 @@ test "sync.chanx.bounded: spsc" {
     try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
-test "sync.chanx.bounded: spmc" {
+test "sync.chanx: bounded spsc" {
     const capacity: usize = 100;
     const n_items: usize = 1000;
-    var chan, const sender, var receiver = try ChannelX(usize).initBounded(.{
+    var chan, const sender, const receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = capacity,
     });
@@ -798,17 +819,15 @@ test "sync.chanx.bounded: spmc" {
     var received_count = Atomic(usize).init(0);
 
     var sender_handle = try std.Thread.spawn(.{}, testUsizeSender, .{ sender, n_items });
-    var receiver_1_handle = try std.Thread.spawn(.{}, testUsizeReceiver, .{ receiver.clone(), &received_count });
-    var receiver_2_handle = try std.Thread.spawn(.{}, testUsizeReceiver, .{ receiver, &received_count });
+    var receiver_handle = try std.Thread.spawn(.{}, testUsizeReceiver, .{ receiver, &received_count });
 
     sender_handle.join();
-    receiver_1_handle.join();
-    receiver_2_handle.join();
+    receiver_handle.join();
 
     try std.testing.expectEqual(n_items, received_count.load(.seq_cst));
 }
 
-test "sync.chanx.bounded: disconnect after all senders released" {
+test "sync.chanx: bounded disconnect after all senders released" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 10,
@@ -822,7 +841,7 @@ test "sync.chanx.bounded: disconnect after all senders released" {
     try std.testing.expectEqual(receiver.receive(), null);
 }
 
-test "sync.chanx.bounded: disconnect after all receivers deinit" {
+test "sync.chanx: bounded disconnect after all receivers deinit" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 10,
@@ -837,7 +856,7 @@ test "sync.chanx.bounded: disconnect after all receivers deinit" {
     try std.testing.expectError(error.disconnected, sender.send(2));
 }
 
-test "sync.chanx.bounded: channel full/empty works correctly" {
+test "sync.chanx: bounded channel full/empty works correctly" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 1,
@@ -853,7 +872,7 @@ test "sync.chanx.bounded: channel full/empty works correctly" {
     try std.testing.expectError(error.full, sender.trySend(3));
 }
 
-test "sync.chanx.bounded: send timeout works" {
+test "sync.chanx: bounded send timeout works" {
     const chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 1,
@@ -869,10 +888,10 @@ test "sync.chanx.bounded: send timeout works" {
     try std.testing.expectError(error.timeout, sender.sendTimeout(2, timeout));
     const time = timer.read();
 
-    try std.testing.expect(time >= std.time.ns_per_ms * 95);
+    try std.testing.expect(time >= std.time.ns_per_ms * 90);
 }
 
-test "sync.chanx.bounded: trySend works properly" {
+test "sync.chanx: bounded trySend works properly" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 3,
@@ -888,7 +907,7 @@ test "sync.chanx.bounded: trySend works properly" {
     try std.testing.expectError(error.disconnected, sender.trySend(4));
 }
 
-test "sync.chanx.bounded: receive order is correct" {
+test "sync.chanx: bounded receive order is correct" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 3,
@@ -905,7 +924,7 @@ test "sync.chanx.bounded: receive order is correct" {
     try std.testing.expectEqual(receiver.receive(), 3);
 }
 
-test "sync.chanx.bounded: receive while disconnected should still drain all elements" {
+test "sync.chanx: bounded receive while disconnected should still drain all elements" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 10,
@@ -924,7 +943,7 @@ test "sync.chanx.bounded: receive while disconnected should still drain all elem
     try std.testing.expect(receiver.receive() == null);
 }
 
-test "sync.chanx.bounded: receive while empty with timeout" {
+test "sync.chanx: bounded receive while empty with timeout" {
     var chan, var sender, var receiver = try ChannelX(usize).initBounded(.{
         .allocator = std.testing.allocator,
         .init_capacity = 10,

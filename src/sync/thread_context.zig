@@ -1,7 +1,7 @@
 const std = @import("std");
 const parker = @import("parker.zig");
 const OperationId = @import("waker.zig").OperationId;
-const Token = @import("bounded.zig").TempSlot;
+const TempSlot = @import("bounded.zig").TempSlot;
 const Backoff = @import("backoff.zig").Backoff;
 const Parker = parker.Parker;
 const Atomic = std.atomic.Value;
@@ -118,12 +118,12 @@ pub const ThreadState = union(enum(u8)) {
 };
 
 test "thread state conversion to/from usize" {
-    var token = Token(u64).uninitialized();
+    var token = TempSlot(u64).uninitialized();
 
     var state = ThreadState{ .operation = token.toOperationId() };
     const as_usize = state.toUsize();
     const other_state = ThreadState.fromUsize(as_usize);
 
     try std.testing.expectEqual(state, other_state);
-    try std.testing.expectEqual(&token, Token(u64).fromOperationId(other_state.operation));
+    try std.testing.expectEqual(&token, TempSlot(u64).fromOperationId(other_state.operation));
 }

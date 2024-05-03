@@ -191,13 +191,16 @@ pub fn Bounded(comptime T: type) type {
                     }
                 }
 
-                if (timeout != null and (std.time.Instant.now() catch unreachable).order(timeout.?) == .gt)
-                    return error.timeout;
+                if (timeout) |timeout_instant| {
+                    if ((std.time.Instant.now() catch unreachable).order(timeout_instant) == .gt) {
+                        return error.timeout;
+                    }
+                }
 
                 var thread_ctx = thread_context.getThreadLocalContext();
                 thread_ctx.reset();
-                const opId = temp_slot.toOperationId();
-                self.senders.registerOperation(opId, thread_ctx);
+                const op_id = temp_slot.toOperationId();
+                self.senders.registerOperation(op_id, thread_ctx);
 
                 // We do this because if channel is not full or if channel is not disconnected,
                 // (in either case) we don't want to wait. Let's break out of the sleep.
@@ -205,17 +208,18 @@ pub fn Bounded(comptime T: type) type {
                 // If some other operation was able to update this context's state, we are ok
                 // with this. This is why we don't check the return value as a call to `waitUntil`
                 // will allow us to perform the checks below.
-                if (!self.isFull() or self.isDisconnected())
+                if (!self.isFull() or self.isDisconnected()) {
                     _ = thread_ctx.tryUpdateFromWaitingStateTo(.aborted);
+                }
 
                 switch (thread_ctx.waitUntil(timeout)) {
                     .waiting => unreachable,
                     .aborted, .disconnected => {
                         // there must be an entry with this operation id, if not panic!
-                        _ = self.senders.unregisterOperation(opId) orelse unreachable;
+                        _ = self.senders.unregisterOperation(op_id) orelse unreachable;
                     },
-                    .operation => |operationId| {
-                        std.debug.assert(opId == operationId);
+                    .operation => |operation_id| {
+                        std.debug.assert(op_id == operation_id);
                     },
                 }
             }
@@ -235,12 +239,12 @@ pub fn Bounded(comptime T: type) type {
                 const stamp = slot.stamp.load(.acquire);
 
                 if (head + 1 == stamp) {
-                    const new = if (index + 1 < self.buffer.len) head + 1 else lap +| self.one_lap_bit;
+                    const new_head = if (index + 1 < self.buffer.len) head + 1 else lap +| self.one_lap_bit;
 
                     // Try moving the head.
                     if (self.head.cmpxchgWeak(
                         head,
-                        new,
+                        new_head,
                         .seq_cst,
                         .monotonic,
                     )) |current_head| {
@@ -322,8 +326,11 @@ pub fn Bounded(comptime T: type) type {
                     }
                 }
 
-                if (timeout != null and (std.time.Instant.now() catch unreachable).order(timeout.?) == .gt)
-                    return error.timeout;
+                if (timeout) |timeout_instant| {
+                    if ((std.time.Instant.now() catch unreachable).order(timeout_instant) == .gt) {
+                        return error.timeout;
+                    }
+                }
 
                 var thread_ctx = thread_context.getThreadLocalContext();
                 thread_ctx.reset();
@@ -336,8 +343,9 @@ pub fn Bounded(comptime T: type) type {
                 // If some other operation was able to update this context's state, we are ok
                 // with this. This is why we don't check the return value as a call to `waitUntil`
                 // will allow us to perform the checks below.
-                if (!self.isEmpty() or self.isDisconnected())
+                if (!self.isEmpty() or self.isDisconnected()) {
                     _ = thread_ctx.tryUpdateFromWaitingStateTo(.aborted);
+                }
 
                 switch (thread_ctx.waitUntil(timeout)) {
                     .waiting => unreachable,
@@ -361,8 +369,10 @@ pub fn Bounded(comptime T: type) type {
         /// receiver was successfully released else returns `false` if `n_recievers < 1`
         /// indicating a (potential) invalid state.
         pub inline fn releaseReceiver(self: *Self) bool {
-            if (self.n_receivers.load(.seq_cst) == 0)
+            if (self.n_receivers.load(.seq_cst) == 0) {
                 return false;
+            }
+
             if (self.n_receivers.fetchSub(1, .seq_cst) == 1) {
                 self.disconnect();
             }
@@ -378,8 +388,10 @@ pub fn Bounded(comptime T: type) type {
         /// sender was successfully released else returns `false` if `n_senders < 1`
         /// indicating a (potential) invalid state.
         pub inline fn releaseSender(self: *Self) bool {
-            if (self.n_senders.load(.seq_cst) == 0)
+            if (self.n_senders.load(.seq_cst) == 0) {
                 return false;
+            }
+
             if (self.n_senders.fetchSub(1, .seq_cst) == 1) {
                 self.disconnect();
             }

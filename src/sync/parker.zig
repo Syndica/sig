@@ -13,8 +13,11 @@ pub const Parker = struct {
     const Self = @This();
 
     const State = enum {
+        /// empty state signifies the thread has neither been parked or notified
         empty,
+        /// parked state signifies the thread is currently parked awaitng to be notified
         parked,
+        /// notified state signifies the thread has been notified and should be unparked
         notified,
     };
 
@@ -54,7 +57,7 @@ pub const Parker = struct {
     }
 
     pub fn park(self: *Self) void {
-        // if we were previously notified, we return early
+        // if we were previously notified, we return early without locking
         if (self.state.cmpxchgStrong(
             @intFromEnum(State.notified),
             @intFromEnum(State.empty),
@@ -200,7 +203,7 @@ pub fn getThreadLocal() *Parker {
     return &thread_local_parker;
 }
 
-pub fn assertEq(left: anytype, right: @TypeOf(left)) void {
+inline fn assertEq(left: anytype, right: @TypeOf(left)) void {
     std.debug.assert(left == right);
 }
 
@@ -221,7 +224,7 @@ pub fn testUnparkingThread(parker: *Parker) void {
     parker.unpark();
 }
 
-test "parker untimed" {
+test "sync.parker untimed" {
     std.debug.print("Parking test (no timeout):\n", .{});
     const now = try std.time.Instant.now();
     var parker = Parker.init();
@@ -236,7 +239,7 @@ test "parker untimed" {
     std.debug.print("took: {any} nsecs\n", .{new_now.since(now)});
 }
 
-test "parker timed" {
+test "sync.parker timed" {
     std.debug.print("Parking test (1 second timeout):\n", .{});
     const now = try std.time.Instant.now();
 
@@ -255,7 +258,7 @@ fn testParkerIsDifferentPerThread(out_ptr: *u64) void {
     out_ptr.* = @intFromPtr(parker);
 }
 
-test "parker should remain per-thread" {
+test "sync.parker should remain per-thread" {
     const parker = getThreadLocal();
     var out_ptr: usize = undefined;
     var other_thread_handle = try std.Thread.spawn(.{}, testParkerIsDifferentPerThread, .{&out_ptr});
