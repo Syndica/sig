@@ -32,7 +32,9 @@ pub const StakeHistoryEntry = struct {
     deactivating: u64, // requested to be cooled down, not fully deactivated yet
 };
 
-const StakeHistory = ArrayList(struct { Epoch, StakeHistoryEntry });
+pub const StakeHistory = struct { 
+    history: ArrayList(struct { Epoch, StakeHistoryEntry })
+};
 
 pub const Stakes = struct {
     /// vote accounts
@@ -1042,7 +1044,7 @@ test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
     try std.testing.expect(std.mem.eql(u8, snapshot_info.filename, path));
 }
 
-test "core.accounts_db.snapshotss: parse status cache" {
+test "core.accounts_db.snapshots: parse status cache" {
     const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";

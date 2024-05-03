@@ -431,7 +431,6 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         },
         .Struct => |info| {
             if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
-                @compileLog("Type: ", T);
                 std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
                 try bincode.write(writer, data.items.len, params);
                 for (data.items) |item| {

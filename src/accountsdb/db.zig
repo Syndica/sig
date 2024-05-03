@@ -1155,10 +1155,11 @@ test "core.accounts_db: load other sysvars" {
     }
 
     const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
+    const StakeHistory = @import("./snapshots.zig").StakeHistory;
     _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
     _ = try accounts_db.getTypeFromAccount(SlotAndHash, &sysvars.IDS.slot_hashes);
-    _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
+    _ = try accounts_db.getTypeFromAccount(StakeHistory, &sysvars.IDS.stake_history);
 
     const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
     defer bincode.free(allocator, slot_history);
