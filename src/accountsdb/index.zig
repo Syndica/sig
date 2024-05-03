@@ -319,7 +319,6 @@ pub fn SwissMap(
         pub const Self = @This();
 
         pub const State = packed struct(u8) {
-            // TODO: change to empty_or_deleted
             state: enum(u1) { empty_or_deleted, occupied },
             control_bytes: u7,
         };
@@ -652,7 +651,7 @@ pub fn SwissMap(
             group_index: usize,
             is_free_vec: @Vector(GROUP_SIZE, bool),
         ) usize {
-            const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(16);
+            const invalid_state: @Vector(GROUP_SIZE, u8) = @splat(GROUP_SIZE);
             const indices = @select(u8, is_free_vec, std.simd.iota(u8, GROUP_SIZE), invalid_state);
             const index = @reduce(.Min, indices);
 

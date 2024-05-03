@@ -61,6 +61,8 @@ pub const AccountsDB = struct {
     file_map: std.AutoArrayHashMap(FileId, AccountFile),
     // used for filenames when flushing accounts to disk
     largest_file_id: u32 = 0,
+    // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
+    unclean_account_files: std.ArrayList(FileId),
 
     logger: Logger,
     config: AccountsDBConfig,
@@ -104,6 +106,7 @@ pub const AccountsDB = struct {
             .config = config,
             .account_cache = std.AutoHashMap(Slot, PubkeysAndAccounts).init(allocator),
             .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
+            .unclean_account_files = std.ArrayList(FileId).init(allocator),
         };
     }
 
@@ -121,6 +124,7 @@ pub const AccountsDB = struct {
             self.allocator.destroy(ptr);
         }
         self.account_cache.deinit();
+        self.unclean_account_files.deinit();
     }
 
     /// easier to use load function
