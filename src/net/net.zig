@@ -116,7 +116,7 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn initIpv6(octets: [16]u8, portt: u16) Self {
         return Self{
-            .V4 = .{ .ip = Ipv6Addr.init(octets), .port = portt },
+            .V6 = .{ .ip = Ipv6Addr.init(octets), .port = portt },
         };
     }
 
@@ -307,8 +307,8 @@ pub const SocketAddrV4 = struct {
 pub const SocketAddrV6 = struct {
     ip: Ipv6Addr,
     port: u16,
-    flowinfo: u32,
-    scope_id: u32,
+    flowinfo: u32 = 0,
+    scope_id: u32 = 0,
 
     const Self = @This();
 

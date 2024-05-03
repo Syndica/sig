@@ -88,7 +88,7 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             var data: T = undefined;
 
             if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
-                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
+                comptime std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
                 const ElementType = @typeInfo(T.Slice).Pointer.child;
                 const len = try bincode.read(allocator, u64, reader, params);
                 data = try T.initCapacity(allocator, len);
@@ -431,6 +431,7 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         },
         .Struct => |info| {
             if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
+                @compileLog("Type: ", T);
                 std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
                 try bincode.write(writer, data.items.len, params);
                 for (data.items) |item| {
