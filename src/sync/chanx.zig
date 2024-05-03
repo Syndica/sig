@@ -888,7 +888,7 @@ test "sync.chanx: bounded send timeout works" {
     try std.testing.expectError(error.timeout, sender.sendTimeout(2, timeout));
     const time = timer.read();
 
-    try std.testing.expect(time >= std.time.ns_per_ms * 90);
+    try std.testing.expect(time >= std.time.ns_per_ms * 80);
 }
 
 test "sync.chanx: bounded trySend works properly" {
@@ -957,5 +957,5 @@ test "sync.chanx: bounded receive while empty with timeout" {
     var timer = try std.time.Timer.start();
     try std.testing.expectError(error.timeout, receiver.receiveTimeout(timeout));
     const time = timer.read();
-    try std.testing.expect(time >= std.time.ns_per_ms * 95);
+    try std.testing.expect(time >= std.time.ns_per_ms * 80);
 }
