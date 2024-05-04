@@ -6,7 +6,6 @@ const ArrayList = std.ArrayList;
 const Mutex = std.Thread.Mutex;
 
 const Slot = sig.core.Slot;
-const Shred = sig.tvu.Shred;
 
 const MAX_SHREDS_PER_SLOT: usize = sig.tvu.MAX_SHREDS_PER_SLOT;
 
@@ -16,7 +15,6 @@ pub const Range = struct {
 };
 
 pub const BasicShredTracker = struct {
-    allocator: Allocator,
     logger: sig.trace.Logger,
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
@@ -32,24 +30,13 @@ pub const BasicShredTracker = struct {
 
     const Self = @This();
 
-    pub fn init(
-        allocator: Allocator,
-        slot: Slot,
-        logger: sig.trace.Logger,
-    ) !*Self {
-        const self = try allocator.create(Self);
-        self.* = .{
-            .allocator = allocator,
+    pub fn init(slot: Slot, logger: sig.trace.Logger) Self {
+        return .{
             .start_slot = slot,
             .current_bottom_slot = slot,
             .max_slot_seen = slot -| 1,
             .logger = logger,
         };
-        return self;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.allocator.destroy(self);
     }
 
     pub fn registerShred(

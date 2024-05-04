@@ -64,6 +64,7 @@ pub const utils = struct {
     pub usingnamespace @import("utils/arraylist.zig");
     pub usingnamespace @import("utils/bitflags.zig");
     pub usingnamespace @import("utils/shortvec.zig");
+    pub usingnamespace @import("utils/service.zig");
     pub usingnamespace @import("utils/thread.zig");
     pub usingnamespace @import("utils/types.zig");
     pub usingnamespace @import("utils/varint.zig");
@@ -113,4 +114,5 @@ pub const tvu = struct {
     pub usingnamespace @import("tvu/shred.zig");
     pub usingnamespace @import("tvu/shred_tracker.zig");
     pub usingnamespace @import("tvu/shred_processor.zig");
+    pub usingnamespace @import("tvu/tvu.zig");
 };

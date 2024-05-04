@@ -42,7 +42,7 @@ pub const Packet = struct {
 /// TODO this violates separation of concerns. it's unusual for network-specific
 /// type definitions to include information that's specific to application
 /// components (like repair)
-/// 
+///
 /// it would be nice to find another approach that is equally easy to use,
 /// without sacrificing safety, performance, or readability.
 pub const Flag = enum(u8) {

@@ -1,27 +1,24 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
-const network = @import("zig-network");
 
 const shred_layout = sig.tvu.shred_layout;
 
-const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
 const Packet = sig.net.Packet;
 
-pub fn runShredSigVerify(
+pub fn runShredSignatureVerification(
     exit: *Atomic(bool),
     incoming: *Channel(ArrayList(Packet)),
     verified: *Channel(ArrayList(Packet)),
     leader_schedule: LeaderScheduleCalculator,
-) void {
-    // TODO: unreachable
+) !void {
     var verified_count: usize = 0;
     var buf: ArrayList(ArrayList(Packet)) = ArrayList(ArrayList(Packet)).init(incoming.allocator);
     while (true) {
-        incoming.tryDrainRecycle(&buf) catch unreachable;
+        try incoming.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;
@@ -35,7 +32,7 @@ pub fn runShredSigVerify(
                     verified_count += 1;
                 }
             }
-            verified.send(packet_batch) catch unreachable; // TODO
+            try verified.send(packet_batch);
             if (exit.load(.monotonic)) return;
         }
     }

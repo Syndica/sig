@@ -27,6 +27,7 @@ const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
+const TaskLooper = sig.utils.ServiceRunner;
 
 const RepairRequest = sig.tvu.RepairRequest;
 const RepairMessage = sig.tvu.RepairMessage;
@@ -103,6 +104,11 @@ pub const RepairService = struct {
 
     const Self = @This();
 
+    pub const run_config = sig.utils.RunConfig{
+        .name = "repair service",
+        .min_loop_duration_ns = 100 * std.time.ns_per_ms,
+    };
+
     pub fn init(
         allocator: Allocator,
         logger: Logger,
@@ -127,22 +133,29 @@ pub const RepairService = struct {
 
     pub fn deinit(self: *Self) void {
         self.peer_provider.deinit();
+        self.requester.deinit();
     }
 
     /// Start the long-running service and block until it exits.
+    /// This function claims ownership of Self, and deinits the
+    /// struct on exit.
     pub fn run(self: *Self) !void {
-        self.logger.info("starting repair service");
-        defer self.logger.info("exiting repair service");
-        var timer = try std.time.Timer.start();
-        while (!self.exit.load(.unordered)) {
+        while (!self.exit.load(.monotonic)) {
             try self.sendNecessaryRepairs();
-            std.time.sleep(100 * std.time.ns_per_ms -| timer.lap());
         }
+        var this = self;
+        var looper = TaskLooper{ .logger = this.logger, .exit = this.exit };
+        defer this.deinit();
+        try looper.runService(
+            .{ .name = "repair service", .min_loop_duration_ns = 100 * std.time.ns_per_ms },
+            Self.sendNecessaryRepairs,
+            .{&this},
+        );
     }
 
     /// Identifies which repairs are needed based on the current state,
     /// and sends those repairs, then returns.
-    fn sendNecessaryRepairs(self: *Self) !void {
+    pub fn sendNecessaryRepairs(self: *Self) !void {
         const repair_requests = try self.getRepairs();
         defer repair_requests.deinit();
         const addressed_requests = try self.assignRequestsToPeers(repair_requests.items);
@@ -163,7 +176,9 @@ pub const RepairService = struct {
         }
 
         // TODO less often
-        self.logger.infof("sent {} repair requests", .{addressed_requests.items.len});
+        if (addressed_requests.items.len > 0) {
+            self.logger.debugf("sent {} repair requests", .{addressed_requests.items.len});
+        }
     }
 
     const MAX_SHRED_REPAIRS = 1000;

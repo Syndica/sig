@@ -8,17 +8,15 @@ const ArrayList = std.ArrayList;
 
 const BasicShredTracker = sig.tvu.BasicShredTracker;
 const Channel = sig.sync.Channel;
-const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Shred = sig.tvu.Shred;
 
-/// analogous to `WindowService`
+/// analogous to `WindowService` TODO permalink
 pub fn processShreds(
     allocator: Allocator,
     verified_shreds: *Channel(ArrayList(Packet)),
     tracker: *BasicShredTracker,
 ) !void {
-    // TODO unreachables
     var processed_count: usize = 0;
     var buf = ArrayList(ArrayList(Packet)).init(allocator);
     while (true) {
@@ -29,9 +27,9 @@ pub fn processShreds(
         }
         for (buf.items) |packet_batch| {
             for (packet_batch.items) |*packet| if (!packet.isSet(.discard)) {
-                const shred_payload = layout.getShred(packet) orelse unreachable;
-                const slot = layout.getSlot(shred_payload) orelse unreachable;
-                const index = layout.getIndex(shred_payload) orelse unreachable;
+                const shred_payload = layout.getShred(packet) orelse continue;
+                const slot = layout.getSlot(shred_payload) orelse continue;
+                const index = layout.getIndex(shred_payload) orelse continue;
                 tracker.registerShred(slot, index) catch |err| switch (err) {
                     error.SlotUnderflow, error.SlotOverflow => continue,
                     else => return err,

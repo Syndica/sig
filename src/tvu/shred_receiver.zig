@@ -22,36 +22,7 @@ const SocketThread = sig.net.SocketThread;
 
 const endpointToString = sig.net.endpointToString;
 
-/// Use this in a single thread where you want to keep accessing
-/// a value that's stored in an atomic, but you don't want to do
-/// an expensive `load` operation every time you read it, and
-/// you're fine with reading a slightly stale value each time.
-///
-/// Periodically call `update` to refresh the value.
-///
-/// The `cache` field and `update` methods are NOT thread safe.
-/// Do not read the `cache` while executing `update`
-pub fn CachedAtomic(comptime T: type) type {
-    return struct {
-        atomic: *Atomic(T),
-        cache: T,
-
-        const Self = @This();
-
-        pub fn init(atomic: *Atomic(T)) Self {
-            return .{
-                .atomic = atomic,
-                .cache = atomic.load(.monotonic),
-            };
-        }
-
-        pub fn update(self: *Self) void {
-            self.cache = self.atomic.load(.monotonic);
-        }
-    };
-}
-
-/// Analogous to `ShredFetchStage`  TODO permalinks
+/// Analogous to `ShredFetchStage`  TODO permalinks TODO deinit?
 pub const ShredReceiver = struct {
     allocator: Allocator,
     keypair: *const KeyPair,
@@ -60,7 +31,7 @@ pub const ShredReceiver = struct {
     repair_socket: *Socket,
     tvu_socket: *Socket,
     outgoing_shred_channel: *Channel(ArrayList(Packet)),
-    shred_version: CachedAtomic(u16),
+    shred_version: *const Atomic(u16),
 
     const Self = @This();
 
@@ -115,9 +86,10 @@ pub const ShredReceiver = struct {
                 var responses = ArrayList(Packet).init(self.allocator);
                 try receiver.tryDrainRecycle(&buf);
                 if (buf.items.len > 0) {
+                    const shred_version = self.shred_version.load(.monotonic);
                     for (buf.items) |batch| {
                         for (batch.items) |*packet| {
-                            try self.handlePacket(packet, &responses);
+                            try self.handlePacket(packet, &responses, shred_version);
                         }
                         try self.outgoing_shred_channel.send(batch);
                     }
@@ -127,13 +99,17 @@ pub const ShredReceiver = struct {
                 } else {
                     std.time.sleep(10 * std.time.ns_per_ms);
                 }
-                self.shred_version.update();
             }
         }
     }
 
     /// Handle a single packet and return
-    fn handlePacket(self: *Self, packet: *Packet, responses: *ArrayList(Packet)) !void {
+    fn handlePacket(
+        self: *Self,
+        packet: *Packet,
+        responses: *ArrayList(Packet),
+        shred_version: u16,
+    ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             try self.handlePing(packet, responses);
             packet.set(.discard);
@@ -146,7 +122,7 @@ pub const ShredReceiver = struct {
             // TODO figure out these values
             const root = 0;
             const max_slot = std.math.maxInt(Slot);
-            if (shouldDiscardShred(packet, root, self.shred_version.cache, max_slot)) {
+            if (shouldDiscardShred(packet, root, shred_version, max_slot)) {
                 packet.set(.discard);
             }
         }
@@ -172,9 +148,6 @@ pub const ShredReceiver = struct {
 
         const endpoint_str = try endpointToString(self.allocator, &packet.addr);
         defer endpoint_str.deinit();
-        // self.logger.field("from_endpoint", endpoint_str.items)
-        //     .field("from_pubkey", &ping.from.string())
-        //     .info("tvu: recv repair ping");
     }
 };
 
@@ -226,3 +199,7 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 const REPAIR_RESPONSE_SERIALIZED_PING_BYTES = 132;
 
 const RepairPing = union(enum) { Ping: Ping };
+
+test "asd quend" {
+    std.debug.print("{s}", .{@typeName(@TypeOf(ShredReceiver.run))});
+}
