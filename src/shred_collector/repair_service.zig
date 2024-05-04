@@ -12,13 +12,13 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
-const BasicShredTracker = sig.tvu.BasicShredTracker;
+const BasicShredTracker = sig.shred_collector.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const GossipTable = sig.gossip.GossipTable;
 const HomogeneousThreadPool = sig.utils.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
 const LruCacheCustom = sig.common.LruCacheCustom;
-const MultiSlotReport = sig.tvu.MultiSlotReport;
+const MultiSlotReport = sig.shred_collector.MultiSlotReport;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -29,10 +29,10 @@ const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
 const TaskLooper = sig.utils.ServiceRunner;
 
-const RepairRequest = sig.tvu.RepairRequest;
-const RepairMessage = sig.tvu.RepairMessage;
+const RepairRequest = sig.shred_collector.RepairRequest;
+const RepairMessage = sig.shred_collector.RepairMessage;
 
-const serializeRepairRequest = sig.tvu.serializeRepairRequest;
+const serializeRepairRequest = sig.shred_collector.serializeRepairRequest;
 
 /// TODO: redundant?
 pub fn initRepair(
@@ -105,7 +105,7 @@ pub const RepairService = struct {
     const Self = @This();
 
     pub const run_config = sig.utils.RunConfig{
-        .name = "repair service",
+        .name = "Repair Service",
         .min_loop_duration_ns = 100 * std.time.ns_per_ms,
     };
 
@@ -134,23 +134,6 @@ pub const RepairService = struct {
     pub fn deinit(self: *Self) void {
         self.peer_provider.deinit();
         self.requester.deinit();
-    }
-
-    /// Start the long-running service and block until it exits.
-    /// This function claims ownership of Self, and deinits the
-    /// struct on exit.
-    pub fn run(self: *Self) !void {
-        while (!self.exit.load(.monotonic)) {
-            try self.sendNecessaryRepairs();
-        }
-        var this = self;
-        var looper = TaskLooper{ .logger = this.logger, .exit = this.exit };
-        defer this.deinit();
-        try looper.runService(
-            .{ .name = "repair service", .min_loop_duration_ns = 100 * std.time.ns_per_ms },
-            Self.sendNecessaryRepairs,
-            .{&this},
-        );
     }
 
     /// Identifies which repairs are needed based on the current state,

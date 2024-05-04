@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
-const shred_layout = sig.tvu.shred_layout;
+const shred_layout = sig.shred_collector.shred_layout;
 
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;

@@ -7,7 +7,7 @@ const Mutex = std.Thread.Mutex;
 
 const Slot = sig.core.Slot;
 
-const MAX_SHREDS_PER_SLOT: usize = sig.tvu.MAX_SHREDS_PER_SLOT;
+const MAX_SHREDS_PER_SLOT: usize = sig.shred_collector.MAX_SHREDS_PER_SLOT;
 
 pub const Range = struct {
     start: usize,

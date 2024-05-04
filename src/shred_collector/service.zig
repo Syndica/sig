@@ -9,23 +9,25 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
 
-const BasicShredTracker = sig.tvu.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
-const RepairPeerProvider = sig.tvu.RepairPeerProvider;
-const RepairRequester = sig.tvu.RepairRequester;
-const RepairService = sig.tvu.RepairService;
 const RwMux = sig.sync.RwMux;
 const ServiceManager = sig.utils.ServiceManager;
-const ShredReceiver = sig.tvu.ShredReceiver;
 const Slot = sig.core.Slot;
+
+const this = sig.shred_collector;
+const BasicShredTracker = this.BasicShredTracker;
+const RepairPeerProvider = this.RepairPeerProvider;
+const RepairRequester = this.RepairRequester;
+const RepairService = this.RepairService;
+const ShredReceiver = this.ShredReceiver;
 
 const SOCKET_TIMEOUT = sig.net.SOCKET_TIMEOUT;
 
-pub const TvuDependencies = struct {
+pub const ShredCollectorDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
@@ -40,23 +42,23 @@ pub const TvuDependencies = struct {
 };
 
 /// communication with non-tvu components
-pub const TvuCommunication = struct {}; // TODO take from deps
+pub const ShredCollectorCommunication = struct {}; // TODO take from deps
 
-pub const TvuConfig = struct {
+pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
     tvu_port: u16,
 };
 
-pub fn spawnTvu(deps: TvuDependencies, conf: TvuConfig) !ServiceManager {
+pub fn spawnShredCollector(deps: ShredCollectorDependencies, conf: ShredCollectorConfig) !ServiceManager {
     var tvu_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit);
 
     var repair_socket = try bindUdpReusable(conf.repair_port);
     var tvu_socket = try bindUdpReusable(conf.tvu_port);
 
     // tracker (shared state)
-    const shred_tracker = try tvu_manager.create(sig.tvu.BasicShredTracker, null);
-    shred_tracker.* = sig.tvu.BasicShredTracker.init(
+    const shred_tracker = try tvu_manager.create(sig.shred_collector.BasicShredTracker, null);
+    shred_tracker.* = sig.shred_collector.BasicShredTracker.init(
         conf.start_slot orelse 0, // TODO
         deps.logger,
     );
@@ -88,7 +90,7 @@ pub fn spawnTvu(deps: TvuDependencies, conf: TvuConfig) !ServiceManager {
         conf.start_slot,
     );
     try tvu_manager.spawn(
-        .{ .name = "Repair Service", .min_loop_duration_ns = 100 * std.time.ns_per_ms },
+        RepairService.run_config,
         RepairService.sendNecessaryRepairs,
         .{repair_svc},
     );
@@ -118,14 +120,14 @@ pub fn spawnTvu(deps: TvuDependencies, conf: TvuConfig) !ServiceManager {
     // verifier (thread)
     try tvu_manager.spawn(
         .{ .name = "Shred Verifier" },
-        sig.tvu.runShredSignatureVerification,
+        sig.shred_collector.runShredSignatureVerification,
         .{ deps.exit, unverified_shreds_channel, verified_shreds_channel, .{} },
     );
 
     // processor (thread)
     try tvu_manager.spawn(
         .{ .name = "Shred Processor" },
-        sig.tvu.processShreds,
+        sig.shred_collector.processShreds,
         .{ deps.allocator, verified_shreds_channel, shred_tracker },
     );
 

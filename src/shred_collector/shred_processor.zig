@@ -1,15 +1,15 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
-const layout = sig.tvu.shred_layout;
+const layout = sig.shred_collector.shred_layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-const BasicShredTracker = sig.tvu.BasicShredTracker;
+const BasicShredTracker = sig.shred_collector.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Packet = sig.net.Packet;
-const Shred = sig.tvu.Shred;
+const Shred = sig.shred_collector.Shred;
 
 /// analogous to `WindowService` TODO permalink
 pub fn processShreds(

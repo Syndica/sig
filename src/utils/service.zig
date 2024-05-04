@@ -13,10 +13,6 @@ const Logger = sig.trace.Logger;
 ///
 /// Provides facilities to wait for the threads to complete,
 /// and to clean up their shared state.
-///
-/// Typically, this should only manage state that must be shared
-/// by multiple threads, when it would not be safe for any individual
-/// thread to own it.
 pub const ServiceManager = struct {
     allocator: Allocator,
     exit: *Atomic(bool),
@@ -36,11 +32,11 @@ pub const ServiceManager = struct {
         };
     }
 
-    /// Allocate shared state to manage with this struct.
+    /// Allocate state to manage with this struct.
     /// Use for state that should outlive the managed threads.
     /// Typically this would be state that is shared by multiple threads,
     /// or state used to orchestrate an individual thread.
-    pub fn create(
+    pub fn create( // TODO: arena instead?
         self: *Self,
         comptime T: type,
         comptime deinitFn: ?fn (*T) void,

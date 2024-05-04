@@ -106,13 +106,13 @@ pub const prometheus = struct {
     pub usingnamespace @import("prometheus/registry.zig");
 };
 
-pub const tvu = struct {
-    pub usingnamespace @import("tvu/repair_message.zig");
-    pub usingnamespace @import("tvu/repair_service.zig");
-    pub usingnamespace @import("tvu/shred_receiver.zig");
-    pub usingnamespace @import("tvu/shred_verifier.zig");
-    pub usingnamespace @import("tvu/shred.zig");
-    pub usingnamespace @import("tvu/shred_tracker.zig");
-    pub usingnamespace @import("tvu/shred_processor.zig");
-    pub usingnamespace @import("tvu/tvu.zig");
+pub const shred_collector = struct {
+    pub usingnamespace @import("shred_collector/repair_message.zig");
+    pub usingnamespace @import("shred_collector/repair_service.zig");
+    pub usingnamespace @import("shred_collector/shred_receiver.zig");
+    pub usingnamespace @import("shred_collector/shred_verifier.zig");
+    pub usingnamespace @import("shred_collector/shred.zig");
+    pub usingnamespace @import("shred_collector/shred_tracker.zig");
+    pub usingnamespace @import("shred_collector/shred_processor.zig");
+    pub usingnamespace @import("shred_collector/service.zig");
 };

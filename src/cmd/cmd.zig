@@ -16,7 +16,7 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
-const BasicShredTracker = sig.tvu.BasicShredTracker;
+const BasicShredTracker = sig.shred_collector.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
@@ -24,8 +24,8 @@ const IpAddr = sig.net.IpAddr;
 const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
-const RepairService = sig.tvu.RepairService;
-const ShredReceiver = sig.tvu.ShredReceiver;
+const RepairService = sig.shred_collector.RepairService;
+const ShredReceiver = sig.shred_collector.ShredReceiver;
 const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -36,7 +36,7 @@ const enumFromName = sig.utils.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
-const initRepair = sig.tvu.initRepair;
+const initRepair = sig.shred_collector.initRepair;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
@@ -420,7 +420,7 @@ fn validator() !void {
     defer gossip_service.deinit();
     var gossip_handle = try spawnGossip(&gossip_service);
 
-    var tvu = try sig.tvu.spawnTvu(
+    var shred_collector = try sig.shred_collector.spawnShredCollector(
         .{
             .allocator = gpa_allocator,
             .logger = logger,
@@ -436,66 +436,7 @@ fn validator() !void {
             .tvu_port = tvu_port,
         },
     );
-    defer tvu.deinit();
-
-    // var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
-    // try sig.net.enablePortReuse(&repair_socket, true);
-    // try repair_socket.bindToPort(repair_port);
-    // try repair_socket.setReadTimeout(SOCKET_TIMEOUT);
-
-    // var tvu_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
-    // try sig.net.enablePortReuse(&tvu_socket, true);
-    // try tvu_socket.bindToPort(tvu_port);
-    // try tvu_socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
-
-    // const shred_tracker = try sig.tvu.BasicShredTracker.init(
-    //     gpa_allocator,
-    //     @intCast(config.current.tvu.test_repair_slot orelse 0),
-    //     logger,
-    // );
-    // const unverified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(gpa_allocator, 1000);
-    // const verified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(gpa_allocator, 1000);
-
-    // const repair_svc = try initRepair(
-    //     gpa_allocator,
-    //     logger,
-    //     &my_keypair,
-    //     &exit,
-    //     rand.random(),
-    //     &gossip_service.gossip_table_rw,
-    //     &gossip_service.my_shred_version,
-    //     &repair_socket,
-    //     shred_tracker,
-    //     if (config.current.tvu.test_repair_slot) |n| @intCast(n) else null,
-    // );
-    // var repair_handle = try std.Thread.spawn(.{}, RepairService.run, .{repair_svc});
-
-    // var shred_receiver = ShredReceiver{
-    //     .allocator = gpa_allocator,
-    //     .keypair = &my_keypair,
-    //     .exit = &exit,
-    //     .logger = logger,
-    //     .repair_socket = &repair_socket,
-    //     .tvu_socket = &tvu_socket,
-    //     .outgoing_shred_channel = unverified_shreds_channel,
-    //     .shred_version = shred_version,
-    // };
-
-    // var shred_receive_handle = try std.Thread.spawn(
-    //     .{},
-    //     ShredReceiver.run,
-    //     .{&shred_receiver},
-    // );
-    // var verify_shreds_handle = try std.Thread.spawn(
-    //     .{},
-    //     sig.tvu.runShredSigVerify,
-    //     .{ &exit, unverified_shreds_channel, verified_shreds_channel, .{} },
-    // );
-    // var process_shreds_handle = try std.Thread.spawn(
-    //     .{},
-    //     sig.tvu.processShreds,
-    //     .{ gpa_allocator, verified_shreds_channel, shred_tracker },
-    // );
+    defer shred_collector.deinit();
 
     // accounts db
     var snapshots = try getOrDownloadSnapshots(
@@ -568,7 +509,7 @@ fn validator() !void {
     logger.infof("accounts-db setup done...", .{});
 
     gossip_handle.join();
-    tvu.join();
+    shred_collector.join();
 }
 
 /// Initialize an instance of GossipService and configure with CLI arguments
