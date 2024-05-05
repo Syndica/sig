@@ -3,47 +3,50 @@ const network = @import("zig-network");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Logger = sig.trace.Logger;
+const Lazy = sig.utils.Lazy;
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.
 ///
-/// Provides facilities to wait for the threads to complete,
-/// and to clean up their shared state.
+/// You can add threads or state, then await all threads and
+/// clean up their state.
 pub const ServiceManager = struct {
-    allocator: Allocator,
+    logger: Logger,
+    /// Signal that is expected to tell all threads to exit.
     exit: *Atomic(bool),
-    runner: ServiceRunner,
+    /// Threads to join.
     threads: std.ArrayList(std.Thread),
-    shared_state: std.ArrayList(AnonBox),
+    /// State to free after all threads join.
+    _arena: ArenaAllocator,
+    /// Logic to run after all threads join.
+    defers: DeferList,
 
     const Self = @This();
 
-    pub fn init(allocator: Allocator, logger: Logger, exit: *Atomic(bool)) Self {
+    pub fn init(allocator_: Allocator, logger: Logger, exit: *Atomic(bool)) Self {
         return .{
-            .allocator = allocator,
+            .logger = logger,
             .exit = exit,
-            .runner = .{ .logger = logger, .exit = exit },
-            .threads = std.ArrayList(std.Thread).init(allocator),
-            .shared_state = std.ArrayList(AnonBox).init(allocator),
+            .threads = std.ArrayList(std.Thread).init(allocator_),
+            ._arena = ArenaAllocator.init(allocator_),
+            .defers = DeferList.init(allocator_),
         };
     }
 
-    /// Allocate state to manage with this struct.
-    /// Use for state that should outlive the managed threads.
-    /// Typically this would be state that is shared by multiple threads,
-    /// or state used to orchestrate an individual thread.
-    pub fn create( // TODO: arena instead?
-        self: *Self,
-        comptime T: type,
-        comptime deinitFn: ?fn (*T) void,
-    ) Allocator.Error!*T {
-        const ptr, const box = try AnonBox.init(T, deinitFn, self.allocator);
-        try self.shared_state.append(box);
-        return ptr;
+    /// Allocator for state to manage with this struct.
+    ///
+    /// Use this for state that should outlive the managed threads,
+    /// but may be freed as soon as those threads are joined.
+    ///
+    /// You must ensure that this is not used to allocate anything
+    /// that will be used after this struct is deinitialized.
+    pub fn arena(self: *Self) Allocator {
+        return self._arena.allocator();
     }
 
     /// Spawn a thread to be managed.
@@ -56,8 +59,8 @@ pub const ServiceManager = struct {
     ) !void {
         var thread = try std.Thread.spawn(
             .{},
-            ServiceRunner.runService,
-            .{ &self.runner, config, function, args },
+            runService,
+            .{ self.logger, self.exit, config, function, args },
         );
         if (config.name) |name| thread.setName(name) catch {};
         try self.threads.append(thread);
@@ -75,70 +78,9 @@ pub const ServiceManager = struct {
     pub fn deinit(self: Self) void {
         self.exit.store(true, .monotonic);
         for (self.threads.items) |t| t.join();
-        for (self.shared_state.items) |s| s.deinit();
         self.threads.deinit();
-        self.shared_state.deinit();
-    }
-};
-
-/// Convert a short-lived task into a long-lived service by looping it,
-/// or make a service resilient by restarting it on failure.
-pub const ServiceRunner = struct {
-    logger: Logger,
-    exit: *Atomic(bool),
-    service_counter: Atomic(usize) = .{ .raw = 0 },
-
-    const Self = @This();
-
-    pub fn runService(
-        self: *Self,
-        config: RunConfig,
-        function: anytype,
-        args: anytype,
-    ) !void {
-        var buf: [16]u8 = undefined;
-        const name = config.name orelse try std.fmt.bufPrint(
-            &buf,
-            "thread {d}",
-            .{std.Thread.getCurrentId()},
-        );
-        self.logger.infof("Starting {s}", .{name});
-        var timer = try std.time.Timer.start();
-        var last_iteration: u64 = 0;
-        while (!self.exit.load(.unordered)) {
-            if (@call(.auto, function, args)) |ok| {
-                switch (config.error_handler) {
-                    .keep_looping => {},
-                    .just_return => {
-                        self.logger.errf("Exiting {s} due to return", .{name});
-                        return ok;
-                    },
-                    .set_exit_and_return => {
-                        self.logger.errf("Signalling exit due to return from {s}", .{name});
-                        self.exit.store(true, .monotonic);
-                        return ok;
-                    },
-                }
-            } else |err| {
-                switch (config.error_handler) {
-                    .keep_looping => self.logger.errf("Unhandled error in {s}: {}", .{ name, err }),
-                    .just_return => {
-                        self.logger.errf("Exiting {s} due to error: {}", .{ name, err });
-                        return err;
-                    },
-                    .set_exit_and_return => {
-                        self.logger.errf("Signalling exit due to error in {s}: {}", .{ name, err });
-                        self.exit.store(true, .monotonic);
-                        return err;
-                    },
-                }
-            }
-            last_iteration = timer.lap();
-            std.time.sleep(@max(
-                config.min_pause_ns,
-                config.min_loop_duration_ns -| last_iteration,
-            ));
-        }
+        self.defers.deinit();
+        self._arena.deinit();
     }
 };
 
@@ -162,36 +104,94 @@ pub const ReturnHandler = enum {
     set_exit_and_return,
 };
 
-/// Create a pointer and manage its lifetime, without concern for its type.
+/// Convert a short-lived task into a long-lived service by looping it,
+/// or make a service resilient by restarting it on failure.
+pub fn runService(
+    logger: Logger,
+    exit: *Atomic(bool),
+    config: RunConfig,
+    function: anytype,
+    args: anytype,
+) !void {
+    var buf: [16]u8 = undefined;
+    const name = config.name orelse try std.fmt.bufPrint(
+        &buf,
+        "thread {d}",
+        .{std.Thread.getCurrentId()},
+    );
+    logger.infof("Starting {s}", .{name});
+    var timer = try std.time.Timer.start();
+    var last_iteration: u64 = 0;
+    while (!exit.load(.unordered)) {
+        if (@call(.auto, function, args)) |ok| {
+            switch (config.error_handler) {
+                .keep_looping => {},
+                .just_return => {
+                    logger.errf("Exiting {s} due to return", .{name});
+                    return ok;
+                },
+                .set_exit_and_return => {
+                    logger.errf("Signalling exit due to return from {s}", .{name});
+                    exit.store(true, .monotonic);
+                    return ok;
+                },
+            }
+        } else |err| {
+            switch (config.error_handler) {
+                .keep_looping => logger.errf("Unhandled error in {s}: {}", .{ name, err }),
+                .just_return => {
+                    logger.errf("Exiting {s} due to error: {}", .{ name, err });
+                    return err;
+                },
+                .set_exit_and_return => {
+                    logger.errf("Signalling exit due to error in {s}: {}", .{ name, err });
+                    exit.store(true, .monotonic);
+                    return err;
+                },
+            }
+        }
+        last_iteration = timer.lap();
+        std.time.sleep(@max(
+            config.min_pause_ns,
+            config.min_loop_duration_ns -| last_iteration,
+        ));
+    }
+}
+
+/// Defer actions until later.
 ///
-/// Useful when you need to manage the lifetime of data in a different
-/// context from where it is allocated or used.
-pub const AnonBox = struct {
-    allocator: Allocator,
-    state: *anyopaque,
-    deinitFn: *const fn (*anyopaque) void,
+/// The `defer` keyword always defers to the end of the current
+/// scope, which can sometimes be overly constraining.
+///
+/// Use `DeferList` when you need to defer actions to execute
+/// in a broader scope.
+///
+/// 1. Add defers using `deferCall`.
+/// 2. Return this struct to the broader scope.
+/// 3. Call `deinit` to run all the defers.
+pub const DeferList = struct {
+    defers: std.ArrayList(Lazy(void)),
 
     const Self = @This();
 
-    pub fn init(
-        comptime T: type,
-        comptime deinitFn: ?fn (*T) void,
-        allocator: Allocator,
-    ) Allocator.Error!struct { *T, Self } {
-        const ptr = try allocator.create(T);
-        const self = .{
-            .allocator = allocator,
-            .state = @as(*anyopaque, @ptrCast(@alignCast(ptr))),
-            .deinitFn = struct {
-                fn deinit(opaque_ptr: *anyopaque) void {
-                    if (deinitFn) |f| f(@ptrCast(@alignCast(opaque_ptr))) else {}
-                }
-            }.deinit,
-        };
-        return .{ ptr, self };
+    pub fn init(allocator: Allocator) Self {
+        return .{ .defers = std.ArrayList(Lazy(void)).init(allocator) };
     }
 
+    pub fn deferCall(
+        self: *Self,
+        comptime function: anytype,
+        args: anytype,
+    ) !void {
+        const lazy = try Lazy(void).init(self.defers.allocator, function, args);
+        try self.defers.append(lazy);
+    }
+
+    /// Runs all the defers, then deinits this struct.
     pub fn deinit(self: Self) void {
-        self.deinitFn(self.state);
+        for (1..self.defers.items.len + 1) |i| {
+            self.defers.items[self.defers.items.len - i].call();
+        }
+        self.defers.deinit();
     }
 };

@@ -36,7 +36,6 @@ const enumFromName = sig.utils.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
-const initRepair = sig.shred_collector.initRepair;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
@@ -420,22 +419,21 @@ fn validator() !void {
     defer gossip_service.deinit();
     var gossip_handle = try spawnGossip(&gossip_service);
 
-    var shred_collector = try sig.shred_collector.spawnShredCollector(
-        .{
-            .allocator = gpa_allocator,
-            .logger = logger,
-            .random = rand.random(),
-            .my_keypair = &my_keypair,
-            .exit = &exit,
-            .gossip_table_rw = &gossip_service.gossip_table_rw,
-            .my_shred_version = &gossip_service.my_shred_version,
-        },
-        .{
-            .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else null,
-            .repair_port = repair_port,
-            .tvu_port = tvu_port,
-        },
-    );
+    // shred collector
+    var shred_collector = try sig.shred_collector.start(.{
+        .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else null,
+        .repair_port = repair_port,
+        .tvu_port = tvu_port,
+    }, .{
+        .allocator = gpa_allocator,
+        .logger = logger,
+        .random = rand.random(),
+        .my_keypair = &my_keypair,
+    }, .{
+        .exit = &exit,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_shred_version = &gossip_service.my_shred_version,
+    });
     defer shred_collector.deinit();
 
     // accounts db

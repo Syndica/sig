@@ -27,51 +27,11 @@ const SignedGossipData = sig.gossip.SignedGossipData;
 const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
-const TaskLooper = sig.utils.ServiceRunner;
 
 const RepairRequest = sig.shred_collector.RepairRequest;
 const RepairMessage = sig.shred_collector.RepairMessage;
 
 const serializeRepairRequest = sig.shred_collector.serializeRepairRequest;
-
-/// TODO: redundant?
-pub fn initRepair(
-    allocator: Allocator,
-    logger: Logger,
-    my_keypair: *const KeyPair,
-    exit: *Atomic(bool),
-    random: Random,
-    gossip_table_rw: *RwMux(GossipTable),
-    my_shred_version: *Atomic(u16),
-    socket: *Socket,
-    shred_tracker: *BasicShredTracker,
-    start_slot: ?Slot,
-) !RepairService {
-    const peer_provider = try RepairPeerProvider.init(
-        allocator,
-        random,
-        gossip_table_rw,
-        Pubkey.fromPublicKey(&my_keypair.public_key),
-        my_shred_version,
-    );
-    const requester = try RepairRequester.init(
-        allocator,
-        logger,
-        random,
-        my_keypair,
-        socket,
-        exit,
-    );
-    return RepairService.init(
-        allocator,
-        logger,
-        exit,
-        requester,
-        peer_provider,
-        shred_tracker,
-        start_slot,
-    );
-}
 
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
@@ -104,11 +64,6 @@ pub const RepairService = struct {
 
     const Self = @This();
 
-    pub const run_config = sig.utils.RunConfig{
-        .name = "Repair Service",
-        .min_loop_duration_ns = 100 * std.time.ns_per_ms,
-    };
-
     pub fn init(
         allocator: Allocator,
         logger: Logger,
@@ -135,6 +90,12 @@ pub const RepairService = struct {
         self.peer_provider.deinit();
         self.requester.deinit();
     }
+
+    /// Used to run RepairService continuously.
+    pub const run_config = sig.utils.RunConfig{
+        .name = "Repair Service",
+        .min_loop_duration_ns = 100 * std.time.ns_per_ms,
+    };
 
     /// Identifies which repairs are needed based on the current state,
     /// and sends those repairs, then returns.

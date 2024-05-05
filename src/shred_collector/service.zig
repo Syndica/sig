@@ -27,37 +27,54 @@ const ShredReceiver = this.ShredReceiver;
 
 const SOCKET_TIMEOUT = sig.net.SOCKET_TIMEOUT;
 
-pub const ShredCollectorDependencies = struct {
-    allocator: Allocator,
-    logger: Logger,
-    random: Random,
-    /// This validator's keypair
-    my_keypair: *const KeyPair,
-    /// Shared exit indicator, used to shutdown the TVU.
-    exit: *Atomic(bool),
-    /// Shared state from gossip
-    gossip_table_rw: *RwMux(GossipTable),
-    /// Shared state from gossip
-    my_shred_version: *const Atomic(u16),
-};
-
-/// communication with non-tvu components
-pub const ShredCollectorCommunication = struct {}; // TODO take from deps
-
+/// Settings which tell the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
     tvu_port: u16,
 };
 
-pub fn spawnShredCollector(deps: ShredCollectorDependencies, conf: ShredCollectorConfig) !ServiceManager {
-    var tvu_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit);
+/// Basic resources that are required for
+/// the Shred Collector to operate.
+pub const ShredCollectorDependencies = struct {
+    allocator: Allocator,
+    logger: Logger,
+    random: Random,
+    /// This validator's keypair
+    my_keypair: *const KeyPair,
+};
+
+/// Interface between the Shred Collector and other components
+/// that are external to the Shred Collector.
+pub const ShredCollectorInterface = struct {
+    /// Shared exit indicator, used to shutdown the Shred Collector.
+    exit: *Atomic(bool),
+    /// Shared state that is read from gossip
+    gossip_table_rw: *RwMux(GossipTable),
+    /// Shared state that is read from gossip
+    my_shred_version: *const Atomic(u16),
+};
+
+/// Start the Shred Collector.
+///
+/// Initializes all state and spawns all threads.
+/// Returns as soon as all the threads are running.
+///
+/// Returns a ServiceManager representing the Shred Collector.
+/// This can be used to join and deinit the Shred Collector.
+pub fn start(
+    conf: ShredCollectorConfig,
+    deps: ShredCollectorDependencies,
+    interface: ShredCollectorInterface,
+) !ServiceManager {
+    var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit);
+    var arena = shred_collector.arena();
 
     var repair_socket = try bindUdpReusable(conf.repair_port);
     var tvu_socket = try bindUdpReusable(conf.tvu_port);
 
-    // tracker (shared state)
-    const shred_tracker = try tvu_manager.create(sig.shred_collector.BasicShredTracker, null);
+    // tracker (shared state, internal to Shred Collector)
+    const shred_tracker = try arena.create(sig.shred_collector.BasicShredTracker);
     shred_tracker.* = sig.shred_collector.BasicShredTracker.init(
         conf.start_slot orelse 0, // TODO
         deps.logger,
@@ -67,9 +84,9 @@ pub fn spawnShredCollector(deps: ShredCollectorDependencies, conf: ShredCollecto
     const repair_peer_provider = try RepairPeerProvider.init(
         deps.allocator,
         deps.random,
-        deps.gossip_table_rw,
+        interface.gossip_table_rw,
         Pubkey.fromPublicKey(&deps.my_keypair.public_key),
-        deps.my_shred_version,
+        interface.my_shred_version,
     );
     const repair_requester = try RepairRequester.init(
         deps.allocator,
@@ -77,25 +94,26 @@ pub fn spawnShredCollector(deps: ShredCollectorDependencies, conf: ShredCollecto
         deps.random,
         deps.my_keypair,
         &repair_socket,
-        deps.exit,
+        interface.exit,
     );
-    const repair_svc = try tvu_manager.create(RepairService, RepairService.deinit);
+    const repair_svc = try arena.create(RepairService);
+    try shred_collector.defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = RepairService.init(
         deps.allocator,
         deps.logger,
-        deps.exit,
+        interface.exit,
         repair_requester,
         repair_peer_provider,
         shred_tracker,
         conf.start_slot,
     );
-    try tvu_manager.spawn(
+    try shred_collector.spawn(
         RepairService.run_config,
         RepairService.sendNecessaryRepairs,
         .{repair_svc},
     );
 
-    // receiver (thread)
+    // receiver (threads)
     const unverified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
         deps.allocator,
         1000,
@@ -104,34 +122,34 @@ pub fn spawnShredCollector(deps: ShredCollectorDependencies, conf: ShredCollecto
         deps.allocator,
         1000,
     );
-    const shred_receiver = try tvu_manager.create(ShredReceiver, null);
+    const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = ShredReceiver{
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
-        .exit = deps.exit,
+        .exit = interface.exit,
         .logger = deps.logger,
         .repair_socket = &repair_socket,
         .tvu_socket = &tvu_socket,
         .outgoing_shred_channel = unverified_shreds_channel,
-        .shred_version = deps.my_shred_version,
+        .shred_version = interface.my_shred_version,
     };
-    try tvu_manager.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
+    try shred_collector.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
-    try tvu_manager.spawn(
+    try shred_collector.spawn(
         .{ .name = "Shred Verifier" },
         sig.shred_collector.runShredSignatureVerification,
-        .{ deps.exit, unverified_shreds_channel, verified_shreds_channel, .{} },
+        .{ interface.exit, unverified_shreds_channel, verified_shreds_channel, .{} },
     );
 
     // processor (thread)
-    try tvu_manager.spawn(
+    try shred_collector.spawn(
         .{ .name = "Shred Processor" },
         sig.shred_collector.processShreds,
         .{ deps.allocator, verified_shreds_channel, shred_tracker },
     );
 
-    return tvu_manager;
+    return shred_collector;
 }
 
 fn bindUdpReusable(port: u16) !Socket {
