@@ -116,10 +116,8 @@ pub const ShredReceiver = struct {
         } else {
             const endpoint_str = try endpointToString(self.allocator, &packet.addr);
             defer endpoint_str.deinit();
-            // self.logger.field("from_endpoint", endpoint_str.items)
-            //     .debugf("tvu: recv shred message: {} bytes", .{packet.size});
 
-            // TODO figure out these values
+            // TODO set correct values once using snapshot + blockstore
             const root = 0;
             const max_slot = std.math.maxInt(Slot);
             if (shouldDiscardShred(packet, root, shred_version, max_slot)) {
@@ -178,7 +176,10 @@ fn shouldDiscardShred(
         },
     }
 
-    // TODO: should we check for enable_chained_merkle_shreds?
+    // TODO: check for feature activation of enable_chained_merkle_shreds
+    // 7uZBkJXJ1HkuP6R3MJfZs7mLwymBcDbKdqbF51ZWLier
+    // https://github.com/solana-labs/solana/pull/34916
+    // https://github.com/solana-labs/solana/pull/35076
 
     _ = layout.getSignature(shred) orelse return true;
     _ = layout.getSignedData(shred) orelse return true;
