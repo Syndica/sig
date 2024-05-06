@@ -113,6 +113,11 @@ pub const AccountFile = struct {
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
+    // size of accounts which are either old-state or zero-lamport
+    dead_bytes: usize = 0,
+    // is populated when file is read
+    // note: need a separate counter vs mmap.len because of padding
+    account_bytes: usize = 0,
 
     const Self = @This();
 
@@ -149,12 +154,14 @@ pub const AccountFile = struct {
     pub fn validate(self: *Self) !void {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
+        var account_bytes: usize = 0;
 
         while (true) {
             const account = self.readAccount(offset) catch break;
             try account.validate();
             offset = offset + account.len;
             number_of_accounts += 1;
+            account_bytes += account.len;
         }
 
         if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
@@ -162,6 +169,23 @@ pub const AccountFile = struct {
         }
 
         self.number_of_accounts = number_of_accounts;
+        self.account_bytes = account_bytes;
+    }
+
+    pub fn populateMetadata(self: *Self) !void {
+        var offset: usize = 0;
+        var number_of_accounts: usize = 0;
+        var account_bytes: usize = 0;
+
+        while (true) {
+            const account = self.readAccount(offset) catch break;
+            offset = offset + account.len;
+            number_of_accounts += 1;
+            account_bytes += account.len;
+        }
+
+        self.number_of_accounts = number_of_accounts;
+        self.account_bytes = account_bytes;
     }
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)
@@ -245,6 +269,24 @@ pub const AccountFile = struct {
     pub fn getType(self: *const Self, start_index_ptr: *usize, comptime T: type) error{EOF}!*T {
         const length = @sizeOf(T);
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
+    }
+
+    pub const Iterator = struct {
+        accounts_file: *const Self,
+        offset: usize = 0,
+
+        pub fn next(self: *Iterator) ?AccountInFile {
+            while (true) {
+                const account = self.accounts_file.readAccount(self.offset) catch break;
+                self.offset = self.offset + account.len;
+                return account;
+            }
+            return null;
+        }
+    };
+
+    pub fn iterator(self: *const Self) Iterator {
+        return .{ .accounts_file = self };
     }
 };
 

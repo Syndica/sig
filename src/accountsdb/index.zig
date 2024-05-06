@@ -252,6 +252,15 @@ pub const AccountIndex = struct {
         return bin.get(pubkey.*);
     }
 
+    pub fn getSlotReference(self: *Self, pubkey: *const Pubkey, slot: Slot) ?*AccountRef {
+        const bin = self.getBinFromPubkey(pubkey);
+        var curr_ref = bin.get(pubkey.*);
+        while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+            if (ref.slot == slot) return ref;
+        }
+        return null;
+    }
+
     pub fn validateAccountFile(
         self: *Self,
         accounts_file: *AccountFile,

@@ -47,6 +47,7 @@ pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 const POSIX_MAP_TYPE_SHARED = 0x01; // This will work on linux and macos x86_64/aarch64
+const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
 /// database for accounts
 pub const AccountsDB = struct {
@@ -59,10 +60,15 @@ pub const AccountsDB = struct {
     // track per-slot for purge/flush
     account_cache: std.AutoHashMap(Slot, PubkeysAndAccounts),
     file_map: std.AutoArrayHashMap(FileId, AccountFile),
-    // used for filenames when flushing accounts to disk
-    largest_file_id: u32 = 0,
     // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
     unclean_account_files: std.ArrayList(FileId),
+    // files which have a small number of accounts alive and should be shrunk
+    shrink_account_files: std.AutoArrayHashMap(FileId, void),
+    // files which have zero accounts and should be deleted
+    delete_account_files: std.ArrayList(FileId),
+    // used for filenames when flushing accounts to disk
+    // TODO: do we need this? since flushed slots will be unique
+    largest_file_id: u32 = 0,
 
     logger: Logger,
     config: AccountsDBConfig,
@@ -107,6 +113,8 @@ pub const AccountsDB = struct {
             .account_cache = std.AutoHashMap(Slot, PubkeysAndAccounts).init(allocator),
             .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
             .unclean_account_files = std.ArrayList(FileId).init(allocator),
+            .shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
+            .delete_account_files = std.ArrayList(FileId).init(allocator),
         };
     }
 
@@ -124,7 +132,10 @@ pub const AccountsDB = struct {
             self.allocator.destroy(ptr);
         }
         self.account_cache.deinit();
+
         self.unclean_account_files.deinit();
+        self.shrink_account_files.deinit();
+        self.delete_account_files.deinit();
     }
 
     /// easier to use load function
@@ -842,6 +853,7 @@ pub const AccountsDB = struct {
     }
 
     /// flushes a slot account data from the cache onto disk, and updates the index
+    /// note: this deallocates the []account and []pubkey data
     pub fn flushSlot(self: *Self, slot: Slot) !void {
         const pubkeys, const accounts = self.account_cache.get(slot) orelse return error.SlotNotFound;
         std.debug.assert(accounts.len == pubkeys.len);
@@ -897,7 +909,7 @@ pub const AccountsDB = struct {
         var offset: usize = 0;
         for (0..accounts.len) |i| {
             // update the reference
-            var ref = self.account_index.getReference(&pubkeys[i]) orelse unreachable;
+            var ref = self.account_index.getSlotReference(&pubkeys[i], slot) orelse unreachable;
             ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
 
             // write the account to the file
@@ -906,12 +918,123 @@ pub const AccountsDB = struct {
         }
         try file.sync();
 
-        const account_file = try AccountFile.init(file, .{
+        var account_file = try AccountFile.init(file, .{
             .id = @intCast(file_id),
             .length = offset,
         }, slot);
+        // fill in metadata such as alive_bytes, n_accounts, etc.
+        // validation would fail because it may contain zero lamport accounts
+        // TOOD: maybe remove zero-lamports before flushing
+        try account_file.populateMetadata();
 
         try self.file_map.putNoClobber(file_id, account_file);
+
+        // queue for cleaning
+        try self.unclean_account_files.append(file_id);
+    }
+
+    pub fn cleanAccountFiles(self: *Self, highest_rooted_slot: Slot) !struct {
+        num_zero_lamports: usize,
+        num_old_states: usize,
+    } {
+        defer self.unclean_account_files.clearRetainingCapacity();
+
+        var num_zero_lamports: usize = 0;
+        var num_old_states: usize = 0;
+
+        // track then delete all to avoid deleting while iterating
+        var references_to_delete = std.ArrayList(*AccountRef).init(self.allocator);
+        defer references_to_delete.deinit();
+
+        // track so we dont double delete
+        var cleaned_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
+        defer cleaned_pubkeys.deinit();
+
+        for (self.unclean_account_files.items) |file_id| {
+            // SAFE: this should always succeed or something is wrong
+            var account_file = self.file_map.get(file_id).?;
+
+            var account_iter = account_file.iterator();
+            while (account_iter.next()) |account| {
+                const pubkey = account.pubkey();
+
+                // check if already cleaned
+                if (cleaned_pubkeys.get(pubkey.*)) |_| continue;
+                try cleaned_pubkeys.put(pubkey.*, {});
+
+                // SAFE: this should always succeed or something is wrong
+                const reference = self.account_index.getReference(pubkey).?;
+
+                // get the highest slot < highest_rooted_slot
+                var highest_ref_slot: usize = 0;
+                var rooted_ref_count: usize = 0;
+                var curr: ?*AccountRef = reference;
+                while (curr) |ref| : (curr = ref.next_ptr) {
+                    // only track rooted states
+                    const is_rooted_ref = ref.slot <= highest_rooted_slot;
+                    if (!is_rooted_ref) continue;
+
+                    const is_larger_slot = ref.slot > highest_ref_slot or rooted_ref_count == 0;
+                    if (is_larger_slot) {
+                        highest_ref_slot = ref.slot;
+                    }
+                    rooted_ref_count += 1;
+                }
+                if (rooted_ref_count == 0) continue;
+
+                // if there are extra references, remove them
+                curr = reference;
+                while (curr) |ref| : (curr = ref.next_ptr) {
+                    const is_not_rooted = ref.slot > highest_rooted_slot;
+                    if (is_not_rooted) continue;
+
+                    // the only reason to delete the highest ref is if it is zero-lamports
+                    const is_highest_ref_slot = ref.slot == highest_ref_slot;
+                    var is_zero_lamports = false;
+                    if (is_highest_ref_slot) {
+                        // check if account is zero-lamports
+                        const ref_info = try self.getAccountHashAndLamportsFromRef(ref);
+                        is_zero_lamports = ref_info.lamports == 0;
+                    }
+
+                    const is_old_state = ref.slot < highest_ref_slot;
+
+                    if (is_old_state) num_old_states += 1;
+                    if (is_zero_lamports) num_zero_lamports += 1;
+
+                    const should_delete_ref = is_zero_lamports or is_old_state;
+                    if (should_delete_ref) {
+                        // track
+                        try references_to_delete.append(ref);
+
+                        // increment dead bytes
+                        const ref_account = try self.getAccountInFile(ref.location.File.file_id, ref.location.File.offset);
+                        account_file.dead_bytes += ref_account.len;
+
+                        // queue file for shrink or delete
+                        const dead_percentage = account_file.dead_bytes * 100 / account_file.account_bytes;
+                        if (dead_percentage == 100) {
+                            // queue for delete
+                            try self.delete_account_files.append(file_id);
+                        } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
+                            // queue for shrink
+                            try self.shrink_account_files.put(file_id, {});
+                        }
+                    }
+                }
+
+                // remove from index
+                for (references_to_delete.items) |ref| {
+                    try self.account_index.removeReference(&ref.pubkey, ref.slot);
+                }
+                references_to_delete.clearRetainingCapacity();
+            }
+        }
+
+        return .{
+            .num_zero_lamports = num_zero_lamports,
+            .num_old_states = num_old_states,
+        };
     }
 
     inline fn lessThanIf(
@@ -1305,6 +1428,9 @@ test "accounts_db.db: flushing slots works" {
     try account_file.validate();
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
+
+    try std.testing.expect(accounts_db.unclean_account_files.items.len == 1);
+    try std.testing.expect(accounts_db.unclean_account_files.items[0] == file_id);
 }
 
 test "accounts_db.db: purge accounts in cache works" {
@@ -1356,6 +1482,176 @@ test "accounts_db.db: purge accounts in cache works" {
     for (0..n_accounts) |i| {
         try std.testing.expect(accounts_db.account_index.getReference(&pubkey_copy[i]) == null);
     }
+}
+
+test "accounts_db.db: clean to shrink account file works with zero-lamports" {
+    const allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
+    var accounts_db = try AccountsDB.init(allocator, logger, .{
+        .num_index_bins = 4,
+        .snapshot_dir = "test_data",
+    });
+    defer accounts_db.deinit(true);
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+    const n_accounts = 10;
+
+    // generate the account file for slot 0
+    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    const accounts = try allocator.alloc(Account, n_accounts);
+    for (0..n_accounts) |i| {
+        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, rng, 100);
+    }
+    const slot = @as(u64, @intCast(0));
+    try accounts_db.putAccountBatch(
+        accounts,
+        pubkeys,
+        slot,
+    );
+
+    // duplicate HALF before the flush/deinit
+    const new_len = n_accounts - 1; // one new root with zero lamports
+    const pubkeys2 = try allocator.alloc(Pubkey, new_len);
+    const accounts2 = try allocator.alloc(Account, new_len);
+    @memcpy(pubkeys2, pubkeys[0..new_len]);
+    for (0..new_len) |i| {
+        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+        accounts2[i].lamports = 0; // !
+    }
+    try accounts_db.flushSlot(slot);
+
+    // write new state
+    const new_slot = @as(u64, @intCast(10));
+    try accounts_db.putAccountBatch(
+        accounts2,
+        pubkeys2,
+        new_slot,
+    );
+    try accounts_db.flushSlot(new_slot);
+
+    const r = try accounts_db.cleanAccountFiles(20);
+    try std.testing.expect(r.num_old_states == new_len);
+    try std.testing.expect(r.num_zero_lamports == new_len);
+    // shrink
+    try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
+    try std.testing.expect(accounts_db.delete_account_files.items.len == 0);
+}
+
+test "accounts_db.db: clean to shrink account file works" {
+    const allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
+    var accounts_db = try AccountsDB.init(allocator, logger, .{
+        .num_index_bins = 4,
+        .snapshot_dir = "test_data",
+    });
+    defer accounts_db.deinit(true);
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+    const n_accounts = 10;
+
+    // generate the account file for slot 0
+    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    const accounts = try allocator.alloc(Account, n_accounts);
+    for (0..n_accounts) |i| {
+        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, rng, 100);
+    }
+    const slot = @as(u64, @intCast(0));
+    try accounts_db.putAccountBatch(
+        accounts,
+        pubkeys,
+        slot,
+    );
+
+    // duplicate HALF before the flush/deinit
+    const new_len = n_accounts - 1; // 90% delete = shrink
+    const pubkeys2 = try allocator.alloc(Pubkey, new_len);
+    const accounts2 = try allocator.alloc(Account, new_len);
+    @memcpy(pubkeys2, pubkeys[0..new_len]);
+    for (0..new_len) |i| {
+        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+    }
+    try accounts_db.flushSlot(slot);
+
+    // write new state
+    const new_slot = @as(u64, @intCast(10));
+    try accounts_db.putAccountBatch(
+        accounts2,
+        pubkeys2,
+        new_slot,
+    );
+    try accounts_db.flushSlot(new_slot);
+
+    const r = try accounts_db.cleanAccountFiles(20);
+    try std.testing.expect(r.num_old_states == new_len);
+    try std.testing.expect(r.num_zero_lamports == 0);
+    // shrink
+    try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
+    try std.testing.expect(accounts_db.delete_account_files.items.len == 0);
+}
+
+test "accounts_db.db: full clean account file works" {
+    const allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
+    var accounts_db = try AccountsDB.init(allocator, logger, .{
+        .num_index_bins = 4,
+        .snapshot_dir = "test_data",
+    });
+    defer accounts_db.deinit(true);
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+    const n_accounts = 3;
+
+    // generate the account file for slot 0
+    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    const accounts = try allocator.alloc(Account, n_accounts);
+    for (0..n_accounts) |i| {
+        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, rng, i % 1_000);
+    }
+    const slot = @as(u64, @intCast(0));
+    try accounts_db.putAccountBatch(
+        accounts,
+        pubkeys,
+        slot,
+    );
+
+    // duplicate before the flush/deinit
+    const pubkeys2 = try allocator.alloc(Pubkey, n_accounts);
+    const accounts2 = try allocator.alloc(Account, n_accounts);
+    @memcpy(pubkeys2, pubkeys);
+    for (0..n_accounts) |i| {
+        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+    }
+
+    try accounts_db.flushSlot(slot);
+
+    var r = try accounts_db.cleanAccountFiles(0); // zero is rooted so no files should be cleaned
+    try std.testing.expect(r.num_old_states == 0);
+    try std.testing.expect(r.num_zero_lamports == 0);
+
+    r = try accounts_db.cleanAccountFiles(1); // zero has no old state so no files should be cleaned
+    try std.testing.expect(r.num_old_states == 0);
+    try std.testing.expect(r.num_zero_lamports == 0);
+
+    // write new state
+    const new_slot = @as(u64, @intCast(10));
+    try accounts_db.putAccountBatch(
+        accounts2,
+        pubkeys2,
+        new_slot,
+    );
+    try accounts_db.flushSlot(new_slot);
+
+    r = try accounts_db.cleanAccountFiles(20);
+    try std.testing.expect(r.num_old_states == n_accounts);
+    try std.testing.expect(r.num_zero_lamports == 0);
+    // full delete
+    try std.testing.expect(accounts_db.delete_account_files.items.len == 1);
 }
 
 pub const BenchmarkAccountsDB = struct {
