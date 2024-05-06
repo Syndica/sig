@@ -3,29 +3,23 @@ const network = @import("zig-network");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
 
-const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
-const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const ServiceManager = sig.utils.ServiceManager;
 const Slot = sig.core.Slot;
 
 const this = sig.shred_collector;
-const BasicShredTracker = this.BasicShredTracker;
 const RepairPeerProvider = this.RepairPeerProvider;
 const RepairRequester = this.RepairRequester;
 const RepairService = this.RepairService;
 const ShredReceiver = this.ShredReceiver;
-
-const SOCKET_TIMEOUT = sig.net.SOCKET_TIMEOUT;
 
 /// Settings which tell the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
