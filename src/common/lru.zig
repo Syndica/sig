@@ -141,8 +141,7 @@ pub fn LruCacheCustom(
             }
 
             const replaced_and_created_node = self.internal_recycle_or_create_node(key, value) catch |e| {
-                std.debug.print("replace_or_create_node returned error: {any}", .{e});
-                @panic("could not recycle_or_create_node");
+                std.debug.panic("recycle_or_create_node returned error: {any}", .{e});
             };
             const new_lru_entry = replaced_and_created_node[1];
             return new_lru_entry;

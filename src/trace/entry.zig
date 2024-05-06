@@ -215,6 +215,4 @@ test "trace.entry: should info log correctly" {
         .field("elapsed", @as(i48, 135133340042))
         .field("possible_value", anull)
         .logf(.info, "hello, {s}", .{"world!"});
-
-    // std.debug.print("{any}\n\n", .{logger});
 }
