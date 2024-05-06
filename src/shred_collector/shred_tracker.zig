@@ -9,6 +9,8 @@ const Slot = sig.core.Slot;
 
 const MAX_SHREDS_PER_SLOT: usize = sig.shred_collector.MAX_SHREDS_PER_SLOT;
 
+const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 200;
+
 pub const Range = struct {
     start: usize,
     end: ?usize,
@@ -22,7 +24,9 @@ pub const BasicShredTracker = struct {
     /// The oldest slot still being tracked, which hasn't yet been finished
     current_bottom_slot: Slot,
     /// The highest slot for which a shred has been received and processed successfully.
-    max_slot_seen: Slot,
+    max_slot_processed: Slot,
+    /// The highest slot that has been seen at all.
+    max_slot_seen: Slot = 0,
     /// ring buffer
     slots: [num_slots]MonitoredSlot = .{.{}} ** num_slots,
 
@@ -34,7 +38,7 @@ pub const BasicShredTracker = struct {
         return .{
             .start_slot = slot,
             .current_bottom_slot = slot,
-            .max_slot_seen = slot -| 1,
+            .max_slot_processed = slot -| 1,
             .logger = logger,
         };
     }
@@ -47,10 +51,11 @@ pub const BasicShredTracker = struct {
         self.mux.lock();
         defer self.mux.unlock();
 
+        self.max_slot_seen = @max(self.max_slot_seen, slot);
         const monitored_slot = try self.getSlot(slot);
         const new = try monitored_slot.record(shred_index);
         if (new) self.logger.debugf("new slot: {}", .{slot});
-        self.max_slot_seen = @max(self.max_slot_seen, slot);
+        self.max_slot_processed = @max(self.max_slot_processed, slot);
     }
 
     pub fn setLastShred(self: *Self, slot: Slot, index: usize) !void {
@@ -72,10 +77,12 @@ pub const BasicShredTracker = struct {
         var found_an_incomplete_slot = false;
         slot_reports.clearRetainingCapacity();
         const timestamp = std.time.milliTimestamp();
-        const last_slot_to_check = @max(self.max_slot_seen, self.current_bottom_slot);
+        const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getSlot(slot);
-            if (monitored_slot.first_received_timestamp_ms + 1000 > timestamp) {
+            if (monitored_slot.is_complete or
+                monitored_slot.first_received_timestamp_ms + MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp)
+            {
                 continue;
             }
             var slot_report = try slot_reports.addOne();
@@ -87,7 +94,7 @@ pub const BasicShredTracker = struct {
                 slot_reports.drop(1);
             }
             if (!found_an_incomplete_slot) {
-                self.logger.debugf("finished slot: {}", .{slot});
+                self.logger.debugf("finished slot: {}", .{slot}); // FIXME not always logged
                 self.current_bottom_slot = @max(self.current_bottom_slot, slot + 1);
                 monitored_slot.* = .{};
             }
@@ -140,10 +147,13 @@ const MonitoredSlot = struct {
     max_seen: ?usize = null,
     last_shred: ?usize = null,
     first_received_timestamp_ms: i64 = 0,
+    is_complete: bool = false,
 
     const Self = @This();
 
+    /// returns whether this is the first shred received for the slot
     pub fn record(self: *Self, shred_index: usize) !bool {
+        if (self.is_complete) return false;
         self.shreds.set(shred_index);
         if (self.max_seen == null) {
             self.max_seen = shred_index;
@@ -156,6 +166,7 @@ const MonitoredSlot = struct {
 
     pub fn identifyMissing(self: *Self, missing_shreds: *ArrayList(Range)) !void {
         missing_shreds.clearRetainingCapacity();
+        if (self.is_complete) return;
         const highest_shred_to_check = self.last_shred orelse self.max_seen orelse 0;
         var gap_start: ?usize = null;
         for (0..highest_shred_to_check + 1) |i| {
@@ -173,47 +184,48 @@ const MonitoredSlot = struct {
         } else if (self.max_seen.? < self.last_shred.?) {
             try missing_shreds.append(.{ .start = self.max_seen.? + 1, .end = self.last_shred });
         }
+        if (missing_shreds.items.len == 0) {
+            self.is_complete = true;
+        }
     }
 };
 
-test "tvu.shred_tracker2: trivial happy path" {
+test "trivial happy path" {
     const allocator = std.testing.allocator;
 
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    var tracker = try BasicShredTracker.init(allocator, 13579);
-    defer tracker.deinit();
+    var tracker = BasicShredTracker.init(13579, .noop);
 
     try tracker.identifyMissing(&msr);
 
-    try std.testing.expect(1 == msr.reports.items.len);
-    const report = msr.reports.items[0];
+    try std.testing.expect(1 == msr.len);
+    const report = msr.items()[0];
     try std.testing.expect(13579 == report.slot);
     try std.testing.expect(1 == report.missing_shreds.items.len);
     try std.testing.expect(0 == report.missing_shreds.items[0].start);
     try std.testing.expect(null == report.missing_shreds.items[0].end);
 }
 
-test "tvu.shred_tracker2: 1 registered shred is identified" {
+test "1 registered shred is identified" {
     const allocator = std.testing.allocator;
 
     var msr = MultiSlotReport.init(allocator);
     defer msr.deinit();
 
-    var tracker = try BasicShredTracker.init(allocator, 13579);
-    defer tracker.deinit();
+    var tracker = BasicShredTracker.init(13579, .noop);
     try tracker.registerShred(13579, 123);
     std.time.sleep(210 * std.time.ns_per_ms);
 
     try tracker.identifyMissing(&msr);
 
     try std.testing.expect(1 == msr.len);
-    const report = msr.reports.items[0];
+    const report = msr.items()[0];
     try std.testing.expect(13579 == report.slot);
     try std.testing.expect(2 == report.missing_shreds.items.len);
     try std.testing.expect(0 == report.missing_shreds.items[0].start);
     try std.testing.expect(123 == report.missing_shreds.items[0].end);
-    try std.testing.expect(124 == report.missing_shreds.items[1].start);
+    try std.testing.expect(0 == report.missing_shreds.items[1].start);
     try std.testing.expect(null == report.missing_shreds.items[1].end);
 }

@@ -28,8 +28,8 @@ pub const ShredReceiver = struct {
     keypair: *const KeyPair,
     exit: *Atomic(bool),
     logger: Logger,
-    repair_socket: *Socket,
-    tvu_socket: *Socket,
+    repair_socket: Socket,
+    tvu_socket: Socket,
     outgoing_shred_channel: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
 
@@ -199,7 +199,3 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 const REPAIR_RESPONSE_SERIALIZED_PING_BYTES = 132;
 
 const RepairPing = union(enum) { Ping: Ping };
-
-test "asd quend" {
-    std.debug.print("{s}", .{@typeName(@TypeOf(ShredReceiver.run))});
-}

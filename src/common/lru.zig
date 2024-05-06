@@ -112,6 +112,7 @@ pub fn LruCacheCustom(
         fn internal_recycle_or_create_node(self: *Self, key: K, value: V) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
             if (self.dbl_link_list.len == self.max_items) {
                 const recycled_node = self.dbl_link_list.popFirst().?;
+                deinitFn(&recycled_node.data.value, self.deinit_context);
                 assert(self.hashmap.swapRemove(recycled_node.data.key));
                 // after swap, this node is thrown away
                 var node_to_swap: Node = .{

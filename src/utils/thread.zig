@@ -193,7 +193,9 @@ pub fn HomogeneousThreadPool(comptime TaskType: type) type {
 
         /// Like join, but it returns an error if any tasks failed, and otherwise discards task output.
         pub fn joinFallible(self: *Self) !void {
-            for (self.join().items) |result| try result;
+            const results = self.join();
+            for (results.items) |result| try result;
+            results.deinit();
         }
     };
 }

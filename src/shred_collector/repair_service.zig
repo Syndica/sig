@@ -44,6 +44,7 @@ pub const RepairService = struct {
     logger: Logger,
     exit: *Atomic(bool),
     start_slot: ?Slot,
+    last_big_request_timestamp_ms: i64 = 0,
 
     /// memory to re-use across iterations. initialized to empty
     report: MultiSlotReport,
@@ -89,6 +90,8 @@ pub const RepairService = struct {
     pub fn deinit(self: *Self) void {
         self.peer_provider.deinit();
         self.requester.deinit();
+        self.thread_pool.deinit();
+        self.report.deinit();
     }
 
     /// Used to run RepairService continuously.
@@ -121,12 +124,16 @@ pub const RepairService = struct {
 
         // TODO less often
         if (addressed_requests.items.len > 0) {
-            self.logger.debugf("sent {} repair requests", .{addressed_requests.items.len});
+            self.logger.debugf(
+                "sent {} repair requests",
+                .{addressed_requests.items.len},
+            );
         }
     }
 
     const MAX_SHRED_REPAIRS = 1000;
-    const MAX_HIGHEST_REPAIRS = 100;
+    const MIN_HIGHEST_REPAIRS = 10;
+    const MAX_HIGHEST_REPAIRS = 200;
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         var repairs = ArrayList(RepairRequest).init(self.allocator);
@@ -134,6 +141,13 @@ pub const RepairService = struct {
         var individual_count: usize = 0;
         var highest_count: usize = 0;
         var slot: Slot = 0;
+
+        var num_highest_repairs: usize = MIN_HIGHEST_REPAIRS;
+        if (self.last_big_request_timestamp_ms + 5_000 < std.time.milliTimestamp()) {
+            self.last_big_request_timestamp_ms = std.time.milliTimestamp();
+            num_highest_repairs = MAX_HIGHEST_REPAIRS;
+        }
+
         for (self.report.items()) |*report| outer: {
             slot = report.slot;
             for (report.missing_shreds.items) |shred_window| {
@@ -147,13 +161,14 @@ pub const RepairService = struct {
                     }
                 }
             }
-            if (highest_count < MAX_HIGHEST_REPAIRS) {
+            if (highest_count < num_highest_repairs) {
                 highest_count += 1;
                 try repairs.append(.{ .HighestShred = .{ slot, 0 } });
             }
         }
-        if (highest_count < MAX_HIGHEST_REPAIRS) {
-            for (slot..slot + MAX_HIGHEST_REPAIRS - highest_count) |s| {
+
+        if (highest_count < num_highest_repairs) {
+            for (slot..slot + num_highest_repairs - highest_count) |s| {
                 try repairs.append(.{ .HighestShred = .{ s, 0 } });
             }
         }
@@ -194,7 +209,7 @@ pub const RepairRequester = struct {
         logger: Logger,
         rng: Random,
         keypair: *const KeyPair,
-        udp_send_socket: *Socket,
+        udp_send_socket: Socket,
         exit: *Atomic(bool),
     ) !Self {
         const sndr = try SocketThread.initSender(allocator, logger, udp_send_socket, exit);
@@ -379,7 +394,7 @@ pub const RepairPeerProvider = struct {
     }
 };
 
-test "tvu.repair_service: RepairService sends repair request to gossip peer" {
+test "RepairService sends repair request to gossip peer" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();
@@ -426,27 +441,27 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
         Pubkey.fromPublicKey(&keypair.public_key),
         &my_shred_version,
     );
-    var tracker = try BasicShredTracker.init(allocator, 13579);
-    defer tracker.deinit();
-    var service = RepairService{
-        .allocator = allocator,
-        .requester = RepairRequester{
-            .allocator = allocator,
-            .rng = random,
-            .udp_send_socket = &repair_socket,
-            .keypair = &keypair,
-            .logger = logger,
-        },
-        .peer_provider = peers,
-        .logger = logger,
-        .exit = &exit,
-        .start_slot = 13579,
-        .shred_tracker = &tracker,
-    };
+    var tracker = BasicShredTracker.init(13579, .noop);
+    var service = RepairService.init(
+        allocator,
+        logger,
+        &exit,
+        try RepairRequester.init(
+            allocator,
+            logger,
+            random,
+            &keypair,
+            repair_socket,
+            &exit,
+        ),
+        peers,
+        &tracker,
+        13579,
+    );
     defer service.deinit();
 
     // run test
-    const handle = try std.Thread.spawn(.{}, RepairService.run, .{&service});
+    try service.sendNecessaryRepairs();
     var buf: [200]u8 = undefined;
     const size = peer_socket.receive(&buf) catch 0;
 
@@ -456,13 +471,9 @@ test "tvu.repair_service: RepairService sends repair request to gossip peer" {
     try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
     try std.testing.expect(msg.HighestWindowIndex.slot == 13579);
     try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);
-
-    // exit
-    exit.store(true, .monotonic);
-    handle.join();
 }
 
-test "tvu.repair_service: RepairPeerProvider selects correct peers" {
+test "RepairPeerProvider selects correct peers" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(4328095);
     var random = rand.random();

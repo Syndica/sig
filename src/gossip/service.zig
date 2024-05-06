@@ -282,7 +282,7 @@ pub const GossipService = struct {
 
         var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
-            &self.gossip_socket,
+            self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
             self.logger,
@@ -303,7 +303,7 @@ pub const GossipService = struct {
         }
 
         var responder_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
-            &self.gossip_socket,
+            self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
             self.logger,

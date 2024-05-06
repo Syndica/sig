@@ -12,7 +12,7 @@ pub const PACKETS_PER_BATCH: usize = 64;
 
 pub fn readSocket(
     allocator: std.mem.Allocator,
-    socket: *UdpSocket,
+    socket_: UdpSocket,
     incoming_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
     logger: Logger,
@@ -23,6 +23,7 @@ pub fn readSocket(
     //  * read until it fails
     //  * set it back to blocking before returning
 
+    var socket = socket_;
     const MAX_WAIT_NS = std.time.ns_per_ms; // 1ms
 
     while (!exit.load(.unordered)) {
@@ -42,7 +43,7 @@ pub fn readSocket(
 
         // recv packets into batch
         while (true) {
-            const n_packets_read = recvMmsg(socket, packet_batch.items[count..capacity], exit) catch |err| {
+            const n_packets_read = recvMmsg(&socket, packet_batch.items[count..capacity], exit) catch |err| {
                 if (count > 0 and err == error.WouldBlock) {
                     if (timer.read() > MAX_WAIT_NS) {
                         break;
@@ -109,7 +110,7 @@ pub fn recvMmsg(
 }
 
 pub fn sendSocket(
-    socket: *UdpSocket,
+    socket: UdpSocket,
     outgoing_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
     logger: Logger,
@@ -158,7 +159,7 @@ pub const SocketThread = struct {
 
     const Self = @This();
 
-    pub fn initSender(allocator: Allocator, logger: Logger, socket: *UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -167,7 +168,7 @@ pub const SocketThread = struct {
         };
     }
 
-    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: *UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -214,7 +215,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Value(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, &socket, channel, &exit, .noop });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, .noop });
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);

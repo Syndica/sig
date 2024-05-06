@@ -298,6 +298,7 @@ var app = &cli.App{
                         &gossip_spy_node_option,
                         &gossip_dump_option,
                         // repair
+                        &tvu_port_option,
                         &repair_port_option,
                         &test_repair_option,
                         // accounts-db

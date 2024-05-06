@@ -70,8 +70,8 @@ pub fn start(
     var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit);
     var arena = shred_collector.arena();
 
-    var repair_socket = try bindUdpReusable(conf.repair_port);
-    var tvu_socket = try bindUdpReusable(conf.tvu_port);
+    const repair_socket = try bindUdpReusable(conf.repair_port);
+    const tvu_socket = try bindUdpReusable(conf.tvu_port);
 
     // tracker (shared state, internal to Shred Collector)
     const shred_tracker = try arena.create(sig.shred_collector.BasicShredTracker);
@@ -93,7 +93,7 @@ pub fn start(
         deps.logger,
         deps.random,
         deps.my_keypair,
-        &repair_socket,
+        repair_socket,
         interface.exit,
     );
     const repair_svc = try arena.create(RepairService);
@@ -128,8 +128,8 @@ pub fn start(
         .keypair = deps.my_keypair,
         .exit = interface.exit,
         .logger = deps.logger,
-        .repair_socket = &repair_socket,
-        .tvu_socket = &tvu_socket,
+        .repair_socket = repair_socket,
+        .tvu_socket = tvu_socket,
         .outgoing_shred_channel = unverified_shreds_channel,
         .shred_version = interface.my_shred_version,
     };
