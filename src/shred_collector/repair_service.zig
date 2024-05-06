@@ -43,7 +43,6 @@ pub const RepairService = struct {
     shred_tracker: *BasicShredTracker,
     logger: Logger,
     exit: *Atomic(bool),
-    start_slot: ?Slot,
     last_big_request_timestamp_ms: i64 = 0,
 
     /// memory to re-use across iterations. initialized to empty
@@ -72,7 +71,6 @@ pub const RepairService = struct {
         requester: RepairRequester,
         peer_provider: RepairPeerProvider,
         shred_tracker: *BasicShredTracker,
-        start_slot: ?Slot,
     ) Self {
         return RepairService{
             .allocator = allocator,
@@ -81,7 +79,6 @@ pub const RepairService = struct {
             .shred_tracker = shred_tracker,
             .logger = logger,
             .exit = exit,
-            .start_slot = start_slot, // TODO: do nothing if null
             .report = MultiSlotReport.init(allocator),
             .thread_pool = RequestBatchThreadPool.init(allocator, 4),
         };
@@ -456,7 +453,6 @@ test "RepairService sends repair request to gossip peer" {
         ),
         peers,
         &tracker,
-        13579,
     );
     defer service.deinit();
 

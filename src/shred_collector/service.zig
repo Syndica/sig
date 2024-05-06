@@ -16,6 +16,7 @@ const ServiceManager = sig.utils.ServiceManager;
 const Slot = sig.core.Slot;
 
 const this = sig.shred_collector;
+const BasicShredTracker = this.BasicShredTracker;
 const RepairPeerProvider = this.RepairPeerProvider;
 const RepairRequester = this.RepairRequester;
 const RepairService = this.RepairService;
@@ -68,9 +69,9 @@ pub fn start(
     const tvu_socket = try bindUdpReusable(conf.tvu_port);
 
     // tracker (shared state, internal to Shred Collector)
-    const shred_tracker = try arena.create(sig.shred_collector.BasicShredTracker);
-    shred_tracker.* = sig.shred_collector.BasicShredTracker.init(
-        conf.start_slot orelse 0, // TODO
+    const shred_tracker = try arena.create(BasicShredTracker);
+    shred_tracker.* = BasicShredTracker.init(
+        conf.start_slot,
         deps.logger,
     );
 
@@ -99,7 +100,6 @@ pub fn start(
         repair_requester,
         repair_peer_provider,
         shred_tracker,
-        conf.start_slot,
     );
     try shred_collector.spawn(
         RepairService.run_config,

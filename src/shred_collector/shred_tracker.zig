@@ -20,11 +20,11 @@ pub const BasicShredTracker = struct {
     logger: sig.trace.Logger,
     mux: Mutex = .{},
     /// The slot that this struct was initialized with at index 0
-    start_slot: Slot,
+    start_slot: ?Slot,
     /// The oldest slot still being tracked, which hasn't yet been finished
     current_bottom_slot: Slot,
     /// The highest slot for which a shred has been received and processed successfully.
-    max_slot_processed: Slot,
+    max_slot_processed: Slot = 0,
     /// The highest slot that has been seen at all.
     max_slot_seen: Slot = 0,
     /// ring buffer
@@ -34,13 +34,19 @@ pub const BasicShredTracker = struct {
 
     const Self = @This();
 
-    pub fn init(slot: Slot, logger: sig.trace.Logger) Self {
+    pub fn init(slot: ?Slot, logger: sig.trace.Logger) Self {
         return .{
             .start_slot = slot,
-            .current_bottom_slot = slot,
-            .max_slot_processed = slot -| 1,
+            .current_bottom_slot = slot orelse 0,
             .logger = logger,
         };
+    }
+
+    pub fn maybeSetStart(self: *Self, start_slot: Slot) void {
+        if (self.start_slot == null) {
+            self.start_slot = start_slot;
+            self.current_bottom_slot = start_slot;
+        }
     }
 
     pub fn registerShred(
@@ -51,6 +57,7 @@ pub const BasicShredTracker = struct {
         self.mux.lock();
         defer self.mux.unlock();
 
+        self.maybeSetStart(slot);
         self.max_slot_seen = @max(self.max_slot_seen, slot);
         const monitored_slot = try self.getSlot(slot);
         const new = try monitored_slot.record(shred_index);
@@ -62,6 +69,7 @@ pub const BasicShredTracker = struct {
         self.mux.lock();
         defer self.mux.unlock();
 
+        self.maybeSetStart(slot);
         const monitored_slot = try self.getSlot(slot);
         if (monitored_slot.last_shred) |old_last| {
             monitored_slot.last_shred = @min(old_last, index);
@@ -71,6 +79,7 @@ pub const BasicShredTracker = struct {
     }
 
     pub fn identifyMissing(self: *Self, slot_reports: *MultiSlotReport) !void {
+        if (self.start_slot == null) return;
         self.mux.lock();
         defer self.mux.unlock();
 
@@ -80,9 +89,7 @@ pub const BasicShredTracker = struct {
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
             const monitored_slot = try self.getSlot(slot);
-            if (monitored_slot.is_complete or
-                monitored_slot.first_received_timestamp_ms + MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp)
-            {
+            if (monitored_slot.first_received_timestamp_ms + MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp) {
                 continue;
             }
             var slot_report = try slot_reports.addOne();
@@ -108,7 +115,7 @@ pub const BasicShredTracker = struct {
         if (slot < self.current_bottom_slot) {
             return error.SlotUnderflow;
         }
-        const slot_index = (slot - self.start_slot) % num_slots;
+        const slot_index = (slot - self.start_slot.?) % num_slots;
         return &self.slots[slot_index];
     }
 };
