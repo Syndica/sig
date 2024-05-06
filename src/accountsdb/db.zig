@@ -1103,6 +1103,37 @@ pub const AccountsDB = struct {
         };
     }
 
+    pub fn deleteAccountFiles(self: *Self) !void {
+        defer self.delete_account_files.clearRetainingCapacity();
+
+        for (self.delete_account_files.items) |file_id| {
+            // SAFE: this should always succeed or something is wrong
+            const account_file = self.file_map.get(file_id).?;
+
+            // remove from map
+            _ = self.file_map.swapRemove(file_id);
+
+            // delete file from disk
+            const accounts_file_path = try std.fmt.allocPrint(
+                self.allocator,
+                "{s}/accounts/{d}.{d}",
+                .{ self.config.snapshot_dir, account_file.slot, file_id },
+            );
+            defer self.allocator.free(accounts_file_path);
+
+            var file_exists = true;
+            std.fs.cwd().access(accounts_file_path, .{}) catch {
+                file_exists = false;
+            };
+
+            if (file_exists) {
+                try std.fs.cwd().deleteFile(accounts_file_path);
+            } else {
+                self.logger.warnf("trying to delete accounts file which does not exist: {s}", .{accounts_file_path});
+            }
+        }
+    }
+
     /// resizes account files to reduce disk usage and remove dead accounts.
     pub fn shrinkAccountFiles(self: *Self) !struct {
         num_accounts_deleted: usize,
@@ -1795,6 +1826,11 @@ test "accounts_db.db: full clean account file works" {
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
     try std.testing.expect(accounts_db.delete_account_files.items.len == 1);
+
+    // test delete
+    try std.testing.expect(accounts_db.file_map.get(2) != null);
+    try accounts_db.deleteAccountFiles();
+    try std.testing.expect(accounts_db.file_map.get(2) == null);
 }
 
 test "accounts_db.db: shrink account file works" {
