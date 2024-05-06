@@ -19,101 +19,57 @@ pub const MAX_DATA_SHREDS_PER_SLOT: usize = 32_768;
 pub const MAX_CODE_SHREDS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT;
 pub const MAX_SHREDS_PER_SLOT: usize = MAX_CODE_SHREDS_PER_SLOT + MAX_DATA_SHREDS_PER_SLOT;
 
-/// TODO this can be restructured with shared code lifted
-pub const Shred = union(enum) {
-    code: ShredCode,
-    data: ShredData,
-
-    const Self = @This();
-
-    pub fn fromPayload(allocator: Allocator, shred: []const u8) !Self {
-        const variant = shred_layout.getShredVariant(shred) orelse return error.uygugj;
-        return switch (variant.shred_type) {
-            .Code => .{ .code = try ShredCode.fromPayload(allocator, shred) },
-            .Data => .{ .data = try ShredData.fromPayload(allocator, shred) },
-        };
-    }
-
-    pub fn header(self: *const Self) *const ShredCommonHeader {
-        return switch (self.*) {
-            .code, .data => |s| &s.common_header,
-        };
-    }
-
-    pub fn isLastInSlot(self: *const Self) bool {
-        return switch (self.*) {
-            .code => false,
-            .data => |data| data.isLastInSlot(),
-        };
-    }
-};
-
-pub const ShredData = struct {
+pub const Shred = struct {
     common_header: ShredCommonHeader,
-    custom_header: DataShredHeader,
-    // payload: ArrayList(u8),
+    custom_header: CustomHeader,
+    payload: ArrayList(u8),
 
-    const SIZE_OF_PAYLOAD: usize = 1203; // TODO this can be calculated like solana
-
-    const Self = @This();
-
-    pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-        return try eitherShredFromPayload(Self, DataShredHeader, SIZE_OF_PAYLOAD, allocator, payload);
-    }
-
-    pub fn isLastInSlot(self: *const Self) bool {
-        return self.custom_header.flags.isSet(.last_shred_in_slot);
-    }
-
-    fn sanitize(self: *const Self) !void {
-        _ = self;
-        // TODO
-    }
-};
-
-pub const ShredCode = struct {
-    common_header: ShredCommonHeader,
-    custom_header: CodingShredHeader,
-    // payload: ArrayList(u8),
-
-    const SIZE_OF_PAYLOAD: usize = 1228; // TODO this can be calculated like solana
-
-    const Self = @This();
-
-    pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-        return try eitherShredFromPayload(Self, CodingShredHeader, SIZE_OF_PAYLOAD, allocator, payload);
-    }
-
-    fn sanitize(self: *const Self) !void {
-        _ = self;
-        // TODO
-    }
-};
-
-fn eitherShredFromPayload(
-    comptime Self: type,
-    comptime Header: type,
-    comptime SIZE_OF_PAYLOAD: usize,
-    allocator: Allocator,
-    payload: []const u8,
-) !Self {
-    if (payload.len < SIZE_OF_PAYLOAD) {
-        return error.InvalidPayloadSize;
-    }
-    const exact_payload = payload[0..SIZE_OF_PAYLOAD];
-    var buf = std.io.fixedBufferStream(exact_payload);
-    const common_header = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{});
-    const custom_header = try bincode.read(allocator, Header, buf.reader(), .{});
-    // var owned_payload = ArrayList(u8).init(allocator);  // TODO: find a cheaper way to get the payload in here
-    // try owned_payload.appendSlice(exact_payload);
-    var self = Self{
-        .common_header = common_header,
-        .custom_header = custom_header,
-        // .payload = owned_payload,
+    const CustomHeader = union(ShredType) {
+        Code: CodingShredHeader,
+        Data: DataShredHeader,
     };
-    try self.sanitize();
-    return self;
-}
+
+    const Self = @This();
+
+    pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
+        const variant = shred_layout.getShredVariant(payload) orelse return error.uygugj;
+        const SIZE_OF_PAYLOAD = switch (variant.shred_type) {
+            .Code => CodingShredHeader.SIZE_OF_PAYLOAD,
+            .Data => DataShredHeader.SIZE_OF_PAYLOAD,
+        };
+        if (payload.len < SIZE_OF_PAYLOAD) {
+            return error.InvalidPayloadSize;
+        }
+        const exact_payload = payload[0..SIZE_OF_PAYLOAD];
+        var buf = std.io.fixedBufferStream(exact_payload);
+        const common_header = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{});
+        const custom_header: CustomHeader = switch (variant.shred_type) {
+            .Code => .{ .Code = try bincode.read(allocator, CodingShredHeader, buf.reader(), .{}) },
+            .Data => .{ .Data = try bincode.read(allocator, DataShredHeader, buf.reader(), .{}) },
+        };
+        var owned_payload = ArrayList(u8).init(allocator); // TODO: find a cheaper way to get the payload in here
+        try owned_payload.appendSlice(exact_payload);
+        var self = Self{
+            .common_header = common_header,
+            .custom_header = custom_header,
+            .payload = owned_payload,
+        };
+        try self.sanitize();
+        return self;
+    }
+
+    pub fn isLastInSlot(self: *const Self) bool {
+        return switch (self.custom_header) {
+            .Code => false,
+            .Data => |data| data.flags.isSet(.last_shred_in_slot),
+        };
+    }
+
+    fn sanitize(self: *const Self) !void {
+        _ = self;
+        // TODO
+    }
+};
 
 pub const ShredCommonHeader = struct {
     signature: Signature,
@@ -130,12 +86,16 @@ pub const DataShredHeader = struct {
     parent_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
+
+    const SIZE_OF_PAYLOAD: usize = 1203; // TODO this can be calculated like solana
 };
 
 pub const CodingShredHeader = struct {
     num_data_shreds: u16,
     num_coding_shreds: u16,
     position: u16, // [0..num_coding_shreds)
+
+    const SIZE_OF_PAYLOAD: usize = 1228; // TODO this can be calculated like solana
 };
 
 pub const ShredType = enum(u8) {

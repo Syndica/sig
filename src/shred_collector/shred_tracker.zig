@@ -207,7 +207,7 @@ test "trivial happy path" {
 
     var tracker = BasicShredTracker.init(13579, .noop);
 
-    try tracker.identifyMissing(&msr);
+    _ = try tracker.identifyMissing(&msr);
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
@@ -227,7 +227,7 @@ test "1 registered shred is identified" {
     try tracker.registerShred(13579, 123);
     std.time.sleep(210 * std.time.ns_per_ms);
 
-    try tracker.identifyMissing(&msr);
+    _ = try tracker.identifyMissing(&msr);
 
     try std.testing.expect(1 == msr.len);
     const report = msr.items()[0];
