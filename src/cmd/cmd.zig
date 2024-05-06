@@ -859,6 +859,7 @@ fn getOrDownloadSnapshots(
         logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.filename});
         try parallelUnpackZstdTarBall(
             allocator,
+            logger,
             snapshot_files.full_snapshot.filename,
             snapshot_dir,
             n_threads_snapshot_unpack,
@@ -872,6 +873,7 @@ fn getOrDownloadSnapshots(
             logger.infof("unpacking {s}...", .{incremental_snapshot.filename});
             try parallelUnpackZstdTarBall(
                 allocator,
+                logger,
                 incremental_snapshot.filename,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
