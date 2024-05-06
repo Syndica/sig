@@ -20,7 +20,7 @@ pub fn enumFromName(comptime T: type, variant_name: []const u8) error{UnknownVar
 /// fn doThing(name: []const u8, count: usize) !u64 { ... }
 ///
 /// ParamsTuple(doThing) == struct { []const u8, usize }
-/// 
+///
 /// const args: ParamsTuple(doThing) = undefined;
 /// const out: u64 = try @call(.auto, doThing, args);
 /// ```
