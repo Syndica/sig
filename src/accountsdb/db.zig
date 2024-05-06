@@ -1550,7 +1550,7 @@ test "accounts_db.db: flushing slots works" {
     }
 
     // this gets written to cache
-    const slot = @as(u64, @intCast(0));
+    const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
         pubkeys,
@@ -1596,7 +1596,7 @@ test "accounts_db.db: purge accounts in cache works" {
     defer allocator.free(pubkey_copy);
     @memcpy(pubkey_copy, pubkeys);
 
-    const slot = @as(u64, @intCast(0));
+    const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
         pubkeys,
@@ -1642,7 +1642,7 @@ test "accounts_db.db: clean to shrink account file works with zero-lamports" {
         pubkeys[i] = Pubkey.random(rng);
         accounts[i] = try Account.random(allocator, rng, 100);
     }
-    const slot = @as(u64, @intCast(0));
+    const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
         pubkeys,
@@ -1664,7 +1664,7 @@ test "accounts_db.db: clean to shrink account file works with zero-lamports" {
     try accounts_db.flushSlot(slot);
 
     // write new state
-    const new_slot = @as(u64, @intCast(10));
+    const new_slot = @as(u64, @intCast(500));
     try accounts_db.putAccountBatch(
         accounts2,
         pubkeys2,
@@ -1672,7 +1672,7 @@ test "accounts_db.db: clean to shrink account file works with zero-lamports" {
     );
     try accounts_db.flushSlot(new_slot);
 
-    const r = try accounts_db.cleanAccountFiles(20);
+    const r = try accounts_db.cleanAccountFiles(new_slot + 100);
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == new_len);
     // shrink
@@ -1702,7 +1702,7 @@ test "accounts_db.db: clean to shrink account file works" {
         pubkeys[i] = Pubkey.random(rng);
         accounts[i] = try Account.random(allocator, rng, 100);
     }
-    const slot = @as(u64, @intCast(0));
+    const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
         pubkeys,
@@ -1720,7 +1720,7 @@ test "accounts_db.db: clean to shrink account file works" {
     try accounts_db.flushSlot(slot);
 
     // write new state
-    const new_slot = @as(u64, @intCast(10));
+    const new_slot = @as(u64, @intCast(500));
     try accounts_db.putAccountBatch(
         accounts2,
         pubkeys2,
@@ -1728,7 +1728,7 @@ test "accounts_db.db: clean to shrink account file works" {
     );
     try accounts_db.flushSlot(new_slot);
 
-    const r = try accounts_db.cleanAccountFiles(20);
+    const r = try accounts_db.cleanAccountFiles(new_slot + 100);
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == 0);
     // shrink
@@ -1756,7 +1756,7 @@ test "accounts_db.db: full clean account file works" {
         pubkeys[i] = Pubkey.random(rng);
         accounts[i] = try Account.random(allocator, rng, i % 1_000);
     }
-    const slot = @as(u64, @intCast(0));
+    const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
         pubkeys,
@@ -1782,7 +1782,7 @@ test "accounts_db.db: full clean account file works" {
     try std.testing.expect(r.num_zero_lamports == 0);
 
     // write new state
-    const new_slot = @as(u64, @intCast(10));
+    const new_slot = @as(u64, @intCast(500));
     try accounts_db.putAccountBatch(
         accounts2,
         pubkeys2,
@@ -1790,7 +1790,7 @@ test "accounts_db.db: full clean account file works" {
     );
     try accounts_db.flushSlot(new_slot);
 
-    r = try accounts_db.cleanAccountFiles(20);
+    r = try accounts_db.cleanAccountFiles(new_slot + 100);
     try std.testing.expect(r.num_old_states == n_accounts);
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
@@ -1817,7 +1817,7 @@ test "accounts_db.db: shrink account file works" {
         pubkeys[i] = Pubkey.random(rng);
         accounts[i] = try Account.random(allocator, rng, 100);
     }
-    const slot = @as(u64, @intCast(0));
+    const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
         pubkeys,
@@ -1838,7 +1838,7 @@ test "accounts_db.db: shrink account file works" {
     try accounts_db.flushSlot(slot);
 
     // write new state
-    const new_slot = @as(u64, @intCast(10));
+    const new_slot = @as(u64, @intCast(500));
     try accounts_db.putAccountBatch(
         accounts2,
         pubkeys2,
@@ -1846,7 +1846,7 @@ test "accounts_db.db: shrink account file works" {
     );
     try accounts_db.flushSlot(new_slot);
 
-    _ = try accounts_db.cleanAccountFiles(20);
+    _ = try accounts_db.cleanAccountFiles(new_slot + 100);
     try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
 
     const v = accounts_db.file_map.get(accounts_db.file_map.keys()[0]).?;
