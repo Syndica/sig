@@ -110,7 +110,9 @@ pub const ShredVariant = struct {
     chained: bool,
     resigned: bool,
 
-    fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!@This() {
+    const Self = @This();
+
+    fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
         return switch (byte & 0xF0) {
             0x40 => .{
                 .shred_type = .Code,
@@ -153,16 +155,44 @@ pub const ShredVariant = struct {
             else => error.UnknownShredVariant,
         };
     }
+
+    fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
+        if (self.proof_size & 0xF0 != 0) return error.IllegalProof;
+        const big_end: u8 =
+            if (self.shred_type == .Code and
+            self.chained == false and
+            self.resigned == false)
+            0x40
+        else if (self.shred_type == .Code and
+            self.chained == true and
+            self.resigned == false)
+            0x60
+        else if (self.shred_type == .Code and
+            self.chained == true and
+            self.resigned == true)
+            0x70
+        else if (self.shred_type == .Data and
+            self.chained == false and
+            self.resigned == false)
+            0x80
+        else if (self.shred_type == .Data and
+            self.chained == true and
+            self.resigned == false)
+            0x90
+        else if (self.shred_type == .Data and
+            self.chained == true and
+            self.resigned == true)
+            0xb0
+        else
+            return error.UnknownShredVariant;
+        return big_end | self.proof_size;
+    }
 };
 
 pub const ShredVariantConfig = blk: {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            _ = writer;
-            _ = params;
-            _ = data;
-            @panic("todo - not implemented"); // TODO
-            // try writer.writeByte(0);
+        pub fn serialize(writer: anytype, data: anytype, _: bincode.Params) !void {
+            return writer.writeByte(try ShredVariant.toByte(data));
         }
 
         pub fn deserialize(_: ?std.mem.Allocator, reader: anytype, _: bincode.Params) !ShredVariant {
@@ -260,3 +290,24 @@ pub const shred_layout = struct {
         return std.mem.readInt(Int, bytes, .little);
     }
 };
+
+test "basic shred variant round trip" {
+    try testShredVariantRoundTrip(0x4C, .{
+        .shred_type = .Code,
+        .proof_size = 0x0C,
+        .chained = false,
+        .resigned = false,
+    });
+}
+
+fn testShredVariantRoundTrip(expected_byte: u8, start_variant: ShredVariant) !void {
+    const actual_byte = try start_variant.toByte();
+    try std.testing.expect(actual_byte == expected_byte);
+    const end_variant = try ShredVariant.fromByte(actual_byte);
+    try std.testing.expect(
+        start_variant.shred_type == end_variant.shred_type and
+            start_variant.proof_size == end_variant.proof_size and
+            start_variant.chained == end_variant.chained and
+            start_variant.resigned == end_variant.resigned,
+    );
+}
