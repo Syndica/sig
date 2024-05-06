@@ -34,7 +34,8 @@ pub fn processShreds(
                     error.SlotUnderflow, error.SlotOverflow => continue,
                     else => return err,
                 };
-                const shred = try Shred.fromPayload(allocator, shred_payload);
+                var shred = try Shred.fromPayload(allocator, shred_payload);
+                defer shred.deinit();
                 if (shred.isLastInSlot()) {
                     tracker.setLastShred(slot, index) catch |err| switch (err) {
                         error.SlotUnderflow, error.SlotOverflow => continue,

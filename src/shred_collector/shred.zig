@@ -21,15 +21,17 @@ pub const MAX_SHREDS_PER_SLOT: usize = MAX_CODE_SHREDS_PER_SLOT + MAX_DATA_SHRED
 
 pub const Shred = struct {
     common_header: ShredCommonHeader,
-    custom_header: CustomHeader,
-    payload: ArrayList(u8),
-
-    const CustomHeader = union(ShredType) {
+    custom_header: union(ShredType) {
         Code: CodingShredHeader,
         Data: DataShredHeader,
-    };
+    },
+    payload: ArrayList(u8),
 
     const Self = @This();
+
+    pub fn deinit(self: *Self) void {
+        self.payload.deinit();
+    }
 
     pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
         const variant = shred_layout.getShredVariant(payload) orelse return error.uygugj;
@@ -42,16 +44,14 @@ pub const Shred = struct {
         }
         const exact_payload = payload[0..SIZE_OF_PAYLOAD];
         var buf = std.io.fixedBufferStream(exact_payload);
-        const common_header = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{});
-        const custom_header: CustomHeader = switch (variant.shred_type) {
-            .Code => .{ .Code = try bincode.read(allocator, CodingShredHeader, buf.reader(), .{}) },
-            .Data => .{ .Data = try bincode.read(allocator, DataShredHeader, buf.reader(), .{}) },
-        };
         var owned_payload = ArrayList(u8).init(allocator); // TODO: find a cheaper way to get the payload in here
         try owned_payload.appendSlice(exact_payload);
         var self = Self{
-            .common_header = common_header,
-            .custom_header = custom_header,
+            .common_header = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{}),
+            .custom_header = switch (variant.shred_type) {
+                .Code => .{ .Code = try bincode.read(allocator, CodingShredHeader, buf.reader(), .{}) },
+                .Data => .{ .Data = try bincode.read(allocator, DataShredHeader, buf.reader(), .{}) },
+            },
             .payload = owned_payload,
         };
         try self.sanitize();
