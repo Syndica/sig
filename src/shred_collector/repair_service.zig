@@ -36,6 +36,8 @@ const serializeRepairRequest = sig.shred_collector.serializeRepairRequest;
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
 /// - delegates to RepairRequester to send the requests.
+///
+/// Analogous to [RepairService](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/repair_service.rs#L245)
 pub const RepairService = struct {
     allocator: Allocator,
     requester: RepairRequester,

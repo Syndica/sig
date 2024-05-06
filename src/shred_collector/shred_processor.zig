@@ -11,7 +11,7 @@ const Channel = sig.sync.Channel;
 const Packet = sig.net.Packet;
 const Shred = sig.shred_collector.Shred;
 
-/// analogous to `WindowService` TODO permalink
+/// Analogous to [WindowService](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L395)
 pub fn processShreds(
     allocator: Allocator,
     verified_shreds: *Channel(ArrayList(Packet)),
