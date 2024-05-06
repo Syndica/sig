@@ -28,13 +28,13 @@ pub const ServiceManager = struct {
 
     const Self = @This();
 
-    pub fn init(allocator_: Allocator, logger: Logger, exit: *Atomic(bool)) Self {
+    pub fn init(allocator: Allocator, logger: Logger, exit: *Atomic(bool)) Self {
         return .{
             .logger = logger,
             .exit = exit,
-            .threads = std.ArrayList(std.Thread).init(allocator_),
-            ._arena = ArenaAllocator.init(allocator_),
-            .defers = DeferList.init(allocator_),
+            .threads = std.ArrayList(std.Thread).init(allocator),
+            ._arena = ArenaAllocator.init(allocator),
+            .defers = DeferList.init(allocator),
         };
     }
 

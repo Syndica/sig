@@ -53,7 +53,6 @@ pub fn serializeRepairRequest(
     timestamp: u64,
     nonce: Nonce,
 ) ![]u8 {
-    // TODO assert minimum length
     const header = RepairRequestHeader{
         .signature = Signature.init(undefined),
         .sender = try Pubkey.fromBytes(&keypair.public_key.bytes),
