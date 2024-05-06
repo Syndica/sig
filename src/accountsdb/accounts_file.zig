@@ -3,6 +3,7 @@ const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
 
 const Account = @import("../core/account.zig").Account;
+const writeIntLittleMem = @import("../core/account.zig").writeIntLittleMem;
 const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/time.zig").Slot;
 const Epoch = @import("../core/time.zig").Epoch;
@@ -29,6 +30,16 @@ pub const AccountInFile = struct {
         write_version_obsolete: u64,
         data_len: u64,
         pubkey: Pubkey,
+
+        pub fn writeToBuf(self: *const StorageInfo, buf: []u8) !usize {
+            var offset: usize = 0;
+            offset += try writeIntLittleMem(self.write_version_obsolete, buf[offset..]);
+            offset += try writeIntLittleMem(self.data_len, buf[offset..]);
+            @memcpy(buf[offset..(offset + 32)], &self.pubkey.data);
+            offset += 32;
+            offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+            return offset;
+        }
     };
 
     /// on-chain account info about the account
@@ -37,6 +48,20 @@ pub const AccountInFile = struct {
         rent_epoch: Epoch,
         owner: Pubkey,
         executable: bool,
+
+        pub fn writeToBuf(self: *const AccountInfo, buf: []u8) !usize {
+            var offset: usize = 0;
+            offset += try writeIntLittleMem(self.lamports, buf[offset..]);
+            offset += try writeIntLittleMem(self.rent_epoch, buf[offset..]);
+            @memcpy(buf[offset..(offset + 32)], &self.owner.data);
+            offset += 32;
+            offset += try writeIntLittleMem(
+                @as(u8, @intFromBool(self.executable)),
+                buf[offset..],
+            );
+            offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+            return offset;
+        }
     };
 
     pub const STATIC_SIZE: usize = blk: {
@@ -97,6 +122,23 @@ pub const AccountInFile = struct {
 
     pub inline fn hash(self: *const Self) *Hash {
         return self.hash_ptr;
+    }
+
+    pub fn writeToBuf(self: *const Self, buf: []u8) !usize {
+        var offset: usize = 0;
+
+        offset += try self.store_info.writeToBuf(buf[offset..]);
+        offset += try self.account_info.writeToBuf(buf[offset..]);
+
+        @memcpy(buf[offset..(offset + 32)], &self.hash().data);
+        offset += 32;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        @memcpy(buf[offset..(offset + self.data.len)], self.data);
+        offset += self.data.len;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        return offset;
     }
 };
 
@@ -172,7 +214,7 @@ pub const AccountFile = struct {
         self.account_bytes = account_bytes;
     }
 
-    pub fn populateMetadata(self: *Self) !void {
+    pub fn populateMetadata(self: *Self) void {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
         var account_bytes: usize = 0;
@@ -282,6 +324,10 @@ pub const AccountFile = struct {
                 return account;
             }
             return null;
+        }
+
+        pub fn reset(self: *Iterator) void {
+            self.offset = 0;
         }
     };
 

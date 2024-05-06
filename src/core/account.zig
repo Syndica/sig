@@ -52,11 +52,7 @@ pub const Account = struct {
             .data_len = self.data.len,
             .pubkey = pubkey.*,
         };
-        offset += try writeIntLittleMem(storage_info.write_version_obsolete, buf[offset..]);
-        offset += try writeIntLittleMem(storage_info.data_len, buf[offset..]);
-        @memcpy(buf[offset..(offset + 32)], &storage_info.pubkey.data);
-        offset += 32;
-        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+        offset += try storage_info.writeToBuf(buf[offset..]);
 
         const account_info = AccountInFile.AccountInfo{
             .lamports = self.lamports,
@@ -64,16 +60,7 @@ pub const Account = struct {
             .owner = self.owner,
             .executable = self.executable,
         };
-        offset += try writeIntLittleMem(account_info.lamports, buf[offset..]);
-        offset += try writeIntLittleMem(account_info.rent_epoch, buf[offset..]);
-        @memcpy(buf[offset..(offset + 32)], &account_info.owner.data);
-        offset += 32;
-
-        offset += try writeIntLittleMem(
-            @as(u8, @intFromBool(account_info.executable)),
-            buf[offset..],
-        );
-        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+        offset += try account_info.writeToBuf(buf[offset..]);
 
         const account_hash = self.hash(pubkey);
         @memcpy(buf[offset..(offset + 32)], &account_hash.data);

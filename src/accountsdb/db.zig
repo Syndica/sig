@@ -852,6 +852,47 @@ pub const AccountsDB = struct {
         };
     }
 
+    pub fn createAccountFile(self: *Self, size: usize, slot: Slot) !struct {
+        file: std.fs.File,
+        memory: []u8,
+        file_id: u32,
+    } {
+        self.largest_file_id += 1;
+        const file_id = self.largest_file_id;
+        const accounts_file_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/accounts/{d}.{d}",
+            .{ self.config.snapshot_dir, slot, file_id },
+        );
+        defer self.allocator.free(accounts_file_path);
+        self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
+
+        var file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
+
+        // resize the file
+        const file_size = (try file.stat()).size;
+        if (file_size < size) {
+            try file.seekTo(size - 1);
+            _ = try file.write(&[_]u8{1});
+            try file.seekTo(0);
+        }
+
+        const memory = try std.posix.mmap(
+            null,
+            size,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.MAP{ .TYPE = .SHARED },
+            file.handle,
+            0,
+        );
+
+        return .{
+            .file = file,
+            .memory = memory,
+            .file_id = file_id,
+        };
+    }
+
     /// flushes a slot account data from the cache onto disk, and updates the index
     /// note: this deallocates the []account and []pubkey data
     pub fn flushSlot(self: *Self, slot: Slot) !void {
@@ -874,36 +915,11 @@ pub const AccountsDB = struct {
                 @sizeOf(u64),
             );
         }
+        const result = try self.createAccountFile(size, slot);
+        const file_id = result.file_id;
+        const file = result.file;
 
-        self.largest_file_id += 1;
-        const file_id = self.largest_file_id;
-        const accounts_file_path = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/accounts/{d}.{d}",
-            .{ self.config.snapshot_dir, slot, file_id },
-        );
-        defer self.allocator.free(accounts_file_path);
-        self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
-
-        var file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
-        defer file.close();
-
-        // resize the file
-        const file_size = (try file.stat()).size;
-        if (file_size < size) {
-            try file.seekTo(size - 1);
-            _ = try file.write(&[_]u8{1});
-            try file.seekTo(0);
-        }
-
-        var memory = try std.posix.mmap(
-            null,
-            size,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
-            file.handle,
-            0,
-        );
+        const memory = result.memory;
 
         // TODO: will likely need locks here when updating the references
         var offset: usize = 0;
@@ -924,15 +940,18 @@ pub const AccountsDB = struct {
         }, slot);
         // fill in metadata such as alive_bytes, n_accounts, etc.
         // validation would fail because it may contain zero lamport accounts
-        // TOOD: maybe remove zero-lamports before flushing
-        try account_file.populateMetadata();
+        // TODO: maybe remove zero-lamports before flushing
+        account_file.populateMetadata();
 
         try self.file_map.putNoClobber(file_id, account_file);
-
         // queue for cleaning
         try self.unclean_account_files.append(file_id);
     }
 
+    /// removes stale accounts and zero-lamport accounts from disk
+    /// including removing the account from the index and updating the account files
+    /// dead bytes. this also queues accounts for shrink or deletion if they contain
+    /// a small number of 'alive' accounts.
     pub fn cleanAccountFiles(self: *Self, highest_rooted_slot: Slot) !struct {
         num_zero_lamports: usize,
         num_old_states: usize,
@@ -1034,6 +1053,73 @@ pub const AccountsDB = struct {
         return .{
             .num_zero_lamports = num_zero_lamports,
             .num_old_states = num_old_states,
+        };
+    }
+
+    /// resizes account files to reduce disk usage and remove dead accounts.
+    pub fn shrinkAccountFiles(self: *Self) !struct {
+        num_accounts_deleted: usize,
+    } {
+        defer self.shrink_account_files.clearRetainingCapacity();
+
+        var num_accounts_deleted: usize = 0;
+
+        for (self.shrink_account_files.keys()) |file_id| {
+            // SAFE: this should always succeed or something is wrong
+            const file_map_entry = self.file_map.getEntry(file_id).?;
+            var account_file = file_map_entry.value_ptr;
+
+            // compute size of alive accounts
+            var size: usize = 0;
+            var account_iter = account_file.iterator();
+            while (account_iter.next()) |account| {
+                const pubkey = account.pubkey();
+                // account is dead if it is not in the index; dead accounts
+                // are removed from the index during cleaning
+                const is_account_alive = self.account_index.getSlotReference(pubkey, account_file.slot) != null;
+                if (is_account_alive) {
+                    size += std.mem.alignForward(
+                        usize,
+                        AccountInFile.STATIC_SIZE + account.data.len,
+                        @sizeOf(u64),
+                    );
+                } else {
+                    num_accounts_deleted += 1;
+                }
+            }
+
+            // alloc account file for accounts
+            const result = try self.createAccountFile(size, account_file.slot);
+            const new_memory = result.memory;
+
+            account_iter.reset();
+            var offset: usize = 0;
+            while (account_iter.next()) |account| {
+                if (self.account_index.getSlotReference(account.pubkey(), account_file.slot)) |ref| {
+                    // update the offset
+                    ref.location.File.offset = offset;
+                    // write to new account file
+                    offset += try account.writeToBuf(new_memory[offset..]);
+                }
+            }
+
+            const file = result.file;
+            var new_account_file = try AccountFile.init(
+                file,
+                .{ .id = @intCast(file_id), .length = offset },
+                account_file.slot,
+            );
+
+            // update the metadata
+            new_account_file.populateMetadata();
+
+            // update the file map
+            account_file.deinit();
+            file_map_entry.value_ptr.* = new_account_file;
+        }
+
+        return .{
+            .num_accounts_deleted = num_accounts_deleted,
         };
     }
 
@@ -1511,7 +1597,10 @@ test "accounts_db.db: clean to shrink account file works with zero-lamports" {
         slot,
     );
 
-    // duplicate HALF before the flush/deinit
+    // test to make sure we can still read it
+    const pubkey_remain = pubkeys[pubkeys.len - 1];
+
+    // duplicate some before the flush/deinit
     const new_len = n_accounts - 1; // one new root with zero lamports
     const pubkeys2 = try allocator.alloc(Pubkey, new_len);
     const accounts2 = try allocator.alloc(Account, new_len);
@@ -1537,6 +1626,8 @@ test "accounts_db.db: clean to shrink account file works with zero-lamports" {
     // shrink
     try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
     try std.testing.expect(accounts_db.delete_account_files.items.len == 0);
+
+    _ = try accounts_db.getAccount(&pubkey_remain);
 }
 
 test "accounts_db.db: clean to shrink account file works" {
@@ -1654,9 +1745,76 @@ test "accounts_db.db: full clean account file works" {
     try std.testing.expect(accounts_db.delete_account_files.items.len == 1);
 }
 
+test "accounts_db.db: shrink account file works" {
+    const allocator = std.testing.allocator;
+    const logger = Logger{ .noop = {} };
+    var accounts_db = try AccountsDB.init(allocator, logger, .{
+        .num_index_bins = 4,
+        .snapshot_dir = "test_data",
+    });
+    defer accounts_db.deinit(true);
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+    const n_accounts = 10;
+
+    // generate the account file for slot 0
+    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
+    const accounts = try allocator.alloc(Account, n_accounts);
+    for (0..n_accounts) |i| {
+        pubkeys[i] = Pubkey.random(rng);
+        accounts[i] = try Account.random(allocator, rng, 100);
+    }
+    const slot = @as(u64, @intCast(0));
+    try accounts_db.putAccountBatch(
+        accounts,
+        pubkeys,
+        slot,
+    );
+
+    // test to make sure we can still read it
+    const pubkey_remain = pubkeys[pubkeys.len - 1];
+
+    // duplicate some before the flush/deinit
+    const new_len = n_accounts - 1; // 90% delete = shrink
+    const pubkeys2 = try allocator.alloc(Pubkey, new_len);
+    const accounts2 = try allocator.alloc(Account, new_len);
+    @memcpy(pubkeys2, pubkeys[0..new_len]);
+    for (0..new_len) |i| {
+        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+    }
+    try accounts_db.flushSlot(slot);
+
+    // write new state
+    const new_slot = @as(u64, @intCast(10));
+    try accounts_db.putAccountBatch(
+        accounts2,
+        pubkeys2,
+        new_slot,
+    );
+    try accounts_db.flushSlot(new_slot);
+
+    _ = try accounts_db.cleanAccountFiles(20);
+    try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
+
+    const v = accounts_db.file_map.get(accounts_db.file_map.keys()[0]).?;
+    const pre_shrink_size = v.file_size;
+
+    const r = try accounts_db.shrinkAccountFiles();
+    try std.testing.expect(accounts_db.shrink_account_files.count() == 0);
+    try std.testing.expect(r.num_accounts_deleted == 9);
+
+    const v2 = accounts_db.file_map.get(accounts_db.file_map.keys()[0]).?;
+    const post_shrink_size = v2.file_size;
+    try std.testing.expect(post_shrink_size < pre_shrink_size);
+
+    // last account ref should still be accessible
+    _ = try accounts_db.getAccount(&pubkey_remain);
+}
+
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
-    pub const max_iterations = 2;
+    pub const max_iterations = 1;
 
     pub const MemoryType = enum {
         ram,
@@ -1782,7 +1940,6 @@ pub const BenchmarkAccountsDB = struct {
                 .use_disk_index = true,
             });
         } else {
-            // std.debug.print("using ram index\n", .{});
             accounts_db = try AccountsDB.init(allocator, logger, .{});
         }
         defer accounts_db.deinit(true);
