@@ -78,8 +78,9 @@ pub const BasicShredTracker = struct {
         }
     }
 
-    pub fn identifyMissing(self: *Self, slot_reports: *MultiSlotReport) !void {
-        if (self.start_slot == null) return;
+    /// returns whether it makes sense to send any repair requests
+    pub fn identifyMissing(self: *Self, slot_reports: *MultiSlotReport) !bool {
+        if (self.start_slot == null) return false;
         self.mux.lock();
         defer self.mux.unlock();
 
@@ -106,6 +107,7 @@ pub const BasicShredTracker = struct {
                 monitored_slot.* = .{};
             }
         }
+        return true;
     }
 
     fn getSlot(self: *Self, slot: Slot) error{ SlotUnderflow, SlotOverflow }!*MonitoredSlot {

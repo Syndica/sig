@@ -134,7 +134,9 @@ pub const RepairService = struct {
 
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         var repairs = ArrayList(RepairRequest).init(self.allocator);
-        try self.shred_tracker.identifyMissing(&self.report);
+        if (!try self.shred_tracker.identifyMissing(&self.report)) {
+            return repairs;
+        }
         var individual_count: usize = 0;
         var highest_count: usize = 0;
         var slot: Slot = 0;
