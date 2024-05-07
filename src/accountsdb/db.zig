@@ -1210,6 +1210,7 @@ pub const AccountsDB = struct {
             // update the file map
             old_account_file.deinit();
             file_map_entry.value_ptr.* = new_account_file;
+            file_map_entry.key_ptr.* = new_file_id;
         }
 
         return .{
@@ -1724,7 +1725,7 @@ test "accounts_db.db: clean to shrink account file works with zero-lamports" {
     try std.testing.expect(r.num_zero_lamports == new_len);
     // shrink
     try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
-    try std.testing.expect(accounts_db.delete_account_files.items.len == 0);
+    try std.testing.expect(accounts_db.delete_account_files.count() == 0);
 
     _ = try accounts_db.getAccount(&pubkey_remain);
 }
@@ -1780,7 +1781,7 @@ test "accounts_db.db: clean to shrink account file works" {
     try std.testing.expect(r.num_zero_lamports == 0);
     // shrink
     try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
-    try std.testing.expect(accounts_db.delete_account_files.items.len == 0);
+    try std.testing.expect(accounts_db.delete_account_files.count() == 0);
 }
 
 test "accounts_db.db: full clean account file works" {
@@ -1841,7 +1842,7 @@ test "accounts_db.db: full clean account file works" {
     try std.testing.expect(r.num_old_states == n_accounts);
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
-    try std.testing.expect(accounts_db.delete_account_files.items.len == 1);
+    try std.testing.expect(accounts_db.delete_account_files.count() == 1);
 
     // test delete
     try std.testing.expect(accounts_db.file_map.get(2) != null);
