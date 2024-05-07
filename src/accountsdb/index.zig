@@ -106,6 +106,7 @@ pub const AccountIndex = struct {
         var current_reference = self.getReference(pubkey) orelse return error.PubkeyNotFound;
         const previous_reference: ?AccountRef = null;
 
+        // TODO: need a way to manage the memory of the underlying ArrayList(AccountRef)
         while (true) {
             // found the slot
             if (current_reference.slot == slot) {
