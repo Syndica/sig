@@ -13,62 +13,275 @@ const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
+const checkedAdd = sig.utils.checkedAdd;
+const checkedSub = sig.utils.checkedSub;
+
 const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
 
-pub const MAX_DATA_SHREDS_PER_SLOT: usize = 32_768;
-pub const MAX_CODE_SHREDS_PER_SLOT: usize = MAX_DATA_SHREDS_PER_SLOT;
-pub const MAX_SHREDS_PER_SLOT: usize = MAX_CODE_SHREDS_PER_SLOT + MAX_DATA_SHREDS_PER_SLOT;
+pub const MAX_SHREDS_PER_SLOT: usize = coding_shred.max_per_slot + data_shred.max_per_slot;
+
+const DATA_SHREDS_PER_FEC_BLOCK: usize = 32;
+const SIZE_OF_MERKLE_ROOT: usize = sig.core.HASH_SIZE;
+
+pub const coding_shred = ShredConstants{
+    .max_per_slot = 32_768,
+    .payload_size = 1228, // TODO this can be calculated like solana
+    .headers_size = 89,
+};
+
+pub const data_shred = ShredConstants{
+    .max_per_slot = 32_768,
+    .payload_size = 1203, // TODO this can be calculated like solana
+    .headers_size = 88,
+};
 
 /// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred.rs#L245)
-pub const Shred = struct {
-    common_header: ShredCommonHeader,
-    custom_header: union(ShredType) {
-        Code: CodingShredHeader,
-        Data: DataShredHeader,
-    },
-    payload: ArrayList(u8),
+pub const Shred = union(ShredType) {
+    Code: CodingShred,
+    Data: DataShred,
 
     const Self = @This();
 
-    pub fn deinit(self: *Self) void {
-        self.payload.deinit();
+    pub fn deinit(self: Self) void {
+        return switch (self) {
+            inline .Code, .Data => |s| s.fields.deinit(),
+        };
     }
 
     pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
         const variant = shred_layout.getShredVariant(payload) orelse return error.uygugj;
-        const SIZE_OF_PAYLOAD = switch (variant.shred_type) {
-            .Code => CodingShredHeader.SIZE_OF_PAYLOAD,
-            .Data => DataShredHeader.SIZE_OF_PAYLOAD,
+        return switch (variant.shred_type) {
+            .Code => .{ .Code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload) } },
+            .Data => .{ .Data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload) } },
         };
-        if (payload.len < SIZE_OF_PAYLOAD) {
-            return error.InvalidPayloadSize;
-        }
-        const exact_payload = payload[0..SIZE_OF_PAYLOAD];
-        var buf = std.io.fixedBufferStream(exact_payload);
-        var owned_payload = ArrayList(u8).init(allocator); // TODO: find a cheaper way to get the payload in here
-        try owned_payload.appendSlice(exact_payload);
-        var self = Self{
-            .common_header = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{}),
-            .custom_header = switch (variant.shred_type) {
-                .Code => .{ .Code = try bincode.read(allocator, CodingShredHeader, buf.reader(), .{}) },
-                .Data => .{ .Data = try bincode.read(allocator, DataShredHeader, buf.reader(), .{}) },
-            },
-            .payload = owned_payload,
-        };
-        try self.sanitize();
-        return self;
     }
 
     pub fn isLastInSlot(self: *const Self) bool {
-        return switch (self.custom_header) {
+        return switch (self.*) {
             .Code => false,
-            .Data => |data| data.flags.isSet(.last_shred_in_slot),
+            .Data => |data| data.fields.custom.flags.isSet(.last_shred_in_slot),
         };
     }
 
     fn sanitize(self: *const Self) !void {
-        _ = self;
-        // TODO
+        if (self.commonHeader().shred_variant.shred_type != self) {
+            return error.InconsistentShredVariant;
+        }
+        switch (self.*) {
+            inline .Code, .Data => |s| try s.sanitize(),
+        }
+    }
+
+    pub fn commonHeader(self: *const Self) *const ShredCommonHeader {
+        return switch (self.*) {
+            inline .Code, .Data => |c| &c.common,
+        };
+    }
+};
+
+pub const CodingShred = struct {
+    fields: Fields,
+    const Fields = GenericShred(CodingShredHeader, coding_shred);
+
+    const Self = @This();
+    const consts = coding_shred;
+
+    fn sanitize(self: *const Self) error{InvalidNumCodingShreds}!void {
+        try self.fields.sanitize();
+        if (self.custom.num_coding_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
+            return error.InvalidNumCodingShreds;
+        }
+    }
+
+    pub fn erasureShardIndex(self: *const Self) !usize {
+        // Assert that the last shred index in the erasure set does not
+        // overshoot MAX_{DATA,CODE}_SHREDS_PER_SLOT.
+        if (try checkedAdd(
+            self.common.fec_set_index,
+            try checkedSub(@as(u32, @intCast(self.custom.num_data_shreds)), 1),
+        ) >= data_shred.max_per_slot) {
+            return error.InvalidErasureShardIndex;
+        }
+        if (try checkedAdd(
+            try self.first_coding_index(),
+            try checkedSub(@as(u32, @intCast(self.custom.num_coding_shreds)), 1),
+        ) >= coding_shred.max_per_slot) {
+            return error.InvalidErasureShardIndex;
+        }
+        const num_data_shreds: usize = @intCast(self.custom.num_data_shreds);
+        const num_coding_shreds: usize = @intCast(self.custom.num_coding_shreds);
+        const position: usize = @intCast(self.custom.position);
+        const fec_set_size = try checkedAdd(num_data_shreds, num_coding_shreds);
+        const index = try checkedAdd(position, num_data_shreds);
+        return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
+    }
+
+    fn first_coding_index(self: *const Self) !u32 {
+        return checkedSub(self.common.index, self.custom.position);
+    }
+};
+
+pub const DataShred = struct {
+    fields: Fields,
+    const Fields = GenericShred(DataShredHeader, data_shred);
+
+    const Self = @This();
+    const consts = data_shred;
+
+    fn sanitize(self: *const Self) !void {
+        try self.fields.sanitize();
+        const flags = self.fields.custom.flags;
+        if (flags.intersects(.last_shred_in_slot) and
+            !flags.isSet(.data_complete_shred))
+        {
+            return error.InvalidShredFlags;
+        }
+        _ = try self.data();
+        _ = try self.parent();
+    }
+
+    fn data(self: *const Self) ![]const u8 {
+        const v = self.fields.common.shred_variant;
+        const data_buffer_size = try Fields.capacity(v.proof_size, v.chained, v.resigned);
+        const size = self.fields.custom.size;
+        if (size > self.payload.len or
+            size < consts.headers_size or
+            size > consts.headers_size + data_buffer_size)
+        {
+            return error.InvalidDataSize;
+        }
+
+        return self.payload[consts.headers_size..size];
+    }
+
+    fn parent(self: *const Self) !Slot {
+        const slot = self.fields.common.slot;
+        if (self.fields.custom.parent_offset == 0 and slot != 0) {
+            return error.InvalidParentOffset;
+        }
+        return checkedSub(slot, self.fields.custom.parent_offset) catch error.InvalidParentOffset;
+    }
+
+    pub fn erasureShardIndex(self: *const Self) error{IntegerOverflow}!usize {
+        return @intCast(try checkedSub(self.fields.common.index, self.fields.common.fec_set_index));
+    }
+};
+
+/// Analogous to [Shred trait](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred/traits.rs#L6)
+pub fn GenericShred(
+    comptime CustomHeader: type,
+    constants: ShredConstants,
+) type {
+    return struct {
+        common: ShredCommonHeader,
+        custom: CustomHeader,
+        allocator: Allocator,
+        payload: []const u8,
+
+        const Self = @This();
+
+        pub fn deinit(self: Self) void {
+            self.allocator.free(self.payload);
+        }
+
+        pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
+            if (payload.len < constants.payload_size) {
+                return error.InvalidPayloadSize;
+            }
+            const owned_payload = try allocator.alloc(u8, constants.payload_size);
+
+            // TODO: It would be nice to find a way to get the payload in here without coping the entire thing.
+            // The challenge is that the input payload is owned by the original packet list which was read
+            // from the socket, and that list may be cluttered with a lot of garbage data.
+            // So a copy like this may be needed somewhere. but it's worth some more thought.
+            @memcpy(owned_payload, payload[0..constants.payload_size]);
+
+            var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
+            const self = Self{
+                .allocator = allocator,
+                .common = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{}),
+                .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
+                .payload = owned_payload,
+            };
+
+            try self.sanitize();
+            return self;
+        }
+
+        fn sanitize(self: *const Self) !void {
+            _ = try self.merkleProof();
+
+            if (self.common.index > constants.max_per_slot) {
+                return error.InvalidShredIndex;
+            }
+            if (constants.payload_size != self.payload.len) {
+                return error.InvalidPayloadSize;
+            }
+        }
+
+        /// TODO should this be memoized?
+        fn capacity(proof_size: u8, chained: bool, resigned: bool) !usize {
+            std.debug.assert(chained or !resigned);
+            return checkedSub(
+                constants.payload_size,
+                constants.headers_size +
+                    if (chained) SIZE_OF_MERKLE_ROOT else 0 +
+                    proof_size * merkle_proof_entry_size +
+                    if (resigned) SIGNATURE_LENGTH else 0,
+            ) catch error.InvalidProofSize;
+        }
+
+        /// The return contains a pointer to data owned by the shred.
+        fn merkleProof(self: *const Self) !MerkleProofEntryList {
+            const size = self.common.shred_variant.proof_size * merkle_proof_entry_size;
+            const offset = try self.proofOffset();
+            const end = offset + size;
+            if (self.payload.len < end) {
+                return error.InsufficentPayloadSize;
+            }
+            return .{
+                .bytes = self.payload[offset..end],
+                .len = self.common.shred_variant.proof_size,
+            };
+        }
+
+        // Where the merkle proof starts in the shred binary.
+        fn proofOffset(self: *const Self) !usize {
+            const v = self.common.shred_variant;
+            return constants.headers_size +
+                try capacity(v.proof_size, v.chained, v.resigned) +
+                if (v.chained) SIZE_OF_MERKLE_ROOT else 0;
+        }
+
+        fn erasureShardAsSlice(self: *const Self) ![]u8 {
+            if (self.payload.len() != self.constants().payload_size) {
+                return error.InvalidPayloadSize;
+            }
+            const variant = self.common.shred_variant;
+            const end = constants.headers_size +
+                try capacity(variant.proof_size, variant.chained, variant.resigned) +
+                SIGNATURE_LENGTH;
+            if (self.payload.len < end) {
+                return error.InsufficientPayloadSize;
+            }
+            return self.payload[SIGNATURE_LENGTH..end];
+        }
+    };
+}
+
+const MerkleProofEntry = [merkle_proof_entry_size]u8;
+const merkle_proof_entry_size: usize = 20;
+
+/// This is a reference. It does not own the data. Be careful with its lifetime.
+const MerkleProofEntryList = struct {
+    bytes: []const u8,
+    len: usize,
+
+    pub fn get(self: *@This(), index: usize) error{IndexOutOfBounds}!MerkleProofEntry {
+        if (index > self.len) return error.IndexOutOfBounds;
+        const start = index * merkle_proof_entry_size;
+        const end = start + merkle_proof_entry_size;
+        return self.bytes[start..end];
     }
 };
 
@@ -87,16 +300,12 @@ pub const DataShredHeader = struct {
     parent_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
-
-    const SIZE_OF_PAYLOAD: usize = 1203; // TODO this can be calculated like solana
 };
 
 pub const CodingShredHeader = struct {
     num_data_shreds: u16,
     num_coding_shreds: u16,
     position: u16, // [0..num_coding_shreds)
-
-    const SIZE_OF_PAYLOAD: usize = 1228; // TODO this can be calculated like solana
 };
 
 pub const ShredType = enum(u8) {
@@ -214,6 +423,12 @@ pub const ShredFlags = BitFlags(enum(u8) {
     data_complete_shred = 0b0100_0000,
     last_shred_in_slot = 0b1100_0000,
 });
+
+pub const ShredConstants = struct {
+    max_per_slot: usize,
+    payload_size: usize,
+    headers_size: usize,
+};
 
 pub const shred_layout = struct {
     const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
