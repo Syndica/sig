@@ -43,6 +43,8 @@ const AccountRef = _accounts_index.AccountRef;
 const DiskMemoryAllocator = _accounts_index.DiskMemoryAllocator;
 
 pub const DB_PROGRESS_UPDATES_NS = 5 * std.time.ns_per_s;
+pub const DB_MANAGER_UPDATE_NS = 5 * std.time.ns_per_s;
+
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
@@ -70,6 +72,10 @@ pub const AccountsDB = struct {
     // used for filenames when flushing accounts to disk
     // TODO: do we need this? since flushed slots will be unique
     largest_file_id: u32 = 0,
+
+    // used for flushing/cleaning/purging/shrinking
+    // TODO: when working on consensus, we'll swap this out
+    largest_root_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
 
     logger: Logger,
     config: AccountsDBConfig,
@@ -850,55 +856,6 @@ pub const AccountsDB = struct {
         _ = try self.account_index.addMemoryBlock(refs);
     }
 
-    /// remove all accounts and associated reference memory.
-    /// note: should only be called on non-rooted slots (ie, slots which
-    /// only exist in the cache, and not on disk).
-    pub fn purgeSlot(self: *Self, slot: Slot, allocator: std.mem.Allocator) void {
-        if (self.account_cache.get(slot)) |r| {
-            const pubkeys, const accounts = r;
-
-            // remove the account_ref from the index
-            for (pubkeys) |*pubkey| {
-                self.account_index.removeReference(pubkey, slot) catch |err| {
-                    switch (err) {
-                        error.PubkeyNotFound => {
-                            std.debug.panic("pubkey not found in index while purging: {any}", .{pubkey});
-                        },
-                        error.SlotNotFound => {
-                            std.debug.panic(
-                                "pubkey @ slot not found in index while purging: {any} @ {d}",
-                                .{ pubkey, slot },
-                            );
-                        },
-                    }
-                };
-            }
-
-            // free the account memory
-            for (accounts) |*account| {
-                allocator.free(account.data);
-            }
-            allocator.free(accounts);
-            allocator.free(pubkeys);
-
-            // remove slot from cache map
-            _ = self.account_cache.remove(slot);
-        } else {
-            // the way it works right now, account files only exist for rooted slots
-            // rooted slots should never need to be purged so we should never get here
-            @panic("purging an account file not supported");
-        }
-
-        // free the account *reference* memory
-        self.account_index.removeMemoryBlock(slot) catch |err| {
-            switch (err) {
-                error.MemoryNotFound => {
-                    std.debug.panic("memory block @ slot not found: {d}", .{slot});
-                },
-            }
-        };
-    }
-
     pub fn createAccountFile(self: *Self, size: usize, slot: Slot) !struct {
         file: std.fs.File,
         file_id: u32,
@@ -940,12 +897,50 @@ pub const AccountsDB = struct {
         };
     }
 
+    /// periodically runs flush/clean/shrink
+    pub fn runManagerLoop(self: *Self) !void {
+        while (true) {
+            const timer = try std.time.Timer.start();
+            defer {
+                const elapsed = timer.read();
+                if (elapsed < DB_MANAGER_UPDATE_NS) {
+                    const delay = DB_MANAGER_UPDATE_NS - elapsed;
+                    std.time.sleep(delay);
+                }
+                timer.reset();
+            }
+
+            const root_slot = self.largest_root_slot.load(.unordered);
+
+            // flush slots <= root slot
+            var iter = self.account_cache.keyIterator();
+            var flush_count: usize = 0;
+            while (iter.next()) |cache_slot| {
+                if (cache_slot <= root_slot) {
+                    self.flushSlot(cache_slot);
+                    flush_count += 1;
+                }
+            }
+
+            // clean the flushed slots account files
+            if (flush_count > 0) {
+                self.cleanAccountFiles(root_slot);
+            }
+
+            self.shrinkAccountFiles();
+        }
+    }
+
     /// flushes a slot account data from the cache onto disk, and updates the index
-    /// note: this deallocates the []account and []pubkey data from the cache
+    /// note: this deallocates the []account and []pubkey data from the cache, as well
+    /// as the data field ([]u8) for each account.
     pub fn flushSlot(self: *Self, slot: Slot) !void {
         const pubkeys, const accounts = self.account_cache.get(slot) orelse return error.SlotNotFound;
         std.debug.assert(accounts.len == pubkeys.len);
         defer {
+            const did_remove = self.account_cache.remove(slot);
+            std.debug.assert(did_remove);
+
             self.allocator.free(pubkeys);
             for (accounts) |account| {
                 self.allocator.free(account.data);
@@ -963,13 +958,12 @@ pub const AccountsDB = struct {
             );
         }
         const r = try self.createAccountFile(size, slot);
+
+        // // note: syntax highlighting doesnt work with the approach below
+        // const file_id, const file, const memory = .{ r.file_id, r.file, r.memory };
         const file_id = r.file_id;
         const file = r.file;
         const memory = r.memory;
-
-        // // note: syntax highlighting doesnt work with the approach below
-        // // which is why we do the above approach
-        // const file_id, const file, const memory = .{ r.file_id, r.file, r.memory };
 
         // TODO: will likely need locks here when updating the references
         var offset: usize = 0;
@@ -1039,8 +1033,8 @@ pub const AccountsDB = struct {
                 var curr: ?*AccountRef = reference;
                 while (curr) |ref| : (curr = ref.next_ptr) {
                     // only track states less than the rooted slot (ie, they are also rooted)
-                    const is_rooted_ref = ref.slot <= highest_rooted_slot;
-                    if (!is_rooted_ref) continue;
+                    const is_not_rooted = ref.slot > highest_rooted_slot;
+                    if (is_not_rooted) continue;
 
                     const is_larger_slot = ref.slot > highest_ref_slot or rooted_ref_count == 0;
                     if (is_larger_slot) {
@@ -1184,6 +1178,8 @@ pub const AccountsDB = struct {
             // delete old account file
             try self.deleteAccountFile(slot, old_file_id);
 
+            // TODO: should we also shrink the memory block associated with the slot?
+
             account_iter.reset();
             var offset: usize = 0;
             while (account_iter.next()) |*account| {
@@ -1215,6 +1211,55 @@ pub const AccountsDB = struct {
 
         return .{
             .num_accounts_deleted = num_accounts_deleted,
+        };
+    }
+
+    /// remove all accounts and associated reference memory.
+    /// note: should only be called on non-rooted slots (ie, slots which
+    /// only exist in the cache, and not on disk).
+    pub fn purgeSlot(self: *Self, slot: Slot, allocator: std.mem.Allocator) void {
+        if (self.account_cache.get(slot)) |r| {
+            const pubkeys, const accounts = r;
+
+            // remove the account_ref from the index
+            for (pubkeys) |*pubkey| {
+                self.account_index.removeReference(pubkey, slot) catch |err| {
+                    switch (err) {
+                        error.PubkeyNotFound => {
+                            std.debug.panic("pubkey not found in index while purging: {any}", .{pubkey});
+                        },
+                        error.SlotNotFound => {
+                            std.debug.panic(
+                                "pubkey @ slot not found in index while purging: {any} @ {d}",
+                                .{ pubkey, slot },
+                            );
+                        },
+                    }
+                };
+            }
+
+            // free the account memory
+            for (accounts) |*account| {
+                allocator.free(account.data);
+            }
+            allocator.free(accounts);
+            allocator.free(pubkeys);
+
+            // remove slot from cache map
+            _ = self.account_cache.remove(slot);
+        } else {
+            // the way it works right now, account files only exist for rooted slots
+            // rooted slots should never need to be purged so we should never get here
+            @panic("purging an account file not supported");
+        }
+
+        // free the account *reference* memory
+        self.account_index.removeMemoryBlock(slot) catch |err| {
+            switch (err) {
+                error.MemoryNotFound => {
+                    std.debug.panic("memory block @ slot not found: {d}", .{slot});
+                },
+            }
         };
     }
 

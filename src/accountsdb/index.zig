@@ -20,7 +20,7 @@ pub const AccountRef = struct {
             offset: usize,
         },
         Cache: struct {
-            index: usize, // used to lookup in the slice
+            index: usize,
         },
     };
 
