@@ -35,7 +35,7 @@ pub fn main() !void {
     // if we have more benchmarks we can make this more efficient
     const max_time_per_bench = 2 * std.time.ms_per_s; // !!
 
-    if (std.mem.startsWith(u8, "swissmap", filter)) {
+    if (std.mem.startsWith(u8, filter, "swissmap")) {
         try benchmark(
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
@@ -43,15 +43,32 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, "accounts_db", filter)) {
-        try benchmark(
-            @import("accountsdb/db.zig").BenchmarkAccountsDB,
-            max_time_per_bench,
-            TimeUnits.nanoseconds,
-        );
+    if (std.mem.startsWith(u8, filter, "accounts_db")) {
+        var run_all = false;
+        if (std.mem.eql(u8, "accounts_db", filter)) { 
+            run_all = true;
+        }
+
+        if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
+            try benchmark(
+                @import("accountsdb/db.zig").BenchmarkAccountsDB,
+                max_time_per_bench,
+                TimeUnits.nanoseconds,
+            );
+        }
+
+        if (std.mem.eql(u8, "accounts_db_snapshot", filter) or run_all) {
+            // NOTE: for this benchmark you need to setup a snapshot in test_data/snapshot_bench
+            // and run as a binary ./zig-out/bin/... so the open file limits are ok
+            try benchmark(
+                @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
+                max_time_per_bench,
+                TimeUnits.nanoseconds,
+            );
+        }
     }
 
-    if (std.mem.startsWith(u8, "socket_utils", filter)) {
+    if (std.mem.startsWith(u8, filter, "socket_utils")) {
         try benchmark(
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
@@ -59,7 +76,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, "gossip", filter)) {
+    if (std.mem.startsWith(u8, filter, "gossip")) {
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
@@ -72,7 +89,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, "sync", filter)) {
+    if (std.mem.startsWith(u8, filter, "sync")) {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,

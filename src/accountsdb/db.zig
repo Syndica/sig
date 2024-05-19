@@ -1109,7 +1109,6 @@ pub const AccountsDB = struct {
         for (self.delete_account_files.keys()) |file_id| {
             // SAFE: this should always succeed or something is wrong
             const account_file = self.file_map.get(file_id).?;
-
             // remove from map
             _ = self.file_map.swapRemove(file_id);
             // delete file from disk
@@ -1443,10 +1442,7 @@ pub const AccountsDB = struct {
     }
 };
 
-fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
-    std.debug.assert(builtin.is_test); // should only be used in tests
-    var allocator = std.testing.allocator;
-
+fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
@@ -1505,7 +1501,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
 test "accounts_db.db: write and read an account" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(std.testing.allocator, false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1541,7 +1537,7 @@ test "accounts_db.db: write and read an account" {
 test "accounts_db.db: load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(true);
+    const result = try loadTestAccountsDB(std.testing.allocator, true);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1559,7 +1555,7 @@ test "accounts_db.db: load and validate from test snapshot using disk index" {
 test "accounts_db.db: load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(std.testing.allocator, false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1577,7 +1573,7 @@ test "accounts_db.db: load and validate from test snapshot" {
 test "accounts_db.db: load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(std.testing.allocator, false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1599,7 +1595,7 @@ test "accounts_db.db: load clock sysvar" {
 test "accounts_db.db: load other sysvars" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(std.testing.allocator, false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1961,6 +1957,81 @@ test "accounts_db.db: shrink account file works" {
     // last account ref should still be accessible
     _ = try accounts_db.getAccount(&pubkey_remain);
 }
+
+pub const BenchmarkAccountsDBSnapshotLoad = struct {
+    pub const min_iterations = 1;
+    pub const max_iterations = 1;
+
+    pub const BenchArgs = struct {
+        use_disk: bool,
+        n_threads: u32,
+        name: []const u8,
+    };
+
+    pub const args = [_]BenchArgs{
+        BenchArgs{
+            .use_disk = false,
+            .n_threads = 2,
+            .name = "load snapshot on RAM",
+        },
+        BenchArgs{
+            .use_disk = true,
+            .n_threads = 2,
+            .name = "load snapshot on DISK",
+        },
+    };
+
+    pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
+        const allocator = std.heap.page_allocator;
+
+        // unpack the snapshot 
+        // NOTE: usually this will be an incremental snapshot
+        // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd) 
+        // (because test snapshots are too small and full snapshots are too big)
+        const dir_path = "test_data/bench_snapshot/";
+        const accounts_path = dir_path ++ "accounts";
+
+        _ = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch { 
+            std.debug.print("need to setup an snapshot dir for this benchmark...\n", .{});
+            return 0;
+        };
+
+        var snapshot_files = try SnapshotFiles.find(allocator, dir_path);
+        defer snapshot_files.deinit(allocator);
+
+        var snapshots = try AllSnapshotFields.fromFiles(allocator, dir_path, snapshot_files);
+        defer {
+            allocator.free(snapshots.full_path);
+            if (snapshots.incremental_path) |inc_path| {
+                allocator.free(inc_path);
+            }
+        }
+        const snapshot = try snapshots.all_fields.collapse();
+        const logger = Logger{ .noop = {} };
+
+        // const logger = Logger.init(allocator, .debug);
+        // defer logger.deinit();
+        // logger.spawn();
+
+        var accounts_db = try AccountsDB.init(allocator, logger, .{
+            .num_index_bins = 32,
+            .use_disk_index = bench_args.use_disk,
+            .snapshot_dir = dir_path,
+        });
+        defer accounts_db.deinit(true);
+
+        var timer = try std.time.Timer.start();
+        try accounts_db.loadFromSnapshot(
+            snapshot.accounts_db_fields,
+            accounts_path,
+            bench_args.n_threads,
+            allocator,
+        );
+        const elapsed = timer.read();
+
+        return elapsed;
+    }
+};
 
 pub const BenchmarkAccountsDB = struct {
     pub const min_iterations = 1;
