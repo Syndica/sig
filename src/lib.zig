@@ -63,6 +63,7 @@ pub const sync = struct {
 pub const utils = struct {
     pub usingnamespace @import("utils/arraylist.zig");
     pub usingnamespace @import("utils/bitflags.zig");
+    pub usingnamespace @import("utils/chacha.zig");
     pub usingnamespace @import("utils/lazy.zig");
     pub usingnamespace @import("utils/math.zig");
     pub usingnamespace @import("utils/shortvec.zig");
