@@ -112,14 +112,13 @@ pub fn Channel(comptime T: type) type {
                 return error.ChannelClosed;
             }
 
-            const values: *const std.ArrayList(T) = buffer.get();
-            const num_items_to_drain = values.items.len;
+            const num_items_to_drain = buffer.get().items.len;
             if (num_items_to_drain == 0) {
                 return null;
             }
 
             const out = try self.allocator.alloc(T, num_items_to_drain);
-            @memcpy(out, values.items);
+            @memcpy(out, buffer.get().items);
             buffer.mut().clearRetainingCapacity();
 
             return out;
@@ -136,34 +135,8 @@ pub fn Channel(comptime T: type) type {
     };
 }
 
-const Block = struct {
-    num: u32 = 333,
-    valid: bool = true,
-    data: [1024]u8 = undefined,
-};
-
-const BlockChannel = Channel(Block);
-const BlockPointerChannel = Channel(*Block);
-
-const logger = std.log.scoped(.sync_channel_tests);
-
-fn testReceiver(chan: *BlockChannel, recv_count: *Atomic(usize), id: u8) void {
-    _ = id;
-    while (chan.receive()) |v| {
-        _ = v;
-        _ = recv_count.fetchAdd(1, .seq_cst);
-    }
-}
-
-fn testSender(chan: *BlockChannel, total_send: usize) void {
-    var i: usize = 0;
-    while (i < total_send) : (i += 1) {
-        chan.send(Block{ .num = @intCast(i) }) catch unreachable;
-    }
-    chan.close();
-}
-
 const Packet = @import("../net/packet.zig").Packet;
+
 fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
@@ -175,66 +148,152 @@ fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
 fn testPacketReceiver(chan: *Channel(Packet), total_recv: usize) void {
     var count: usize = 0;
     while (count < total_recv) : (count += 1) {
-        const v = chan.receive();
+        const v = chan.receive() orelse unreachable;
         _ = v;
     }
 }
 
-test "sync.channel: channel works properly" {
-    var ch = BlockChannel.init(testing.allocator, 100);
-    defer ch.deinit();
+fn testUsizeReceiver(chan: *Channel(usize), recv_count: usize) void {
+    var count: usize = 0;
+    while (count < recv_count) : (count += 1) {
+        if (chan.try_drain()) |v| {
+            _ = v;
+        } else |_| {
+            // break;
+            @panic("channel closed while trying to receive!");
+        }
+    }
+}
 
-    var recv_count: Atomic(usize) = Atomic(usize).init(0);
-    const send_count: usize = 1_000_000;
-
-    var join1 = try std.Thread.spawn(.{}, testSender, .{ ch, send_count });
-    var join2 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
-    var join3 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
-    var join4 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
-
-    join1.join();
-    join2.join();
-    join3.join();
-    join4.join();
-
-    try testing.expectEqual(send_count, recv_count.load(.seq_cst));
+fn testUsizeSender(chan: *Channel(usize), send_count: usize) void {
+    var i: usize = 0;
+    while (i < send_count) : (i += 1) {
+        chan.send(i) catch |err| {
+            std.debug.print("could not send on chan: {any}", .{err});
+            @panic("could not send on channel!");
+        };
+    }
 }
 
 pub const BenchmarkChannel = struct {
-    pub const min_iterations = 5;
-    pub const max_iterations = 5;
+    pub const min_iterations = 10;
+    pub const max_iterations = 25;
 
-    const send_count: usize = 500_000;
+    pub const BenchmarkArgs = struct {
+        name: []const u8 = "",
+        n_items: usize,
+        n_senders: usize,
+        n_receivers: usize,
+    };
 
-    pub fn benchmarkChannel() !u64 {
+    pub const args = [_]BenchmarkArgs{
+        .{
+            .name = "  10k_items,   1_senders,   1_receivers ",
+            .n_items = 10_000,
+            .n_senders = 1,
+            .n_receivers = 1,
+        },
+        .{
+            .name = " 100k_items,   4_senders,   4_receivers ",
+            .n_items = 100_000,
+            .n_senders = 4,
+            .n_receivers = 4,
+        },
+        .{
+            .name = " 500k_items,   8_senders,   8_receivers ",
+            .n_items = 500_000,
+            .n_senders = 8,
+            .n_receivers = 8,
+        },
+        .{
+            .name = "   1m_items,  16_senders,  16_receivers ",
+            .n_items = 1_000_000,
+            .n_senders = 16,
+            .n_receivers = 16,
+        },
+        .{
+            .name = "   5m_items,   4_senders,   4_receivers ",
+            .n_items = 5_000_000,
+            .n_senders = 4,
+            .n_receivers = 4,
+        },
+        .{
+            .name = "   5m_items,  16_senders,  16_receivers ",
+            .n_items = 5_000_000,
+            .n_senders = 16,
+            .n_receivers = 16,
+        },
+    };
+
+    pub fn benchmarkSimpleUsizeChannel(argss: BenchmarkArgs) !usize {
+        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
+
         const allocator = std.heap.page_allocator;
-        var channel = BlockChannel.init(allocator, send_count / 2);
+        var channel = Channel(usize).init(allocator, n_items / 2);
         defer channel.deinit();
 
-        var recv_count: Atomic(usize) = Atomic(usize).init(0);
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
 
-        var timer = try std.time.Timer.start();
-        var join2 = try std.Thread.spawn(.{}, testSender, .{ channel, send_count });
-        var join1 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 1 });
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ channel, sends_per_sender });
+        }
 
-        join2.join();
-        join1.join();
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ channel, receives_per_receiver });
+        }
 
-        return timer.read();
+        for (0..thread_handles.len) |i| {
+            if (thread_handles[i]) |handle| {
+                handle.join();
+            } else {
+                break;
+            }
+        }
+
+        channel.close();
+        const elapsed = timer.read();
+        return elapsed;
     }
 
-    pub fn benchmarkPacketChannel() !u64 {
+    pub fn benchmarkSimplePacketChannel(argss: BenchmarkArgs) !usize {
+        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
+
         const allocator = std.heap.page_allocator;
-        var channel = Channel(Packet).init(allocator, send_count / 2);
+        var channel = Channel(Packet).init(allocator, n_items / 2);
         defer channel.deinit();
 
-        var timer = try std.time.Timer.start();
-        var join1 = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, send_count });
-        var join2 = try std.Thread.spawn(.{}, testPacketSender, .{ channel, send_count });
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
 
-        join1.join();
-        join2.join();
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{ channel, sends_per_sender });
+        }
 
-        return timer.read();
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, receives_per_receiver });
+        }
+
+        for (0..thread_handles.len) |i| {
+            if (thread_handles[i]) |handle| {
+                handle.join();
+            } else {
+                break;
+            }
+        }
+
+        channel.close();
+        const elapsed = timer.read();
+        return elapsed;
     }
 };

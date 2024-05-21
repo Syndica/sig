@@ -166,7 +166,7 @@ sig gossip --entrypoint entrypoint.testnet.solana.com:8001 \
 
 ## Develop
 
-See [Setup](#-setup) to get your environment set up. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
+See [Setup](#-setup) to get your environment set up. See [CONTRIBUTING.md](misc/CONTRIBUTING.md) for the code style guide.
 
 ### 🧪 Test
 
@@ -202,7 +202,7 @@ zig build benchmark -- gossip
 
 ## 📦 Import Sig
 
-Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.12). See the [API documentation](docs/api.md) to learn more about how to use Sig as a library.
+Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.12). See the [API documentation](misc/api.md) to learn more about how to use Sig as a library.
 
 <details>
 <summary><code>Steps</code> - how to install Sig in your Zig project</summary>
@@ -303,7 +303,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 - **[Core](src/core)** - Core data structures shared across modules.
 
-- **[RPC Client](src/rpc)** ([docs](docs/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
+- **[RPC Client](src/rpc)** ([docs](misc/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
   <br><br>
 
 ## 📚 Learn More

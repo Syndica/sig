@@ -64,9 +64,17 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, "sync", filter)) {
+    if (std.mem.startsWith(u8, "sync.channel", filter)) {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
+            max_time_per_bench,
+            TimeUnits.microseconds,
+        );
+    }
+
+    if (std.mem.startsWith(u8, "sync.chanx", filter)) {
+        try benchmark(
+            @import("sync/chanx.zig").BenchmarkChannel,
             max_time_per_bench,
             TimeUnits.microseconds,
         );

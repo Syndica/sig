@@ -94,7 +94,7 @@ pub const ThreadPool = struct {
             if (len == 0) {
                 return null;
             }
-            const task: Task = this.head.?;
+            const task: *Task = this.head.?;
             if (task.node.next) |node| {
                 this.head = @fieldParentPtr("node", node);
             } else {

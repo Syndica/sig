@@ -156,7 +156,6 @@ pub fn build(b: *std.Build) void {
 
         // this lets us run it as an exec
         b.installArtifact(exec);
-
         const cmd = b.addRunArtifact(exec);
         if (b.args) |args| cmd.addArgs(args);
         b

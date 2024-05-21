@@ -1013,7 +1013,7 @@ pub const ContactInfo = struct {
     const Self = @This();
 
     pub fn toNodeInstance(self: *Self) NodeInstance {
-        return NodeInstance.init(self.Pubkey, @intCast(std.time.milliTimestamp()));
+        return NodeInstance.init(self.pubkey, @intCast(std.time.milliTimestamp()));
     }
 
     pub fn deinit(self: Self) void {

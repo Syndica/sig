@@ -83,7 +83,7 @@ pub fn deserialize_short_u16(reader: anytype, _: bincode.Params) !u16 {
     var val: u16 = 0;
     for (0..MAX_ENCODING_LENGTH) |n| {
         const elem: u8 = try reader.readByte();
-        switch (try visit_byte_2(elem, val, n)) {
+        switch (try visit_byte(elem, val, n)) {
             .Done => |v| {
                 return v;
             },
@@ -105,41 +105,6 @@ const U32_MAX: u32 = 4_294_967_295;
 const MAX_ENCODING_LENGTH = 3;
 
 pub fn visit_byte(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
-    if (elem == 0 and nth_byte != 0) {
-        return error.VisitError;
-    }
-
-    var value = @as(u32, val);
-    const element = @as(u32, elem);
-    var elem_val: u8 = @as(u8, @intCast(element & 0x7f));
-    const elem_done = (element & 0x80) == 0;
-
-    if (nth_byte >= MAX_ENCODING_LENGTH) {
-        return error.TooLong;
-    } else if (nth_byte == (MAX_ENCODING_LENGTH - 1) and !elem_done) {
-        return error.ByteThreeContinues;
-    }
-
-    const shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
-
-    const shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
-    if (shift_res.@"1" == 1) {
-        elem_val = U32_MAX;
-    } else {
-        elem_val = shift_res.@"0".Int.bits;
-    }
-
-    const new_val = value | elem_val;
-    value = std.math.cast(u16, new_val) catch return error.Overflow;
-
-    if (elem_done) {
-        return .{ .Done = value };
-    } else {
-        return .{ .More = value };
-    }
-}
-
-pub fn visit_byte_2(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
     if (elem == 0 and nth_byte != 0) {
         return error.VisitError;
     }

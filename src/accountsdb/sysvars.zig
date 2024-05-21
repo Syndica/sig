@@ -105,14 +105,6 @@ pub const Rent = struct {
     burn_percent: u8,
 };
 
-const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
-pub const SlotHashes = ArrayList(SlotAndHash);
-
-pub const StakeHistory = ArrayList(struct {
-    epoch: Epoch,
-    stake_history_entry: StakeHistoryEntry,
-});
-
 pub const LastRestartSlot = struct {
     last_restart_slot: Slot,
 };
