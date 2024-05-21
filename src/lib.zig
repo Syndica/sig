@@ -73,6 +73,11 @@ pub const utils = struct {
     pub usingnamespace @import("utils/varint.zig");
 };
 
+pub const rand = struct {
+    pub usingnamespace @import("rand/rand.zig");
+    pub usingnamespace @import("rand/chacha.zig");
+};
+
 pub const trace = struct {
     pub usingnamespace @import("trace/level.zig");
     pub usingnamespace @import("trace/log.zig");

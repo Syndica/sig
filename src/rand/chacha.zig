@@ -9,57 +9,15 @@ const sig = @import("../lib.zig");
 
 const mem = std.mem;
 
-const Return = sig.utils.Return;
+const BlockRng = sig.utils.BlockRng;
 
 const BUFSZ: usize = 64;
 const endian = builtin.cpu.arch.endian();
 
 /// A random number generator based on ChaCha.
-/// Generates the same stream as `rand_chacha`
+/// Generates the same stream as ChaChaRng in `rand_chacha`
 pub fn ChaChaRng(comptime rounds: usize) type {
     return BlockRng(ChaCha(rounds), ChaCha(rounds).generate);
-}
-
-/// Wrapper for random number generators which generate
-/// blocks of [64]u32. Minimizes calls to the underlying
-/// random number generator by recycling unused data from
-/// previous calls. Port of BlockRng from rust which
-/// ensures the same sequence is generated.
-pub fn BlockRng(
-    comptime T: type,
-    comptime generate: fn (*T, *[64]u32) void,
-) type {
-    return struct {
-        results: [64]u32 = undefined,
-        index: usize = 64,
-        core: T,
-
-        const Self = @This();
-
-        pub fn init(seed: anytype) Self {
-            return .{ .core = @call(.auto, T.init, .{seed}) };
-        }
-
-        pub fn random(self: *Self) std.rand.Random {
-            return std.rand.Random.init(self, fill);
-        }
-
-        pub fn fill(self: *Self, dest: []u8) void {
-            var completed_bytes: usize = 0;
-            while (completed_bytes < dest.len) {
-                if (self.index >= self.results.len) {
-                    generate(&self.core, &self.results);
-                    self.index = 0;
-                }
-                const src: [*]u8 = @ptrCast(self.results[self.index..].ptr);
-                const num_u8s = @min(4 * (64 - self.index), dest.len - completed_bytes);
-                @memcpy(dest[completed_bytes..][0..num_u8s], src[0..num_u8s]);
-
-                self.index += (num_u8s + 3) / 4;
-                completed_bytes += num_u8s;
-            }
-        }
-    };
 }
 
 /// Computes the chacha stream.
@@ -98,14 +56,14 @@ pub fn ChaCha(rounds: usize) type {
                 .a = .{ k, k, k, k },
                 .b = .{ b, b, b, b },
                 .c = .{ c, c, c, c },
-                .d = repeatx4AndAdd0123(self.d),
+                .d = repeat4timesAndAdd0123(self.d),
             };
             for (0..rounds / 2) |_| {
                 x = diagonalize(round(diagonalize(round(x), 1)), -1);
             }
             const sb = self.b;
             const sc = self.c;
-            const sd = repeatx4AndAdd0123(self.d);
+            const sd = repeat4timesAndAdd0123(self.d);
             const results: [64]u32 = @bitCast(transpose4(.{
                 wrappingAddEachInt(x.a, .{ k, k, k, k }),
                 wrappingAddEachInt(x.b, .{ sb, sb, sb, sb }),
@@ -156,7 +114,8 @@ fn wrappingAddToFirstHalf(d: [4]u32, i: u64) [4]u32 {
     return leIntBitCast([4]u32, u64s);
 }
 
-fn repeatx4AndAdd0123(d: [4]u32) [4][4]u32 {
+
+fn repeat4timesAndAdd0123(d: [4]u32) [4][4]u32 {
     return .{
         wrappingAddToFirstHalf(d, 0),
         wrappingAddToFirstHalf(d, 1),
@@ -409,7 +368,7 @@ test "d0123 works" {
         .{ 3, 2, 3, 4 },
         .{ 4, 2, 3, 4 },
     };
-    const output = repeatx4AndAdd0123(input);
+    const output = repeat4timesAndAdd0123(input);
     for (0..4) |i| {
         try std.testing.expect(mem.eql(u32, &expected_out[i], &output[i]));
     }
