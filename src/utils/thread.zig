@@ -48,7 +48,6 @@ pub fn ThreadPoolTask(
         task: Task,
         entry: EntryType,
         done: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
-
         const Self = @This();
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) ![]Self {
@@ -63,7 +62,7 @@ pub fn ThreadPoolTask(
         }
 
         fn callback(task: *Task) void {
-            var self: *Self = @fieldParentPtr("task", task);
+            const self: *Self = @fieldParentPtr("task", task);
             std.debug.assert(!self.done.load(.acquire));
             defer {
                 self.done.store(true, .release);
