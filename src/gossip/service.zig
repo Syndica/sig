@@ -131,7 +131,7 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
-        entrypoints: ?ArrayList(SocketAddr),
+        entrypoints: ?[]const SocketAddr,
         exit: *AtomicBool,
         logger: Logger,
     ) !Self {
@@ -172,8 +172,8 @@ pub const GossipService = struct {
 
         var entrypoint_list = ArrayList(Entrypoint).init(allocator);
         if (entrypoints) |eps| {
-            try entrypoint_list.ensureTotalCapacityPrecise(eps.items.len);
-            for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
+            try entrypoint_list.ensureTotalCapacityPrecise(eps.len);
+            for (eps) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
         const stats = try GossipStats.init(logger);

@@ -370,15 +370,13 @@ fn gossip() !void {
         logger,
         my_keypair,
         &exit,
-        entrypoints,
+        entrypoints.items,
         my_data.shred_version,
         my_data.ip,
         &.{},
     );
     defer gossip_service.deinit();
-
-    var handle = try spawnGossip(&gossip_service);
-    handle.join();
+    try runGossip(&gossip_service);
 }
 
 /// entrypoint to run a full solana validator
@@ -402,7 +400,7 @@ fn validator() !void {
         logger,
         my_keypair,
         &exit,
-        entrypoints,
+        entrypoints.items,
         ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
         ip_echo_data.ip,
         &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
@@ -515,7 +513,7 @@ fn initGossip(
     logger: Logger,
     my_keypair: KeyPair,
     exit: *Atomic(bool),
-    entrypoints: std.ArrayList(SocketAddr),
+    entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: u8, port: u16 },
@@ -572,14 +570,14 @@ fn initRepair(
     };
 }
 
+fn runGossip(gossip_service: *GossipService) !void {
+    const current = config.current.gossip;
+    return gossip_service.run(current.spy_node, current.dump);
+}
+
 /// Spawn a thread to run gossip and configure with CLI arguments
 fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread {
-    const spy_node = config.current.gossip.spy_node;
-    return try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{ gossip_service, spy_node, config.current.gossip.dump },
-    );
+    return try std.Thread.spawn(.{}, runGossip, .{gossip_service});
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
@@ -737,7 +735,7 @@ fn downloadSnapshot() !void {
         .noop,
         my_keypair,
         &exit,
-        entrypoints,
+        entrypoints.items,
         my_data.shred_version,
         my_data.ip,
         &.{},
