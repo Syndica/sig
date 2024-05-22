@@ -29,7 +29,7 @@ pub fn merkleTreeHash(hashes: []Hash, fanout: usize) !*Hash {
 }
 
 pub const NestedHashTree = struct {
-    hashes: []std.ArrayList(Hash),
+    hashes: []std.ArrayListUnmanaged(Hash),
 
     pub fn getValue(self: *NestedHashTree, index: usize) !*Hash {
         var search_index: usize = 0;
@@ -91,9 +91,9 @@ test "common.merkle_tree: test nested impl" {
     for (&hashes, 0..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    const hashes_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes);
+    const hashes_list = std.ArrayListUnmanaged(Hash).fromOwnedSlice(&hashes);
 
-    var hashes_full = [_]std.ArrayList(Hash){hashes_list};
+    var hashes_full = [_]std.ArrayListUnmanaged(Hash){hashes_list};
     var nested_hashes = NestedHashTree{
         .hashes = &hashes_full,
     };
@@ -108,21 +108,21 @@ test "common.merkle_tree: test nested impl deeper" {
     for (&hashes, 0..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    const hashes_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes);
+    const hashes_list = std.ArrayListUnmanaged(Hash).fromOwnedSlice(&hashes);
 
     var hashes2: [4]Hash = undefined;
     for (&hashes2, 4..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    const hashes2_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes2);
+    const hashes2_list = std.ArrayListUnmanaged(Hash).fromOwnedSlice(&hashes2);
 
     var hashes3: [2]Hash = undefined;
     for (&hashes3, 8..) |*hash, i| {
         hash.* = Hash{ .data = [_]u8{@intCast(i)} ** 32 };
     }
-    const hashes3_list = std.ArrayList(Hash).fromOwnedSlice(std.testing.allocator, &hashes3);
+    const hashes3_list = std.ArrayListUnmanaged(Hash).fromOwnedSlice(&hashes3);
 
-    var hashes_full = [_]std.ArrayList(Hash){ hashes_list, hashes2_list, hashes3_list };
+    var hashes_full = [_]std.ArrayListUnmanaged(Hash){ hashes_list, hashes2_list, hashes3_list };
     var nested_hashes = NestedHashTree{
         .hashes = &hashes_full,
     };

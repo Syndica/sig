@@ -4,39 +4,41 @@ const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
-/// Spawns tasks and returns a list of threads
-/// task function should take {params} ++ {start_index, end_index, thread_id}
+/// Spawns tasks and outputs the list of handles for the spawned threads.
+/// Task function should accept `params ++ .{ start_index, end_index, thread_id }` as its parameter tuple.
 pub fn spawnThreadTasks(
-    allocator: std.mem.Allocator,
-    f: anytype,
+    /// This list is cleared, and then filled with the handles for the spawned task threads.
+    /// On successful call, all threads were appropriately spawned.
+    handles: *std.ArrayList(std.Thread),
+    comptime taskFn: anytype,
     params: anytype,
     data_len: usize,
     max_n_threads: usize,
-) !std.ArrayList(std.Thread) {
-    var chunk_size = data_len / max_n_threads;
-    var n_threads = max_n_threads;
-    if (chunk_size == 0) {
-        n_threads = 1;
-        chunk_size = data_len;
-    }
+) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
+    const chunk_size, const n_threads = blk: {
+        var chunk_size = data_len / max_n_threads;
+        var n_threads = max_n_threads;
+        if (chunk_size == 0) {
+            n_threads = 1;
+            chunk_size = data_len;
+        }
+        break :blk .{ chunk_size, n_threads };
+    };
 
-    var handles = try std.ArrayList(std.Thread).initCapacity(allocator, n_threads);
+    handles.clearRetainingCapacity();
+    try handles.ensureTotalCapacityPrecise(n_threads);
 
     var start_index: usize = 0;
-    var end_index: usize = 0;
     for (0..n_threads) |thread_id| {
-        if (thread_id == (n_threads - 1)) {
-            end_index = data_len;
-        } else {
-            end_index = start_index + chunk_size;
-        }
-        const handle = try std.Thread.spawn(.{}, f, params ++ .{ start_index, end_index, thread_id });
+        const end_index = if (thread_id == n_threads - 1) data_len else (start_index + chunk_size);
+        // NOTE(trevor): instead of just `try`ing, we could fill an optional diagnostic struct
+        //               which inform the caller how much coverage over `data_len` was achieved,
+        //               so that they could handle its coverage themselves instead of just having
+        //               to kill all the successfully spawned threads.
+        const handle = try std.Thread.spawn(.{}, taskFn, params ++ .{ start_index, end_index, thread_id });
         handles.appendAssumeCapacity(handle);
-
         start_index = end_index;
     }
-
-    return handles;
 }
 
 pub fn ThreadPoolTask(

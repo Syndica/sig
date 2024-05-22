@@ -11,6 +11,7 @@ pub const std_options: std.Options = .{
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
     try cmd.run();
