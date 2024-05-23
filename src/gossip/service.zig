@@ -2616,10 +2616,8 @@ test "gossip.gossip_service: test packet verification" {
     const id = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(id);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
-
+    // noop for this case because this tests error failed verification
+    const logger: Logger = .noop;
     var gossip_service = try GossipService.init(
         allocator,
         contact_info,

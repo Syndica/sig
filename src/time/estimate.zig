@@ -1,7 +1,9 @@
 const std = @import("std");
+const Logger = @import("../trace/log.zig").Logger;
 
 // TODO: change to writer interface when logger has improved
 pub fn printTimeEstimate(
+    logger: Logger,
     // timer should be started at the beginning of the loop
     timer: *std.time.Timer,
     total: usize,
@@ -11,12 +13,22 @@ pub fn printTimeEstimate(
 ) void {
     if (i == 0 or total == 0) return;
     if (i > total) {
-        std.debug.print("{s}: {d}/{d} (?%) (time left: ...) (elp: {s})\r", .{
-            name,
-            i,
-            total,
-            std.fmt.fmtDuration(timer.read()),
-        });
+        if (other_info) |info| {
+            logger.infof("{s} [{s}]: {d}/{d} (?%) (est: ?) (elp: {s})", .{
+                name,
+                info,
+                i,
+                total,
+                std.fmt.fmtDuration(timer.read()),
+            });
+        } else {
+            logger.infof("{s}: {d}/{d} (?%) (est: ?) (elp: {s})", .{
+                name,
+                i,
+                total,
+                std.fmt.fmtDuration(timer.read()),
+            });
+        }
         return;
     }
 
@@ -28,17 +40,17 @@ pub fn printTimeEstimate(
     const ns_left = ns_per_vec * left;
 
     if (other_info) |info| {
-        std.debug.print("{s}: {d}/{d} ({d}%) {s} (time left: {s}) (elp: {s})\r", .{
+        logger.infof("{s} [{s}]: {d}/{d} ({d}%) (est: {s}) (elp: {s})", .{
             name,
+            info,
             i,
             total,
             p_done,
-            info,
             std.fmt.fmtDuration(ns_left),
             std.fmt.fmtDuration(timer.read()),
         });
     } else {
-        std.debug.print("{s}: {d}/{d} ({d}%) (time left: {s}) (elp: {s})\r", .{
+        logger.infof("{s}: {d}/{d} ({d}%) (est: {s}) (elp: {s})", .{
             name,
             i,
             total,
