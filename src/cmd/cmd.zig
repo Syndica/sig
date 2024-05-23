@@ -376,7 +376,7 @@ fn gossip() !void {
         &.{},
     );
     defer gossip_service.deinit();
-    try runGossip(&gossip_service);
+    try runGossipWithConfigValues(&gossip_service);
 }
 
 /// entrypoint to run a full solana validator
@@ -406,7 +406,7 @@ fn validator() !void {
         &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
     );
     defer gossip_service.deinit();
-    var gossip_handle = try spawnGossip(&gossip_service);
+    const gossip_handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
 
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
@@ -570,14 +570,9 @@ fn initRepair(
     };
 }
 
-fn runGossip(gossip_service: *GossipService) !void {
-    const current = config.current.gossip;
-    return gossip_service.run(current.spy_node, current.dump);
-}
-
-/// Spawn a thread to run gossip and configure with CLI arguments
-fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread {
-    return try std.Thread.spawn(.{}, runGossip, .{gossip_service});
+fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
+    const gossip_config = config.current.gossip;
+    return gossip_service.run(gossip_config.spy_node, gossip_config.dump);
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
@@ -741,7 +736,7 @@ fn downloadSnapshot() !void {
         &.{},
     );
     defer gossip_service.deinit();
-    var handle = try spawnGossip(&gossip_service);
+    const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
     // program will be done after snapshot downloaded
     handle.detach();
 
