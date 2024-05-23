@@ -1,7 +1,12 @@
 //! Port of ChaCha from the `rand_chacha` crate.
-//! Generates the same psuedorandom numbers as rand_chacha,
-//! unlike Zig std's ChaCha. This is needed since rand_chacha
-//! does not comply with the IETF standard.
+//!
+//! Generates the same psuedorandom numbers as rand_chacha, unlike Zig std's
+//! ChaCha.
+//!
+//! This is needed since rand_chacha differs from the zig std's ChaCha in several
+//! ways. One example is that it does not comply with the IETF standard, plus
+//! there are other compatibility issues that require a different design from zig
+//! std, like how it maintains state across iterations.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,23 +14,36 @@ const sig = @import("../lib.zig");
 
 const mem = std.mem;
 
-const BlockRng = sig.utils.BlockRng;
+const BlockRng = sig.rand.BlockRng;
 
-const BUFSZ: usize = 64;
 const endian = builtin.cpu.arch.endian();
 
 /// A random number generator based on ChaCha.
-/// Generates the same stream as ChaChaRng in `rand_chacha`
+/// Generates the same stream as ChaChaRng in `rand_chacha`.
+/// This is an ease-of-use wrapper for the type:
+///     BlockRng(ChaCha(rounds), ChaCha(rounds).generate)
 pub fn ChaChaRng(comptime rounds: usize) type {
-    return BlockRng(ChaCha(rounds), ChaCha(rounds).generate);
+    return struct {
+        block_rng: BlockRng(ChaCha(rounds), ChaCha(rounds).generate),
+
+        const Self = @This();
+
+        pub fn fromSeed(seed: [32]u8) Self {
+            return .{ .block_rng = .{ .core = ChaCha(rounds).init(seed, .{0} ** 12) } };
+        }
+
+        pub fn random(self: *Self) std.rand.Random {
+            return self.block_rng.random();
+        }
+    };
 }
 
 /// Computes the chacha stream.
 ///
-/// This is the underlying implementation of the chacha cipher.
-/// If you're looking for a random number generator, ChaChaRng
-/// is a better candidate.
-pub fn ChaCha(rounds: usize) type {
+/// This is the barebones implementation of the chacha stream cipher. If you're
+/// looking for a random number generator based on the chacha stream cipher, use
+/// ChaChaRng.
+pub fn ChaCha(comptime rounds: usize) type {
     return struct {
         b: [4]u32,
         c: [4]u32,
@@ -33,11 +51,7 @@ pub fn ChaCha(rounds: usize) type {
 
         const Self = @This();
 
-        pub fn init(seed: [32]u8) Self {
-            return Self.initWithNonce(seed, .{0} ** 12);
-        }
-
-        pub fn initWithNonce(key: [32]u8, nonce: [12]u8) Self {
+        pub fn init(key: [32]u8, nonce: [12]u8) Self {
             const ctr_nonce = .{0} ++ leIntBitCast([3]u32, nonce);
             return .{
                 .b = leIntBitCast([4]u32, key[0..16].*),
@@ -46,10 +60,10 @@ pub fn ChaCha(rounds: usize) type {
             };
         }
 
-        /// Run the full chacha algorithm, generating the next block
-        /// of 64 32-bit integers.
+        /// Run the full chacha algorithm, generating the next block of 64 32-bit
+        /// integers.
         pub fn generate(self: *Self, out: *[64]u32) void {
-            const k = [4]u32{ 0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574 };
+            const k = comptime leIntBitCast([4]u32, @as([16]u8, "expand 32-byte k".*));
             const b = self.b;
             const c = self.c;
             var x = State{
@@ -105,15 +119,13 @@ fn transpose4(a: [4][4][4]u32) [4][4][4]u32 {
     };
 }
 
-/// converts the first two items into a u64 and
-/// then wrapping_adds the integer `i` to it,
-/// then converts back to u32s.
+/// converts the first two items into a u64 and then wrapping_adds the integer
+/// `i` to it, then converts back to u32s.
 fn wrappingAddToFirstHalf(d: [4]u32, i: u64) [4]u32 {
     var u64s = leIntBitCast([2]u64, d);
     u64s[0] += i;
     return leIntBitCast([4]u32, u64s);
 }
-
 
 fn repeat4timesAndAdd0123(d: [4]u32) [4][4]u32 {
     return .{
@@ -155,15 +167,15 @@ fn xorThenRotateRight(const_lhs: [4][4]u32, rhs: [4][4]u32, rotate: anytype) [4]
     return lhs;
 }
 
-/// Reinterprets an integer or array of integers as an
-/// integer or array of integers with different sizes.
-/// For example, can convert u64 -> [2]u32 or vice versa.
+/// Reinterprets an integer or array of integers as an integer or array of
+/// integers with different sizes. For example, can convert u64 -> [2]u32 or vice
+/// versa.
 ///
-/// The function ensures that the resulting numbers are
-/// universal across platforms, using little-endian ordering.
+/// The function ensures that the resulting numbers are universal across
+/// platforms, using little-endian ordering.
 ///
-/// So, this is the same as @bitCast for little endian platforms,
-/// but it requires a byte swap for big endian platforms.
+/// So, this is the same as @bitCast for little endian platforms, but it requires
+/// a byte swap for big endian platforms.
 fn leIntBitCast(comptime Output: type, input: anytype) Output {
     switch (endian) {
         .little => return @bitCast(input),
@@ -214,21 +226,21 @@ fn mod(n: isize, len: usize) usize {
 }
 
 test "Random.int(u32) works" {
-    const chacha = ChaCha(20).init(.{0} ** 32);
+    const chacha = ChaCha(20).init(.{0} ** 32, .{0} ** 12);
     var rng = BlockRng(ChaCha(20), ChaCha(20).generate){ .core = chacha };
     const random = rng.random();
     try std.testing.expect(2917185654 == random.int(u32));
 }
 
 test "Random.int(u64) works" {
-    const chacha = ChaCha(20).init(.{0} ** 32);
+    const chacha = ChaCha(20).init(.{0} ** 32, .{0} ** 12);
     var rng = BlockRng(ChaCha(20), ChaCha(20).generate){ .core = chacha };
     const random = rng.random();
     try std.testing.expect(10393729187455219830 == random.int(u64));
 }
 
 test "Random.bytes works" {
-    const chacha = ChaCha(20).init(.{0} ** 32);
+    const chacha = ChaCha(20).init(.{0} ** 32, .{0} ** 12);
     var rng = BlockRng(ChaCha(20), ChaCha(20).generate){ .core = chacha };
     const random = rng.random();
     var dest: [32]u8 = undefined;
@@ -242,9 +254,9 @@ test "Random.bytes works" {
 
 test "recursive fill" {
     var bytes: [32]u8 = .{0} ** 32;
-    var rng_init = ChaChaRng(20).init(bytes);
-    rng_init.fill(&bytes);
-    const chacha = ChaCha(20).init(bytes);
+    var rng_init = ChaChaRng(20).fromSeed(bytes);
+    rng_init.random().bytes(&bytes);
+    const chacha = ChaCha(20).init(bytes, .{0} ** 12);
     var rng = BlockRng(ChaCha(20), ChaCha(20).generate){ .core = chacha };
     rng.fill(&bytes);
 
@@ -257,9 +269,9 @@ test "recursive fill" {
 
 test "dynamic next int works" {
     var bytes: [32]u8 = .{0} ** 32;
-    var rng_init = ChaChaRng(20).init(bytes);
-    rng_init.fill(&bytes);
-    const chacha = ChaCha(20).init(bytes);
+    var rng_init = ChaChaRng(20).fromSeed(bytes);
+    rng_init.random().bytes(&bytes);
+    const chacha = ChaCha(20).init(bytes, .{0} ** 12);
     var rng = BlockRng(ChaCha(20), ChaCha(20).generate){ .core = chacha };
     const u32s = [_]u32{
         4279565744, 862297132,  2898887311, 3678189893, 3874939098, 1553983382, 1031206440,
@@ -313,7 +325,7 @@ test "dynamic next int works" {
 }
 
 test "rng works" {
-    const chacha = ChaCha(20).init(.{0} ** 32);
+    const chacha = ChaCha(20).init(.{0} ** 32, .{0} ** 12);
     var rng = BlockRng(ChaCha(20), ChaCha(20).generate){ .core = chacha };
     var dest: [32]u8 = undefined;
     const midpoint = .{
@@ -333,7 +345,18 @@ test "ChaCha works" {
     };
     var out: [64]u32 = .{0} ** 64;
     chacha.generate(&out);
-    const expected1 = .{ 514454965, 2343183702, 485828088, 2392727011, 3682321578, 3166467596, 1535089427, 266038024, 1861812015, 3818141583, 486852448, 277812666, 1961317633, 3870259557, 3811097870, 10333140, 3471107314, 854767140, 1292362001, 1791493576, 684928595, 2735203077, 3103536681, 1555264764, 2953779204, 1335099419, 3308039343, 3071159758, 676902921, 3409736680, 289978712, 198159109, 4106483464, 4193260066, 389599996, 1248502515, 607568078, 3047265466, 2254027974, 3837112036, 2647654845, 3933149571, 251366014, 192741632, 4239604811, 2829206891, 2090618058, 86120867, 3489155609, 162839505, 3738605468, 1369674854, 3501711964, 3507855056, 3021042483, 747171775, 3095039326, 1302941762, 1534526601, 4269591531, 2416037718, 2139104272, 3631556128, 4065100274 };
+    const expected1 = .{
+        514454965,  2343183702, 485828088,  2392727011, 3682321578, 3166467596, 1535089427,
+        266038024,  1861812015, 3818141583, 486852448,  277812666,  1961317633, 3870259557,
+        3811097870, 10333140,   3471107314, 854767140,  1292362001, 1791493576, 684928595,
+        2735203077, 3103536681, 1555264764, 2953779204, 1335099419, 3308039343, 3071159758,
+        676902921,  3409736680, 289978712,  198159109,  4106483464, 4193260066, 389599996,
+        1248502515, 607568078,  3047265466, 2254027974, 3837112036, 2647654845, 3933149571,
+        251366014,  192741632,  4239604811, 2829206891, 2090618058, 86120867,   3489155609,
+        162839505,  3738605468, 1369674854, 3501711964, 3507855056, 3021042483, 747171775,
+        3095039326, 1302941762, 1534526601, 4269591531, 2416037718, 2139104272, 3631556128,
+        4065100274,
+    };
     try std.testing.expect(mem.eql(u32, &expected1, &out));
 }
 

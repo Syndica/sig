@@ -4,20 +4,23 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 
-const ChaChaRng = sig.rand.ChaCha;
+const ChaChaRng = sig.rand.ChaChaRng;
 
-/// Uniformly samples a collection of weighted items.
-/// This struct only deals with the weights, and it
-/// tells you which index it selects.
+/// Uniformly samples a collection of weighted items. This struct only deals with
+/// the weights, and it tells you which index it selects.
 ///
-/// Each index's probability of being selected is the
-/// ratio of its weight to the sum of all weights.
+/// This deterministically selects the same sequence of items as WeightedIndex
+/// from the rust crate rand_chacha, assuming you use a compatible pseudo-random
+/// number generator.
 ///
-/// For example, for the weights [1, 3, 2], the
-/// probability of `sample` returning each index is:
-/// 0 -> 1/6
-/// 1 -> 1/2
-/// 3 -> 1/3
+/// Each index's probability of being selected is the ratio of its weight to the
+/// sum of all weights.
+///
+/// For example, for the weights [1, 3, 2], the probability of `sample` returning
+/// each index is:
+/// 0. -> 1/6
+/// 1. -> 1/2
+/// 3. -> 1/3
 pub fn WeightedRandomSampler(comptime uint: type) type {
     return struct {
         allocator: Allocator,
@@ -27,7 +30,7 @@ pub fn WeightedRandomSampler(comptime uint: type) type {
 
         const Self = @This();
 
-        fn init(
+        pub fn init(
             allocator: Allocator,
             random: Random,
             weights: []const uint,
@@ -46,16 +49,16 @@ pub fn WeightedRandomSampler(comptime uint: type) type {
             };
         }
 
-        fn deinit(self: Self) void {
+        pub fn deinit(self: Self) void {
             self.allocator.free(self.cumulative_weights);
         }
 
         /// Returns the index of the selected item
-        fn sample(self: *const Self) uint {
-            const want = self.random.uintLessThan(uint, self.total + 1);
+        pub fn sample(self: *const Self) uint {
+            const want = self.random.uintLessThan(uint, self.total);
             var lower: usize = 0;
             var upper: usize = self.cumulative_weights.len - 1;
-            var guess: usize = self.cumulative_weights.len * want / self.total;
+            var guess = upper / 2;
             for (0..self.cumulative_weights.len) |_| {
                 if (self.cumulative_weights[guess] >= want) {
                     upper = guess;
@@ -72,11 +75,10 @@ pub fn WeightedRandomSampler(comptime uint: type) type {
     };
 }
 
-/// Wrapper for random number generators which generate
-/// blocks of [64]u32. Minimizes calls to the underlying
-/// random number generator by recycling unused data from
-/// previous calls. Port of BlockRng from rust which
-/// ensures the same sequence is generated.
+/// Wrapper for random number generators which generate blocks of [64]u32.
+/// Minimizes calls to the underlying random number generator by recycling unused
+/// data from previous calls. Port of BlockRng from rust which ensures the same
+/// sequence is generated.
 pub fn BlockRng(
     comptime T: type,
     comptime generate: fn (*T, *[64]u32) void,
@@ -87,10 +89,6 @@ pub fn BlockRng(
         core: T,
 
         const Self = @This();
-
-        pub fn init(seed: anytype) Self {
-            return .{ .core = @call(.auto, T.init, .{seed}) };
-        }
 
         pub fn random(self: *Self) Random {
             return Random.init(self, fill);
@@ -116,7 +114,7 @@ pub fn BlockRng(
 
 test "WeightedRandomSampler matches rust with chacha" {
     // generate data
-    var rng = ChaChaRng(20).init(.{0} ** 32);
+    var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
     var random = rng.random();
     var items: [100]u64 = undefined;
     for (0..100) |i| {

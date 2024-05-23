@@ -141,6 +141,14 @@ pub const EpochSchedule = extern struct {
             };
         }
     }
+
+    /// get the length of the given epoch (in slots)
+    pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) Slot {
+        return if (epoch < self.first_normal_epoch)
+            1 <<| epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH)
+        else
+            self.slots_per_epoch;
+    }
 };
 
 pub const ClusterType = enum(u8) {

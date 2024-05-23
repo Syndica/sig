@@ -15,6 +15,7 @@ pub const core = struct {
     pub usingnamespace @import("core/time.zig");
     pub usingnamespace @import("core/hard_forks.zig");
     pub usingnamespace @import("core/shred.zig");
+    pub usingnamespace @import("core/leader_schedule.zig");
 };
 
 pub const accounts_db = struct {
@@ -63,7 +64,6 @@ pub const sync = struct {
 pub const utils = struct {
     pub usingnamespace @import("utils/arraylist.zig");
     pub usingnamespace @import("utils/bitflags.zig");
-    pub usingnamespace @import("utils/chacha.zig");
     pub usingnamespace @import("utils/lazy.zig");
     pub usingnamespace @import("utils/math.zig");
     pub usingnamespace @import("utils/shortvec.zig");
