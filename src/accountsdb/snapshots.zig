@@ -991,9 +991,12 @@ pub const AllSnapshotFields = struct {
     }
 };
 
+const Logger = @import("../trace/log.zig").Logger;
+
 /// unpacks a .tar.zstd file into the given directory
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
+    logger: Logger,
     path: []const u8,
     output_dir: std.fs.Dir,
     n_threads: usize,
@@ -1014,8 +1017,10 @@ pub fn parallelUnpackZstdTarBall(
     );
     var tar_stream = try ZstdReader.init(memory);
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
+
     try parallelUntarToFileSystem(
         allocator,
+        logger,
         output_dir,
         tar_stream.reader(),
         n_threads,
