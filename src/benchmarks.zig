@@ -45,7 +45,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "accounts_db")) {
         var run_all = false;
-        if (std.mem.eql(u8, "accounts_db", filter)) { 
+        if (std.mem.eql(u8, "accounts_db", filter)) {
             run_all = true;
         }
 

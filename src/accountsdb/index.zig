@@ -39,10 +39,9 @@ pub const AccountRef = struct {
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
     reference_allocator: std.mem.Allocator,
+    reference_memory: std.AutoHashMap(Slot, ArrayList(AccountRef)),
     bins: []RefMap,
     calculator: PubkeyBinCalculator,
-    // TODO: use arena allocator ontop of reference allocator ...
-    memory_linked_list: ?*RefMemoryLinkedList = null,
 
     pub const RefMap = SwissMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
 
@@ -67,6 +66,7 @@ pub const AccountIndex = struct {
             .reference_allocator = reference_allocator,
             .bins = bins,
             .calculator = calculator,
+            .reference_memory = std.AutoHashMap(Slot, ArrayList(AccountRef)).init(allocator),
         };
     }
 
@@ -76,30 +76,28 @@ pub const AccountIndex = struct {
         }
         self.allocator.free(self.bins);
 
-        var maybe_curr = self.memory_linked_list;
-        while (maybe_curr) |curr| {
-            if (free_memory) {
-                curr.memory.deinit();
+        if (free_memory) {
+            var iter = self.reference_memory.iterator();
+            while (iter.next()) |entry| {
+                entry.value_ptr.deinit();
             }
-            maybe_curr = curr.next_ptr;
-            self.allocator.destroy(curr);
         }
+        self.reference_memory.deinit();
     }
 
-    pub fn addMemoryBlock(self: *Self, refs: ArrayList(AccountRef)) !*ArrayList(AccountRef) {
-        var node = try self.allocator.create(RefMemoryLinkedList);
-        node.* = .{ .memory = refs };
-        if (self.memory_linked_list == null) {
-            self.memory_linked_list = node;
-        } else {
-            var tail = self.memory_linked_list.?;
-            while (tail.next_ptr) |ptr| {
-                tail = ptr;
-            }
-            tail.next_ptr = node;
-        }
+    pub fn allocReferenceBlock(self: *Self, slot: Slot, capacity: usize) !*ArrayList(AccountRef) {
+        const references = try ArrayList(AccountRef).initCapacity(
+            self.reference_allocator,
+            capacity,
+        );
+        try self.reference_memory.putNoClobber(slot, references);
+        return self.reference_memory.getEntry(slot).?.value_ptr;
+    }
 
-        return &node.memory;
+    pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
+        if (!self.reference_memory.remove(slot)) {
+            return error.MemoryNotFound;
+        }
     }
 
     pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
@@ -134,50 +132,6 @@ pub const AccountIndex = struct {
                 } else {
                     return error.SlotNotFound;
                 }
-            }
-        }
-    }
-
-    pub fn removeMemoryBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
-        // find the memory block associated with the slot
-        var prev: ?*RefMemoryLinkedList = null;
-        var curr = self.memory_linked_list;
-        while (true) {
-            if (curr) |memory_node| {
-                if (memory_node.memory.items.len == 0) {
-                    std.debug.panic("memory block with zero length found, something went wrong", .{});
-                }
-
-                // found the memory block
-                if (memory_node.memory.items[0].slot == slot) {
-                    // remove it from the index (eg, remove [b])
-                    const b = memory_node;
-                    if (prev) |a| {
-                        // ... -> a -> [b] -> c  => ... -> a -> c
-                        const c = b.next_ptr;
-                        a.next_ptr = c;
-                    } else {
-                        if (b.next_ptr) |a| {
-                            // head: [b] -> a => head: a
-                            b.memory.deinit();
-                            // SAFE: the only way we get here is if curr (ie, memory_ll) != null
-                            self.memory_linked_list.?.* = a.*;
-                            return;
-                        } else {
-                            // head: [b] => head: { set linked list to null }
-                            self.memory_linked_list = null;
-                        }
-                    }
-
-                    // deinit the memory block
-                    b.memory.deinit();
-                    self.allocator.destroy(b);
-                    return;
-                }
-                prev = curr;
-                curr = curr.?.next_ptr;
-            } else {
-                return error.MemoryNotFound;
             }
         }
     }
@@ -593,6 +547,48 @@ pub fn SwissMap(
                         // PERF: SIMD eq check across pubkeys
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
                             return self.groups[group_index][j].value;
+                        }
+                    }
+                }
+
+                // PERF: SIMD eq check: if theres a free state, then the key DNE
+                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
+                if (@reduce(.Or, is_empty_vec)) {
+                    return null;
+                }
+
+                // otherwise try the next group
+                group_index = (group_index + 1) & self.bit_mask;
+            }
+            return null;
+        }
+
+        // TODO: this copy pasta just for a pointer return isnt that nice
+        pub fn getPtr(self: *const @This(), key: Key) ?*Value {
+            if (self._capacity == 0) return null;
+
+            const hash = hash_fn(key);
+            var group_index = hash & self.bit_mask;
+
+            // what we are searching for (get)
+            const control_bytes: u7 = @intCast(hash >> (64 - 7));
+            // PERF: this struct is represented by a u8
+            const key_state = State{
+                .state = .occupied,
+                .control_bytes = control_bytes,
+            };
+            const key_vec: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
+
+            for (0..self.groups.len) |_| {
+                const state_vec = self.states[group_index];
+
+                // PERF: SIMD eq check: search for a match
+                const match_vec = key_vec == state_vec;
+                if (@reduce(.Or, match_vec)) {
+                    inline for (0..GROUP_SIZE) |j| {
+                        // PERF: SIMD eq check across pubkeys
+                        if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
+                            return &self.groups[group_index][j].value;
                         }
                     }
                 }
