@@ -251,7 +251,7 @@ pub fn Bounded(comptime T: type) type {
                     } else {
                         // succeeded
                         temp_slot.slot = slot;
-                        temp_slot.stamp = ~occupied_bit & head +| self.one_lap;
+                        temp_slot.stamp = head +| self.one_lap;
                         return;
                     }
                 } else if (stamp == head) {
