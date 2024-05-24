@@ -34,7 +34,7 @@ pub fn Bounded(comptime T: type) type {
         n_senders: Atomic(usize),
 
         /// if this bit is set on the tail, the channel is disconnected
-        const disconnect_bit: usize = ~@as(usize, std.math.maxInt(usize) >> 1);
+        const disconnect_bit: usize = 1 << @intCast(@bitSizeOf(usize) - 1);
 
         /// if this bit is set on a slot, the slot is already occupied.
         const occupied_bit: usize = disconnect_bit >> 1;
