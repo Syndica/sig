@@ -110,7 +110,7 @@ fn valToValue(allocator: Allocator, val: anytype) Value {
                         else => unreachable,
                     };
                     if (inner_child_type == u8) {
-                        var str = allocator.alloc(u8, inner_child_len) catch unreachable;
+                        const str = allocator.alloc(u8, inner_child_len) catch unreachable;
                         @memcpy(str, val[0..]);
                         return .{ .string = str };
                     } else {
@@ -119,7 +119,7 @@ fn valToValue(allocator: Allocator, val: anytype) Value {
                 },
                 .Slice => {
                     if (@typeInfo(info.child).Int.bits == 8) {
-                        var str = allocator.alloc(u8, val.len) catch unreachable;
+                        const str = allocator.alloc(u8, val.len) catch unreachable;
                         @memcpy(str, val[0..]);
                         return .{ .string = str };
                     } else {

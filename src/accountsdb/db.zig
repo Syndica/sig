@@ -27,7 +27,8 @@ const Bank = @import("bank.zig").Bank;
 const readDirectory = @import("../utils/directory.zig").readDirectory;
 const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
 const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
-const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
+const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
+const parallelUnpackZstdTarBall = @import("snapshots.zig").parallelUnpackZstdTarBall;
 const Logger = @import("../trace/log.zig").Logger;
 const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
 
@@ -43,12 +44,13 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
+const POSIX_MAP_TYPE_SHARED = 0x01; // This will work on linux and macos x86_64/aarch64
 
 pub const AccountsDBConfig = struct {
     // number of Accounts to preallocate for cache
     storage_cache_size: usize = 0,
     // number of bins to shard the index pubkeys across -- must be power of two
-    n_index_bins: usize = ACCOUNT_INDEX_BINS,
+    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
     // how many RAM references to preallocate for each bin
     index_ram_capacity: usize = 0,
     // where to create disk indexes files (if null, will not use disk indexes)
@@ -95,7 +97,7 @@ pub const AccountsDB = struct {
         const account_index = try AccountIndex.init(
             allocator,
             reference_allocator,
-            config.n_index_bins,
+            config.number_of_index_bins,
         );
 
         return Self{
@@ -114,6 +116,42 @@ pub const AccountsDB = struct {
         if (self.disk_allocator_ptr) |ptr| {
             self.allocator.destroy(ptr);
         }
+    }
+
+    /// easier to use load function
+    pub fn loadWithDefaults(
+        self: *Self,
+        snapshot_fields_and_paths: *SnapshotFieldsAndPaths,
+        snapshot_dir: []const u8,
+        n_threads: u32,
+        validate: bool,
+    ) !SnapshotFields {
+        const snapshot_fields = try snapshot_fields_and_paths.all_fields.collapse();
+        const accounts_path = try std.fmt.allocPrint(self.allocator, "{s}/accounts/", .{snapshot_dir});
+        defer self.allocator.free(accounts_path);
+
+        var timer = try std.time.Timer.start();
+        self.logger.infof("loading from snapshot...", .{});
+        try self.loadFromSnapshot(
+            snapshot_fields.accounts_db_fields,
+            accounts_path,
+            n_threads,
+            std.heap.page_allocator,
+        );
+        self.logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+
+        if (validate) {
+            timer.reset();
+            const full_snapshot = snapshot_fields_and_paths.all_fields.full;
+            try self.validateLoadFromSnapshot(
+                snapshot_fields.bank_fields.incremental_snapshot_persistence,
+                full_snapshot.bank_fields.slot,
+                full_snapshot.bank_fields.capitalization,
+            );
+            self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        }
+
+        return snapshot_fields;
     }
 
     /// loads the account files and gernates the account index from a snapshot
@@ -137,11 +175,13 @@ pub const AccountsDB = struct {
         timer.reset();
 
         // read the account files
-        var accounts_dir = try std.fs.cwd().openIterableDir(accounts_path, .{});
+        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
 
-        var files = try readDirectory(self.allocator, accounts_dir);
-        var filenames = files.filenames;
+        const accounts_dir_iter = accounts_dir.iterate();
+
+        var files = try readDirectory(self.allocator, accounts_dir_iter);
+        const filenames = files.filenames;
         defer {
             files.filenames.deinit();
             self.allocator.free(files.filename_memory);
@@ -180,7 +220,7 @@ pub const AccountsDB = struct {
             var thread_db = try AccountsDB.init(
                 per_thread_allocator,
                 self.logger,
-                .{ .n_index_bins = self.config.n_index_bins },
+                .{ .number_of_index_bins = self.config.number_of_index_bins },
             );
 
             thread_db.fields = self.fields;
@@ -268,13 +308,16 @@ pub const AccountsDB = struct {
         var file_map = &self.storage.file_map;
         try file_map.ensureTotalCapacity(file_names.len);
 
-        var bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
+        const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        var n_accounts_est = file_names.len * accounts_per_file_est;
-        var memory = try ArrayList(AccountRef).initCapacity(self.account_index.reference_allocator, n_accounts_est);
-        var refs_ptr = try self.account_index.addMemoryBlock(memory);
+        const n_accounts_est = file_names.len * accounts_per_file_est;
+        const refs_ptr = blk: {
+            var memory = try ArrayList(AccountRef).initCapacity(self.account_index.reference_allocator, n_accounts_est);
+            errdefer memory.deinit();
+            break :blk try self.account_index.addMemoryBlock(memory);
+        };
 
         // NOTE: might need to be longer depending on abs path length
         var buf: [1024]u8 = undefined;
@@ -374,7 +417,7 @@ pub const AccountsDB = struct {
 
         // push underlying memory to index
         const index_allocator = self.account_index.allocator;
-        var head = try index_allocator.create(RefMemoryLinkedList);
+        const head = try index_allocator.create(RefMemoryLinkedList);
         head.* = .{
             .memory = thread_dbs[0].account_index.memory_linked_list.?.memory,
         };
@@ -382,7 +425,7 @@ pub const AccountsDB = struct {
         for (1..thread_dbs.len) |i| {
             // sometimes not all threads are spawned
             if (thread_dbs[i].account_index.memory_linked_list) |memory_linked_list| {
-                var ref = try index_allocator.create(RefMemoryLinkedList);
+                const ref = try index_allocator.create(RefMemoryLinkedList);
                 ref.* = .{ .memory = memory_linked_list.memory };
                 curr.next_ptr = ref;
                 curr = ref;
@@ -465,14 +508,14 @@ pub const AccountsDB = struct {
     /// either full or incremental snapshot values.
     pub fn computeAccountHashesAndLamports(self: *Self, config: AccountHashesConfig) !struct { accounts_hash: Hash, total_lamports: u64 } {
         var timer = try std.time.Timer.start();
-        var n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
+        const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
 
         // alloc the result
-        var hashes = try self.allocator.alloc(ArrayList(Hash), n_threads);
+        const hashes = try self.allocator.alloc(ArrayList(Hash), n_threads);
         for (hashes) |*h| {
             h.* = ArrayList(Hash).init(self.allocator);
         }
-        var lamports = try self.allocator.alloc(u64, n_threads);
+        const lamports = try self.allocator.alloc(u64, n_threads);
         @memset(lamports, 0);
         defer {
             for (hashes) |*h| h.deinit();
@@ -543,7 +586,7 @@ pub const AccountsDB = struct {
         const total_lamports = full_result.total_lamports;
         const accounts_hash = full_result.accounts_hash;
 
-        if (expected_accounts_hash.cmp(&accounts_hash) != .eq) {
+        if (expected_accounts_hash.order(&accounts_hash) != .eq) {
             self.logger.errf(
                 \\ incorrect accounts hash
                 \\ expected vs calculated: {d} vs {d}
@@ -580,7 +623,7 @@ pub const AccountsDB = struct {
             return error.IncorrectIncrementalLamports;
         }
 
-        if (expected_accounts_delta_hash.cmp(&accounts_delta_hash) != .eq) {
+        if (expected_accounts_delta_hash.order(&accounts_delta_hash) != .eq) {
             self.logger.errf(
                 \\ incorrect accounts delta hash
                 \\ expected vs calculated: {d} vs {d}
@@ -654,7 +697,7 @@ pub const AccountsDB = struct {
                 keys[i] = entry.key_ptr.*;
                 i += 1;
             }
-            var bin_pubkeys = keys[0..n_pubkeys_in_bin];
+            const bin_pubkeys = keys[0..n_pubkeys_in_bin];
 
             std.mem.sort(Pubkey, bin_pubkeys, {}, struct {
                 fn lessThan(_: void, lhs: Pubkey, rhs: Pubkey) bool {
@@ -844,7 +887,7 @@ pub const AccountsDB = struct {
     /// gets an account given an associated pubkey
     pub fn getAccount(self: *const Self, pubkey: *const Pubkey) !Account {
         const bin = self.account_index.getBinFromPubkey(pubkey);
-        var ref = bin.get(pubkey.*) orelse return error.PubkeyNotInIndex;
+        const ref = bin.get(pubkey.*) orelse return error.PubkeyNotInIndex;
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(ref, null, null).?;
         const account = try self.getAccountFromRef(max_ref);
@@ -871,7 +914,7 @@ pub const AccountsDB = struct {
         account_file: *AccountFile,
         n_accounts: usize,
     ) !void {
-        var bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
+        const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
@@ -944,7 +987,7 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     var allocator = std.testing.allocator;
 
     const dir_path = "test_data";
-    const dir = try std.fs.cwd().openDir(dir_path, .{});
+    const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
     // unpack both snapshots to get the acccount files
     try parallelUnpackZstdTarBall(
@@ -982,10 +1025,10 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
     }
 
     const snapshot = try snapshots.all_fields.collapse();
-    var logger = Logger{ .noop = {} };
+    const logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
     var accounts_db = try AccountsDB.init(allocator, logger, .{
-        .n_index_bins = 4,
+        .number_of_index_bins = 4,
         .storage_cache_size = 10,
         .disk_index_path = disk_dir,
         .index_disk_capacity = disk_capacity,
@@ -1006,9 +1049,9 @@ fn loadTestAccountsDB(use_disk: bool) !struct { AccountsDB, AllSnapshotFields } 
 }
 
 test "core.accounts_db: write and read an account" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1019,7 +1062,7 @@ test "core.accounts_db: write and read an account" {
     var rng = std.rand.DefaultPrng.init(0);
     const pubkey = Pubkey.random(rng.random());
     var data = [_]u8{ 1, 2, 3 };
-    var test_account = Account{
+    const test_account = Account{
         .data = &data,
         .executable = false,
         .lamports = 100,
@@ -1031,20 +1074,20 @@ test "core.accounts_db: write and read an account" {
     var accounts = [_]Account{test_account};
     var pubkeys = [_]Pubkey{pubkey};
     try accounts_db.putAccountBatch(&accounts, &pubkeys, 19);
-    var account = try accounts_db.getAccount(&pubkey);
+    const account = try accounts_db.getAccount(&pubkey);
     try std.testing.expect(std.meta.eql(test_account, account));
 
     // new account
     accounts[0].lamports = 20;
     try accounts_db.putAccountBatch(&accounts, &pubkeys, 28);
-    var account_2 = try accounts_db.getAccount(&pubkey);
+    const account_2 = try accounts_db.getAccount(&pubkey);
     try std.testing.expect(std.meta.eql(accounts[0], account_2));
 }
 
 test "core.accounts_db: load and validate from test snapshot using disk index" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var result = try loadTestAccountsDB(true);
+    const result = try loadTestAccountsDB(true);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1060,9 +1103,9 @@ test "core.accounts_db: load and validate from test snapshot using disk index" {
 }
 
 test "core.accounts_db: load and validate from test snapshot" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1078,9 +1121,9 @@ test "core.accounts_db: load and validate from test snapshot" {
 }
 
 test "core.accounts_db: load clock sysvar" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1101,9 +1144,9 @@ test "core.accounts_db: load clock sysvar" {
 }
 
 test "core.accounts_db: load other sysvars" {
-    var allocator = std.testing.allocator;
+    const allocator = std.testing.allocator;
 
-    var result = try loadTestAccountsDB(false);
+    const result = try loadTestAccountsDB(false);
     var accounts_db: AccountsDB = result[0];
     var snapshots: AllSnapshotFields = result[1];
     defer {
@@ -1111,10 +1154,12 @@ test "core.accounts_db: load other sysvars" {
         snapshots.deinit(allocator);
     }
 
+    const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
+    const StakeHistory = @import("./snapshots.zig").StakeHistory;
     _ = try accounts_db.getTypeFromAccount(sysvars.EpochSchedule, &sysvars.IDS.epoch_schedule);
     _ = try accounts_db.getTypeFromAccount(sysvars.Rent, &sysvars.IDS.rent);
-    _ = try accounts_db.getTypeFromAccount(sysvars.SlotHash, &sysvars.IDS.slot_hashes);
-    _ = try accounts_db.getTypeFromAccount(sysvars.StakeHistory, &sysvars.IDS.stake_history);
+    _ = try accounts_db.getTypeFromAccount(SlotAndHash, &sysvars.IDS.slot_hashes);
+    _ = try accounts_db.getTypeFromAccount(StakeHistory, &sysvars.IDS.stake_history);
 
     const slot_history = try accounts_db.getTypeFromAccount(sysvars.SlotHistory, &sysvars.IDS.slot_history);
     defer bincode.free(allocator, slot_history);
@@ -1244,7 +1289,7 @@ pub const BenchmarkAccountsDB = struct {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         var allocator = gpa.allocator();
 
-        var logger = Logger{ .noop = {} };
+        const logger = Logger{ .noop = {} };
         var accounts_db: AccountsDB = undefined;
         if (bench_args.index == .disk) {
             // std.debug.print("using disk index\n", .{});
@@ -1258,7 +1303,7 @@ pub const BenchmarkAccountsDB = struct {
         defer accounts_db.deinit();
 
         var random = std.rand.DefaultPrng.init(19);
-        var rng = random.random();
+        const rng = random.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
         defer allocator.free(pubkeys);
@@ -1333,11 +1378,11 @@ pub const BenchmarkAccountsDB = struct {
                         try file.seekTo(0);
                     }
 
-                    var memory = try std.os.mmap(
+                    var memory = try std.posix.mmap(
                         null,
                         aligned_size,
-                        std.os.PROT.READ | std.os.PROT.WRITE,
-                        std.os.MAP.SHARED, // need it written to the file before it can be used
+                        std.posix.PROT.READ | std.posix.PROT.WRITE,
+                        std.posix.MAP{ .TYPE = .SHARED }, // need it written to the file before it can be used
                         file.handle,
                         0,
                     );
@@ -1352,8 +1397,13 @@ pub const BenchmarkAccountsDB = struct {
                     break :blk offset;
                 };
 
-                var file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
-                var account_file = try AccountFile.init(file, .{ .id = s, .length = length }, s);
+                var account_file = blk: {
+                    const file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
+                    errdefer file.close();
+                    break :blk try AccountFile.init(file, .{ .id = s, .length = length }, s);
+                };
+                errdefer account_file.deinit();
+
                 if (s < bench_args.n_accounts_multiple) {
                     try accounts_db.putAccountFile(&account_file, n_accounts);
                 } else {

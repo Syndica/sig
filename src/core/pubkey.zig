@@ -15,7 +15,7 @@ pub const Pubkey = struct {
     ///
     pub fn fromString(str: []const u8) !Self {
         var out: [32]u8 = undefined;
-        var written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
+        const written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
         if (written != 32) @panic("written is not 32");
 
         return Self{ .data = out };
@@ -39,7 +39,7 @@ pub const Pubkey = struct {
     pub fn base58_encode(bytes: []const u8) error{EncodingError}![44]u8 {
         var dest: [44]u8 = undefined;
         @memset(&dest, 0);
-        var written = encoder.encode(bytes, &dest) catch return error.EncodingError;
+        const written = encoder.encode(bytes, &dest) catch return error.EncodingError;
         if (written > 44) {
             std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
         }
@@ -51,7 +51,7 @@ pub const Pubkey = struct {
     }
 
     pub fn stringWithBuf(self: *const Self, dest: []u8) []u8 {
-        var written = encoder.encode(&self.data, dest) catch @panic("could not encode pubkey");
+        const written = encoder.encode(&self.data, dest) catch @panic("could not encode pubkey");
         if (written > 44) {
             std.debug.panic("written > 44\n", .{});
         }
@@ -80,7 +80,7 @@ pub const Pubkey = struct {
         return Self.fromBytes(&public_key.bytes) catch unreachable;
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) std.os.WriteError!void {
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         return writer.print("{s}", .{self.string()});
     }
 

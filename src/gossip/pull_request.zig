@@ -91,16 +91,16 @@ pub const GossipPullFilterSet = struct {
         num_items: usize,
         bloom_size_bytes: usize,
     ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
-        var bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
+        const bloom_size_bits: f64 = @floatFromInt(bloom_size_bytes * 8);
         // mask_bits = log2(..) number of filters
-        var mask_bits = GossipPullFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
+        const mask_bits = GossipPullFilter.computeMaskBits(@floatFromInt(num_items), bloom_size_bits);
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         // TODO; add errdefer handling here
-        var max_items = GossipPullFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
+        const max_items = GossipPullFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            var filter = try Bloom.random(
+            const filter = try Bloom.random(
                 alloc,
                 @intFromFloat(max_items),
                 FALSE_RATE,
@@ -120,7 +120,7 @@ pub const GossipPullFilterSet = struct {
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            var filter = try Bloom.random(alloc, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
+            const filter = try Bloom.random(alloc, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
             filters.appendAssumeCapacity(filter);
         }
         return Self{
@@ -186,7 +186,7 @@ pub const GossipPullFilterSet = struct {
         for (0..n_filters) |i| {
             const index = indexs.items[i];
 
-            var filter = GossipPullFilter{
+            const filter = GossipPullFilter{
                 .filter = self.filters.items[index], // take ownership of filter
                 .mask = GossipPullFilter.computeMask(index, self.mask_bits),
                 .mask_bits = self.mask_bits,
@@ -251,7 +251,7 @@ pub const GossipPullFilter = struct {
 
 pub fn hashToU64(hash: *const Hash) u64 {
     const buf = hash.data[0..8];
-    return std.mem.readIntLittle(u64, buf);
+    return std.mem.readInt(u64, buf, .little);
 }
 
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
@@ -265,15 +265,15 @@ test "gossip.pull_request: test building filters" {
     // insert a some value
     const kp = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
     for (0..64) |_| {
-        var id = Pubkey.random(rng);
+        const id = Pubkey.random(rng);
         var legacy_contact_info = LegacyContactInfo.default(id);
         legacy_contact_info.id = id;
-        var gossip_value = try SignedGossipData.initSigned(.{
+        const gossip_value = try SignedGossipData.initSigned(.{
             .LegacyContactInfo = legacy_contact_info,
         }, &kp);
 
@@ -313,7 +313,10 @@ test "gossip.pull_request: test building filters" {
 test "gossip.pull_request: filter set deinits correct" {
     var filter_set = try GossipPullFilterSet.init(std.testing.allocator, 10000, 200);
 
-    const hash = Hash.random();
+    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    const rand = default_prng.random();
+
+    const hash = Hash.random(rand);
     filter_set.add(&hash);
 
     const index = GossipPullFilterSet.hashIndex(filter_set.mask_bits, &hash);
@@ -360,6 +363,6 @@ test "gossip.pull_request: gossip filter matches rust bytes" {
     defer filter.deinit();
 
     var buf = [_]u8{0} ** 1024;
-    var bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
+    const bytes = try bincode.writeToSlice(buf[0..], filter, bincode.Params.standard);
     try std.testing.expectEqualSlices(u8, rust_bytes[0..], bytes);
 }

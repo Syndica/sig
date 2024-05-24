@@ -12,9 +12,9 @@ const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
 const Batch = ThreadPool.Batch;
 
-const BitVec = @import("../bloom/bitvec.zig").BitVec;
-const DynamicBitSet = std.bit_set.DynamicBitSet;
-const BitVecConfig = @import("../bloom/bitvec.zig").BitVecConfig;
+const BitVec = @import("../bloom/bit_vec.zig").BitVec;
+const DynamicArrayBitSet = @import("../bloom/bit_set.zig").DynamicArrayBitSet;
+const BitVecConfig = @import("../bloom/bit_vec.zig").BitVecConfig;
 const bincode = @import("../bincode/bincode.zig");
 
 pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
@@ -105,23 +105,15 @@ pub const Rent = struct {
     burn_percent: u8,
 };
 
-pub const SlotHashes = ArrayList(SlotHash);
-pub const SlotHash = struct { slot: Slot, hash: Hash };
-
-pub const StakeHistory = ArrayList(struct {
-    epoch: Epoch,
-    stake_history_entry: StakeHistoryEntry,
-});
-
 pub const LastRestartSlot = struct {
     last_restart_slot: Slot,
 };
 
 pub const SlotHistory = struct {
-    bits: DynamicBitSet,
+    bits: DynamicArrayBitSet(u64),
     next_slot: Slot,
 
-    pub const @"!bincode-config:bits" = BitVecConfig();
+    pub const @"!bincode-config:bits" = BitVecConfig(u64);
 
     pub fn deinit(self: SlotHistory, allocator: std.mem.Allocator) void {
         bincode.free(allocator, self);

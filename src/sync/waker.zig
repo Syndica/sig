@@ -5,7 +5,7 @@ const thread_context = @import("thread_context.zig");
 const ThreadLocalContext = thread_context.ThreadLocalContext;
 const ThreadState = thread_context.ThreadState;
 const ArrayList = std.ArrayList;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 const Mutex = std.Thread.Mutex;
 
 pub const Waker = struct {
@@ -40,7 +40,7 @@ pub const Waker = struct {
 
         self.is_empty.store(
             false,
-            .SeqCst,
+            .seq_cst,
         );
     }
 
@@ -54,7 +54,7 @@ pub const Waker = struct {
                 // if there's only a single item, then after this swapRemove, we'll be empty
                 self.is_empty.store(
                     self.sleepers.items.len == 1,
-                    .SeqCst,
+                    .seq_cst,
                 );
 
                 return self.sleepers.swapRemove(i);
@@ -63,14 +63,14 @@ pub const Waker = struct {
 
         self.is_empty.store(
             self.sleepers.items.len == 0,
-            .SeqCst,
+            .seq_cst,
         );
         return null;
     }
 
     /// NOTE: This assumes we've already acquired the self.mutex lock
     inline fn tryAwakeSleeper(self: *Self) ?SleepingOperation {
-        var this_thread_id = std.Thread.getCurrentId();
+        const this_thread_id = std.Thread.getCurrentId();
 
         for (0.., self.sleepers.items) |i, sleeper| {
             // for each sleeping operation, try and find one that:
@@ -105,15 +105,15 @@ pub const Waker = struct {
     }
 
     pub inline fn notify(self: *Self) void {
-        if (!self.is_empty.load(.SeqCst)) {
+        if (!self.is_empty.load(.seq_cst)) {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            if (!self.is_empty.load(.SeqCst)) {
+            if (!self.is_empty.load(.seq_cst)) {
                 _ = self.tryAwakeSleeper();
                 self.is_empty.store(
                     self.sleepers.items.len == 0,
-                    .SeqCst,
+                    .seq_cst,
                 );
             }
         }

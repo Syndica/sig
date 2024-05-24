@@ -6,7 +6,7 @@
 <div align="center">
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
   <a href="https://github.com/syndica/sig/actions/workflows/test.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/syndica/sig/test.yml?branch=main" /></a>
-  <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.11.0-green.svg"></a>
+  <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.12.0-green.svg"></a>
   <a href="https://github.com/syndica/sig/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPLv3-blue"></a>
   </div>
 </p>
@@ -22,7 +22,7 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 
 ### Build Dependencies
 
-- Zig 0.11.0 - Choose one:
+- Zig 0.12.0 - Choose one:
   - [Binary Releases](https://ziglang.org/download/) (extract and add to PATH)
   - [Install with a package manager](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
   - Manage multiple versions with [zigup](https://github.com/marler8997/zigup) or [zvm](https://www.zvm.app/)
@@ -33,7 +33,7 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 
 These tools are optional but recommended for a smooth development process.
 
-- [Zig Language Server (ZLS) 0.11.0](https://github.com/zigtools/zls/wiki/Installation)
+- [Zig Language Server (ZLS) 0.12.0](https://github.com/zigtools/zls/wiki/Installation)
 - [lldb](https://lldb.llvm.org/): [Zig CLI Debugging](https://devlog.hexops.com/2022/debugging-undefined-behavior/)
 - [Zig Language](https://marketplace.visualstudio.com/items?itemName=ziglang.vscode-zig) VS Code extension
 - [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) VS Code extension
@@ -166,7 +166,7 @@ sig gossip --entrypoint entrypoint.testnet.solana.com:8001 \
 
 ## Develop
 
-See [Setup](#-setup) to get your environment set up. See [CONTRIBUTING.md](docs/CONTRIBUTING.md) for the code style guide.
+See [Setup](#-setup) to get your environment set up. See [CONTRIBUTING.md](misc/CONTRIBUTING.md) for the code style guide.
 
 ### 🧪 Test
 
@@ -202,7 +202,7 @@ zig build benchmark -- gossip
 
 ## 📦 Import Sig
 
-Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.11). See the [API documentation](docs/api.md) to learn more about how to use Sig as a library.
+Sig can be included as a dependency in your Zig project using `build.zig.zon` file (available for Zig >= 0.12). See the [API documentation](misc/api.md) to learn more about how to use Sig as a library.
 
 <details>
 <summary><code>Steps</code> - how to install Sig in your Zig project</summary>
@@ -293,7 +293,7 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 ### Note
 
 - Zig is still an evolving language.
-- Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.11`.
+- Many of the low-level APIs have been stabilized but `std.http.Client` and `std.json` are still WIP targetting stable implementations by `>=0.12`.
 - Currently, `std.http.Client` [leaks](https://github.com/ziglang/zig/blob/447a30299073ce88b7b26d18d060a345beac5276/lib/std/http/Client.zig#L913) and is failing some tests, fix is in works.
   <br><br>
 
@@ -303,14 +303,14 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 - **[Core](src/core)** - Core data structures shared across modules.
 
-- **[RPC Client](src/rpc)** ([docs](docs/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
+- **[RPC Client](src/rpc)** ([docs](misc/api.md#rpcclient---api-reference)) - A fully featured HTTP RPC client with ability to query all on-chain data along with sending transactions.
   <br><br>
 
 ## 📚 Learn More
 
 [Zig](https://ziglang.org/)
 
-- [Official Documentation](https://ziglang.org/documentation/0.11.0/)
+- [Official Documentation](https://ziglang.org/documentation/0.12.0/)
 - [Ziglearn Book](https://ziglearn.org/)
 - [Ziglings Exercises](https://github.com/ratfactor/ziglings)
 

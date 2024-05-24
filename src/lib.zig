@@ -1,98 +1,101 @@
+const std = @import("std");
+
 pub const rpc = struct {
-    pub usingnamespace @import("rpc/client.zig");
-    pub const types = struct {
-        pub usingnamespace @import("rpc/types.zig");
-    };
+    // TODO: FIXME
+    // pub usingnamespace @import("rpc/client.zig");
+    pub const types = @import("rpc/types.zig");
 };
 
 pub const core = struct {
-    pub usingnamespace @import("core/pubkey.zig");
-    pub usingnamespace @import("core/account.zig");
-    pub usingnamespace @import("core/transaction.zig");
-    pub usingnamespace @import("core/hash.zig");
-    pub usingnamespace @import("core/signature.zig");
-    pub usingnamespace @import("core/time.zig");
-    pub usingnamespace @import("core/hard_forks.zig");
-    pub usingnamespace @import("core/shred.zig");
+    pub const pubkey = @import("core/pubkey.zig");
+    pub const account = @import("core/account.zig");
+    pub const transaction = @import("core/transaction.zig");
+    pub const hash = @import("core/hash.zig");
+    pub const signature = @import("core/signature.zig");
+    pub const time = @import("core/time.zig");
+    pub const hard_forks = @import("core/hard_forks.zig");
+    pub const shred = @import("core/shred.zig");
 };
 
 pub const accounts_db = struct {
-    pub usingnamespace @import("accountsdb/db.zig");
-    pub usingnamespace @import("accountsdb/bank.zig");
-    pub usingnamespace @import("accountsdb/accounts_file.zig");
-    pub usingnamespace @import("accountsdb/genesis_config.zig");
-    pub usingnamespace @import("accountsdb/index.zig");
-    pub usingnamespace @import("accountsdb/snapshots.zig");
-    pub usingnamespace @import("accountsdb/sysvars.zig");
+    pub const db = @import("accountsdb/db.zig");
+    pub const bank = @import("accountsdb/bank.zig");
+    pub const accounts_file = @import("accountsdb/accounts_file.zig");
+    pub const genesis_config = @import("accountsdb/genesis_config.zig");
+    pub const index = @import("accountsdb/index.zig");
+    pub const snapshots = @import("accountsdb/snapshots.zig");
+    pub const sysvars = @import("accountsdb/sysvars.zig");
+    pub const download = @import("accountsdb/download.zig");
 };
 
 pub const gossip = struct {
-    pub usingnamespace @import("gossip/data.zig");
-    pub usingnamespace @import("gossip/table.zig");
-    pub usingnamespace @import("gossip/service.zig");
-    pub usingnamespace @import("gossip/message.zig");
-    pub usingnamespace @import("gossip/pull_request.zig");
-    pub usingnamespace @import("gossip/pull_response.zig");
-    pub usingnamespace @import("gossip/shards.zig");
-    pub usingnamespace @import("gossip/ping_pong.zig");
-    pub usingnamespace @import("gossip/active_set.zig");
-    pub usingnamespace @import("gossip/dump_service.zig");
+    pub const data = @import("gossip/data.zig");
+    pub const table = @import("gossip/table.zig");
+    pub const service = @import("gossip/service.zig");
+    pub const message = @import("gossip/message.zig");
+    pub const pull_request = @import("gossip/pull_request.zig");
+    pub const pull_response = @import("gossip/pull_response.zig");
+    pub const shards = @import("gossip/shards.zig");
+    pub const ping_pong = @import("gossip/ping_pong.zig");
+    pub const active_set = @import("gossip/active_set.zig");
+    pub const dump_service = @import("gossip/dump_service.zig");
 };
 
 pub const bloom = struct {
-    pub usingnamespace @import("bloom/bitvec.zig");
-    pub usingnamespace @import("bloom/bloom.zig");
+    pub const bit_vec = @import("bloom/bit_vec.zig");
+    pub const bit_set = @import("bloom/bit_set.zig");
+    pub const bloom = @import("bloom/bloom.zig");
 };
 
 pub const version = struct {
-    pub usingnamespace @import("version/version.zig");
+    pub const version = @import("version/version.zig");
 };
 
 pub const sync = struct {
-    pub usingnamespace @import("sync/backoff.zig");
-    pub usingnamespace @import("sync/bounded.zig");
-    pub usingnamespace @import("sync/channel.zig");
-    pub usingnamespace @import("sync/chanx.zig");
-    pub usingnamespace @import("sync/mpmc.zig");
-    pub usingnamespace @import("sync/ref.zig");
-    pub usingnamespace @import("sync/mux.zig");
-    pub usingnamespace @import("sync/once_cell.zig");
-    pub usingnamespace @import("sync/parker.zig");
-    pub usingnamespace @import("sync/thread_context.zig");
-    pub usingnamespace @import("sync/thread_pool.zig");
-    pub usingnamespace @import("sync/waker.zig");
+    pub const backoff = @import("sync/backoff.zig");
+    pub const bounded = @import("sync/bounded.zig");
+    pub const channel = @import("sync/channel.zig");
+    pub const chanx = @import("sync/chanx.zig");
+    pub const mpmc = @import("sync/mpmc.zig");
+    pub const ref = @import("sync/ref.zig");
+    pub const mux = @import("sync/mux.zig");
+    pub const once_cell = @import("sync/once_cell.zig");
+    pub const parker = @import("sync/parker.zig");
+    pub const thread_context = @import("sync/thread_context.zig");
+    pub const thread_pool = @import("sync/thread_pool.zig");
+    pub const waker = @import("sync/waker.zig");
 };
 
 pub const utils = struct {
-    pub usingnamespace @import("utils/shortvec.zig");
-    pub usingnamespace @import("utils/types.zig");
-    pub usingnamespace @import("utils/varint.zig");
+    pub const shortvec = @import("utils/shortvec.zig");
+    pub const types = @import("utils/types.zig");
+    pub const varint = @import("utils/varint.zig");
 };
 
 pub const trace = struct {
-    pub usingnamespace @import("trace/level.zig");
-    pub usingnamespace @import("trace/log.zig");
-    pub usingnamespace @import("trace/entry.zig");
+    pub const level = @import("trace/level.zig");
+    pub const log = @import("trace/log.zig");
+    pub const entry = @import("trace/entry.zig");
 };
 
 pub const common = struct {
-    pub usingnamespace @import("common/lru.zig");
-    pub usingnamespace @import("common/merkle_tree.zig");
+    pub const lru = @import("common/lru.zig");
+    pub const merkle_tree = @import("common/merkle_tree.zig");
 };
 
 pub const bincode = struct {
-    pub usingnamespace @import("bincode/bincode.zig");
+    pub const bincode = @import("bincode/bincode.zig");
 };
 
 pub const cmd = struct {
-    pub usingnamespace @import("cmd/helpers.zig");
+    pub const helpers = @import("cmd/helpers.zig");
 };
 
 pub const net = struct {
-    pub usingnamespace @import("net/net.zig");
-    pub usingnamespace @import("net/echo.zig");
-    pub usingnamespace @import("net/packet.zig");
-    pub usingnamespace @import("net/socket_utils.zig");
+    pub const net = @import("net/net.zig");
+    pub const echo = @import("net/echo.zig");
+    pub const packet = @import("net/packet.zig");
+    pub const socket_utils = @import("net/socket_utils.zig");
 };
 
 pub const prometheus = struct {

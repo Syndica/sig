@@ -1,10 +1,10 @@
 const std = @import("std");
 const parker = @import("parker.zig");
 const OperationId = @import("waker.zig").OperationId;
-const Token = @import("bounded.zig").TempSlot;
+const TempSlot = @import("bounded.zig").TempSlot;
 const Backoff = @import("backoff.zig").Backoff;
 const Parker = parker.Parker;
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 threadlocal var thread_local_context: ThreadLocalContext = .{
     .state = Atomic(usize).init(0),
@@ -35,25 +35,25 @@ pub const ThreadLocalContext = struct {
     /// if comparison failed (or state isn't `.waiting`), meaning it failed to update the state successfully.
     /// If successful, returns `null`.
     pub inline fn tryUpdateFromWaitingStateTo(self: *Self, new_state: ThreadState) ?ThreadState {
-        return ThreadState.fromUsize(self.state.compareAndSwap(
+        return ThreadState.fromUsize(self.state.cmpxchgStrong(
             ThreadState.toUsize(.waiting),
             new_state.toUsize(),
-            .AcqRel,
-            .Acquire,
+            .acq_rel,
+            .acquire,
         ) orelse return null);
     }
 
     pub fn reset(self: *Self) void {
         self.parker = parker.getThreadLocal();
         self.id = std.Thread.getCurrentId();
-        self.state.store(ThreadState.toUsize(.waiting), .Release);
+        self.state.store(ThreadState.toUsize(.waiting), .release);
     }
 
     pub fn waitUntil(self: *Self, timeout: ?std.time.Instant) ThreadState {
         var backoff = Backoff.init();
 
         while (true) {
-            var state = ThreadState.fromUsize(self.state.load(.Acquire));
+            const state = ThreadState.fromUsize(self.state.load(.acquire));
             if (state != .waiting) return state;
 
             if (backoff.isCompleted())
@@ -64,11 +64,11 @@ pub const ThreadLocalContext = struct {
 
         // park the thread as we are waiting longer
         while (true) {
-            var state = ThreadState.fromUsize(self.state.load(.Acquire));
+            const state = ThreadState.fromUsize(self.state.load(.acquire));
             if (state != .waiting) return state;
 
             if (timeout) |end| {
-                var now = std.time.Instant.now() catch unreachable;
+                const now = std.time.Instant.now() catch unreachable;
 
                 if (now.timestamp.tv_sec < end.timestamp.tv_sec and now.timestamp.tv_nsec < end.timestamp.tv_nsec)
                     self.parker.parkTimeout(timespecDifferenceInNs(end, now))
@@ -80,9 +80,9 @@ pub const ThreadLocalContext = struct {
 };
 
 fn timespecDifferenceInNs(a: std.time.Instant, b: std.time.Instant) u64 {
-    var sec_diff = a.timestamp.tv_sec - b.timestamp.tv_sec;
-    var nsec_diff = a.timestamp.tv_nsec - b.timestamp.tv_nsec;
-    var total_nsec = sec_diff * std.time.ns_per_s + nsec_diff;
+    const sec_diff = a.timestamp.tv_sec - b.timestamp.tv_sec;
+    const nsec_diff = a.timestamp.tv_nsec - b.timestamp.tv_nsec;
+    const total_nsec = sec_diff * std.time.ns_per_s + nsec_diff;
     return @intCast(total_nsec);
 }
 
@@ -118,12 +118,12 @@ pub const ThreadState = union(enum(u8)) {
 };
 
 test "thread state conversion to/from usize" {
-    var token = Token(u64).uninitialized();
+    var token = TempSlot(u64).uninitialized();
 
     var state = ThreadState{ .operation = token.toOperationId() };
-    var as_usize = state.toUsize();
-    var other_state = ThreadState.fromUsize(as_usize);
+    const as_usize = state.toUsize();
+    const other_state = ThreadState.fromUsize(as_usize);
 
     try std.testing.expectEqual(state, other_state);
-    try std.testing.expectEqual(&token, Token(u64).fromOperationId(other_state.operation));
+    try std.testing.expectEqual(&token, TempSlot(u64).fromOperationId(other_state.operation));
 }

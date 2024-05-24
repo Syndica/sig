@@ -2,8 +2,7 @@ const std = @import("std");
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
 const bincode = @import("../bincode/bincode.zig");
-const _hash = @import("../core/hash.zig");
-const Hash = _hash.Hash;
+const Hash = @import("../core/hash.zig").Hash;
 const GossipTableShards = @import("./shards.zig").GossipTableShards;
 const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
@@ -171,7 +170,7 @@ pub const GossipTable = struct {
         };
 
         const label = value.label();
-        var result = try self.store.getOrPut(label);
+        const result = try self.store.getOrPut(label);
         const entry_index = result.index;
         const origin = value.id();
 
@@ -232,17 +231,17 @@ pub const GossipTable = struct {
                     old_info.?.value.deinit();
                 },
                 .Vote => {
-                    var did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
+                    const did_remove = self.votes.swapRemove(old_entry.cursor_on_insertion);
                     std.debug.assert(did_remove);
                     try self.votes.put(self.cursor, entry_index);
                 },
                 .EpochSlots => {
-                    var did_remove = self.epoch_slots.swapRemove(old_entry.cursor_on_insertion);
+                    const did_remove = self.epoch_slots.swapRemove(old_entry.cursor_on_insertion);
                     std.debug.assert(did_remove);
                     try self.epoch_slots.put(self.cursor, entry_index);
                 },
                 .DuplicateShred => {
-                    var did_remove = self.duplicate_shreds.swapRemove(old_entry.cursor_on_insertion);
+                    const did_remove = self.duplicate_shreds.swapRemove(old_entry.cursor_on_insertion);
                     std.debug.assert(did_remove);
                     try self.duplicate_shreds.put(self.cursor, entry_index);
                 },
@@ -272,7 +271,7 @@ pub const GossipTable = struct {
         } else {
             const old_entry = result.value_ptr.*;
 
-            if (old_entry.value_hash.cmp(&versioned_value.value_hash) != .eq) {
+            if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
                 return TableError.OldValue;
@@ -290,7 +289,7 @@ pub const GossipTable = struct {
         comptime record_inserts: bool,
         comptime record_timeouts: bool,
     ) error{OutOfMemory}!InsertResults {
-        var now = getWallclockMs();
+        const now = getWallclockMs();
 
         // TODO: change to record duplicate and old values seperately + handle when
         // gossip table is full
@@ -341,7 +340,7 @@ pub const GossipTable = struct {
         timeout: u64,
         failed_indexes: *std.ArrayList(usize),
     ) error{OutOfMemory}!void {
-        var now = getWallclockMs();
+        const now = getWallclockMs();
 
         failed_indexes.clearRetainingCapacity();
         try failed_indexes.ensureTotalCapacity(values.len);
@@ -424,7 +423,7 @@ pub const GossipTable = struct {
             }
 
             const entry_index = hashmap.get(cursor_index).?;
-            var entry = store_values[entry_index];
+            const entry = store_values[entry_index];
             buf[index] = entry;
             index += 1;
 
@@ -597,7 +596,7 @@ pub const GossipTable = struct {
 
         const entry_indexs = self.pubkey_to_values.getEntry(origin).?.value_ptr;
         {
-            var did_remove = entry_indexs.swapRemove(entry_index);
+            const did_remove = entry_indexs.swapRemove(entry_index);
             std.debug.assert(did_remove);
         }
 
@@ -605,7 +604,7 @@ pub const GossipTable = struct {
         if (entry_indexs.count() == 0) {
             {
                 entry_indexs.deinit();
-                var did_remove = self.pubkey_to_values.swapRemove(origin);
+                const did_remove = self.pubkey_to_values.swapRemove(origin);
                 std.debug.assert(did_remove);
             }
 
@@ -620,32 +619,32 @@ pub const GossipTable = struct {
 
         switch (versioned_value.value.data) {
             .ContactInfo => {
-                var did_remove = self.contact_infos.swapRemove(entry_index);
+                const did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
             },
             .LegacyContactInfo => |lci| {
-                var did_remove = self.contact_infos.swapRemove(entry_index);
+                const did_remove = self.contact_infos.swapRemove(entry_index);
                 std.debug.assert(did_remove);
                 var contact_info = self.converted_contact_infos.fetchSwapRemove(lci.id).?.value;
                 contact_info.deinit();
             },
             .Vote => {
-                var did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.votes.swapRemove(versioned_value.cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             .EpochSlots => {
-                var did_remove = self.epoch_slots.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.epoch_slots.swapRemove(versioned_value.cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             .DuplicateShred => {
-                var did_remove = self.duplicate_shreds.swapRemove(versioned_value.cursor_on_insertion);
+                const did_remove = self.duplicate_shreds.swapRemove(versioned_value.cursor_on_insertion);
                 std.debug.assert(did_remove);
             },
             else => {},
         }
 
         {
-            var did_remove = self.entries.swapRemove(versioned_value.cursor_on_insertion);
+            const did_remove = self.entries.swapRemove(versioned_value.cursor_on_insertion);
             std.debug.assert(did_remove);
         }
         {
@@ -670,12 +669,12 @@ pub const GossipTable = struct {
             // these also should not fail since there are no allocations - just changing the value
             switch (versioned_value.value.data) {
                 .ContactInfo => {
-                    var did_remove = self.contact_infos.swapRemove(table_len);
+                    const did_remove = self.contact_infos.swapRemove(table_len);
                     std.debug.assert(did_remove);
                     self.contact_infos.put(entry_index, {}) catch unreachable;
                 },
                 .LegacyContactInfo => {
-                    var did_remove = self.contact_infos.swapRemove(table_len);
+                    const did_remove = self.contact_infos.swapRemove(table_len);
                     std.debug.assert(did_remove);
                     self.contact_infos.put(entry_index, {}) catch unreachable;
                 },
@@ -693,7 +692,7 @@ pub const GossipTable = struct {
             self.entries.put(new_index_cursor, entry_index) catch unreachable;
 
             const new_entry_indexs = self.pubkey_to_values.getEntry(new_index_origin).?.value_ptr;
-            var did_remove = new_entry_indexs.swapRemove(table_len);
+            const did_remove = new_entry_indexs.swapRemove(table_len);
             std.debug.assert(did_remove);
             new_entry_indexs.put(entry_index, {}) catch unreachable;
         }
@@ -757,15 +756,15 @@ pub const GossipTable = struct {
 
         // standard
         task: Task = .{ .callback = callback },
-        done: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
+        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
         pub fn deinit(self: *GetOldLabelsTask) void {
             self.old_labels.deinit();
         }
 
         pub fn callback(task: *Task) void {
-            var self = @fieldParentPtr(@This(), "task", task);
-            defer self.done.store(true, std.atomic.Ordering.Release);
+            const self: *@This() = @fieldParentPtr("task", task);
+            defer self.done.store(true, .release);
 
             // get assocaited entries
             const entry = self.table.pubkey_to_values.getEntry(self.key).?;
@@ -821,12 +820,11 @@ pub const GossipTable = struct {
 
         // run this loop in parallel
         for (self.pubkey_to_values.keys()[0..n_pubkeys], 0..) |key, i| {
-            var old_labels = std.ArrayList(GossipKey).init(self.allocator);
             tasks[i] = GetOldLabelsTask{
                 .key = key,
                 .table = self,
                 .cutoff_timestamp = cutoff_timestamp,
-                .old_labels = old_labels,
+                .old_labels = std.ArrayList(GossipKey).init(self.allocator),
             };
 
             // run it
@@ -837,7 +835,7 @@ pub const GossipTable = struct {
         // wait for them to be done to release the lock
         var output_length: u64 = 0;
         for (tasks) |*task| {
-            while (!task.done.load(std.atomic.Ordering.Acquire)) {
+            while (!task.done.load(.acquire)) {
                 // wait
             }
             output_length += task.old_labels.items.len;
@@ -856,7 +854,7 @@ pub const GossipTable = struct {
         self: *const Self,
         gossip_addr: SocketAddr,
     ) !?ContactInfo {
-        var contact_indexs = self.contact_infos.keys();
+        const contact_indexs = self.contact_infos.keys();
         for (contact_indexs) |index| {
             const entry: GossipVersionedData = self.store.values()[index];
             switch (entry.value.data) {
@@ -896,7 +894,7 @@ pub const HashTimeQueue = struct {
     }
 
     pub fn insert(self: *Self, v: Hash, now: u64) error{OutOfMemory}!void {
-        var hat = HashAndTime{
+        const hat = HashAndTime{
             .hash = v,
             .timestamp = now,
         };
@@ -936,7 +934,7 @@ pub const HashTimeQueue = struct {
 test "gossip.table: remove old values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
@@ -967,7 +965,7 @@ test "gossip.table: remove old values" {
 test "gossip.table: insert and remove value" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
@@ -987,7 +985,7 @@ test "gossip.table: insert and remove value" {
 test "gossip.table: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rng = std.rand.DefaultPrng.init(seed);
 
     var tp = ThreadPool.init(.{});
@@ -1031,15 +1029,18 @@ test "gossip.HashTimeQueue: insert multiple values" {
     var htq = HashTimeQueue.init(std.testing.allocator);
     defer htq.deinit();
 
-    try htq.insert(Hash.random(), 100);
-    try htq.insert(Hash.random(), 102);
-    try htq.insert(Hash.random(), 103);
+    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    const rand = default_prng.random();
+
+    try htq.insert(Hash.random(rand), 100);
+    try htq.insert(Hash.random(rand), 102);
+    try htq.insert(Hash.random(rand), 103);
 
     try htq.trim(102);
     try std.testing.expect(htq.len() == 2);
 
-    try htq.insert(Hash.random(), 101);
-    try htq.insert(Hash.random(), 120);
+    try htq.insert(Hash.random(rand), 101);
+    try htq.insert(Hash.random(rand), 120);
     try std.testing.expect(htq.len() == 4);
 
     try htq.trim(150);
@@ -1049,10 +1050,10 @@ test "gossip.HashTimeQueue: insert multiple values" {
 test "gossip.HashTimeQueue: trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
-    var data = GossipData{
+    const data = GossipData{
         .LegacyContactInfo = LegacyContactInfo.random(rng),
     };
     var value = try SignedGossipData.initSigned(data, &keypair);
@@ -1085,7 +1086,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
 test "gossip.table: insert and get" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
     var value = try SignedGossipData.random(rng, &keypair);
@@ -1102,7 +1103,7 @@ test "gossip.table: insert and get" {
 }
 
 test "gossip.table: insert and get votes" {
-    var kp_bytes = [_]u8{1} ** 32;
+    const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
     var id = Pubkey.fromPublicKey(&pk);
@@ -1125,7 +1126,7 @@ test "gossip.table: insert and get votes" {
     try std.testing.expect(cursor == 1);
 
     // try inserting another vote
-    var seed: u64 = @intCast(std.time.milliTimestamp());
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
     id = Pubkey.random(rng);
@@ -1147,7 +1148,7 @@ test "gossip.table: insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&kp.public_key);
 
-    var legacy_contact_info = LegacyContactInfo.default(id);
+    const legacy_contact_info = LegacyContactInfo.default(id);
     var gossip_value = try SignedGossipData.initSigned(GossipData{
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);

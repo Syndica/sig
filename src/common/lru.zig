@@ -60,7 +60,7 @@ pub fn LruCacheCustom(
 
         fn initNode(self: *Self, key: K, val: V) error{OutOfMemory}!*Node {
             self.len += 1;
-            var node = try self.allocator.create(Node);
+            const node = try self.allocator.create(Node);
             node.* = .{ .data = LruEntry.init(key, val) };
             return node;
         }
@@ -82,7 +82,7 @@ pub fn LruCacheCustom(
             max_items: usize,
             deinit_context: DeinitContext,
         ) error{OutOfMemory}!Self {
-            var hashmap = if (K == []const u8) std.StringArrayHashMap(*Node).init(allocator) else std.AutoArrayHashMap(K, *Node).init(allocator);
+            const hashmap = if (K == []const u8) std.StringArrayHashMap(*Node).init(allocator) else std.AutoArrayHashMap(K, *Node).init(allocator);
             var self = Self{
                 .allocator = allocator,
                 .hashmap = hashmap,
@@ -111,7 +111,7 @@ pub fn LruCacheCustom(
         /// Entry (otherwise null) and second element of tuple is inserted Entry.
         fn internal_recycle_or_create_node(self: *Self, key: K, value: V) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
             if (self.dbl_link_list.len == self.max_items) {
-                var recycled_node = self.dbl_link_list.popFirst().?;
+                const recycled_node = self.dbl_link_list.popFirst().?;
                 assert(self.hashmap.swapRemove(recycled_node.data.key));
                 // after swap, this node is thrown away
                 var node_to_swap: Node = .{
@@ -126,7 +126,7 @@ pub fn LruCacheCustom(
             }
 
             // key not exist, alloc a new node
-            var node = try self.initNode(key, value);
+            const node = try self.initNode(key, value);
             self.hashmap.putAssumeCapacityNoClobber(key, node);
             self.dbl_link_list.append(node);
             return .{ null, node.data };
@@ -140,11 +140,11 @@ pub fn LruCacheCustom(
                 return existing_node.data;
             }
 
-            var replaced_and_created_node = self.internal_recycle_or_create_node(key, value) catch |e| {
+            const replaced_and_created_node = self.internal_recycle_or_create_node(key, value) catch |e| {
                 std.debug.print("replace_or_create_node returned error: {any}", .{e});
                 @panic("could not recycle_or_create_node");
             };
-            var new_lru_entry = replaced_and_created_node[1];
+            const new_lru_entry = replaced_and_created_node[1];
             return new_lru_entry;
         }
 
@@ -213,7 +213,7 @@ pub fn LruCacheCustom(
             defer if (kind == .locking) self.mux.unlock();
 
             if (self.hashmap.fetchSwapRemove(k)) |kv| {
-                var node = kv.value;
+                const node = kv.value;
                 self.dbl_link_list.remove(node);
                 defer self.deinitNode(node);
                 return node.data.value;
@@ -240,7 +240,7 @@ pub fn LruCacheCustom(
 
             if (self.hashmap.getEntry(key)) |existing_entry| {
                 var existing_node: *Node = existing_entry.value_ptr.*;
-                var old_value = existing_node.data.value;
+                const old_value = existing_node.data.value;
                 existing_node.data.value = value;
                 self.internal_reorder(existing_node);
                 return old_value;
@@ -256,7 +256,7 @@ pub fn LruCacheCustom(
             defer if (kind == .locking) self.mux.unlock();
 
             if (self.hashmap.fetchSwapRemove(key)) |kv| {
-                var node = kv.value;
+                const node = kv.value;
                 self.dbl_link_list.remove(node);
                 self.deinitNode(node);
                 return true;
@@ -278,7 +278,7 @@ test "common.lru: LruCache state is correct" {
     try testing.expectEqual(@as(usize, 4), cache.hashmap.keys().len);
     try testing.expectEqual(@as(usize, 4), cache.len);
 
-    var val = cache.get(2);
+    const val = cache.get(2);
     try testing.expectEqual(val.?, "two");
     try testing.expectEqual(cache.mru().?.value, "two");
     try testing.expectEqual(cache.lru().?.value, "one");
@@ -304,12 +304,12 @@ test "common.lru: put works as expected" {
 
     try cache.insert("a", 1);
 
-    var old = cache.put("a", 2);
+    const old = cache.put("a", 2);
 
     try testing.expectEqual(@as(usize, 1), old.?);
     try testing.expectEqual(@as(usize, 2), cache.get("a").?);
 
-    var possible_old = cache.put("b", 3);
+    const possible_old = cache.put("b", 3);
     try testing.expectEqual(possible_old, null);
     try testing.expectEqual(@as(usize, 3), cache.get("b").?);
 }

@@ -7,7 +7,7 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
             _ = params;
             var v = data;
             while (v >= 0x80) {
-                var byte = @as(u8, @intCast(((v & 0x7F) | 0x80)));
+                const byte = @as(u8, @intCast(((v & 0x7F) | 0x80)));
                 v >>= 7;
                 try writer.writeByte(byte);
             }
@@ -20,7 +20,7 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
 
             var out: VarInt = 0;
 
-            var t_bits: u8 = switch (VarInt) {
+            const t_bits: u8 = switch (VarInt) {
                 u16 => 16,
                 u32 => 32,
                 u64 => 64,
@@ -82,8 +82,8 @@ pub fn serialize_short_u16(writer: anytype, data: u16, _: bincode.Params) !void 
 pub fn deserialize_short_u16(reader: anytype, _: bincode.Params) !u16 {
     var val: u16 = 0;
     for (0..MAX_ENCODING_LENGTH) |n| {
-        var elem: u8 = try reader.readByte();
-        switch (try visit_byte_2(elem, val, n)) {
+        const elem: u8 = try reader.readByte();
+        switch (try visit_byte(elem, val, n)) {
             .Done => |v| {
                 return v;
             },
@@ -109,45 +109,10 @@ pub fn visit_byte(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
         return error.VisitError;
     }
 
-    var value = @as(u32, val);
-    var element = @as(u32, elem);
-    var elem_val: u8 = @as(u8, @intCast(element & 0x7f));
-    var elem_done = (element & 0x80) == 0;
-
-    if (nth_byte >= MAX_ENCODING_LENGTH) {
-        return error.TooLong;
-    } else if (nth_byte == (MAX_ENCODING_LENGTH - 1) and !elem_done) {
-        return error.ByteThreeContinues;
-    }
-
-    var shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
-
-    var shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
-    if (shift_res.@"1" == 1) {
-        elem_val = U32_MAX;
-    } else {
-        elem_val = shift_res.@"0".Int.bits;
-    }
-
-    var new_val = value | elem_val;
-    value = std.math.cast(u16, new_val) catch return error.Overflow;
-
-    if (elem_done) {
-        return .{ .Done = value };
-    } else {
-        return .{ .More = value };
-    }
-}
-
-pub fn visit_byte_2(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
-    if (elem == 0 and nth_byte != 0) {
-        return error.VisitError;
-    }
-
-    var value = @as(u32, val);
-    var element = @as(u32, elem);
+    const value = @as(u32, val);
+    const element = @as(u32, elem);
     var elem_val: u32 = element & 0x7f;
-    var elem_done = (element & 0x80) == 0;
+    const elem_done = (element & 0x80) == 0;
 
     if (nth_byte >= MAX_ENCODING_LENGTH) {
         return error.TooLong;
@@ -155,19 +120,19 @@ pub fn visit_byte_2(elem: u8, val: u16, nth_byte: usize) !DoneOrMore {
         return error.ByteThreeContinues;
     }
 
-    var shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
+    const shift: u32 = (std.math.cast(u32, nth_byte) orelse U32_MAX) *| 7;
 
-    var shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
-    var result = shift_res.@"0";
-    var overflow_bit = shift_res.@"1";
+    const shift_res = @shlWithOverflow(elem_val, @as(u3, @intCast(shift)));
+    const result = shift_res.@"0";
+    const overflow_bit = shift_res.@"1";
     if (overflow_bit == 1) {
         elem_val = U32_MAX;
     } else {
         elem_val = result;
     }
 
-    var new_val = value | elem_val;
-    var out_val = std.math.cast(u16, new_val) orelse return error.Overflow;
+    const new_val = value | elem_val;
+    const out_val = std.math.cast(u16, new_val) orelse return error.Overflow;
 
     if (elem_done) {
         return .{ .Done = out_val };
