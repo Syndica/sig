@@ -1,166 +1,120 @@
 const std = @import("std");
+const Build = std.Build;
 
-const package_name = "sig";
-const package_path = "src/lib.zig";
-
-pub fn build(b: *std.Build) void {
+pub fn build(b: *Build) void {
+    // CLI options
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
 
-    const opts = .{ .target = target, .optimize = optimize };
-    const base58 = b.dependency("base58-zig", opts);
-    const base58_module = base58.module("base58-zig");
+    // CLI build steps
+    const run_step = b.step("run", "Run the sig executable");
+    const test_step = b.step("test", "Run library tests");
+    const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
+    const benchmark_step = b.step("benchmark", "Benchmark client");
 
-    const zig_network = b.dependency("zig-network", opts);
-    const zig_network_module = zig_network.module("network");
+    // Dependencies
+    const dep_opts = .{ .target = target, .optimize = optimize };
 
-    const zig_cli = b.dependency("zig-cli", opts);
-    const zig_cli_module = zig_cli.module("zig-cli");
+    const base58_dep = b.dependency("base58-zig", dep_opts);
+    const base58_module = base58_dep.module("base58-zig");
 
-    const httpz = b.dependency("httpz", opts);
-    const httpz_mod = httpz.module("httpz");
+    const zig_network_dep = b.dependency("zig-network", dep_opts);
+    const zig_network_module = zig_network_dep.module("network");
 
-    const zigdig = b.dependency("zigdig", opts);
-    const zigdig_mod = zigdig.module("dns");
+    const zig_cli_dep = b.dependency("zig-cli", dep_opts);
+    const zig_cli_module = zig_cli_dep.module("zig-cli");
 
-    const zstd_dep = b.dependency("zstd", opts);
+    const httpz_dep = b.dependency("httpz", dep_opts);
+    const httpz_mod = httpz_dep.module("httpz");
+
+    const zigdig_dep = b.dependency("zigdig", dep_opts);
+    const zigdig_mod = zigdig_dep.module("dns");
+
+    const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
-    const zstd_c_lib = zstd_dep.artifact("zstd");
 
-    const curl_dep = b.dependency("curl", opts);
+    const curl_dep = b.dependency("curl", dep_opts);
     const curl_mod = curl_dep.module("curl");
-    const curl_c_lib = curl_dep.artifact("curl");
 
     // expose Sig as a module
-    _ = b.addModule(package_name, .{
-        .root_source_file = .{ .path = package_path },
-        .imports = &.{
-            .{
-                .name = "zig-network",
-                .module = zig_network_module,
-            },
-            .{
-                .name = "base58-zig",
-                .module = base58_module,
-            },
-            .{
-                .name = "zig-cli",
-                .module = zig_cli_module,
-            },
-            .{
-                .name = "httpz",
-                .module = httpz_mod,
-            },
-            .{
-                .name = "zigdig",
-                .module = zigdig_mod,
-            },
-            .{
-                .name = "zstd",
-                .module = zstd_mod,
-            },
-            .{
-                .name = "curl",
-                .module = curl_mod,
-            },
-        },
+    const sig_mod = b.addModule("sig", .{
+        .root_source_file = b.path("src/lib.zig"),
     });
+    sig_mod.addImport("zig-network", zig_network_module);
+    sig_mod.addImport("base58-zig", base58_module);
+    sig_mod.addImport("zig-cli", zig_cli_module);
+    sig_mod.addImport("httpz", httpz_mod);
+    sig_mod.addImport("zigdig", zigdig_mod);
+    sig_mod.addImport("zstd", zstd_mod);
+    sig_mod.addImport("curl", curl_mod);
+
+    // main executable
+    const sig_exe = b.addExecutable(.{
+        .name = "sig",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(sig_exe);
+    sig_exe.root_module.addImport("base58-zig", base58_module);
+    sig_exe.root_module.addImport("curl", curl_mod);
+    sig_exe.root_module.addImport("httpz", httpz_mod);
+    sig_exe.root_module.addImport("zig-cli", zig_cli_module);
+    sig_exe.root_module.addImport("zig-network", zig_network_module);
+    sig_exe.root_module.addImport("zigdig", zigdig_mod);
+    sig_exe.root_module.addImport("zstd", zstd_mod);
+
+    const main_exe_run = b.addRunArtifact(sig_exe);
+    main_exe_run.addArgs(b.args orelse &.{});
+    main_exe_run.step.dependOn(b.getInstallStep());
+    run_step.dependOn(&main_exe_run.step);
 
     // unit tests
-    const tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/tests.zig" },
+    const unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
-        .filter = if (b.args) |args| args[0] else null, // filter tests like so: zig build test -- "<FILTER>"
+        .filters = filters orelse &.{},
     });
-    tests.root_module.addImport("zig-network", zig_network_module);
-    tests.root_module.addImport("base58-zig", base58_module);
-    tests.root_module.addImport("zig-cli", zig_cli_module);
-    tests.root_module.addImport("httpz", httpz_mod);
-    tests.root_module.addImport("zigdig", zigdig_mod);
-    tests.root_module.addImport("zstd", zstd_mod);
-    tests.root_module.addImport("curl", curl_mod);
-    tests.linkLibrary(curl_c_lib);
-    tests.linkLibrary(zstd_c_lib);
+    b.installArtifact(unit_tests);
+    unit_tests.root_module.addImport("base58-zig", base58_module);
+    unit_tests.root_module.addImport("httpz", httpz_mod);
+    unit_tests.root_module.addImport("zig-network", zig_network_module);
+    unit_tests.root_module.addImport("zstd", zstd_mod);
 
-    const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&run_tests.step);
+    const unit_tests_run = b.addRunArtifact(unit_tests);
+    test_step.dependOn(&unit_tests_run.step);
 
-    const exe = b.addExecutable(.{
-        .name = "sig",
-        .root_source_file = .{ .path = "src/main.zig" },
+    const fuzz_exe = b.addExecutable(.{
+        .name = "fuzz",
+        .root_source_file = b.path("src/fuzz.zig"),
         .target = target,
         .optimize = optimize,
     });
+    b.installArtifact(fuzz_exe);
+    fuzz_exe.root_module.addImport("base58-zig", base58_module);
+    fuzz_exe.root_module.addImport("zig-network", zig_network_module);
+    fuzz_exe.root_module.addImport("httpz", httpz_mod);
 
-    exe.root_module.addImport("zig-cli", zig_cli_module);
-    exe.root_module.addImport("base58-zig", base58_module);
-    exe.root_module.addImport("zig-network", zig_network_module);
-    exe.root_module.addImport("zig-cli", zig_cli_module);
-    exe.root_module.addImport("httpz", httpz_mod);
-    exe.root_module.addImport("zigdig", zigdig_mod);
-    exe.root_module.addImport("zstd", zstd_mod);
-    exe.root_module.addImport("curl", curl_mod);
-    exe.linkLibrary(curl_c_lib);
-    exe.linkLibrary(zstd_c_lib);
+    const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
+    fuzz_exe_run.addArgs(b.args orelse &.{});
+    fuzz_exe_run.step.dependOn(b.getInstallStep());
+    fuzz_step.dependOn(&fuzz_exe_run.step);
 
-    b.installArtifact(exe);
+    const benchmark_exe = b.addExecutable(.{
+        .name = "benchmark",
+        .root_source_file = b.path("src/benchmarks.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(benchmark_exe);
+    benchmark_exe.root_module.addImport("base58-zig", base58_module);
+    benchmark_exe.root_module.addImport("zig-network", zig_network_module);
+    benchmark_exe.root_module.addImport("httpz", httpz_mod);
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
-
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
-
-    const ExecCommand = struct {
-        name: []const u8,
-        path: []const u8,
-        description: []const u8 = "",
-    };
-
-    const exec_commands = [_]ExecCommand{
-        ExecCommand{
-            .name = "fuzz",
-            .path = "src/fuzz.zig",
-            .description = "gossip fuzz testing",
-        },
-        ExecCommand{
-            .name = "benchmark",
-            .path = "src/benchmarks.zig",
-            .description = "benchmark client",
-            // note: we dont want this in ReleaseSafe always because its harder to debug
-        },
-    };
-
-    for (exec_commands) |command_info| {
-        const exec = b.addExecutable(.{
-            .name = command_info.name,
-            .root_source_file = .{ .path = command_info.path },
-            .target = target,
-            .optimize = optimize,
-            // .main_pkg_path = .{ .path = "src" },
-        });
-
-        // TODO: maybe we dont need all these for all bins
-        exec.root_module.addImport("base58-zig", base58_module);
-        exec.root_module.addImport("zig-network", zig_network_module);
-        exec.root_module.addImport("zig-cli", zig_cli_module);
-        exec.root_module.addImport("httpz", httpz_mod);
-        exec.root_module.addImport("zigdig", zigdig_mod);
-        exec.root_module.addImport("zstd", zstd_mod);
-        exec.root_module.addImport("curl", curl_mod);
-        exec.linkLibrary(curl_c_lib);
-        exec.linkLibrary(zstd_c_lib);
-
-        // this lets us run it as an exec
-        b.installArtifact(exec);
-
-        const cmd = b.addRunArtifact(exec);
-        if (b.args) |args| cmd.addArgs(args);
-        b
-            .step(command_info.name, command_info.description)
-            .dependOn(&cmd.step);
-    }
+    const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
+    benchmark_exe_run.step.dependOn(b.getInstallStep());
+    benchmark_exe_run.addArgs(b.args orelse &.{});
+    benchmark_step.dependOn(&benchmark_exe_run.step);
 }
