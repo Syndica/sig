@@ -508,6 +508,75 @@ fn testChannelReceiver(chan: *Bounded(usize), received_counter: ?*Atomic(usize),
     }
 }
 
+test "sync.bounded: mpmc ordering" {
+    const capacity: usize = 100;
+    const items_per_sender: usize = 1000;
+    var chan = try Bounded(usize).init(.{
+        .allocator = std.testing.allocator,
+        .init_capacity = capacity,
+    });
+    defer chan.deinit();
+
+    const on_each_end = 16; // set to 1 for spsc, or >1 for mpmc
+
+    var handles: [on_each_end * 2]std.Thread = undefined;
+
+    var success = Atomic(bool).init(true);
+    for (0..on_each_end) |i| {
+        handles[i * 2] = try std.Thread.spawn(.{}, testChannelSenderOrder, .{ chan, items_per_sender, i });
+        handles[i * 2 + 1] = try std.Thread.spawn(.{}, testChannelReceiverOrder, .{ chan, 16, items_per_sender, &success });
+    }
+
+    for (handles) |h| h.join();
+
+    try std.testing.expect(success.load(.seq_cst));
+}
+
+fn testChannelSenderOrder(chan: *Bounded(usize), items_per_sender: usize, sender_id: usize) void {
+    chan.acquireSender();
+    defer std.debug.assert(chan.releaseSender());
+
+    const base = items_per_sender * sender_id;
+    for (0..items_per_sender) |i| {
+        chan.send(base + i, null) catch break;
+    }
+}
+
+fn testChannelReceiverOrder(
+    chan: *Bounded(usize),
+    comptime num_senders: usize,
+    items_per_sender: usize,
+    success: *Atomic(bool),
+) void {
+    chan.acquireReceiver();
+    defer std.debug.assert(chan.releaseReceiver());
+
+    var highest: [num_senders]usize = .{0} ** num_senders;
+    var audit: [num_senders]std.ArrayList(usize) = undefined;
+    for (0..num_senders) |i| {
+        audit[i] = std.ArrayList(usize).init(std.testing.allocator);
+    }
+    defer for (0..num_senders) |i| audit[i].deinit();
+    var fail: ?usize = null;
+
+    while (true) {
+        const n = chan.receive(null) catch break;
+        const sender_id = n / items_per_sender;
+        const item = n % items_per_sender;
+        audit[sender_id].append(n) catch unreachable;
+        if (highest[sender_id] > item) {
+            std.debug.print("{},{},{}\n", .{ sender_id, highest[sender_id], item });
+            success.store(false, .seq_cst);
+            fail = sender_id;
+            // break;
+        }
+        highest[sender_id] = item;
+    }
+    if (fail) |fail_id| {
+        std.debug.print("{} - {any}\n\n", .{ fail_id, audit[fail_id].items });
+    }
+}
+
 test "sync.bounded: bounded channel works" {
     const items_to_send = 1000;
     var chan = try Bounded(usize).init(.{
