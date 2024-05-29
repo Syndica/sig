@@ -287,7 +287,7 @@ pub const GossipService = struct {
         // because http.zig's server doesn't stop when you call server.stop() - it's broken
         // const echo_server_thread = try self.echo_server.listenAndServe();
         // _ = echo_server_thread;
-        var manager = ServiceManager.init(self.allocator, self.logger, self.exit, .{}, .{});
+        var manager = ServiceManager.init("gossip", self.allocator, self.logger, self.exit, .{}, .{});
 
         try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
             self.allocator,
