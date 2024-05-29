@@ -75,7 +75,7 @@ pub fn start(
     deps: ShredCollectorDependencies,
     interface: ShredCollectorInterface,
 ) !ServiceManager {
-    var shred_collector = ServiceManager.init("shred collector", deps.allocator, deps.logger, interface.exit, .{}, .{});
+    var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit, "shred collector", .{}, .{});
     var arena = shred_collector.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);

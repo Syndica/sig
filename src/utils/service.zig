@@ -25,7 +25,7 @@ pub const ServiceManager = struct {
     _arena: ArenaAllocator,
     /// Logic to run after all threads join.
     defers: DeferList,
-    name: ?[]const u8,
+    name: []const u8,
     default_run_config: RunConfig,
     default_spawn_config: std.Thread.SpawnConfig,
 
@@ -35,7 +35,7 @@ pub const ServiceManager = struct {
         allocator: Allocator,
         logger: Logger,
         exit: *Atomic(bool),
-        name: ?[]const u8,
+        name: []const u8,
         default_run_config: RunConfig,
         default_spawn_config: std.Thread.SpawnConfig,
     ) Self {
@@ -102,13 +102,13 @@ pub const ServiceManager = struct {
     /// 2. Wait for threads to exit.
     /// 3. Deinit the shared state from those threads.
     pub fn deinit(self: Self) void {
-        self.logger.infof("Cleaning up: {}", .{self.name});
+        self.logger.infof("Cleaning up: {s}", .{self.name});
         self.exit.store(true, .monotonic);
         for (self.threads.items) |t| t.join();
         self.threads.deinit();
         self.defers.deinit();
         self._arena.deinit();
-        self.logger.infof("Finished cleaning up: {}", .{self.name});
+        self.logger.infof("Finished cleaning up: {s}", .{self.name});
     }
 };
 
