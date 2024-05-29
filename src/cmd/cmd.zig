@@ -370,15 +370,13 @@ fn gossip() !void {
         logger,
         my_keypair,
         &exit,
-        entrypoints,
+        entrypoints.items,
         my_data.shred_version,
         my_data.ip,
         &.{},
     );
     defer gossip_service.deinit();
-
-    var handle = try spawnGossip(&gossip_service);
-    handle.join();
+    try runGossipWithConfigValues(&gossip_service);
 }
 
 /// entrypoint to run a full solana validator
@@ -402,13 +400,13 @@ fn validator() !void {
         logger,
         my_keypair,
         &exit,
-        entrypoints,
+        entrypoints.items,
         ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
         ip_echo_data.ip,
         &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
     );
     defer gossip_service.deinit();
-    var gossip_handle = try spawnGossip(&gossip_service);
+    const gossip_handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
 
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
@@ -515,7 +513,7 @@ fn initGossip(
     logger: Logger,
     my_keypair: KeyPair,
     exit: *Atomic(bool),
-    entrypoints: std.ArrayList(SocketAddr),
+    entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
     sockets: []const struct { tag: u8, port: u16 },
@@ -572,14 +570,9 @@ fn initRepair(
     };
 }
 
-/// Spawn a thread to run gossip and configure with CLI arguments
-fn spawnGossip(gossip_service: *GossipService) std.Thread.SpawnError!std.Thread {
-    const spy_node = config.current.gossip.spy_node;
-    return try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{ gossip_service, spy_node, config.current.gossip.dump },
-    );
+fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
+    const gossip_config = config.current.gossip;
+    return gossip_service.run(gossip_config.spy_node, gossip_config.dump);
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version
@@ -737,13 +730,13 @@ fn downloadSnapshot() !void {
         .noop,
         my_keypair,
         &exit,
-        entrypoints,
+        entrypoints.items,
         my_data.shred_version,
         my_data.ip,
         &.{},
     );
     defer gossip_service.deinit();
-    var handle = try spawnGossip(&gossip_service);
+    const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
