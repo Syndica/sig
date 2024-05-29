@@ -95,7 +95,6 @@ pub const RepairService = struct {
 
     /// Used to run RepairService continuously.
     pub const run_config = sig.utils.RunConfig{
-        .name = "Repair Service",
         .min_loop_duration_ns = 100 * std.time.ns_per_ms,
     };
 

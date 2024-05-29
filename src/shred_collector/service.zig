@@ -75,7 +75,7 @@ pub fn start(
     deps: ShredCollectorDependencies,
     interface: ShredCollectorInterface,
 ) !ServiceManager {
-    var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit);
+    var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit, .{}, .{});
     var arena = shred_collector.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
@@ -114,8 +114,10 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try shred_collector.spawn(
+    try shred_collector.spawnCustom(
+        "Repair Service",
         RepairService.run_config,
+        .{},
         RepairService.sendNecessaryRepairs,
         .{repair_svc},
     );
@@ -140,11 +142,11 @@ pub fn start(
         .outgoing_shred_channel = unverified_shreds_channel,
         .shred_version = interface.my_shred_version,
     };
-    try shred_collector.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
+    try shred_collector.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
     try shred_collector.spawn(
-        .{ .name = "Shred Verifier" },
+        "Shred Verifier",
         sig.shred_collector.runShredSignatureVerification,
         .{
             interface.exit,
@@ -156,7 +158,7 @@ pub fn start(
 
     // processor (thread)
     try shred_collector.spawn(
-        .{ .name = "Shred Processor" },
+        "Shred Processor",
         sig.shred_collector.processShreds,
         .{ deps.allocator, verified_shreds_channel, shred_tracker },
     );

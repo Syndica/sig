@@ -287,35 +287,35 @@ pub const GossipService = struct {
         // because http.zig's server doesn't stop when you call server.stop() - it's broken
         // const echo_server_thread = try self.echo_server.listenAndServe();
         // _ = echo_server_thread;
-        var services = ServiceManager.init(self.allocator, self.logger, self.exit);
+        var manager = ServiceManager.init(self.allocator, self.logger, self.exit, .{}, .{});
 
-        try services.spawn(.{}, socket_utils.readSocket, .{
+        try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
             self.allocator,
             self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
             self.logger,
         });
-        try services.spawn(.{}, verifyPackets, .{self});
-        try services.spawn(.{}, processMessages, .{self});
+        try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
+        try manager.spawn("gossip processMessages", processMessages, .{self});
 
-        if (!spy_node) try services.spawn(.{}, buildMessages, .{self});
+        if (!spy_node) try manager.spawn("gossip buildMessages", buildMessages, .{self});
 
-        try services.spawn(.{}, socket_utils.sendSocket, .{
+        try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
             self.logger,
         });
 
-        if (dump) try services.spawn(.{}, GossipDumpService.run, .{.{
+        if (dump) try manager.spawn("GossipDumpService", GossipDumpService.run, .{.{
             .allocator = self.allocator,
             .logger = self.logger,
             .gossip_table_rw = &self.gossip_table_rw,
             .exit = self.exit,
         }});
 
-        return services;
+        return manager;
     }
 
     const VerifyMessageTask = struct {
