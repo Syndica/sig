@@ -500,7 +500,6 @@ pub const AccountsDB = struct {
                 );
             }
         }
-<<<<<<< HEAD
         const largest_slot = self.file_map.get(self.largest_file_id).?.slot;
         self.largest_root_slot.store(largest_slot, .unordered);
 
@@ -508,8 +507,6 @@ pub const AccountsDB = struct {
             handle.join();
         }
         handles.deinit();
-=======
->>>>>>> 8f7434b0d512872068210fa0d1b031d1e4a0e318
     }
 
     /// combines multiple thread indexes into the given index.
