@@ -737,6 +737,7 @@ fn downloadSnapshot() !void {
     );
     defer gossip_service.deinit();
     const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
+    handle.detach();
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
@@ -751,8 +752,6 @@ fn downloadSnapshot() !void {
         snapshot_dir_str,
         @intCast(min_mb_per_sec),
     );
-
-    handle.join();
 }
 
 fn getTrustedValidators(
