@@ -13,11 +13,12 @@ const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 
-pub fn leaderScheduleFromBank(allocator: Allocator, bank: *const Bank, epoch: Epoch) Allocator.Error!?[]Pubkey {
-    const epoch_stakes = bank.bank_fields.epoch_stakes.getPtr(epoch) orelse return null;
-    const staked_nodes = &epoch_stakes.stakes.vote_accounts.staked_nodes orelse return null;
+pub fn leaderScheduleFromBank(allocator: Allocator, bank: *const Bank) ![]Pubkey {
+    const epoch = bank.bank_fields.epoch;
+    const epoch_stakes = bank.bank_fields.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
+    const staked_nodes = &(epoch_stakes.stakes.vote_accounts.staked_nodes orelse return error.NoStakedNodes);
     const slots_in_epoch = bank.bank_fields.epoch_schedule.getSlotsInEpoch(epoch);
-    leaderSchedule(allocator, staked_nodes, slots_in_epoch);
+    return try leaderSchedule(allocator, staked_nodes, slots_in_epoch, epoch);
 }
 
 pub fn leaderSchedule(

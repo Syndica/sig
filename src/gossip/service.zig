@@ -48,6 +48,7 @@ const PingCache = @import("./ping_pong.zig").PingCache;
 const PingAndSocketAddr = @import("./ping_pong.zig").PingAndSocketAddr;
 const echo = @import("../net/echo.zig");
 const GossipDumpService = @import("../gossip/dump_service.zig").GossipDumpService;
+const ServiceManager = @import("../utils/service.zig").ServiceManager;
 
 const Registry = @import("../prometheus/registry.zig").Registry;
 const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
@@ -266,7 +267,14 @@ pub const GossipService = struct {
         self.exit.store(true, .unordered);
     }
 
-    /// spawns required threads for the gossip serivce.
+    /// starts gossip and blocks until it exits
+    pub fn run(self: *Self, spy_node: bool, dump: bool) !void {
+        var service = try self.start(spy_node, dump);
+        service.join();
+        service.deinit();
+    }
+
+    /// spawns required threads for the gossip service and returns immediately
     /// including:
     ///     1) socket reciever
     ///     2) packet verifier
@@ -274,49 +282,40 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message) (only active if not a spy node)
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
-    pub fn run(self: *Self, spy_node: bool, dump: bool) !void {
+    pub fn start(self: *Self, spy_node: bool, dump: bool) !ServiceManager {
         // TODO(Ahmad): need new server impl, for now we don't join server thread
         // because http.zig's server doesn't stop when you call server.stop() - it's broken
         // const echo_server_thread = try self.echo_server.listenAndServe();
         // _ = echo_server_thread;
+        var services = ServiceManager.init(self.allocator, self.logger, self.exit);
 
-        var receiver_handle = try Thread.spawn(.{}, socket_utils.readSocket, .{
+        try services.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
             self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
             self.logger,
         });
-        defer self.joinAndExit(&receiver_handle);
+        try services.spawn(.{}, verifyPackets, .{self});
+        try services.spawn(.{}, processMessages, .{self});
 
-        var packet_verifier_handle = try Thread.spawn(.{}, verifyPackets, .{self});
-        defer self.joinAndExit(&packet_verifier_handle);
+        if (!spy_node) try services.spawn(.{}, buildMessages, .{self});
 
-        var packet_handle = try Thread.spawn(.{}, processMessages, .{self});
-        defer self.joinAndExit(&packet_handle);
-
-        var maybe_build_messages_handle = if (!spy_node) try Thread.spawn(.{}, buildMessages, .{self}) else null;
-        defer {
-            if (maybe_build_messages_handle) |*handle| {
-                self.joinAndExit(handle);
-            }
-        }
-
-        var responder_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
+        try services.spawn(.{}, socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
             self.logger,
         });
-        defer self.joinAndExit(&responder_handle);
 
-        var dump_handle = if (dump) try Thread.spawn(.{}, GossipDumpService.run, .{.{
+        if (dump) try services.spawn(.{}, GossipDumpService.run, .{.{
             .allocator = self.allocator,
             .logger = self.logger,
             .gossip_table_rw = &self.gossip_table_rw,
             .exit = self.exit,
-        }}) else null;
-        defer if (dump_handle) |*h| self.joinAndExit(h);
+        }});
+
+        return services;
     }
 
     const VerifyMessageTask = struct {

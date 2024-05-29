@@ -418,24 +418,11 @@ fn validator() !void {
         },
     );
     defer gossip_service.deinit();
-    var gossip_handle = try spawnGossip(&gossip_service);
-
-    // shred collector
-    var shred_collector = try sig.shred_collector.start(.{
-        .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else null,
-        .repair_port = repair_port,
-        .tvu_port = tvu_port,
-    }, .{
-        .allocator = gpa_allocator,
-        .logger = logger,
-        .random = rand.random(),
-        .my_keypair = &my_keypair,
-    }, .{
-        .exit = &exit,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .my_shred_version = &gossip_service.my_shred_version,
-    });
-    defer shred_collector.deinit();
+    var gossip_handle = try gossip_service.start(
+        config.current.gossip.spy_node,
+        config.current.gossip.dump,
+    );
+    defer gossip_handle.deinit();
 
     // accounts db
     var snapshots = try getOrDownloadSnapshots(
@@ -506,6 +493,30 @@ fn validator() !void {
     try status_cache.validate(gpa_allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
+
+    // shred collector
+    const leader_schedule = try sig.core.leaderScheduleFromBank(gpa_allocator, &bank);
+    _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
+    const epoch_start_slot = bank.bank_fields.slot - slot_index;
+    var shred_collector = try sig.shred_collector.start(.{
+        .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else bank.bank_fields.slot,
+        .repair_port = repair_port,
+        .tvu_port = tvu_port,
+    }, .{
+        .allocator = gpa_allocator,
+        .logger = logger,
+        .random = rand.random(),
+        .my_keypair = &my_keypair,
+    }, .{
+        .exit = &exit,
+        .gossip_table_rw = &gossip_service.gossip_table_rw,
+        .my_shred_version = &gossip_service.my_shred_version,
+        .leader_schedule = .{
+            .leader_schedule = leader_schedule,
+            .start_slot = epoch_start_slot,
+        },
+    });
+    defer shred_collector.deinit();
 
     gossip_handle.join();
     shred_collector.join();

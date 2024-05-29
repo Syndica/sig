@@ -2,11 +2,6 @@ zig-cache/
 zig-out/
 data/
 
-# unpacking test snapshots
-test_data/version
-test_data/accounts/
-test_data/snapshots/
-test_data/tmp/
 index_storage/
 
 /gossip-dumps

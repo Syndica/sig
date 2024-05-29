@@ -7,6 +7,7 @@ const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
+const LeaderScheduleCalculator = sig.shred_collector.LeaderScheduleCalculator;
 const Packet = sig.net.Packet;
 
 /// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
@@ -55,9 +56,3 @@ fn verifyShred(packet: *const Packet, leader_schedule: *const LeaderScheduleCalc
     return true;
 }
 
-// TODO
-pub const LeaderScheduleCalculator = struct {
-    fn getLeader(_: *const @This(), _: sig.core.Slot) ?sig.core.Pubkey {
-        return null;
-    }
-};
