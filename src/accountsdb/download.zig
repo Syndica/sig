@@ -10,7 +10,7 @@ const Logger = @import("../trace/log.zig").Logger;
 const socket_tag = @import("../gossip/data.zig").socket_tag;
 const Hash = @import("../core/hash.zig").Hash;
 
-const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
+const DOWNLOAD_PROGRESS_UPDATES_NS = 10 * std.time.ns_per_s;
 
 const PeerSnapshotHash = struct {
     contact_info: ContactInfo,
@@ -269,6 +269,7 @@ pub fn downloadSnapshotsFromGossip(
             }
 
             // success
+            logger.infof("snapshot downloaded finished", .{});
             return;
         }
     }
@@ -346,12 +347,14 @@ const DownloadProgress = struct {
             }
             const elapsed_sec = elapsed_ns / std.time.ns_per_s;
             const ns_per_mb = elapsed_ns / mb_read;
-            const mb_left = (self.download_size - self.bytes_read) / 1024 / 1024;
+            const mb_left = (self.download_size - self.file_memory_index) / 1024 / 1024;
             const time_left_ns = mb_left * ns_per_mb;
             const mb_per_second = mb_read / elapsed_sec;
 
-            self.logger.infof("[download progress]: {d}% done ({d} MB/s) (time left: {d})", .{
-                self.bytes_read * 100 / self.download_size,
+            self.logger.infof("[download progress]: {d}% done ({d}/{d}) ({d} MB/s) (time left: {d})", .{
+                self.file_memory_index * 100 / self.download_size,
+                self.file_memory_index,
+                self.download_size,
                 mb_per_second,
                 std.fmt.fmtDuration(time_left_ns),
             });
