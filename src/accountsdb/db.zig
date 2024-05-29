@@ -282,22 +282,26 @@ pub const AccountsDB = struct {
         }
 
         self.logger.infof("reading and indexing accounts...", .{});
-        var handles = try spawnThreadTasks(
-            self.allocator,
-            loadAndVerifyAccountsFilesMultiThread,
-            .{
-                loading_threads.items,
-                filenames.items,
-                accounts_path,
-            },
-            filenames.items.len,
-            n_parse_threads,
-        );
 
-        for (handles.items) |handle| {
-            handle.join();
+        {
+            var handles = std.ArrayList(std.Thread).init(self.allocator);
+            defer {
+                for (handles.items) |*h| h.join();
+                handles.deinit();
+            }
+            try spawnThreadTasks(
+                &handles,
+                loadAndVerifyAccountsFilesMultiThread,
+                .{
+                    loading_threads.items,
+                    filenames.items,
+                    accounts_path,
+                },
+                filenames.items.len,
+                n_parse_threads,
+            );
         }
-        handles.deinit();
+
         self.logger.infof("total time: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
@@ -455,8 +459,13 @@ pub const AccountsDB = struct {
         thread_dbs: []AccountsDB,
         n_threads: usize,
     ) !void {
-        var handles = try spawnThreadTasks(
-            self.allocator,
+        var handles = std.ArrayList(std.Thread).init(self.allocator);
+        defer {
+            for (handles.items) |*h| h.join();
+            handles.deinit();
+        }
+        try spawnThreadTasks(
+            &handles,
             combineThreadIndexesMultiThread,
             .{
                 self.logger,
@@ -491,6 +500,7 @@ pub const AccountsDB = struct {
                 );
             }
         }
+<<<<<<< HEAD
         const largest_slot = self.file_map.get(self.largest_file_id).?.slot;
         self.largest_root_slot.store(largest_slot, .unordered);
 
@@ -498,6 +508,8 @@ pub const AccountsDB = struct {
             handle.join();
         }
         handles.deinit();
+=======
+>>>>>>> 8f7434b0d512872068210fa0d1b031d1e4a0e318
     }
 
     /// combines multiple thread indexes into the given index.
@@ -574,37 +586,40 @@ pub const AccountsDB = struct {
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
 
         // alloc the result
-        const hashes = try self.allocator.alloc(ArrayList(Hash), n_threads);
-        for (hashes) |*h| {
-            h.* = ArrayList(Hash).init(self.allocator);
-        }
+        const hashes = try self.allocator.alloc(ArrayListUnmanaged(Hash), n_threads);
+        defer self.allocator.free(hashes);
+
+        @memset(hashes, .{});
+        defer for (hashes) |*h| h.deinit(self.allocator);
+
         const lamports = try self.allocator.alloc(u64, n_threads);
+        defer self.allocator.free(lamports);
         @memset(lamports, 0);
-        defer {
-            for (hashes) |*h| h.deinit();
-            self.allocator.free(hashes);
-            self.allocator.free(lamports);
-        }
 
         // split processing the bins over muliple threads
         self.logger.infof("collecting hashes from accounts...", .{});
-        var handles = try spawnThreadTasks(
-            self.allocator,
-            getHashesFromIndexMultiThread,
-            .{
-                self,
-                config,
-                hashes,
-                lamports,
-            },
-            self.account_index.numberOfBins(),
-            n_threads,
-        );
 
-        for (handles.items) |handle| {
-            handle.join();
+        {
+            var handles = std.ArrayList(std.Thread).init(self.allocator);
+            defer {
+                for (handles.items) |*h| h.join();
+                handles.deinit();
+            }
+            try spawnThreadTasks(
+                &handles,
+                getHashesFromIndexMultiThread,
+                .{
+                    self,
+                    config,
+                    self.allocator,
+                    hashes,
+                    lamports,
+                },
+                self.account_index.numberOfBins(),
+                n_threads,
+            );
         }
-        handles.deinit();
+
         self.logger.debugf("took: {s}", .{std.fmt.fmtDuration(timer.read())});
         timer.reset();
 
@@ -698,7 +713,9 @@ pub const AccountsDB = struct {
     pub fn getHashesFromIndexMultiThread(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
-        hashes: []ArrayList(Hash),
+        /// Allocator shared by all the arraylists in `hashes`.
+        hashes_allocator: std.mem.Allocator,
+        hashes: []ArrayListUnmanaged(Hash),
         total_lamports: []u64,
         // spawing thread specific params
         bin_start_index: usize,
@@ -709,6 +726,7 @@ pub const AccountsDB = struct {
             self,
             config,
             self.account_index.bins[bin_start_index..bin_end_index],
+            hashes_allocator,
             &hashes[thread_index],
             &total_lamports[thread_index],
             thread_index == 0,
@@ -720,8 +738,9 @@ pub const AccountsDB = struct {
     pub fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
-        thread_bins: []AccountIndex.RefMap,
-        hashes: *ArrayList(Hash),
+        thread_bins: []const AccountIndex.RefMap,
+        hashes_allocator: std.mem.Allocator,
+        hashes: *ArrayListUnmanaged(Hash),
         total_lamports: *u64,
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
@@ -730,7 +749,7 @@ pub const AccountsDB = struct {
         for (thread_bins) |*bin| {
             total_n_pubkeys += bin.count();
         }
-        try hashes.ensureTotalCapacity(total_n_pubkeys);
+        try hashes.ensureTotalCapacity(hashes_allocator, total_n_pubkeys);
 
         // well reuse this over time so this is ok (even if 1k is an under estimate)
         var keys = try self.allocator.alloc(Pubkey, 1_000);
@@ -1539,9 +1558,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
 test "accounts_db.db: write and read an account" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(std.testing.allocator, false);
-    var accounts_db: AccountsDB = result[0];
-    var snapshots: AllSnapshotFields = result[1];
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -1575,9 +1592,7 @@ test "accounts_db.db: write and read an account" {
 test "accounts_db.db: load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(std.testing.allocator, true);
-    var accounts_db: AccountsDB = result[0];
-    var snapshots: AllSnapshotFields = result[1];
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -1593,9 +1608,7 @@ test "accounts_db.db: load and validate from test snapshot using disk index" {
 test "accounts_db.db: load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(std.testing.allocator, false);
-    var accounts_db: AccountsDB = result[0];
-    var snapshots: AllSnapshotFields = result[1];
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -1611,9 +1624,7 @@ test "accounts_db.db: load and validate from test snapshot" {
 test "accounts_db.db: load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(std.testing.allocator, false);
-    var accounts_db: AccountsDB = result[0];
-    var snapshots: AllSnapshotFields = result[1];
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -1633,9 +1644,7 @@ test "accounts_db.db: load clock sysvar" {
 test "accounts_db.db: load other sysvars" {
     const allocator = std.testing.allocator;
 
-    const result = try loadTestAccountsDB(std.testing.allocator, false);
-    var accounts_db: AccountsDB = result[0];
-    var snapshots: AllSnapshotFields = result[1];
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);

@@ -131,19 +131,18 @@ pub const GossipService = struct {
         allocator: std.mem.Allocator,
         my_contact_info: ContactInfo,
         my_keypair: KeyPair,
-        entrypoints: ?ArrayList(SocketAddr),
+        entrypoints: ?[]const SocketAddr,
         exit: *AtomicBool,
         logger: Logger,
     ) !Self {
         var packet_incoming_channel = Channel(PacketBatch).init(allocator, 10000);
-        var packet_outgoing_channel = Channel(PacketBatch).init(allocator, 10000);
-        var verified_incoming_channel = Channel(GossipMessageWithEndpoint).init(allocator, 10000);
+        errdefer packet_incoming_channel.deinit();
 
-        errdefer {
-            packet_incoming_channel.deinit();
-            packet_outgoing_channel.deinit();
-            verified_incoming_channel.deinit();
-        }
+        var packet_outgoing_channel = Channel(PacketBatch).init(allocator, 10000);
+        errdefer packet_outgoing_channel.deinit();
+
+        var verified_incoming_channel = Channel(GossipMessageWithEndpoint).init(allocator, 10000);
+        errdefer verified_incoming_channel.deinit();
 
         const thread_pool = try allocator.create(ThreadPool);
         const n_threads = @min(@as(u32, @truncate(std.Thread.getCpuCount() catch 1)), 8);
@@ -155,6 +154,7 @@ pub const GossipService = struct {
 
         var gossip_table = try GossipTable.init(allocator, thread_pool);
         errdefer gossip_table.deinit();
+
         const gossip_table_rw = RwMux(GossipTable).init(gossip_table);
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
         const my_shred_version = my_contact_info.shred_version;
@@ -168,13 +168,12 @@ pub const GossipService = struct {
 
         const failed_pull_hashes = HashTimeQueue.init(allocator);
         const push_msg_q = ArrayList(SignedGossipData).init(allocator);
-
         const echo_server = echo.Server.init(allocator, gossip_address.port(), exit);
 
         var entrypoint_list = ArrayList(Entrypoint).init(allocator);
         if (entrypoints) |eps| {
-            try entrypoint_list.ensureTotalCapacityPrecise(eps.items.len);
-            for (eps.items) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
+            try entrypoint_list.ensureTotalCapacityPrecise(eps.len);
+            for (eps) |ep| entrypoint_list.appendAssumeCapacity(.{ .addr = ep });
         }
 
         const stats = try GossipStats.init(logger);
@@ -482,21 +481,24 @@ pub const GossipService = struct {
         // 3) processing read-heavy messages in parallel (specifically pull-requests)
 
         const init_capacity = socket_utils.PACKETS_PER_BATCH;
-        var ping_messages = try ArrayList(PingMessage).initCapacity(self.allocator, init_capacity);
-        var pong_messages = try ArrayList(PongMessage).initCapacity(self.allocator, init_capacity);
-        var push_messages = try ArrayList(PushMessage).initCapacity(self.allocator, init_capacity);
-        var pull_requests = try ArrayList(PullRequestMessage).initCapacity(self.allocator, init_capacity);
-        var pull_responses = try ArrayList(PullResponseMessage).initCapacity(self.allocator, init_capacity);
-        var prune_messages = try ArrayList(*PruneData).initCapacity(self.allocator, init_capacity);
 
-        defer {
-            ping_messages.deinit();
-            pong_messages.deinit();
-            push_messages.deinit();
-            pull_requests.deinit();
-            pull_responses.deinit();
-            prune_messages.deinit();
-        }
+        var ping_messages = try ArrayList(PingMessage).initCapacity(self.allocator, init_capacity);
+        defer ping_messages.deinit();
+
+        var pong_messages = try ArrayList(PongMessage).initCapacity(self.allocator, init_capacity);
+        defer pong_messages.deinit();
+
+        var push_messages = try ArrayList(PushMessage).initCapacity(self.allocator, init_capacity);
+        defer push_messages.deinit();
+
+        var pull_requests = try ArrayList(PullRequestMessage).initCapacity(self.allocator, init_capacity);
+        defer pull_requests.deinit();
+
+        var pull_responses = try ArrayList(PullResponseMessage).initCapacity(self.allocator, init_capacity);
+        defer pull_responses.deinit();
+
+        var prune_messages = try ArrayList(*PruneData).initCapacity(self.allocator, init_capacity);
+        defer prune_messages.deinit();
 
         while (!self.exit.load(.unordered)) {
             const maybe_messages = try self.verified_incoming_channel.try_drain();
@@ -1253,7 +1255,7 @@ pub const GossipService = struct {
         // create the pull requests
         const n_valid_requests = valid_indexs.items.len;
 
-        var tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
+        const tasks = try self.allocator.alloc(PullRequestTask, n_valid_requests);
         defer {
             for (tasks) |*task| task.deinit();
             self.allocator.free(tasks);
