@@ -434,7 +434,10 @@ pub fn downloadFile(
     );
     defer download_progress.deinit();
     errdefer {
-        const output_dir = std.fs.cwd().openDir(output_dir_str, .{}) catch {};
+        // NOTE: this shouldnt fail because we open the dir in DownloadProgress.init
+        const output_dir = std.fs.cwd().openDir(output_dir_str, .{}) catch {
+            std.debug.panic("failed to open output dir: {s}", .{output_dir_str});
+        };
         output_dir.deleteFile(filename) catch {};
     }
 
