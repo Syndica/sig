@@ -114,7 +114,7 @@ pub const ServiceManager = struct {
 
 pub const RunConfig = struct {
     /// what to do when the task returns without error
-    return_handler: ReturnHandler = .{ .log_return = false },
+    return_handler: ReturnHandler = .{},
     /// what to do when the task returns an error
     error_handler: ReturnHandler = .{},
     /// The minimum amount of time to spend on the entire loop,
