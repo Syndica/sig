@@ -104,7 +104,6 @@ pub const AccountIndex = struct {
         var current_reference = self.getReference(pubkey) orelse return error.PubkeyNotFound;
         const previous_reference: ?AccountRef = null;
 
-        // TODO: need a way to manage the memory of the underlying ArrayList(AccountRef)
         while (true) {
             // found the slot
             if (current_reference.slot == slot) {
@@ -523,47 +522,13 @@ pub fn SwissMap(
         }
 
         pub fn get(self: *const @This(), key: Key) ?Value {
-            if (self._capacity == 0) return null;
-
-            const hash = hash_fn(key);
-            var group_index = hash & self.bit_mask;
-
-            // what we are searching for (get)
-            const control_bytes: u7 = @intCast(hash >> (64 - 7));
-            // PERF: this struct is represented by a u8
-            const key_state = State{
-                .state = .occupied,
-                .control_bytes = control_bytes,
-            };
-            const key_vec: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(key_state));
-
-            for (0..self.groups.len) |_| {
-                const state_vec = self.states[group_index];
-
-                // PERF: SIMD eq check: search for a match
-                const match_vec = key_vec == state_vec;
-                if (@reduce(.Or, match_vec)) {
-                    inline for (0..GROUP_SIZE) |j| {
-                        // PERF: SIMD eq check across pubkeys
-                        if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
-                            return self.groups[group_index][j].value;
-                        }
-                    }
-                }
-
-                // PERF: SIMD eq check: if theres a free state, then the key DNE
-                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
-                if (@reduce(.Or, is_empty_vec)) {
-                    return null;
-                }
-
-                // otherwise try the next group
-                group_index = (group_index + 1) & self.bit_mask;
+            if (self.getPtr(key)) |ptr| {
+                return ptr.*;
+            } else {
+                return null;
             }
-            return null;
         }
 
-        // TODO: this copy pasta just for a pointer return isnt that nice
         pub fn getPtr(self: *const @This(), key: Key) ?*Value {
             if (self._capacity == 0) return null;
 
@@ -734,17 +699,6 @@ pub inline fn pubkey_hash(key: Pubkey) u64 {
 pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
     return key1.equals(&key2);
 }
-
-/// used to track account reference data. This architechture allows
-/// us to allocate memory blocks of references in one go and then link them
-/// together for deallocation.
-pub const RefMemoryLinkedList = struct {
-    memory: ArrayList(AccountRef),
-    next_ptr: ?*RefMemoryLinkedList = null,
-
-    // TODO: be able to re-use this backing memory (whats free/occupied?)
-    // will likely just need a quick simd bitvec
-};
 
 pub const DiskMemoryConfig = struct {
     // path to where disk files will be stored

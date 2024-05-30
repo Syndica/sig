@@ -49,7 +49,6 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
-const POSIX_MAP_TYPE_SHARED = 0x01; // This will work on linux and macos x86_64/aarch64
 const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
 /// database for accounts
@@ -1201,44 +1200,48 @@ pub const AccountsDB = struct {
             var offset: usize = 0;
             while (account_iter.next()) |*account| {
                 // write the alive accounts
-                if (self.account_index.getSlotReference(account.pubkey(), slot)) |ref| {
-                    // update the offset
-                    ref.location.File.offset = offset;
-                    ref.location.File.file_id = new_file_id;
+                if (self.account_index.getSlotReference(account.pubkey(), slot)) |old_ref_ptr| {
+                    // copy + update the values
+                    var new_ref = old_ref_ptr.*;
+                    new_ref.location.File.offset = offset;
+                    new_ref.location.File.file_id = new_file_id;
                     // copy the reference
-                    new_ref_list.appendAssumeCapacity(ref.*);
-                    // update the reference linked list
+                    new_ref_list.appendAssumeCapacity(new_ref);
+                    // this is our new ptr value
+                    const new_ref_ptr = &new_ref_list.items[new_ref_list.items.len - 1];
+
+                    // update the reference value to be new_ref_ptr
                     const pubkey = account.pubkey();
                     const bin = self.account_index.getBinFromPubkey(pubkey);
-                    const new_ref_ptr = &new_ref_list.items[new_ref_list.items.len - 1];
-                    if (bin.getPtr(pubkey.*)) |ref_ptr_ptr| {
-                        // TODO: move this logic into a linked-list logic methods
-                        if (ref_ptr_ptr.*.slot == slot) {
-                            if (ref_ptr_ptr.*.next_ptr == null) {
-                                // map(k, a)
-                                // update slot: a => map(k, a*)
-                                ref_ptr_ptr.* = new_ref_ptr;
-                            } else {
-                                // map(k, a -> b -> c)
-                                // slot: b => a -> b* -> c
-                                //                 b  -> c
-                                var prev_ptr = ref_ptr_ptr.*;
-                                // SAFE: we know this next_ptr is non_null
-                                var curr_ptr_maybe = prev_ptr.next_ptr;
-                                while (curr_ptr_maybe) |curr_ptr| {
-                                    if (curr_ptr.slot == slot) {
-                                        // a -> b*
-                                        prev_ptr.next_ptr = new_ref_ptr;
-                                        // b* -> c
-                                        new_ref_ptr.next_ptr = curr_ptr.next_ptr;
-                                        break;
-                                    }
-                                    prev_ptr = curr_ptr;
-                                    curr_ptr_maybe = curr_ptr.next_ptr;
-                                }
+                    // this is the old ptr value
+                    // NOTE: we NEED a double pointer so that we can update it to *point* to the new value
+                    // - this means either updating the hashmap pointer
+                    // - or updating the linked list next_ptr field
+                    const ref_ptr_ptr: **AccountRef = bin.getPtr(pubkey.*) orelse unreachable;
+
+                    // base case: element is at the head
+                    if (ref_ptr_ptr.*.slot == slot) {
+                        // note: this is ok because new_ref_ptr has the same next_ptr already
+                        ref_ptr_ptr.* = new_ref_ptr;
+                    } else {
+                        // other cases: element is not at the head - need to update next pointer
+                        var prev_ptr = ref_ptr_ptr.*;
+                        // SAFE: we know this next_ptr is non_null because `slot` is not at the head and must exist
+                        var curr_ptr = prev_ptr.next_ptr.?;
+                        while (true) {
+                            if (curr_ptr.slot == slot) {
+                                // a -> b*
+                                prev_ptr.next_ptr = new_ref_ptr;
+                                // b* -> c
+                                new_ref_ptr.next_ptr = curr_ptr.next_ptr;
+                                break;
                             }
+                            // SAFE: we know this next_ptr is non_null because `slot` was not found yet and must exist
+                            prev_ptr = curr_ptr;
+                            curr_ptr = curr_ptr.next_ptr.?;
                         }
                     }
+
                     // write to new account file
                     offset += try account.writeToBuf(new_memory[offset..]);
                 }
