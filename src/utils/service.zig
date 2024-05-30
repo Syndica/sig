@@ -183,6 +183,7 @@ pub fn runService(
             config.min_loop_duration_ns -| last_iteration,
         ));
     }
+    logger.infof("Exiting {s} due to exit signal received", .{name});
 }
 
 /// Defer actions until later.
