@@ -1179,6 +1179,9 @@ pub const AccountsDB = struct {
                 }
             }
 
+            // if there are no alive accounts, it should have been queued for deletion
+            std.debug.assert(num_alive_accounts > 0);
+
             // alloc account file for accounts
             const slot = old_account_file.slot;
             const result = try self.createAccountFile(alive_accounts_size, slot);
@@ -1248,7 +1251,6 @@ pub const AccountsDB = struct {
             ref_memory_entry.value_ptr.deinit();
             // point to new block
             ref_memory_entry.value_ptr.* = new_ref_list;
-            std.debug.print("reflen: {d}\n", .{new_ref_list.items.len});
 
             const file = result.file;
             var new_account_file = try AccountFile.init(
@@ -1955,6 +1957,7 @@ test "accounts_db.db: shrink account file works" {
         pubkeys[i] = Pubkey.random(rng);
         accounts[i] = try Account.random(allocator, rng, 100);
     }
+
     const slot = @as(u64, @intCast(200));
     try accounts_db.putAccountBatch(
         accounts,
@@ -1984,26 +1987,43 @@ test "accounts_db.db: shrink account file works" {
     );
     try accounts_db.flushSlot(new_slot);
 
+    // clean the account files - slot is queued for shrink
     _ = try accounts_db.cleanAccountFiles(new_slot + 100);
     try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
 
-    const v = accounts_db.file_map.get(accounts_db.file_map.keys()[0]).?;
+    var slot_file_id: FileId = undefined;
+    for (accounts_db.file_map.keys()) |file_id| {
+        if (accounts_db.file_map.get(file_id).?.slot == slot) {
+            slot_file_id = file_id;
+            break;
+        }
+    }
+    const v = accounts_db.file_map.get(slot_file_id).?;
     const pre_shrink_size = v.file_size;
 
     // full memory block
     const ref_mem = accounts_db.account_index.reference_memory.get(new_slot).?;
     try std.testing.expect(ref_mem.items.len == accounts2.len);
 
+    // test: files were shrunk
     const r = try accounts_db.shrinkAccountFiles();
     try std.testing.expect(accounts_db.shrink_account_files.count() == 0);
     try std.testing.expect(r.num_accounts_deleted == 9);
 
-    const v2 = accounts_db.file_map.get(accounts_db.file_map.keys()[0]).?;
+    // test: new account file is shrunk
+    var new_slot_file_id: FileId = undefined;
+    for (accounts_db.file_map.keys()) |file_id| {
+        if (accounts_db.file_map.get(file_id).?.slot == slot) {
+            new_slot_file_id = file_id;
+            break;
+        }
+    }
+    const v2 = accounts_db.file_map.get(new_slot_file_id).?;
     const post_shrink_size = v2.file_size;
     try std.testing.expect(post_shrink_size < pre_shrink_size);
 
-    // shrunk memory block too
-    const ref_mem_small = accounts_db.account_index.reference_memory.get(new_slot).?;
+    // test: memory block is shrunk too
+    const ref_mem_small = accounts_db.account_index.reference_memory.get(slot).?;
     try std.testing.expectEqual(1, ref_mem_small.items.len);
 
     // last account ref should still be accessible
