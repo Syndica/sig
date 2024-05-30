@@ -432,7 +432,6 @@ pub fn downloadFile(
         download_size,
         min_mb_per_second,
     );
-    defer download_progress.deinit();
     errdefer {
         // NOTE: this shouldnt fail because we open the dir in DownloadProgress.init
         const output_dir = std.fs.cwd().openDir(output_dir_str, .{}) catch {
@@ -440,6 +439,7 @@ pub fn downloadFile(
         };
         output_dir.deleteFile(filename) catch {};
     }
+    defer download_progress.deinit();
 
     try setNoBody(easy, false); // full download
     try easy.setUrl(url);
