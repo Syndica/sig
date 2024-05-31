@@ -266,9 +266,6 @@ pub fn run() !void {
         }
     };
     const to_endpoint = entrypoint.toEndpoint();
-    var entrypoints = std.ArrayList(SocketAddr).init(allocator);
-    defer entrypoints.deinit();
-    try entrypoints.append(entrypoint);
 
     const seed = blk: {
         if (maybe_seed) |seed_str| {
@@ -306,7 +303,7 @@ pub fn run() !void {
         allocator,
         fuzz_contact_info,
         fuzz_keypair,
-        entrypoints,
+        (&entrypoint)[0..1],
         &fuzz_exit,
         .noop,
     );
