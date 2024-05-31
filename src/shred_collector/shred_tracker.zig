@@ -16,6 +16,9 @@ pub const Range = struct {
     end: ?usize,
 };
 
+/// This is a temporary placeholder that will be replaced by the Blockstore
+/// once it is implemented. This struct tracks shreds linearly with no regard
+/// for forking. The Blockstore will fix this by tracking forks.
 pub const BasicShredTracker = struct {
     logger: sig.trace.Logger,
     mux: Mutex = .{},
