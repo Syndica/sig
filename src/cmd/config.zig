@@ -1,9 +1,10 @@
 const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
+const ShredCollectorConfig = @import("../shred_collector/service.zig").ShredCollectorConfig;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
     gossip: GossipConfig = .{},
-    tvu: TvuConfig = .{},
+    shred_collector: ShredCollectorConfig = shred_collector_defaults,
     accounts_db: AccountsDbConfig = .{},
     // general config
     log_level: []const u8 = "debug",
@@ -24,10 +25,10 @@ const GossipConfig = struct {
     trusted_validators: [][]const u8 = &.{},
 };
 
-const TvuConfig = struct {
-    tvu_port: u16 = 8002,
-    repair_port: u16 = 8003,
-    test_repair_slot: ?u64 = null,
+const shred_collector_defaults = ShredCollectorConfig{
+    .tvu_port = 8002,
+    .repair_port = 8003,
+    .start_slot = null,
 };
 
 const AccountsDbConfig = struct {

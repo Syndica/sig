@@ -82,7 +82,7 @@ var gossip_port_option = cli.Option{
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
     .help = "The port to run tvu repair listener - default: 8002",
-    .value_ref = cli.mkRef(&config.current.tvu.repair_port),
+    .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
     .required = false,
     .value_name = "Repair Port",
 };
@@ -90,7 +90,7 @@ var repair_port_option = cli.Option{
 var tvu_port_option = cli.Option{
     .long_name = "tvu-port",
     .help = "The port to run turbine listener - default: 8003",
-    .value_ref = cli.mkRef(&config.current.tvu.tvu_port),
+    .value_ref = cli.mkRef(&config.current.shred_collector.tvu_port),
     .required = false,
     .value_name = "TVU Port",
 };
@@ -98,7 +98,7 @@ var tvu_port_option = cli.Option{
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value_ref = cli.mkRef(&config.current.tvu.test_repair_slot),
+    .value_ref = cli.mkRef(&config.current.shred_collector.start_slot),
     .required = false,
     .value_name = "slot number",
 };
@@ -399,8 +399,8 @@ fn validator() !void {
     defer entrypoints.deinit();
     const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
-    const repair_port: u16 = config.current.tvu.repair_port;
-    const tvu_port: u16 = config.current.tvu.repair_port;
+    const repair_port: u16 = config.current.shred_collector.repair_port;
+    const tvu_port: u16 = config.current.shred_collector.repair_port;
 
     // gossip
     var gossip_service = try initGossip(
@@ -419,20 +419,20 @@ fn validator() !void {
     const gossip_handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
 
     // shred collector
-    var shred_collector = try sig.shred_collector.start(.{
-        .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else null,
-        .repair_port = repair_port,
-        .tvu_port = tvu_port,
-    }, .{
-        .allocator = gpa_allocator,
-        .logger = logger,
-        .random = rand.random(),
-        .my_keypair = &my_keypair,
-    }, .{
-        .exit = &exit,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .my_shred_version = &gossip_service.my_shred_version,
-    });
+    var shred_collector = try sig.shred_collector.start(
+        config.current.shred_collector,
+        .{
+            .allocator = gpa_allocator,
+            .logger = logger,
+            .random = rand.random(),
+            .my_keypair = &my_keypair,
+        },
+        .{
+            .exit = &exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+        },
+    );
     defer shred_collector.deinit();
 
     // accounts db
