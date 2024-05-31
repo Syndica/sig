@@ -103,11 +103,12 @@ pub fn RecyclingList(
                 resetItem(item);
                 self.len += 1;
                 return item;
+            } else {
+                const item = try self.private.addOne();
+                item.* = initBlank(self.private.allocator);
+                self.len += 1;
+                return item;
             }
-            const item = try self.private.addOne();
-            item.* = initBlank(self.private.allocator);
-            self.len += 1;
-            return item;
         }
 
         pub fn drop(self: *Self, n: usize) void {
