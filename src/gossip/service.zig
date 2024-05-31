@@ -547,14 +547,12 @@ pub const GossipService = struct {
             msg_count += messages.len;
 
             for (messages) |*message| {
-                var from_endpoint: EndPoint = message.from_endpoint;
-
                 switch (message.message) {
                     .PushMessage => |*push| {
                         try push_messages.append(PushMessage{
                             .gossip_values = push[1],
                             .from_pubkey = &push[0],
-                            .from_endpoint = &from_endpoint,
+                            .from_endpoint = &message.from_endpoint,
                         });
                     },
                     .PullResponse => |*pull| {
@@ -597,7 +595,7 @@ pub const GossipService = struct {
                             },
                         }
 
-                        const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
+                        const from_addr = SocketAddr.fromEndpoint(&message.from_endpoint);
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
                             self.stats.pull_requests_dropped.add(1);
@@ -607,7 +605,7 @@ pub const GossipService = struct {
                         try pull_requests.append(.{
                             .filter = pull[0],
                             .value = value,
-                            .from_endpoint = from_endpoint,
+                            .from_endpoint = message.from_endpoint,
                         });
                     },
                     .PruneMessage => |*prune| {
@@ -624,7 +622,7 @@ pub const GossipService = struct {
                         try prune_messages.append(prune_data);
                     },
                     .PingMessage => |*ping| {
-                        const from_addr = SocketAddr.fromEndpoint(&from_endpoint);
+                        const from_addr = SocketAddr.fromEndpoint(&message.from_endpoint);
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
                             self.stats.ping_messages_dropped.add(1);
@@ -633,13 +631,13 @@ pub const GossipService = struct {
 
                         try ping_messages.append(PingMessage{
                             .ping = ping,
-                            .from_endpoint = &from_endpoint,
+                            .from_endpoint = &message.from_endpoint,
                         });
                     },
                     .PongMessage => |*pong| {
                         try pong_messages.append(PongMessage{
                             .pong = pong,
-                            .from_endpoint = &from_endpoint,
+                            .from_endpoint = &message.from_endpoint,
                         });
                     },
                 }
