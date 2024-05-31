@@ -114,9 +114,6 @@ pub const ShredReceiver = struct {
             try self.handlePing(packet, responses);
             packet.set(.discard);
         } else {
-            const endpoint_str = try endpointToString(self.allocator, &packet.addr);
-            defer endpoint_str.deinit();
-
             // TODO set correct values once using snapshot + blockstore
             const root = 0;
             const max_slot = std.math.maxInt(Slot);
@@ -140,12 +137,9 @@ pub const ShredReceiver = struct {
 
         const reply = RepairMessage{ .Pong = try Pong.init(&ping, self.keypair) };
         const reply_packet = try responses.addOne();
-        reply_packet.addr = packet.addr;
         const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
         reply_packet.size = reply_bytes.len;
-
-        const endpoint_str = try endpointToString(self.allocator, &packet.addr);
-        defer endpoint_str.deinit();
+        reply_packet.addr = packet.addr;
     }
 };
 
