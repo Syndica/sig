@@ -64,8 +64,8 @@ pub fn start(
     deps: ShredCollectorDependencies,
     interface: ShredCollectorInterface,
 ) !ServiceManager {
-    var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit);
-    var arena = shred_collector.arena();
+    var service_manager = ServiceManager.init(deps.allocator, deps.logger, interface.exit);
+    var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const tvu_socket = try bindUdpReusable(conf.tvu_port);
@@ -94,7 +94,7 @@ pub fn start(
         interface.exit,
     );
     const repair_svc = try arena.create(RepairService);
-    try shred_collector.defers.deferCall(RepairService.deinit, .{repair_svc});
+    try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = RepairService.init(
         deps.allocator,
         deps.logger,
@@ -103,7 +103,7 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try shred_collector.spawn(
+    try service_manager.spawn(
         RepairService.run_config,
         RepairService.sendNecessaryRepairs,
         .{repair_svc},
@@ -129,23 +129,23 @@ pub fn start(
         .outgoing_shred_channel = unverified_shreds_channel,
         .shred_version = interface.my_shred_version,
     };
-    try shred_collector.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
+    try service_manager.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
-    try shred_collector.spawn(
+    try service_manager.spawn(
         .{ .name = "Shred Verifier" },
         sig.shred_collector.runShredSignatureVerification,
         .{ interface.exit, unverified_shreds_channel, verified_shreds_channel, .{} },
     );
 
     // processor (thread)
-    try shred_collector.spawn(
+    try service_manager.spawn(
         .{ .name = "Shred Processor" },
         sig.shred_collector.processShreds,
         .{ deps.allocator, verified_shreds_channel, shred_tracker },
     );
 
-    return shred_collector;
+    return service_manager;
 }
 
 fn bindUdpReusable(port: u16) !Socket {
