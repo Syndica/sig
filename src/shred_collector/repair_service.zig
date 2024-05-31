@@ -238,7 +238,6 @@ pub const RepairRequester = struct {
             const packet = packet_batch.addOneAssumeCapacity();
             packet.* = Packet{
                 .addr = request.recipient_addr.toEndpoint(),
-                .flags = 0,
                 .data = undefined,
                 .size = undefined,
             };

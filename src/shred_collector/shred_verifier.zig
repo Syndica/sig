@@ -28,7 +28,7 @@ pub fn runShredSignatureVerification(
             // TODO parallelize this once it's actually verifying signatures
             for (packet_batch.items) |*packet| {
                 if (!verifyShred(packet, &leader_schedule)) {
-                    packet.set(.discard);
+                    packet.flags.set(.discard);
                 } else {
                     verified_count += 1;
                 }
@@ -41,7 +41,7 @@ pub fn runShredSignatureVerification(
 
 /// verify_shred_cpu
 fn verifyShred(packet: *const Packet, leader_schedule: *const LeaderScheduleCalculator) bool {
-    if (packet.isSet(.discard)) return false;
+    if (packet.flags.isSet(.discard)) return false;
     const shred = shred_layout.getShred(packet) orelse return false;
     const slot = shred_layout.getSlot(shred) orelse return false;
     const signature = shred_layout.getSignature(shred) orelse return false;

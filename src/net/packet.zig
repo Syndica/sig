@@ -1,4 +1,7 @@
 const network = @import("zig-network");
+const sig = @import("../lib.zig");
+
+const BitFlags = sig.utils.BitFlags;
 
 /// Maximum over-the-wire size of a Transaction
 ///   1280 is IPv6 minimum MTU
@@ -10,7 +13,7 @@ pub const Packet = struct {
     data: [PACKET_DATA_SIZE]u8,
     size: usize,
     addr: network.EndPoint,
-    flags: u8 = 0,
+    flags: BitFlags(Flag) = .{},
 
     const Self = @This();
 
@@ -28,14 +31,6 @@ pub const Packet = struct {
             .data = undefined,
             .size = 0,
         };
-    }
-
-    pub fn set(self: *Self, flag: Flag) void {
-        self.flags |= @intFromEnum(flag);
-    }
-
-    pub fn isSet(self: *const Self, flag: Flag) bool {
-        return self.flags & @intFromEnum(flag) == @intFromEnum(flag);
     }
 };
 

@@ -448,7 +448,7 @@ pub const shred_layout = struct {
     }
 
     pub fn getShredSize(packet: *const Packet) usize {
-        return if (packet.isSet(.repair))
+        return if (packet.flags.isSet(.repair))
             packet.size -| @sizeOf(Nonce)
         else
             packet.size;

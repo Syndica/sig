@@ -62,12 +62,12 @@ pub const ShredReceiver = struct {
         const x = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, tvu_receivers, sender.channel },
+            .{ self, tvu_receivers, sender.channel, false },
         );
         const y = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, .{repair_receiver.channel}, sender.channel },
+            .{ self, .{repair_receiver.channel}, sender.channel, true },
         );
         x.join();
         y.join();
@@ -79,6 +79,7 @@ pub const ShredReceiver = struct {
         self: *Self,
         receivers: anytype,
         sender: *Channel(ArrayList(Packet)),
+        comptime is_repair: bool,
     ) !void {
         var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
         while (!self.exit.load(.unordered)) {
@@ -90,6 +91,7 @@ pub const ShredReceiver = struct {
                     for (buf.items) |batch| {
                         for (batch.items) |*packet| {
                             try self.handlePacket(packet, &responses, shred_version);
+                            if (is_repair) packet.flags.set(.repair);
                         }
                         try self.outgoing_shred_channel.send(batch);
                     }
@@ -112,13 +114,13 @@ pub const ShredReceiver = struct {
     ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
             try self.handlePing(packet, responses);
-            packet.set(.discard);
+            packet.flags.set(.discard);
         } else {
             // TODO set correct values once using snapshot + blockstore
             const root = 0;
             const max_slot = std.math.maxInt(Slot);
             if (shouldDiscardShred(packet, root, shred_version, max_slot)) {
-                packet.set(.discard);
+                packet.flags.set(.discard);
             }
         }
     }
