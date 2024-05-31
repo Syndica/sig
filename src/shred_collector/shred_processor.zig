@@ -26,7 +26,7 @@ pub fn processShreds(
             continue;
         }
         for (buf.items) |packet_batch| {
-            for (packet_batch.items) |*packet| if (!packet.isSet(.discard)) {
+            for (packet_batch.items) |*packet| if (!packet.flags.isSet(.discard)) {
                 const shred_payload = layout.getShred(packet) orelse continue;
                 const slot = layout.getSlot(shred_payload) orelse continue;
                 const index = layout.getIndex(shred_payload) orelse continue;
