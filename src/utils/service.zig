@@ -163,10 +163,10 @@ pub fn runService(
         const result = @call(.auto, function, args);
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
         const handler, const num_events, const event_name, const err: ?anyerror = if (result) |_|
-            .{ config.return_handler, num_oks, "returned", null }
+            .{ config.return_handler, num_oks, "return", null }
         else |err|
             .{ config.error_handler, num_errors, "error", err };
-        if (handler.log_return) logger.errf("{s} has {s}ed: {?}", .{ name, event_name, err });
+        if (handler.log_return) logger.errf("{s} has {s}ed: {}", .{ name, event_name, err orelse error.no_error });
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {
                 if (handler.log_exit) logger.errf("Signaling exit due to {}th {s} from {s}", .{ num_events, event_name, name });

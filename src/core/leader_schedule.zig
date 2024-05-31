@@ -13,6 +13,26 @@ const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 
+pub const SlotLeaderProvider = sig.utils.PointerClosure(Slot, ?Pubkey);
+
+/// Only works for a single epoch. This is a basic limited approach that should
+/// only be used as a placeholder until a better approach is fleshed out.
+pub const SingleEpochLeaderSchedule = struct {
+    leader_schedule: []const sig.core.Pubkey,
+    start_slot: sig.core.Slot,
+
+    const Self = @This();
+
+    pub fn getLeader(self: *const Self, slot: sig.core.Slot) ?sig.core.Pubkey {
+        const index: usize = @intCast(slot - self.start_slot);
+        return if (index >= self.leader_schedule.len) null else self.leader_schedule[index];
+    }
+
+    pub fn provider(self: *Self) SlotLeaderProvider {
+        return SlotLeaderProvider.init(self, Self.getLeader);
+    }
+};
+
 pub fn leaderScheduleFromBank(allocator: Allocator, bank: *const Bank) ![]Pubkey {
     const epoch = bank.bank_fields.epoch;
     const epoch_stakes = bank.bank_fields.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;

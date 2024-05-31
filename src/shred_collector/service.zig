@@ -14,6 +14,7 @@ const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const ServiceManager = sig.utils.ServiceManager;
 const Slot = sig.core.Slot;
+const SlotLeaderGetter = sig.core.SlotLeaderProvider;
 
 const this = sig.shred_collector;
 const BasicShredTracker = this.BasicShredTracker;
@@ -48,17 +49,7 @@ pub const ShredCollectorInterface = struct {
     gossip_table_rw: *RwMux(GossipTable),
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
-    leader_schedule: LeaderScheduleCalculator,
-};
-
-pub const LeaderScheduleCalculator = struct {
-    leader_schedule: []const sig.core.Pubkey,
-    start_slot: sig.core.Slot,
-
-    pub fn getLeader(self: *const @This(), slot: sig.core.Slot) ?sig.core.Pubkey {
-        const index: usize = @intCast(slot - self.start_slot);
-        return if (index >= self.leader_schedule.len) null else self.leader_schedule[index];
-    }
+    leader_schedule: SlotLeaderGetter,
 };
 
 /// Start the Shred Collector.

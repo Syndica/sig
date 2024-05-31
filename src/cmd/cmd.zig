@@ -494,10 +494,17 @@ fn validator() !void {
 
     logger.infof("accounts-db setup done...", .{});
 
-    // shred collector
+    // leader schedule
     const leader_schedule = try sig.core.leaderScheduleFromBank(gpa_allocator, &bank);
     _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
     const epoch_start_slot = bank.bank_fields.slot - slot_index;
+    var slot_leader_getter = sig.core.SingleEpochLeaderSchedule{
+        .leader_schedule = leader_schedule,
+        .start_slot = epoch_start_slot,
+    };
+    const getter = slot_leader_getter.provider();
+
+    // shred collector
     var shred_collector = try sig.shred_collector.start(.{
         .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else bank.bank_fields.slot,
         .repair_port = repair_port,
@@ -511,10 +518,7 @@ fn validator() !void {
         .exit = &exit,
         .gossip_table_rw = &gossip_service.gossip_table_rw,
         .my_shred_version = &gossip_service.my_shred_version,
-        .leader_schedule = .{
-            .leader_schedule = leader_schedule,
-            .start_slot = epoch_start_slot,
-        },
+        .leader_schedule = getter,
     });
     defer shred_collector.deinit();
 
