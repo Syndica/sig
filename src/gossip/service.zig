@@ -129,8 +129,6 @@ pub const GossipService = struct {
 
     const Entrypoint = struct { addr: SocketAddr, info: ?ContactInfo = null };
 
-    const Self = @This();
-
     pub fn init(
         allocator: std.mem.Allocator,
         my_contact_info: ContactInfo,
@@ -138,7 +136,7 @@ pub const GossipService = struct {
         entrypoints: ?[]const SocketAddr,
         exit: *AtomicBool,
         logger: Logger,
-    ) !Self {
+    ) !GossipService {
         var packet_incoming_channel = Channel(PacketBatch).init(allocator, 10000);
         errdefer packet_incoming_channel.deinit();
 
@@ -190,7 +188,7 @@ pub const GossipService = struct {
             GOSSIP_PING_CACHE_CAPACITY,
         );
 
-        return Self{
+        return .{
             .my_contact_info = my_contact_info,
             .my_keypair = my_keypair,
             .my_pubkey = my_pubkey,
@@ -226,7 +224,7 @@ pub const GossipService = struct {
         lg.unlock();
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *GossipService) void {
         self.my_contact_info.deinit();
         self.echo_server.deinit();
         self.gossip_socket.close();
@@ -262,12 +260,40 @@ pub const GossipService = struct {
         deinitMux(&self.failed_pull_hashes_mux);
     }
 
-    /// these threads should run forever - so if they join - somethings wrong
-    /// and we should shutdown
-    fn joinAndExit(self: *const Self, handle: std.Thread) void {
-        handle.join();
-        self.exit.store(true, .unordered);
-    }
+    pub const RunHandles = struct {
+        exit: *AtomicBool,
+        receiver_thread: std.Thread,
+        packet_verifier_thread: std.Thread,
+        message_processor_thread: std.Thread,
+        message_builder_thread: ?std.Thread,
+        responder_thread: std.Thread,
+        dumper_thread: ?std.Thread,
+
+        /// If any of the threads join, all other threads will be signalled to join.
+        pub fn joinAndExit(handles: RunHandles) void {
+            inline for (@typeInfo(RunHandles).Struct.fields, 0..) |field, i| cont: {
+                comptime if (@field(std.meta.FieldEnum(RunHandles), field.name) == .exit) {
+                    std.debug.assert(field.type == *AtomicBool);
+                    continue;
+                };
+                const maybe_thread: ?std.Thread = @field(handles, field.name);
+                const thread = maybe_thread orelse break :cont;
+                thread.join(); // if we end up joining, something's gone wrong, so signal exit
+                if (i == 0) handles.exit.store(true, .unordered);
+            }
+        }
+    };
+
+    pub const RunThreadsParams = struct {
+        /// Allocator used to allocate message metadata.
+        /// Helpful to use a dedicated allocator to reduce contention
+        /// during message allocation & deallocation.
+        /// Should be thread safe, and remain valid until calling `joinAll` on the result.
+        message_allocator: std.mem.Allocator,
+
+        spy_node: bool,
+        dump: bool,
+    };
 
     /// spawns required threads for the gossip serivce.
     /// including:
@@ -277,50 +303,79 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message) (only active if not a spy node)
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
-    pub fn run(self: *Self, spy_node: bool, dump: bool) !void {
+    pub fn runThreads(
+        service: *GossipService,
+        params: RunThreadsParams,
+    ) std.Thread.SpawnError!RunHandles {
+        const message_allocator = params.message_allocator;
+        const spy_node = params.spy_node;
+        const dump = params.dump;
+
         // TODO(Ahmad): need new server impl, for now we don't join server thread
         // because http.zig's server doesn't stop when you call server.stop() - it's broken
         // const echo_server_thread = try self.echo_server.listenAndServe();
         // _ = echo_server_thread;
 
+        const exitAndJoin = struct {
+            inline fn exitAndJoin(exit: *AtomicBool, thread: std.Thread) void {
+                exit.store(true, .unordered);
+                thread.join();
+            }
+        }.exitAndJoin;
+
         const receiver_thread = try Thread.spawn(.{}, socket_utils.readSocket, .{
-            self.allocator,
-            &self.gossip_socket,
-            self.packet_incoming_channel,
-            self.exit,
-            self.logger,
+            service.allocator,
+            &service.gossip_socket,
+            service.packet_incoming_channel,
+            service.exit,
+            service.logger,
         });
-        defer self.joinAndExit(receiver_thread);
+        errdefer exitAndJoin(service.exit, receiver_thread);
 
-        // TODO: use better allocator, unless GPA becomes more performant.
-        var gp_message_allocator: std.heap.GeneralPurposeAllocator(.{ .thread_safe = !builtin.single_threaded }) = .{};
-        defer _ = gp_message_allocator.deinit();
-        const message_allocator = gp_message_allocator.allocator();
+        const packet_verifier_thread = try Thread.spawn(.{}, verifyPackets, .{ service, message_allocator });
+        errdefer exitAndJoin(service.exit, packet_verifier_thread);
 
-        const packet_verifier_handle = try Thread.spawn(.{}, verifyPackets, .{ self, message_allocator });
-        defer self.joinAndExit(packet_verifier_handle);
+        const message_processor_thread = try Thread.spawn(.{}, processMessages, .{ service, message_allocator });
+        errdefer exitAndJoin(service.exit, message_processor_thread);
 
-        const packet_handle = try Thread.spawn(.{}, processMessages, .{ self, message_allocator });
-        defer self.joinAndExit(packet_handle);
+        const maybe_message_builder_thread: ?std.Thread = if (!spy_node) try Thread.spawn(.{}, buildMessages, .{service}) else null;
+        errdefer if (maybe_message_builder_thread) |thread| {
+            exitAndJoin(service.exit, thread);
+        };
 
-        const maybe_build_messages_handle = if (!spy_node) try Thread.spawn(.{}, buildMessages, .{self}) else null;
-        defer if (maybe_build_messages_handle) |h| self.joinAndExit(h);
-
-        const responder_handle = try Thread.spawn(.{}, socket_utils.sendSocket, .{
-            &self.gossip_socket,
-            self.packet_outgoing_channel,
-            self.exit,
-            self.logger,
+        const responder_thread = try Thread.spawn(.{}, socket_utils.sendSocket, .{
+            &service.gossip_socket,
+            service.packet_outgoing_channel,
+            service.exit,
+            service.logger,
         });
-        defer self.joinAndExit(responder_handle);
+        errdefer exitAndJoin(service.exit, responder_thread);
 
-        const dump_handle = if (dump) try Thread.spawn(.{}, GossipDumpService.run, .{.{
-            .allocator = self.allocator,
-            .logger = self.logger,
-            .gossip_table_rw = &self.gossip_table_rw,
-            .exit = self.exit,
+        const maybe_dumper_thread: ?std.Thread = if (dump) try Thread.spawn(.{}, GossipDumpService.run, .{.{
+            .allocator = service.allocator,
+            .logger = service.logger,
+            .gossip_table_rw = &service.gossip_table_rw,
+            .exit = service.exit,
         }}) else null;
-        defer if (dump_handle) |h| self.joinAndExit(h);
+        errdefer if (maybe_dumper_thread) |thread| {
+            exitAndJoin(service.exit, thread);
+        };
+
+        return .{
+            .exit = service.exit,
+
+            .receiver_thread = receiver_thread,
+            .packet_verifier_thread = packet_verifier_thread,
+            .message_processor_thread = message_processor_thread,
+            .message_builder_thread = maybe_message_builder_thread,
+            .responder_thread = responder_thread,
+            .dumper_thread = maybe_dumper_thread,
+        };
+    }
+
+    pub fn run(service: *GossipService, params: RunThreadsParams) !void {
+        const run_handles = try service.runThreads(params);
+        defer run_handles.joinAndExit();
     }
 
     const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);
@@ -372,7 +427,7 @@ pub const GossipService = struct {
     /// and verifing they have valid values, and have valid signatures.
     /// Verified GossipMessagemessages are then sent to the verified_channel.
     fn verifyPackets(
-        self: *Self,
+        self: *GossipService,
         /// Must be thread-safe. Can be a specific allocator which will
         /// only be contended for by the tasks spawned by in function.
         task_allocator: std.mem.Allocator,
@@ -453,7 +508,7 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self, message_allocator: std.mem.Allocator) !void {
+    pub fn processMessages(self: *GossipService, message_allocator: std.mem.Allocator) !void {
         var timer = std.time.Timer.start() catch unreachable;
         var last_table_trim_ts: u64 = 0;
         var msg_count: usize = 0;
@@ -746,7 +801,7 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(
-        self: *Self,
+        self: *GossipService,
     ) !void {
         var last_push_ts: u64 = 0;
         var last_stats_publish_ts: u64 = 0;
@@ -833,7 +888,7 @@ pub const GossipService = struct {
     }
 
     // collect gossip table metrics and pushes them to stats
-    pub fn collectGossipTableMetrics(self: *Self) !void {
+    pub fn collectGossipTableMetrics(self: *GossipService) !void {
         var gossip_table_lock = self.gossip_table_rw.read();
         defer gossip_table_lock.unlock();
 
@@ -846,7 +901,7 @@ pub const GossipService = struct {
     }
 
     pub fn rotateActiveSet(
-        self: *Self,
+        self: *GossipService,
     ) !void {
         const now = getWallclockMs();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
@@ -883,7 +938,7 @@ pub const GossipService = struct {
 
     /// logic for building new push messages which are sent to peers from the
     /// active set and serialized into packets.
-    fn buildPushMessages(self: *Self, push_cursor: *u64) !ArrayList(ArrayList(Packet)) {
+    fn buildPushMessages(self: *GossipService, push_cursor: *u64) !ArrayList(ArrayList(Packet)) {
         // TODO: find a better static value?
         var buf: [512]gossip.GossipVersionedData = undefined;
 
@@ -996,7 +1051,7 @@ pub const GossipService = struct {
     /// builds new pull request messages and serializes it into a list of Packets
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
-        self: *Self,
+        self: *GossipService,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
     ) !ArrayList(Packet) {
@@ -1179,7 +1234,7 @@ pub const GossipService = struct {
     };
 
     fn handleBatchPullRequest(
-        self: *Self,
+        self: *GossipService,
         pull_requests: ArrayList(PullRequestMessage),
     ) !void {
         // update the callers
@@ -1287,7 +1342,7 @@ pub const GossipService = struct {
     }
 
     pub fn handleBatchPongMessages(
-        self: *Self,
+        self: *GossipService,
         pong_messages: *const ArrayList(PongMessage),
     ) void {
         const now = std.time.Instant.now() catch @panic("time is not supported on the OS!");
@@ -1306,7 +1361,7 @@ pub const GossipService = struct {
     }
 
     pub fn handleBatchPingMessages(
-        self: *Self,
+        self: *GossipService,
         ping_messages: *const ArrayList(PingMessage),
     ) !void {
         const n_ping_messages = ping_messages.items.len;
@@ -1346,7 +1401,7 @@ pub const GossipService = struct {
     /// failed inserts (ie, too old or duplicate values) are added to the failed pull hashes so that they can be
     /// included in the next pull request (so we dont receive them again).
     pub fn handleBatchPullResponses(
-        self: *Self,
+        self: *GossipService,
         pull_response_messages: *const ArrayList(PullResponseMessage),
     ) !void {
         if (pull_response_messages.items.len == 0) {
@@ -1425,7 +1480,7 @@ pub const GossipService = struct {
     /// is not too old, and that the destination pubkey is the local node,
     /// then updates the active set to prune the list of origin Pubkeys.
     pub fn handleBatchPruneMessages(
-        self: *Self,
+        self: *GossipService,
         prune_messages: *const ArrayList(*PruneData),
     ) void {
         var active_set_lock = self.active_set_rw.write();
@@ -1447,7 +1502,7 @@ pub const GossipService = struct {
     /// builds a prune message for a list of origin Pubkeys and serializes the values
     /// into packets to send to the prune_destination.
     fn buildPruneMessage(
-        self: *Self,
+        self: *GossipService,
         /// origin Pubkeys which will be pruned
         failed_origins: *const std.AutoArrayHashMap(Pubkey, void),
         /// the pubkey of the node which we will send the prune message to
@@ -1501,7 +1556,7 @@ pub const GossipService = struct {
     }
 
     pub fn handleBatchPushMessages(
-        self: *Self,
+        self: *GossipService,
         batch_push_messages: *const ArrayList(PushMessage),
     ) !void {
         if (batch_push_messages.items.len == 0) {
@@ -1666,7 +1721,7 @@ pub const GossipService = struct {
     /// gossip table, triming the max number of pubkeys in the gossip table, and removing
     /// old labels from the gossip table.
     fn trimMemory(
-        self: *Self,
+        self: *GossipService,
         /// the current time
         now: u64,
     ) error{OutOfMemory}!void {
@@ -1701,7 +1756,7 @@ pub const GossipService = struct {
     /// Returns true if all entrypoints have been identified
     ///
     /// Acquires the gossip table lock regardless of whether the gossip table is used.
-    fn populateEntrypointsFromGossipTable(self: *Self) !bool {
+    fn populateEntrypointsFromGossipTable(self: *GossipService) !bool {
         var identified_all = true;
 
         var gossip_table_lock = self.gossip_table_rw.read();
@@ -1719,7 +1774,7 @@ pub const GossipService = struct {
 
     /// if we have no shred version, attempt to get one from an entrypoint.
     /// Returns true if the shred version is set to non-zero
-    fn assignDefaultShredVersionFromEntrypoint(self: *Self) bool {
+    fn assignDefaultShredVersionFromEntrypoint(self: *GossipService) bool {
         if (self.my_shred_version.load(.monotonic) != 0) return true;
         for (self.entrypoints.items) |entrypoint| {
             if (entrypoint.info) |info| {
@@ -1741,7 +1796,7 @@ pub const GossipService = struct {
     /// drains values from the push queue and inserts them into the gossip table.
     /// when inserting values in the gossip table, any errors are ignored.
     fn drainPushQueueToGossipTable(
-        self: *Self,
+        self: *GossipService,
         /// the current time to insert the values with
         now: u64,
     ) void {
@@ -1760,7 +1815,7 @@ pub const GossipService = struct {
 
     /// serializes a list of ping messages into Packets and sends them out
     pub fn sendPings(
-        self: *Self,
+        self: *GossipService,
         pings: ArrayList(PingAndSocketAddr),
     ) error{ OutOfMemory, ChannelClosed, SerializationError }!void {
         const n_pings = pings.items.len;
@@ -1788,7 +1843,7 @@ pub const GossipService = struct {
     /// nodes that are 1) too old, 2) have a different shred version, or 3) have
     /// an invalid gossip address.
     pub fn getGossipNodes(
-        self: *Self,
+        self: *GossipService,
         /// the output slice which will be filled with gossip nodes
         nodes: []ContactInfo,
         /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
@@ -1846,7 +1901,7 @@ pub const GossipService = struct {
     }
 
     pub fn filterBasedOnShredVersion(
-        self: *Self,
+        self: *GossipService,
         gossip_table: *const GossipTable,
         gossip_values: []SignedGossipData,
         from_pubkey: Pubkey,
@@ -2841,11 +2896,13 @@ test "gossip.service: init, exit, and deinit" {
         logger,
     );
 
-    var handle = try std.Thread.spawn(
-        .{},
-        GossipService.run,
-        .{ &gossip_service, true, false },
-    );
+    const handle = try std.Thread.spawn(.{}, GossipService.run, .{
+        &gossip_service, .{
+            .message_allocator = std.testing.allocator,
+            .spy_node = true,
+            .dump = false,
+        },
+    });
 
     gossip_service.echo_server.kill();
     exit.store(true, .unordered);
@@ -2928,10 +2985,12 @@ pub const BenchmarkGossipServiceGeneral = struct {
         // reset stats
         defer gossip_service.stats.reset();
 
-        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{
-            &gossip_service,
-            true, // dont build any outgoing messages
-            false,
+        const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
+            &gossip_service, .{
+                .message_allocator = allocator,
+                .spy_node = true, // dont build any outgoing messages
+                .dump = false,
+            },
         });
 
         const outgoing_channel = gossip_service.packet_incoming_channel;
@@ -3093,10 +3152,12 @@ pub const BenchmarkGossipServicePullRequests = struct {
             table_lock.unlock();
         }
 
-        var packet_handle = try Thread.spawn(.{}, GossipService.run, .{
-            &gossip_service,
-            true, // dont build any outgoing messages
-            false,
+        const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
+            &gossip_service, .{
+                .message_allocator = allocator,
+                .spy_node = true, // dont build any outgoing messages
+                .dump = false,
+            },
         });
 
         const outgoing_channel = gossip_service.packet_incoming_channel;
