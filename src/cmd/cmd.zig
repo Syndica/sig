@@ -39,7 +39,7 @@ const requestIpEcho = @import("../net/echo.zig").requestIpEcho;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
-const SOCKET_TIMEOUT = @import("../net/socket_utils.zig").SOCKET_TIMEOUT;
+const SOCKET_TIMEOUT_US = @import("../net/socket_utils.zig").SOCKET_TIMEOUT_US;
 
 const config = @import("config.zig");
 // var validator_config = config.current;
@@ -376,6 +376,7 @@ fn gossip() !void {
         &.{},
     );
     defer gossip_service.deinit();
+
     try runGossipWithConfigValues(&gossip_service);
 }
 
@@ -411,7 +412,7 @@ fn validator() !void {
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
     try repair_socket.bindToPort(repair_port);
-    try repair_socket.setReadTimeout(SOCKET_TIMEOUT);
+    try repair_socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
     var repair_svc = try initRepair(
         logger,
@@ -571,8 +572,16 @@ fn initRepair(
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
+    // TODO: use better allocator, unless GPA becomes more performant.
+    var gp_message_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gp_message_allocator.deinit();
+
     const gossip_config = config.current.gossip;
-    return gossip_service.run(gossip_config.spy_node, gossip_config.dump);
+    return gossip_service.run(.{
+        .message_allocator = gp_message_allocator.allocator(),
+        .spy_node = gossip_config.spy_node,
+        .dump = gossip_config.dump,
+    });
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version

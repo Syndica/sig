@@ -1016,6 +1016,7 @@ pub fn parallelUnpackZstdTarBall(
         0,
     );
     var tar_stream = try ZstdReader.init(memory);
+    defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
 
     try parallelUntarToFileSystem(
