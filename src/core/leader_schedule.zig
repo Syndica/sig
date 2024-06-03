@@ -36,33 +36,37 @@ pub const SingleEpochLeaderSchedule = struct {
 pub fn leaderScheduleFromBank(allocator: Allocator, bank: *const Bank) ![]Pubkey {
     const epoch = bank.bank_fields.epoch;
     const epoch_stakes = bank.bank_fields.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-    const staked_nodes = &(epoch_stakes.stakes.vote_accounts.staked_nodes orelse return error.NoStakedNodes);
     const slots_in_epoch = bank.bank_fields.epoch_schedule.getSlotsInEpoch(epoch);
+
+    const vote_accounts = epoch_stakes.stakes.vote_accounts.vote_accounts;
+    const staked_nodes = try allocator.alloc(StakedNode, vote_accounts.count());
+    defer allocator.free(staked_nodes);
+    var iter = vote_accounts.iterator();
+    var index: usize = 0;
+    while (iter.next()) |entry| : (index += 1) {
+        staked_nodes[index] = .{
+            .id = entry.key_ptr.*,
+            .stake = entry.value_ptr.*[0],
+        };
+    }
+
     return try leaderSchedule(allocator, staked_nodes, slots_in_epoch, epoch);
 }
 
+pub const StakedNode = struct { id: Pubkey, stake: u64 };
+
 pub fn leaderSchedule(
     allocator: Allocator,
-    staked_nodes: *const std.AutoHashMap(Pubkey, u64),
+    nodes: []StakedNode,
     slots_in_epoch: Slot,
     epoch: Epoch,
 ) Allocator.Error![]Pubkey {
-    const Entry = std.AutoHashMap(Pubkey, u64).Entry;
-
-    // sort nodes descending by stake weight, then pubkey
-    const nodes = try allocator.alloc(Entry, staked_nodes.count());
-    defer allocator.free(nodes);
-    var iter = staked_nodes.iterator();
-    var index: usize = 0;
-    while (iter.next()) |staked_node_entry| : (index += 1) {
-        nodes[index] = staked_node_entry;
-    }
-    std.mem.sortUnstable(Entry, nodes, {}, struct {
-        fn gt(_: void, lhs: Entry, rhs: Entry) bool {
-            return switch (std.math.order(lhs.value_ptr.*, rhs.value_ptr.*)) {
+    std.mem.sortUnstable(StakedNode, nodes, {}, struct {
+        fn gt(_: void, lhs: StakedNode, rhs: StakedNode) bool {
+            return switch (std.math.order(lhs.stake, rhs.stake)) {
                 .gt => true,
                 .lt => false,
-                .eq => .gt == std.mem.order(u8, &lhs.key_ptr.data, &rhs.key_ptr.data),
+                .eq => .gt == std.mem.order(u8, &lhs.id.data, &rhs.id.data),
             };
         }
     }.gt);
@@ -76,7 +80,7 @@ pub fn leaderSchedule(
     // init sampler from stake weights
     const stakes = try allocator.alloc(u64, nodes.len);
     defer allocator.free(stakes);
-    for (nodes, 0..) |entry, i| stakes[i] = entry.value_ptr.*;
+    for (nodes, 0..) |entry, i| stakes[i] = entry.stake;
     var sampler = try WeightedRandomSampler(u64).init(allocator, random, stakes);
     defer sampler.deinit();
 
@@ -85,7 +89,7 @@ pub fn leaderSchedule(
     var current_node: Pubkey = undefined;
     for (0..slots_in_epoch) |i| {
         if (i % NUM_CONSECUTIVE_LEADER_SLOTS == 0) {
-            current_node = nodes[sampler.sample()].key_ptr.*;
+            current_node = nodes[sampler.sample()].id;
         }
         slot_leaders[i] = current_node;
     }
@@ -97,13 +101,12 @@ test "leaderSchedule calculation matches agave" {
     var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
     const random = rng.random();
     var pubkey_bytes: [32]u8 = undefined;
-    var staked_nodes = std.AutoHashMap(Pubkey, u64).init(std.testing.allocator);
-    defer staked_nodes.deinit();
-    for (0..100) |_| {
+    var staked_nodes: [100]StakedNode = undefined;
+    for (0..100) |i| {
         random.bytes(&pubkey_bytes);
         const key = Pubkey{ .data = pubkey_bytes };
         const stake = random.int(u64) / 1000;
-        try staked_nodes.put(key, stake);
+        staked_nodes[i] = .{ .id = key, .stake = stake };
     }
     const slot_leaders = try leaderSchedule(std.testing.allocator, &staked_nodes, 321, 123);
     defer std.testing.allocator.free(slot_leaders);

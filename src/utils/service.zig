@@ -7,8 +7,9 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
-const Logger = sig.trace.Logger;
 const Lazy = sig.utils.Lazy;
+const Level = sig.trace.Level;
+const Logger = sig.trace.Logger;
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.
@@ -161,29 +162,42 @@ pub fn runService(
     var num_errors: u64 = 0;
     while (!exit.load(.unordered)) {
         const result = @call(.auto, function, args);
+
+        // identify result
         if (result) |_| num_oks += 1 else |_| num_errors += 1;
-        const handler, const num_events, const event_name, const err: ?anyerror = if (result) |_|
-            .{ config.return_handler, num_oks, "return", null }
-        else |err|
-            .{ config.error_handler, num_errors, "error", err };
-        if (handler.log_return) logger.errf("{s} has {s}ed: {}", .{ name, event_name, err orelse error.no_error });
+        const handler, const num_events, const event_name, const level = if (result) |_|
+            .{ config.return_handler, num_oks, "return", Level.info }
+        else |_|
+            .{ config.error_handler, num_errors, "error", Level.err };
+
+        // handle result
+        if (handler.log_return) {
+            logger.logf(level, "{s} has {s}ed: {any}", .{ name, event_name, result });
+        }
         if (handler.max_iterations) |max| if (num_events >= max) {
             if (handler.set_exit_on_completion) {
-                if (handler.log_exit) logger.errf("Signaling exit due to {}th {s} from {s}", .{ num_events, event_name, name });
+                if (handler.log_exit) logger.logf(
+                    level,
+                    "Signaling exit due to {} {s}s from {s}",
+                    .{ num_events, event_name, name },
+                );
                 exit.store(true, .monotonic);
-            } else {
-                if (handler.log_exit) logger.errf("Exiting {s} due to {}th {s}", .{ name, num_events, event_name });
-            }
+            } else if (handler.log_exit) logger.logf(
+                level,
+                "Exiting {s} due to {} {s}s",
+                .{ name, num_events, event_name },
+            );
             return result;
         };
 
+        // sleep before looping, if necessary
         last_iteration = timer.lap();
         std.time.sleep(@max(
             config.min_pause_ns,
             config.min_loop_duration_ns -| last_iteration,
         ));
     }
-    logger.infof("Exiting {s} due to exit signal received", .{name});
+    logger.infof("Exiting {s} because the exit signal was received.", .{name});
 }
 
 /// Defer actions until later.

@@ -219,47 +219,17 @@ pub fn GenericShred(
             }
         }
 
-        /// TODO should this be memoized?
-        fn capacity(proof_size: u8, chained: bool, resigned: bool) !usize {
-            std.debug.assert(chained or !resigned);
-            return checkedSub(
-                constants.payload_size,
-                constants.headers_size +
-                    if (chained) SIZE_OF_MERKLE_ROOT else 0 +
-                    proof_size * merkle_proof_entry_size +
-                    if (resigned) SIGNATURE_LENGTH else 0,
-            ) catch error.InvalidProofSize;
-        }
-
         /// The return contains a pointer to data owned by the shred.
         fn merkleProof(self: *const Self) !MerkleProofEntryList {
-            const size = self.common.shred_variant.proof_size * merkle_proof_entry_size;
-            const offset = try self.proofOffset();
-            const end = offset + size;
-            if (self.payload.len < end) {
-                return error.InsufficentPayloadSize;
-            }
-            return .{
-                .bytes = self.payload[offset..end],
-                .len = self.common.shred_variant.proof_size,
-            };
-        }
-
-        // Where the merkle proof starts in the shred binary.
-        fn proofOffset(self: *const Self) !usize {
-            const v = self.common.shred_variant;
-            return constants.headers_size +
-                try capacity(v.proof_size, v.chained, v.resigned) +
-                if (v.chained) SIZE_OF_MERKLE_ROOT else 0;
+            return getMerkleProof(self.payload, constants, self.common.shred_variant);
         }
 
         fn erasureShardAsSlice(self: *const Self) ![]u8 {
             if (self.payload.len() != self.constants().payload_size) {
                 return error.InvalidPayloadSize;
             }
-            const variant = self.common.shred_variant;
             const end = constants.headers_size +
-                try capacity(variant.proof_size, variant.chained, variant.resigned) +
+                try capacity(self.common.shred_variant) +
                 SIGNATURE_LENGTH;
             if (self.payload.len < end) {
                 return error.InsufficientPayloadSize;
@@ -269,19 +239,146 @@ pub fn GenericShred(
     };
 }
 
+fn getMerkleRoot(
+    shred: []const u8,
+    constants: ShredConstants,
+    variant: ShredVariant,
+) !Hash {
+    const index = switch (variant.shred_type) {
+        .Code => codeIndex(shred) orelse return error.InvalidErasureShardIndex,
+        .Data => dataIndex(shred) orelse return error.InvalidErasureShardIndex,
+    };
+    const proof = try getMerkleProof(shred, constants, variant);
+    const offset = try proofOffset(constants, variant);
+    const node = try getMerkleNode(shred, SIGNATURE_LENGTH, offset);
+    return calculateMerkleRoot(index, node, proof);
+}
+
+fn getMerkleProof(
+    shred: []const u8,
+    constants: ShredConstants,
+    variant: ShredVariant,
+) !MerkleProofEntryList {
+    const size = variant.proof_size * merkle_proof_entry_size;
+    const offset = try proofOffset(constants, variant);
+    const end = offset + size;
+    if (shred.len < end) {
+        return error.InsufficentPayloadSize;
+    }
+    return .{
+        .bytes = shred[offset..end],
+        .len = variant.proof_size,
+    };
+}
+
+fn getMerkleNode(shred: []const u8, start: usize, end: usize) !Hash {
+    if (shred.len < end) return error.InvalidPayloadSize;
+    return hashv(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
+}
+
+fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofEntryList) !Hash {
+    var index = start_index;
+    var node = start_node;
+    var iterator = proof.iterator();
+    while (iterator.next()) |other| {
+        node = if (index % 2 == 0)
+            joinNodes(&node.data, &other)
+        else
+            joinNodes(&other, &node.data);
+        index = index >> 1;
+    }
+    if (index == 0) return error.InvalidMerkleProf;
+    return node;
+}
+
+const MERKLE_HASH_PREFIX_LEAF: *const [26]u8 = "\x00SOLANA_MERKLE_SHREDS_LEAF";
+const MERKLE_HASH_PREFIX_NODE: *const [26]u8 = "\x01SOLANA_MERKLE_SHREDS_NODE";
+
+fn joinNodes(lhs: []const u8, rhs: []const u8) Hash {
+    // TODO check
+    return hashv(&.{
+        MERKLE_HASH_PREFIX_NODE,
+        lhs[0..merkle_proof_entry_size],
+        rhs[0..merkle_proof_entry_size],
+    });
+}
+
+pub fn hashv(vals: []const []const u8) Hash {
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    for (vals) |val| hasher.update(val);
+    return .{ .data = hasher.finalResult() };
+}
+
+/// Where the merkle proof starts in the shred binary.
+fn proofOffset(constants: ShredConstants, variant: ShredVariant) !usize {
+    return constants.headers_size +
+        try capacity(constants, variant) +
+        if (variant.chained) SIZE_OF_MERKLE_ROOT else 0;
+}
+
+fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
+    std.debug.assert(variant.chained or !variant.resigned);
+    return checkedSub(
+        constants.payload_size,
+        constants.headers_size +
+            if (variant.chained) SIZE_OF_MERKLE_ROOT else 0 +
+            variant.proof_size * merkle_proof_entry_size +
+            if (variant.resigned) SIGNATURE_LENGTH else 0,
+    ) catch error.InvalidProofSize;
+}
+
+/// Shred index in the erasure batch.
+/// This only works for coding shreds.
+fn codeIndex(shred: []const u8) ?usize {
+    const num_data_shreds: usize = @intCast(getInt(u16, shred, 83) orelse return null);
+    const position: usize = @intCast(getInt(u16, shred, 87) orelse return null);
+    return checkedAdd(num_data_shreds, position) catch null;
+}
+
+/// Shred index in the erasure batch
+/// This only works for data shreds.
+fn dataIndex(shred: []const u8) ?usize {
+    const fec_set_index = getInt(u32, shred, 79) orelse return null;
+    const layout_index = shred_layout.getIndex(shred) orelse return null;
+    const index = checkedAdd(layout_index, fec_set_index) catch return null;
+    return @intCast(index);
+}
+
 const MerkleProofEntry = [merkle_proof_entry_size]u8;
 const merkle_proof_entry_size: usize = 20;
+
+const MerkleProofIterator = Iterator(MerkleProofEntryList, MerkleProofEntry);
+
+pub fn Iterator(comptime Collection: type, comptime Item: type) type {
+    return struct {
+        list: Collection,
+        index: usize,
+
+        pub fn next(self: *@This()) ?Item {
+            if (self.index >= self.list.len) {
+                return null;
+            }
+            return self.list.get(self.index);
+        }
+    };
+}
 
 /// This is a reference. It does not own the data. Be careful with its lifetime.
 const MerkleProofEntryList = struct {
     bytes: []const u8,
     len: usize,
 
-    pub fn get(self: *@This(), index: usize) error{IndexOutOfBounds}!MerkleProofEntry {
-        if (index > self.len) return error.IndexOutOfBounds;
+    pub fn get(self: *@This(), index: usize) ?MerkleProofEntry {
+        if (index > self.len) return null;
         const start = index * merkle_proof_entry_size;
         const end = start + merkle_proof_entry_size;
-        return self.bytes[start..end];
+        var entry: MerkleProofEntry = undefined;
+        @memcpy(&entry, self.bytes[start..end]);
+        return entry;
+    }
+
+    pub fn iterator(self: @This()) MerkleProofIterator {
+        return .{ .list = self, .index = 0 };
     }
 };
 
@@ -481,9 +578,11 @@ pub const shred_layout = struct {
 
     pub fn getSignedData(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
-        _ = variant;
-        // TODO implement this once the leader schedule is available to runShredSigVerify
-        return Hash.default();
+        const constants = switch (variant.shred_type) {
+            .Code => coding_shred,
+            .Data => data_shred,
+        };
+        return getMerkleRoot(shred, constants, variant) catch null;
     }
 
     /// must be a data shred, otherwise the return value will be corrupted and meaningless
@@ -491,20 +590,20 @@ pub const shred_layout = struct {
         std.debug.assert(getShredVariant(shred).?.shred_type == .Data);
         return getInt(u16, shred, 83);
     }
-
-    /// Extracts a little-endian integer from within the slice,
-    /// starting at start_index.
-    fn getInt(
-        comptime Int: type,
-        data: []const u8,
-        start_index: usize,
-    ) ?Int {
-        const end_index = start_index + @sizeOf(Int);
-        if (data.len < end_index) return null;
-        const bytes: *const [@sizeOf(Int)]u8 = @ptrCast(data[start_index..end_index]);
-        return std.mem.readInt(Int, bytes, .little);
-    }
 };
+
+/// Extracts a little-endian integer from within the slice,
+/// starting at start_index.
+fn getInt(
+    comptime Int: type,
+    data: []const u8,
+    start_index: usize,
+) ?Int {
+    const end_index = start_index + @sizeOf(Int);
+    if (data.len < end_index) return null;
+    const bytes: *const [@sizeOf(Int)]u8 = @ptrCast(data[start_index..end_index]);
+    return std.mem.readInt(Int, bytes, .little);
+}
 
 test "basic shred variant round trip" {
     try testShredVariantRoundTrip(0x4C, .{

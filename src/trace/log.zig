@@ -92,6 +92,15 @@ pub const Logger = union(enum) {
         }
     }
 
+    pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.logf(level, fmt, args);
+            },
+            .noop => {},
+        }
+    }
+
     pub fn info(self: Self, msg: []const u8) void {
         switch (self) {
             .standard => |logger| {
@@ -123,6 +132,15 @@ pub const Logger = union(enum) {
         switch (self) {
             .standard => |logger| {
                 logger.err(msg);
+            },
+            .noop => {},
+        }
+    }
+
+    pub fn log(self: Self, level: Level, msg: []const u8) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.log(level, msg);
             },
             .noop => {},
         }
