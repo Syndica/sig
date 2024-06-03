@@ -109,7 +109,7 @@ pub fn LruCacheCustom(
 
         /// Recycles an old node if LruCache capacity is full. If replaced, first element of tuple is replaced
         /// Entry (otherwise null) and second element of tuple is inserted Entry.
-        fn internal_recycle_or_create_node(self: *Self, key: K, value: V) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
+        fn internalRecycleOrCreateNode(self: *Self, key: K, value: V) error{OutOfMemory}!struct { ?LruEntry, LruEntry } {
             if (self.dbl_link_list.len == self.max_items) {
                 const recycled_node = self.dbl_link_list.popFirst().?;
                 deinitFn(&recycled_node.data.value, self.deinit_context);
@@ -133,15 +133,15 @@ pub fn LruCacheCustom(
             return .{ null, node.data };
         }
 
-        fn internal_insert(self: *Self, key: K, value: V) LruEntry {
+        fn internalInsert(self: *Self, key: K, value: V) LruEntry {
             // if key exists, we update it
             if (self.hashmap.get(key)) |existing_node| {
                 existing_node.data.value = value;
-                self.internal_reorder(existing_node);
+                self.internalReorder(existing_node);
                 return existing_node.data;
             }
 
-            const replaced_and_created_node = self.internal_recycle_or_create_node(key, value) catch |e| {
+            const replaced_and_created_node = self.internalRecycleOrCreateNode(key, value) catch |e| {
                 std.debug.panic("recycle_or_create_node returned error: {any}", .{e});
             };
             const new_lru_entry = replaced_and_created_node[1];
@@ -154,7 +154,7 @@ pub fn LruCacheCustom(
             if (kind == .locking) self.mux.lock();
             defer if (kind == .locking) self.mux.unlock();
 
-            _ = self.internal_insert(key, value);
+            _ = self.internalInsert(key, value);
             return;
         }
 
@@ -190,7 +190,7 @@ pub fn LruCacheCustom(
         }
 
         // reorder Node to the top
-        fn internal_reorder(self: *Self, node: *Node) void {
+        fn internalReorder(self: *Self, node: *Node) void {
             self.dbl_link_list.remove(node);
             self.dbl_link_list.append(node);
         }
@@ -242,11 +242,11 @@ pub fn LruCacheCustom(
                 var existing_node: *Node = existing_entry.value_ptr.*;
                 const old_value = existing_node.data.value;
                 existing_node.data.value = value;
-                self.internal_reorder(existing_node);
+                self.internalReorder(existing_node);
                 return old_value;
             }
 
-            _ = self.internal_insert(key, value);
+            _ = self.internalInsert(key, value);
             return null;
         }
 
@@ -319,7 +319,7 @@ test "common.lru: locked put is thread safe" {
     defer cache.deinit();
     var threads = std.ArrayList(std.Thread).init(testing.allocator);
     defer threads.deinit();
-    for (0..2) |_| try threads.append(try std.Thread.spawn(.{}, test_put, .{ &cache, 1 }));
+    for (0..2) |_| try threads.append(try std.Thread.spawn(.{}, testPut, .{ &cache, 1 }));
     for (threads.items) |thread| thread.join();
 }
 
@@ -328,13 +328,13 @@ test "common.lru: locked insert is thread safe" {
     defer cache.deinit();
     var threads = std.ArrayList(std.Thread).init(testing.allocator);
     defer threads.deinit();
-    for (0..2) |_| try threads.append(try std.Thread.spawn(.{}, test_insert, .{ &cache, 1 }));
+    for (0..2) |_| try threads.append(try std.Thread.spawn(.{}, testInsert, .{ &cache, 1 }));
     for (threads.items) |thread| thread.join();
 }
 
-fn test_put(lru_cache: *LruCache(.locking, usize, usize), k: usize) void {
+fn testPut(lru_cache: *LruCache(.locking, usize, usize), k: usize) void {
     _ = lru_cache.put(k, 2);
 }
-fn test_insert(lru_cache: *LruCache(.locking, usize, usize), k: usize) void {
+fn testInsert(lru_cache: *LruCache(.locking, usize, usize), k: usize) void {
     _ = lru_cache.insert(k, 2) catch unreachable;
 }
