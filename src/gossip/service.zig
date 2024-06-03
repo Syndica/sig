@@ -436,12 +436,14 @@ pub const GossipService = struct {
         defer self.allocator.free(tasks);
 
         // pre-allocate all the tasks
-        for (tasks) |*task| task.entry = .{
-            .allocator = task_allocator,
-            .verified_incoming_channel = self.verified_incoming_channel,
-            .packet_batch = undefined,
-            .logger = self.logger,
-        };
+        for (tasks) |*task| {
+            task.entry = .{
+                .allocator = task_allocator,
+                .verified_incoming_channel = self.verified_incoming_channel,
+                .packet_batch = undefined,
+                .logger = self.logger,
+            };
+        }
 
         while (!self.exit.load(.unordered)) {
             const maybe_packet_batches = try self.packet_incoming_channel.try_drain();

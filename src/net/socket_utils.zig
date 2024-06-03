@@ -27,8 +27,6 @@ pub fn readSocket(
 
     while (!exit.load(.unordered)) {
         // init a new batch
-        // var count: usize = 0;
-        // const capacity = PACKETS_PER_BATCH;
         var packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
             PACKETS_PER_BATCH,
@@ -72,12 +70,11 @@ pub fn sendSocket(
 
     while (!exit.load(.unordered)) {
         const maybe_packet_batches = try outgoing_channel.try_drain();
-        if (maybe_packet_batches == null) {
+        const packet_batches = maybe_packet_batches orelse {
             // sleep for 1ms
             // std.time.sleep(std.time.ns_per_ms * 1);
             continue;
-        }
-        const packet_batches = maybe_packet_batches.?;
+        };
         defer {
             for (packet_batches) |*packet_batch| {
                 packet_batch.deinit();
