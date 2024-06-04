@@ -44,9 +44,9 @@ pub const ShredReceiver = struct {
         defer self.logger.err("exiting shred receiver");
         errdefer self.logger.err("error in shred receiver");
 
-        var sender = try SocketThread
+        var response_sender = try SocketThread
             .initSender(self.allocator, self.logger, self.repair_socket, self.exit);
-        defer sender.deinit();
+        defer response_sender.deinit();
         var repair_receiver = try SocketThread
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit();
@@ -64,12 +64,12 @@ pub const ShredReceiver = struct {
         const x = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, tvu_receivers, sender.channel, false },
+            .{ self, tvu_receivers, response_sender.channel, false },
         );
         const y = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, .{repair_receiver.channel}, sender.channel, true },
+            .{ self, .{repair_receiver.channel}, response_sender.channel, true },
         );
         x.join();
         y.join();
@@ -80,13 +80,13 @@ pub const ShredReceiver = struct {
     fn runPacketHandler(
         self: *Self,
         receivers: anytype,
-        sender: *Channel(ArrayList(Packet)),
+        response_sender: *Channel(ArrayList(Packet)),
         comptime is_repair: bool,
     ) !void {
         var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
         while (!self.exit.load(.unordered)) {
+            var responses = ArrayList(Packet).init(self.allocator);
             inline for (receivers) |receiver| {
-                var responses = ArrayList(Packet).init(self.allocator);
                 try receiver.tryDrainRecycle(&buf);
                 if (buf.items.len > 0) {
                     const shred_version = self.shred_version.load(.monotonic);
@@ -97,12 +97,12 @@ pub const ShredReceiver = struct {
                         }
                         try self.unverified_shred_channel.send(batch);
                     }
-                    if (responses.items.len > 0) {
-                        try sender.send(responses);
-                    }
                 } else {
                     std.time.sleep(10 * std.time.ns_per_ms);
                 }
+            }
+            if (responses.items.len > 0) {
+                try response_sender.send(responses);
             }
         }
     }
