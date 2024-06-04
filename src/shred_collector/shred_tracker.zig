@@ -62,7 +62,7 @@ pub const BasicShredTracker = struct {
 
         self.maybeSetStart(slot);
         self.max_slot_seen = @max(self.max_slot_seen, slot);
-        const monitored_slot = try self.getSlot(slot);
+        const monitored_slot = try self.getMonitoredSlot(slot);
         const new = try monitored_slot.record(shred_index);
         if (new) self.logger.debugf("new slot: {}", .{slot});
         self.max_slot_processed = @max(self.max_slot_processed, slot);
@@ -73,7 +73,7 @@ pub const BasicShredTracker = struct {
         defer self.mux.unlock();
 
         self.maybeSetStart(slot);
-        const monitored_slot = try self.getSlot(slot);
+        const monitored_slot = try self.getMonitoredSlot(slot);
         if (monitored_slot.last_shred) |old_last| {
             monitored_slot.last_shred = @min(old_last, index);
         } else {
@@ -92,7 +92,7 @@ pub const BasicShredTracker = struct {
         const timestamp = std.time.milliTimestamp();
         const last_slot_to_check = @max(self.max_slot_processed, self.current_bottom_slot);
         for (self.current_bottom_slot..last_slot_to_check + 1) |slot| {
-            const monitored_slot = try self.getSlot(slot);
+            const monitored_slot = try self.getMonitoredSlot(slot);
             if (monitored_slot.first_received_timestamp_ms + MIN_SLOT_AGE_TO_REPORT_AS_MISSING > timestamp) {
                 continue;
             }
@@ -113,7 +113,7 @@ pub const BasicShredTracker = struct {
         return true;
     }
 
-    fn getSlot(self: *Self, slot: Slot) error{ SlotUnderflow, SlotOverflow }!*MonitoredSlot {
+    fn getMonitoredSlot(self: *Self, slot: Slot) error{ SlotUnderflow, SlotOverflow }!*MonitoredSlot {
         if (slot > self.current_bottom_slot + num_slots - 1) {
             return error.SlotOverflow;
         }
