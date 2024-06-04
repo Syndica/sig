@@ -30,7 +30,8 @@ pub const ShredReceiver = struct {
     logger: Logger,
     repair_socket: Socket,
     tvu_socket: Socket,
-    outgoing_shred_channel: *Channel(ArrayList(Packet)),
+    /// me --> shred verifier
+    unverified_shred_channel: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
 
     const Self = @This();
@@ -93,7 +94,7 @@ pub const ShredReceiver = struct {
                             try self.handlePacket(packet, &responses, shred_version);
                             if (is_repair) packet.flags.set(.repair);
                         }
-                        try self.outgoing_shred_channel.send(batch);
+                        try self.unverified_shred_channel.send(batch);
                     }
                     if (responses.items.len > 0) {
                         try sender.send(responses);
