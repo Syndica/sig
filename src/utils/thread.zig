@@ -44,50 +44,56 @@ pub fn spawnThreadTasks(
     }
 }
 
-pub fn ThreadPoolTask(
-    comptime EntryType: type,
-) type {
+pub fn ThreadPoolTask(comptime Entry: type) type {
     return struct {
         task: ThreadPool.Task,
-        entry: EntryType,
-        done: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+        entry: Entry,
+        available: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
+        result: CallbackError!void = {},
         const Self = @This();
 
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) ![]Self {
-            const tasks = try allocator.alloc(Self, capacity);
-            for (tasks) |*t| {
-                t.* = .{
-                    .entry = undefined,
-                    .task = .{ .callback = Self.callback },
-                };
-            }
+        const CallbackError = blk: {
+            const CallbackFn = @TypeOf(Entry.callback);
+            const CallbackResult = @typeInfo(CallbackFn).Fn.return_type.?;
+            break :blk switch (@typeInfo(CallbackResult)) {
+                .ErrorUnion => |info| info.error_set,
+                else => error{},
+            };
+        };
+
+        pub fn init(allocator: std.mem.Allocator, task_count: usize) ![]Self {
+            const tasks = try allocator.alloc(Self, task_count);
+            @memset(tasks, .{
+                .entry = undefined,
+                .task = .{ .callback = Self.callback },
+            });
             return tasks;
         }
 
         fn callback(task: *ThreadPool.Task) void {
             const self: *Self = @fieldParentPtr("task", task);
-            std.debug.assert(!self.done.load(.acquire));
-            defer {
-                self.done.store(true, .release);
-            }
-            self.entry.callback() catch |err| {
-                std.debug.print("{s} error: {}\n", .{ @typeName(EntryType), err });
-                return;
-            };
+            self.result = undefined;
+
+            std.debug.assert(!self.available.load(.acquire));
+            defer self.available.store(true, .release);
+
+            self.result = self.entry.callback();
         }
 
-        pub fn queue(thread_pool: *ThreadPool, tasks: []Self, entry: EntryType) void {
-            var task_i: usize = 0;
-            var task_ptr = &tasks[task_i];
-            while (!task_ptr.done.load(.acquire)) {
-                task_i = (task_i + 1) % tasks.len;
-                task_ptr = &tasks[task_i];
+        /// Waits for any of the tasks in the slice to become available. Once one does,
+        /// it is atomically set to be unavailable, and its index is returned.
+        pub fn awaitAndAcquireFirstAvailableTask(tasks: []Self, start_index: usize) usize {
+            var task_index = start_index;
+            while (tasks[task_index].available.cmpxchgWeak(true, false, .release, .acquire) != null) {
+                task_index = (task_index + 1) % tasks.len;
             }
-            task_ptr.done.store(false, .release);
-            task_ptr.entry = entry;
+            return task_index;
+        }
 
-            const batch = Batch.from(&task_ptr.task);
-            thread_pool.schedule(batch);
+        pub fn blockUntilCompletion(task: *Self) void {
+            while (!task.available.load(.acquire)) {
+                std.atomic.spinLoopHint();
+            }
         }
     };
 }

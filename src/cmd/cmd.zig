@@ -41,7 +41,7 @@ const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 
 const socket_tag = sig.gossip.socket_tag;
-const SOCKET_TIMEOUT = sig.net.SOCKET_TIMEOUT;
+const SOCKET_TIMEOUT_US = sig.net.SOCKET_TIMEOUT_US;
 const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -382,6 +382,7 @@ fn gossip() !void {
         &.{},
     );
     defer gossip_service.deinit();
+
     try runGossipWithConfigValues(&gossip_service);
 }
 
@@ -541,8 +542,16 @@ fn initGossip(
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
+    // TODO: use better allocator, unless GPA becomes more performant.
+    var gp_message_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gp_message_allocator.deinit();
+
     const gossip_config = config.current.gossip;
-    return gossip_service.run(gossip_config.spy_node, gossip_config.dump);
+    return gossip_service.run(.{
+        .message_allocator = gp_message_allocator.allocator(),
+        .spy_node = gossip_config.spy_node,
+        .dump = gossip_config.dump,
+    });
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version

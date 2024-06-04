@@ -149,6 +149,6 @@ fn bindUdpReusable(port: u16) !Socket {
     var socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
     try sig.net.enablePortReuse(&socket, true);
     try socket.bindToPort(port);
-    try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
+    try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT_US);
     return socket;
 }

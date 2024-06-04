@@ -10,7 +10,7 @@ const Logger = @import("../trace/log.zig").Logger;
 const socket_tag = @import("../gossip/data.zig").socket_tag;
 const Hash = @import("../core/hash.zig").Hash;
 
-const DOWNLOAD_PROGRESS_UPDATES_NS = 10 * std.time.ns_per_s;
+const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 
 const PeerSnapshotHash = struct {
     contact_info: ContactInfo,
@@ -322,6 +322,10 @@ const DownloadProgress = struct {
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        std.posix.munmap(self.mmap);
+    }
+
     pub fn bufferWriteCallback(ptr: [*c]c_char, size: c_uint, nmemb: c_uint, user_data: *anyopaque) callconv(.C) c_uint {
         const len = size * nmemb;
         var self: *Self = @alignCast(@ptrCast(user_data));
@@ -397,7 +401,7 @@ pub fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
     url: [:0]const u8,
-    output_dir: []const u8,
+    output_dir_str: []const u8,
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !void {
@@ -423,11 +427,19 @@ pub fn downloadFile(
     easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
         logger,
-        output_dir,
+        output_dir_str,
         filename,
         download_size,
         min_mb_per_second,
     );
+    errdefer {
+        // NOTE: this shouldnt fail because we open the dir in DownloadProgress.init
+        const output_dir = std.fs.cwd().openDir(output_dir_str, .{}) catch {
+            std.debug.panic("failed to open output dir: {s}", .{output_dir_str});
+        };
+        output_dir.deleteFile(filename) catch {};
+    }
+    defer download_progress.deinit();
 
     try setNoBody(easy, false); // full download
     try easy.setUrl(url);

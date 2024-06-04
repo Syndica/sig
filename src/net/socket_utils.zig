@@ -7,7 +7,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
 const Logger = @import("../trace/log.zig").Logger;
 
-pub const SOCKET_TIMEOUT: usize = 1000000;
+pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
 pub fn readSocket(
@@ -17,96 +17,48 @@ pub fn readSocket(
     exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) !void {
-    //Performance out of the IO without poll
+    // Performance out of the IO without poll
     //  * block on the socket until it's readable
     //  * set the socket to non blocking
     //  * read until it fails
     //  * set it back to blocking before returning
 
     var socket = socket_;
-    const MAX_WAIT_NS = std.time.ns_per_ms; // 1ms
+    try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
     while (!exit.load(.unordered)) {
         // init a new batch
-        var count: usize = 0;
-        const capacity = PACKETS_PER_BATCH;
         var packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
-            capacity,
+            PACKETS_PER_BATCH,
         );
-        packet_batch.appendNTimesAssumeCapacity(Packet.default(), capacity);
+        errdefer packet_batch.deinit();
 
         // NOTE: usually this would be null (ie, blocking)
         // but in order to exit cleanly in tests - we set to 1 second
         try socket.setReadTimeout(std.time.ms_per_s);
-        var timer = std.time.Timer.start() catch unreachable;
 
         // recv packets into batch
-        while (true) {
-            const n_packets_read = recvMmsg(&socket, packet_batch.items[count..capacity], exit) catch |err| {
-                if (count > 0 and err == error.WouldBlock) {
-                    if (timer.read() > MAX_WAIT_NS) {
-                        break;
-                    }
-                }
-                continue;
+        while (packet_batch.items.len != packet_batch.capacity) {
+            var packet: Packet = Packet.default();
+            const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
+                error.WouldBlock => {
+                    if (packet_batch.items.len > 0) break;
+                    continue;
+                },
+                else => |e| return e,
             };
-
-            if (count == 0) {
-                // set to nonblocking mode
-                try socket.setReadTimeout(SOCKET_TIMEOUT);
-            }
-            count += n_packets_read;
-            if (timer.read() > MAX_WAIT_NS or count >= capacity) {
-                break;
-            }
+            const bytes_read = recv_meta.numberOfBytes;
+            if (bytes_read == 0) return error.SocketClosed;
+            packet.addr = recv_meta.sender;
+            packet.size = bytes_read;
+            packet_batch.appendAssumeCapacity(packet);
         }
 
-        if (count < capacity) {
-            packet_batch.shrinkAndFree(count);
-        }
+        packet_batch.shrinkAndFree(packet_batch.items.len);
         try incoming_channel.send(packet_batch);
     }
     logger.debugf("readSocket loop closed", .{});
-}
-
-pub fn recvMmsg(
-    socket: *UdpSocket,
-    /// pre-allocated array of packets to fill up
-    packet_batch: []Packet,
-    exit: *const std.atomic.Value(bool),
-) !usize {
-    const max_size = packet_batch.len;
-    var count: usize = 0;
-
-    while (count < max_size) {
-        var packet = &packet_batch[count];
-        const recv_meta = socket.receiveFrom(&packet.data) catch |err| {
-            // would block then return
-            if (count > 0 and err == error.WouldBlock) {
-                break;
-            } else {
-                if (exit.load(.unordered)) return 0;
-                continue;
-            }
-        };
-
-        const bytes_read = recv_meta.numberOfBytes;
-        if (bytes_read == 0) {
-            return error.SocketClosed;
-        }
-        packet.addr = recv_meta.sender;
-        packet.size = bytes_read;
-        packet.flags = .{};
-
-        if (count == 0) {
-            // nonblocking mode
-            try socket.setReadTimeout(SOCKET_TIMEOUT);
-        }
-        count += 1;
-    }
-
-    return count;
 }
 
 pub fn sendSocket(
@@ -119,12 +71,11 @@ pub fn sendSocket(
 
     while (!exit.load(.unordered)) {
         const maybe_packet_batches = try outgoing_channel.try_drain();
-        if (maybe_packet_batches == null) {
+        const packet_batches = maybe_packet_batches orelse {
             // sleep for 1ms
             // std.time.sleep(std.time.ns_per_ms * 1);
             continue;
-        }
-        const packet_batches = maybe_packet_batches.?;
+        };
         defer {
             for (packet_batches) |*packet_batch| {
                 packet_batch.deinit();

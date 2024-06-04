@@ -308,7 +308,13 @@ pub fn run() !void {
         .noop,
     );
 
-    var fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{ &gossip_service_fuzzer, true, false });
+    const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
+        &gossip_service_fuzzer, .{
+            .message_allocator = allocator,
+            .spy_node = true,
+            .dump = false,
+        },
+    });
 
     const SLEEP_TIME = 0;
     // const SLEEP_TIME = std.time.ns_per_ms * 10;
