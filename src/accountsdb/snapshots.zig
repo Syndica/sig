@@ -705,10 +705,17 @@ pub const StatusCache = struct {
                 return error.SlotNotFoundInHistory;
             }
         }
-        for (slot_history.oldest()..slot_history.newest()) |slot| {
-            if (!slots_seen.contains(slot)) {
-                return error.SlotNotFoundInStatusCache;
+
+        var slots_checked: u32 = 0;
+        var slot = slot_history.newest();
+        while (slot >= slot_history.oldest() and slots_checked != MAX_CACHE_ENTRIES) {
+            if (slot_history.check(slot) == sysvars.SlotCheckResult.Found) {
+                slots_checked += 1;
+                if (!slots_seen.contains(slot)) {
+                    return error.SlotNotFoundInStatusCache;
+                }
             }
+            slot -= 1;
         }
     }
 };

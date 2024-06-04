@@ -15,6 +15,7 @@ const AccountFileInfo = @import("../accountsdb/snapshots.zig").AccountFileInfo;
 const AccountFile = @import("../accountsdb/accounts_file.zig").AccountFile;
 const FileId = @import("../accountsdb/accounts_file.zig").FileId;
 const AccountInFile = @import("../accountsdb/accounts_file.zig").AccountInFile;
+const Blake3 = std.crypto.hash.Blake3;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 const Task = ThreadPool.Task;
@@ -768,11 +769,28 @@ pub const AccountsDB = struct {
                 } orelse continue;
                 const result = try self.getAccountHashAndLamportsFromRef(max_slot_ref);
 
-                // only include non-zero lamport accounts (for full snapshots)
                 const lamports = result.lamports;
-                if (config == .FullAccountHash and lamports == 0) continue;
+                var account_hash = result.hash;
+                if (lamports == 0) {
+                    switch (config) {
+                        // for full snapshots, only include non-zero lamport accounts
+                        .FullAccountHash => continue,
+                        // zero-lamport accounts for incrementals = hash(pubkey)
+                        .IncrementalAccountHash => {
+                            var hasher = Blake3.init(.{});
+                            hasher.update(&key.data);
+                            hasher.final(&account_hash.data);
+                        },
+                    }
+                } else {
+                    // hashes arent always stored correctly in snapshots
+                    if (account_hash.order(&Hash.default()) == .eq) {
+                        const account = try self.getAccountFromRef(max_slot_ref);
+                        account_hash = account.hash(&key);
+                    }
+                }
 
-                hashes.appendAssumeCapacity(result.hash);
+                hashes.appendAssumeCapacity(account_hash);
                 local_total_lamports += lamports;
             }
 

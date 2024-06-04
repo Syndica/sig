@@ -78,7 +78,7 @@ pub fn parallelUntarToFileSystem(
         thread_pool.deinit();
     }
 
-    logger.infof("using {d} threads to unpack snapshot\n", .{n_threads});
+    logger.infof("using {d} threads to unpack snapshot", .{n_threads});
     const tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
 
