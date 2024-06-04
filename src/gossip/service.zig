@@ -263,30 +263,6 @@ pub const GossipService = struct {
         deinitMux(&self.failed_pull_hashes_mux);
     }
 
-    pub const RunHandles = struct {
-        exit: *AtomicBool,
-        receiver_thread: std.Thread,
-        packet_verifier_thread: std.Thread,
-        message_processor_thread: std.Thread,
-        message_builder_thread: ?std.Thread,
-        responder_thread: std.Thread,
-        dumper_thread: ?std.Thread,
-
-        /// If any of the threads join, all other threads will be signalled to join.
-        pub fn joinAndExit(handles: RunHandles) void {
-            inline for (@typeInfo(RunHandles).Struct.fields, 0..) |field, i| cont: {
-                comptime if (@field(std.meta.FieldEnum(RunHandles), field.name) == .exit) {
-                    std.debug.assert(field.type == *AtomicBool);
-                    continue;
-                };
-                const maybe_thread: ?std.Thread = @field(handles, field.name);
-                const thread = maybe_thread orelse break :cont;
-                thread.join(); // if we end up joining, something's gone wrong, so signal exit
-                if (i == 0) handles.exit.store(true, .unordered);
-            }
-        }
-    };
-
     pub const RunThreadsParams = struct {
         /// Allocator used to allocate message metadata.
         /// Helpful to use a dedicated allocator to reduce contention
