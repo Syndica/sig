@@ -48,6 +48,9 @@ jobs:
       - name: test
         run: zig build test
 
+      - name: gossip 
+        run: bash scripts/gossip_test.sh 120 # in seconds
+
   # build-windows:
   #   runs-on: windows-latest
   #   defaults:
