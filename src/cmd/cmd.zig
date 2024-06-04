@@ -39,7 +39,7 @@ const requestIpEcho = @import("../net/echo.zig").requestIpEcho;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
-const SOCKET_TIMEOUT = @import("../net/socket_utils.zig").SOCKET_TIMEOUT;
+const SOCKET_TIMEOUT_US = @import("../net/socket_utils.zig").SOCKET_TIMEOUT_US;
 
 const config = @import("config.zig");
 // var validator_config = config.current;
@@ -47,8 +47,14 @@ const config = @import("config.zig");
 const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
 const socket_tag = @import("../gossip/data.zig").socket_tag;
 
+// TODO: use better allocator, unless GPA becomes more performant.
+
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
+
+var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
+
 const base58Encoder = base58.Encoder.init(.{});
 
 const gossip_host = struct {
@@ -376,6 +382,7 @@ fn gossip() !void {
         &.{},
     );
     defer gossip_service.deinit();
+
     try runGossipWithConfigValues(&gossip_service);
 }
 
@@ -411,7 +418,7 @@ fn validator() !void {
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
     try repair_socket.bindToPort(repair_port);
-    try repair_socket.setReadTimeout(SOCKET_TIMEOUT);
+    try repair_socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
     var repair_svc = try initRepair(
         logger,
@@ -531,6 +538,7 @@ fn initGossip(
 
     return try GossipService.init(
         gpa_allocator,
+        gossip_value_gpa_allocator,
         contact_info,
         my_keypair,
         entrypoints,
@@ -572,7 +580,10 @@ fn initRepair(
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
     const gossip_config = config.current.gossip;
-    return gossip_service.run(gossip_config.spy_node, gossip_config.dump);
+    return gossip_service.run(.{
+        .spy_node = gossip_config.spy_node,
+        .dump = gossip_config.dump,
+    });
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version

@@ -87,8 +87,10 @@ pub fn parallelUntarToFileSystem(
     var file_count: usize = 0;
     const strip_components: u32 = 0;
     loop: while (true) {
-        var header_buf = try allocator.alloc(u8, 512);
-        _ = try reader.readAtLeast(header_buf, 512);
+        const header_buf = try allocator.alloc(u8, 512);
+        if (try reader.readAtLeast(header_buf, 512) != 512) {
+            std.debug.panic("Actual file size too small for header (< 512).", .{});
+        }
 
         const header: TarHeaderMinimal = .{ .bytes = header_buf[0..512] };
 
@@ -136,11 +138,16 @@ pub fn parallelUntarToFileSystem(
                 file_count += 1;
 
                 const contents = try allocator.alloc(u8, file_size);
-                _ = try reader.readAtLeast(contents, file_size);
+                const actual_contents_len = try reader.readAtLeast(contents, file_size);
+                if (actual_contents_len != file_size) {
+                    std.debug.panic("Reported file ({d}) size does not match actual file size ({d})", .{ contents.len, actual_contents_len });
+                }
 
                 try reader.skipBytes(pad_len, .{});
 
-                const entry = UnTarEntry{
+                const task_ptr = &tasks[UnTarTask.awaitAndAcquireFirstAvailableTask(tasks, 0)];
+                task_ptr.result catch |err| logger.errf("UnTarTask encountered error: {s}", .{@errorName(err)});
+                task_ptr.entry = .{
                     .allocator = allocator,
                     .contents = contents,
                     .dir = dir,
@@ -148,7 +155,9 @@ pub fn parallelUntarToFileSystem(
                     .filename_buf = file_name_buf,
                     .header_buf = header_buf,
                 };
-                UnTarTask.queue(&thread_pool, tasks, entry);
+
+                const batch = ThreadPool.Batch.from(&task_ptr.task);
+                thread_pool.schedule(batch);
             },
             .global_extended_header, .extended_header => {
                 return error.TarUnsupportedFileType;
@@ -161,9 +170,8 @@ pub fn parallelUntarToFileSystem(
 
     // wait for all tasks
     for (tasks) |*task| {
-        while (!task.done.load(.acquire)) {
-            // wait
-        }
+        task.blockUntilCompletion();
+        task.result catch |err| logger.errf("UnTarTask encountered error: {s}", .{@errorName(err)});
     }
 }
 
