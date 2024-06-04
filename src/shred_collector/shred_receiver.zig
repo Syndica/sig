@@ -22,6 +22,8 @@ const SocketThread = sig.net.SocketThread;
 
 const endpointToString = sig.net.endpointToString;
 
+const num_tvu_receivers = 2;
+
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     allocator: Allocator,
@@ -30,7 +32,8 @@ pub const ShredReceiver = struct {
     logger: Logger,
     repair_socket: Socket,
     tvu_socket: Socket,
-    outgoing_shred_channel: *Channel(ArrayList(Packet)),
+    /// me --> shred verifier
+    unverified_shred_channel: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
 
     const Self = @This();
@@ -41,14 +44,13 @@ pub const ShredReceiver = struct {
         defer self.logger.err("exiting shred receiver");
         errdefer self.logger.err("error in shred receiver");
 
-        var sender = try SocketThread
+        var response_sender = try SocketThread
             .initSender(self.allocator, self.logger, self.repair_socket, self.exit);
-        defer sender.deinit();
+        defer response_sender.deinit();
         var repair_receiver = try SocketThread
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit();
 
-        const num_tvu_receivers = 2;
         var tvu_receivers: [num_tvu_receivers]*Channel(ArrayList(Packet)) = undefined;
         for (0..num_tvu_receivers) |i| {
             tvu_receivers[i] = (try SocketThread.initReceiver(
@@ -62,12 +64,12 @@ pub const ShredReceiver = struct {
         const x = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, tvu_receivers, sender.channel, false },
+            .{ self, tvu_receivers, response_sender.channel, false },
         );
         const y = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, .{repair_receiver.channel}, sender.channel, true },
+            .{ self, .{repair_receiver.channel}, response_sender.channel, true },
         );
         x.join();
         y.join();
@@ -78,13 +80,13 @@ pub const ShredReceiver = struct {
     fn runPacketHandler(
         self: *Self,
         receivers: anytype,
-        sender: *Channel(ArrayList(Packet)),
+        response_sender: *Channel(ArrayList(Packet)),
         comptime is_repair: bool,
     ) !void {
         var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
         while (!self.exit.load(.unordered)) {
+            var responses = ArrayList(Packet).init(self.allocator);
             inline for (receivers) |receiver| {
-                var responses = ArrayList(Packet).init(self.allocator);
                 try receiver.tryDrainRecycle(&buf);
                 if (buf.items.len > 0) {
                     const shred_version = self.shred_version.load(.monotonic);
@@ -93,14 +95,14 @@ pub const ShredReceiver = struct {
                             try self.handlePacket(packet, &responses, shred_version);
                             if (is_repair) packet.flags.set(.repair);
                         }
-                        try self.outgoing_shred_channel.send(batch);
-                    }
-                    if (responses.items.len > 0) {
-                        try sender.send(responses);
+                        try self.unverified_shred_channel.send(batch);
                     }
                 } else {
                     std.time.sleep(10 * std.time.ns_per_ms);
                 }
+            }
+            if (responses.items.len > 0) {
+                try response_sender.send(responses);
             }
         }
     }

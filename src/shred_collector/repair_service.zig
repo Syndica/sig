@@ -33,6 +33,8 @@ const RepairMessage = sig.shred_collector.RepairMessage;
 
 const serializeRepairRequest = sig.shred_collector.serializeRepairRequest;
 
+const repair_requester_threads = 4;
+
 /// Identifies which repairs are needed and sends them
 /// - delegates to RepairPeerProvider to identify repair peers.
 /// - delegates to RepairRequester to send the requests.
@@ -82,7 +84,7 @@ pub const RepairService = struct {
             .logger = logger,
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
-            .thread_pool = RequestBatchThreadPool.init(allocator, 4),
+            .thread_pool = RequestBatchThreadPool.init(allocator, repair_requester_threads),
         };
     }
 

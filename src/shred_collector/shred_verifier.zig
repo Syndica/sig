@@ -11,16 +11,18 @@ const SlotLeaderGetter = sig.core.SlotLeaderProvider;
 const Packet = sig.net.Packet;
 
 /// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
-pub fn runShredSignatureVerification(
+pub fn runShredVerifier(
     exit: *Atomic(bool),
-    incoming: *Channel(ArrayList(Packet)),
-    verified: *Channel(ArrayList(Packet)),
-    leader_schedule: SlotLeaderGetter,
+    /// shred receiver --> me
+    unverified_shred_channel: *Channel(ArrayList(Packet)),
+    /// me --> shred processor
+    verified_shred_channel: *Channel(ArrayList(Packet)),
+    leader_schedule: sig.core.SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
-    var buf: ArrayList(ArrayList(Packet)) = ArrayList(ArrayList(Packet)).init(incoming.allocator);
+    var buf = ArrayList(ArrayList(Packet)).init(unverified_shred_channel.allocator);
     while (true) {
-        try incoming.tryDrainRecycle(&buf);
+        try unverified_shred_channel.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;
@@ -34,7 +36,7 @@ pub fn runShredSignatureVerification(
                     verified_count += 1;
                 }
             }
-            try verified.send(packet_batch);
+            try verified_shred_channel.send(packet_batch);
             if (exit.load(.monotonic)) return;
         }
     }

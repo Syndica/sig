@@ -12,15 +12,16 @@ const Packet = sig.net.Packet;
 const Shred = sig.shred_collector.Shred;
 
 /// Analogous to [WindowService](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L395)
-pub fn processShreds(
+pub fn runShredProcessor(
     allocator: Allocator,
-    verified_shreds: *Channel(ArrayList(Packet)),
+    // shred verifier --> me
+    verified_shred_channel: *Channel(ArrayList(Packet)),
     tracker: *BasicShredTracker,
 ) !void {
     var processed_count: usize = 0;
     var buf = ArrayList(ArrayList(Packet)).init(allocator);
     while (true) {
-        try verified_shreds.tryDrainRecycle(&buf);
+        try verified_shred_channel.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;

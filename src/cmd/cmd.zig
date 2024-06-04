@@ -41,7 +41,7 @@ const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 
 const socket_tag = sig.gossip.socket_tag;
-const SOCKET_TIMEOUT = sig.net.SOCKET_TIMEOUT;
+const SOCKET_TIMEOUT_US = sig.net.SOCKET_TIMEOUT_US;
 const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -82,7 +82,7 @@ var gossip_port_option = cli.Option{
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
     .help = "The port to run tvu repair listener - default: 8002",
-    .value_ref = cli.mkRef(&config.current.tvu.repair_port),
+    .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
     .required = false,
     .value_name = "Repair Port",
 };
@@ -90,7 +90,7 @@ var repair_port_option = cli.Option{
 var tvu_port_option = cli.Option{
     .long_name = "tvu-port",
     .help = "The port to run turbine listener - default: 8003",
-    .value_ref = cli.mkRef(&config.current.tvu.tvu_port),
+    .value_ref = cli.mkRef(&config.current.shred_collector.tvu_port),
     .required = false,
     .value_name = "TVU Port",
 };
@@ -98,7 +98,7 @@ var tvu_port_option = cli.Option{
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value_ref = cli.mkRef(&config.current.tvu.test_repair_slot),
+    .value_ref = cli.mkRef(&config.current.shred_collector.start_slot),
     .required = false,
     .value_name = "slot number",
 };
@@ -382,6 +382,7 @@ fn gossip() !void {
         &.{},
     );
     defer gossip_service.deinit();
+
     try runGossipWithConfigValues(&gossip_service);
 }
 
@@ -399,8 +400,8 @@ fn validator() !void {
     defer entrypoints.deinit();
     const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
-    const repair_port: u16 = config.current.tvu.repair_port;
-    const tvu_port: u16 = config.current.tvu.repair_port;
+    const repair_port: u16 = config.current.shred_collector.repair_port;
+    const tvu_port: u16 = config.current.shred_collector.repair_port;
 
     // gossip
     var gossip_service = try initGossip(
@@ -416,10 +417,11 @@ fn validator() !void {
         },
     );
     defer gossip_service.deinit();
-    var gossip_handle = try gossip_service.start(
-        config.current.gossip.spy_node,
-        config.current.gossip.dump,
-    );
+    var gossip_handle = try gossip_service.start(.{
+        .message_allocator = gpa_allocator,
+        .spy_node = config.current.gossip.spy_node,
+        .dump = config.current.gossip.dump,
+    });
     defer gossip_handle.deinit();
 
     // accounts db
@@ -503,21 +505,21 @@ fn validator() !void {
     const getter = slot_leader_getter.provider();
 
     // shred collector
-    var shred_collector = try sig.shred_collector.start(.{
-        .start_slot = if (config.current.tvu.test_repair_slot) |n| @intCast(n) else bank.bank_fields.slot,
-        .repair_port = repair_port,
-        .tvu_port = tvu_port,
-    }, .{
-        .allocator = gpa_allocator,
-        .logger = logger,
-        .random = rand.random(),
-        .my_keypair = &my_keypair,
-    }, .{
-        .exit = &exit,
-        .gossip_table_rw = &gossip_service.gossip_table_rw,
-        .my_shred_version = &gossip_service.my_shred_version,
-        .leader_schedule = getter,
-    });
+    var shred_collector = try sig.shred_collector.start(
+        config.current.shred_collector,
+        .{
+            .allocator = gpa_allocator,
+            .logger = logger,
+            .random = rand.random(),
+            .my_keypair = &my_keypair,
+        },
+        .{
+            .exit = &exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .leader_schedule = getter,
+        },
+    );
     defer shred_collector.deinit();
 
     gossip_handle.join();
@@ -556,8 +558,16 @@ fn initGossip(
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
+    // TODO: use better allocator, unless GPA becomes more performant.
+    var gp_message_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gp_message_allocator.deinit();
+
     const gossip_config = config.current.gossip;
-    return gossip_service.run(gossip_config.spy_node, gossip_config.dump);
+    return gossip_service.run(.{
+        .message_allocator = gp_message_allocator.allocator(),
+        .spy_node = gossip_config.spy_node,
+        .dump = gossip_config.dump,
+    });
 }
 
 /// determine our shred version and ip. in the solana-labs client, the shred version

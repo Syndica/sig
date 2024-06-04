@@ -3,13 +3,16 @@ const network = @import("zig-network");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
 
+const Channel = sig.sync.Channel;
 const GossipTable = sig.gossip.GossipTable;
 const Logger = sig.trace.Logger;
+const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const ServiceManager = sig.utils.ServiceManager;
@@ -66,17 +69,58 @@ pub fn start(
     deps: ShredCollectorDependencies,
     interface: ShredCollectorInterface,
 ) !ServiceManager {
-    var shred_collector = ServiceManager.init(deps.allocator, deps.logger, interface.exit, "shred collector", .{}, .{});
-    var arena = shred_collector.arena();
+    var service_manager = ServiceManager.init(deps.allocator, deps.logger, interface.exit, "shred collector", .{}, .{});
+    var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
     const tvu_socket = try bindUdpReusable(conf.tvu_port);
+
+    // receiver (threads)
+    const unverified_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
+        deps.allocator,
+        1000,
+    );
+    const verified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
+        deps.allocator,
+        1000,
+    );
+    const shred_receiver = try arena.create(ShredReceiver);
+    shred_receiver.* = ShredReceiver{
+        .allocator = deps.allocator,
+        .keypair = deps.my_keypair,
+        .exit = interface.exit,
+        .logger = deps.logger,
+        .repair_socket = repair_socket,
+        .tvu_socket = tvu_socket,
+        .unverified_shred_channel = unverified_shred_channel,
+        .shred_version = interface.my_shred_version,
+    };
+    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
+
+    // verifier (thread)
+    try service_manager.spawn(
+        "Shred Verifier",
+        sig.shred_collector.runShredVerifier,
+        .{
+            interface.exit,
+            unverified_shred_channel,
+            verified_shreds_channel,
+            interface.leader_schedule,
+        },
+    );
 
     // tracker (shared state, internal to Shred Collector)
     const shred_tracker = try arena.create(BasicShredTracker);
     shred_tracker.* = BasicShredTracker.init(
         conf.start_slot,
         deps.logger,
+    );
+
+    // processor (thread)
+    try service_manager.spawn(
+        "Shred Processor",
+        sig.shred_collector.runShredProcessor,
+        .{ deps.allocator, verified_shreds_channel, shred_tracker },
     );
 
     // repair (thread)
@@ -96,7 +140,7 @@ pub fn start(
         interface.exit,
     );
     const repair_svc = try arena.create(RepairService);
-    try shred_collector.defers.deferCall(RepairService.deinit, .{repair_svc});
+    try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = RepairService.init(
         deps.allocator,
         deps.logger,
@@ -105,7 +149,7 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try shred_collector.spawnCustom(
+    try service_manager.spawnCustom(
         "Repair Service",
         RepairService.run_config,
         .{},
@@ -113,54 +157,13 @@ pub fn start(
         .{repair_svc},
     );
 
-    // receiver (threads)
-    const unverified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
-        deps.allocator,
-        1000,
-    );
-    const verified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
-        deps.allocator,
-        1000,
-    );
-    const shred_receiver = try arena.create(ShredReceiver);
-    shred_receiver.* = ShredReceiver{
-        .allocator = deps.allocator,
-        .keypair = deps.my_keypair,
-        .exit = interface.exit,
-        .logger = deps.logger,
-        .repair_socket = repair_socket,
-        .tvu_socket = tvu_socket,
-        .outgoing_shred_channel = unverified_shreds_channel,
-        .shred_version = interface.my_shred_version,
-    };
-    try shred_collector.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
-
-    // verifier (thread)
-    try shred_collector.spawn(
-        "Shred Verifier",
-        sig.shred_collector.runShredSignatureVerification,
-        .{
-            interface.exit,
-            unverified_shreds_channel,
-            verified_shreds_channel,
-            interface.leader_schedule,
-        },
-    );
-
-    // processor (thread)
-    try shred_collector.spawn(
-        "Shred Processor",
-        sig.shred_collector.processShreds,
-        .{ deps.allocator, verified_shreds_channel, shred_tracker },
-    );
-
-    return shred_collector;
+    return service_manager;
 }
 
 fn bindUdpReusable(port: u16) !Socket {
     var socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
     try sig.net.enablePortReuse(&socket, true);
     try socket.bindToPort(port);
-    try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT);
+    try socket.setReadTimeout(sig.net.SOCKET_TIMEOUT_US);
     return socket;
 }
