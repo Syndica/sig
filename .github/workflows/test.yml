@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main, pre-release]
+    branches: [main, pre-release, 19/cicd-gossip]
   pull_request:
     branches: [main, pre-release]
 
