@@ -1,9 +1,6 @@
 const std = @import("std");
 const bincode = @import("../bincode/bincode.zig");
 
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
-
 pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {

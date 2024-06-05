@@ -20,7 +20,7 @@ pub const ServiceManager = struct {
     /// Signal that is expected to tell all threads to exit.
     exit: *Atomic(bool),
     /// Threads to join.
-    threads: std.ArrayList(std.Thread),
+    threads: ArrayList(std.Thread),
     /// State to free after all threads join.
     _arena: ArenaAllocator,
     /// Logic to run after all threads join.
@@ -32,7 +32,7 @@ pub const ServiceManager = struct {
         return .{
             .logger = logger,
             .exit = exit,
-            .threads = std.ArrayList(std.Thread).init(allocator),
+            .threads = ArrayList(std.Thread).init(allocator),
             ._arena = ArenaAllocator.init(allocator),
             .defers = DeferList.init(allocator),
         };
@@ -170,12 +170,12 @@ pub fn runService(
 /// 2. Return this struct to the broader scope.
 /// 3. Call `deinit` to run all the defers.
 pub const DeferList = struct {
-    defers: std.ArrayList(Lazy(void)),
+    defers: ArrayList(Lazy(void)),
 
     const Self = @This();
 
     pub fn init(allocator: Allocator) Self {
-        return .{ .defers = std.ArrayList(Lazy(void)).init(allocator) };
+        return .{ .defers = ArrayList(Lazy(void)).init(allocator) };
     }
 
     pub fn deferCall(
