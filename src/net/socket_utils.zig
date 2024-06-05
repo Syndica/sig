@@ -7,7 +7,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
 const Logger = @import("../trace/log.zig").Logger;
 
-pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
+pub const SOCKET_TIMEOUT_MS: usize = 1 * std.time.ms_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
 pub fn readSocket(
@@ -17,15 +17,10 @@ pub fn readSocket(
     exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) !void {
-    // Performance out of the IO without poll
-    //  * block on the socket until it's readable
-    //  * set the socket to non blocking
-    //  * read until it fails
-    //  * set it back to blocking before returning
+    // NOTE: we set to non-blocking to periodically check if we should exit
+    try socket.setReadTimeout(SOCKET_TIMEOUT_MS);
 
-    try socket.setReadTimeout(SOCKET_TIMEOUT_US);
-
-    while (!exit.load(.unordered)) {
+    inf_loop: while (!exit.load(.unordered)) {
         // init a new batch
         var packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
@@ -33,16 +28,16 @@ pub fn readSocket(
         );
         errdefer packet_batch.deinit();
 
-        // NOTE: usually this would be null (ie, blocking)
-        // but in order to exit cleanly in tests - we set to 1 second
-        try socket.setReadTimeout(std.time.ms_per_s);
-
         // recv packets into batch
         while (packet_batch.items.len != packet_batch.capacity) {
             var packet: Packet = Packet.default();
             const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
                 error.WouldBlock => {
                     if (packet_batch.items.len > 0) break;
+                    if (exit.load(.unordered)) {
+                        packet_batch.deinit();
+                        break :inf_loop;
+                    }
                     continue;
                 },
                 else => |e| return e,
@@ -57,6 +52,7 @@ pub fn readSocket(
         packet_batch.shrinkAndFree(packet_batch.items.len);
         try incoming_channel.send(packet_batch);
     }
+
     logger.debugf("readSocket loop closed", .{});
 }
 
@@ -171,6 +167,7 @@ pub const BenchmarkPacketProcessing = struct {
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
         var timer = try std.time.Timer.start();
 
+        // NOTE: send more packets than we need because UDP drops some
         for (1..(n_packets * 2 + 1)) |i| {
             rand.fill(&packet_buf);
             _ = try socket.sendTo(to_endpoint, &packet_buf);
@@ -185,6 +182,7 @@ pub const BenchmarkPacketProcessing = struct {
                 }
             }
         }
+        std.debug.print("sent all packets.. waiting on receiver\r", .{});
 
         recv_handle.join();
         const elapsed = timer.read();
@@ -208,6 +206,7 @@ pub fn benchmarkChannelRecv(
         for (values) |packet_batch| {
             count += packet_batch.items.len;
         }
+        std.debug.print("recv packet count: {d}\r", .{count});
         if (count >= n_values_to_receive) {
             break;
         }

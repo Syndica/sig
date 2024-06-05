@@ -39,7 +39,7 @@ const requestIpEcho = @import("../net/echo.zig").requestIpEcho;
 const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
 const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
 const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
-const SOCKET_TIMEOUT_US = @import("../net/socket_utils.zig").SOCKET_TIMEOUT_US;
+const SOCKET_TIMEOUT_MS = @import("../net/socket_utils.zig").SOCKET_TIMEOUT_MS;
 
 const config = @import("config.zig");
 // var validator_config = config.current;
@@ -418,7 +418,7 @@ fn validator() !void {
     // repair
     var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
     try repair_socket.bindToPort(repair_port);
-    try repair_socket.setReadTimeout(SOCKET_TIMEOUT_US);
+    try repair_socket.setReadTimeout(SOCKET_TIMEOUT_MS);
 
     var repair_svc = try initRepair(
         logger,

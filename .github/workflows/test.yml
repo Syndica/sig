@@ -24,7 +24,7 @@ jobs:
           zig fmt --check src/
           zig fmt --check build.zig
 
-  build-unix:
+  test:
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -42,41 +42,47 @@ jobs:
         with:
           version: 0.12.0
 
-      - name: build
-        run: zig build
-
       - name: test
         run: zig build test
 
-      - name: gossip 
+  benchmarks:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    runs-on: ${{matrix.os}}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.12.0
+
+      - name: benchmarks 
+        run: zig build benchmark
+
+  gossip:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    runs-on: ${{matrix.os}}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.12.0
+
+      - name: gossip
         run: bash scripts/gossip_test.sh 120 # in seconds
-
-  # build-windows:
-  #   runs-on: windows-latest
-  #   defaults:
-  #     run:
-  #       shell: bash
-
-  #   steps:
-  #     - name: setup-git
-  #       run: |
-  #         git config --global core.autocrlf false
-  #         git config --global core.eol lf
-
-  #     - name: checkout
-  #       uses: actions/checkout@v2
-  #       with:
-  #         submodules: recursive
-
-  #     - name: setup-zig
-  #       uses: goto-bus-stop/setup-zig@v1
-  #       with:
-  #         version: master
-
-  #     - name: build
-  #       run: |
-  #         zig build -Dtarget=x86_64-windows --prefix tmp
-  #         zig build
-
-  #     - name: test
-  #       run: zig build test

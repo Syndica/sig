@@ -173,7 +173,7 @@ pub const GossipService = struct {
         const gossip_address = my_contact_info.getSocket(socket_tag.GOSSIP) orelse return error.GossipAddrUnspecified;
         var gossip_socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
         gossip_socket.bindToPort(gossip_address.port()) catch return error.SocketBindFailed;
-        gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT_US) catch return error.SocketSetTimeoutFailed; // 1 second
+        gossip_socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT_MS) catch return error.SocketSetTimeoutFailed; // 1 second
 
         const failed_pull_hashes = HashTimeQueue.init(allocator);
         const push_msg_q = ArrayList(SignedGossipData).init(allocator);
@@ -2933,27 +2933,27 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "10k_ping_msgs",
+            .name = "5k_ping_msgs",
             .message_counts = .{
-                .n_ping = 10_000,
+                .n_ping = 5_000,
                 .n_push_message = 0,
                 .n_pull_response = 0,
             },
         },
         .{
-            .name = "10k_push_msgs",
+            .name = "5k_push_msgs",
             .message_counts = .{
                 .n_ping = 0,
-                .n_push_message = 10_000,
+                .n_push_message = 5_000,
                 .n_pull_response = 0,
             },
         },
         .{
-            .name = "10k_pull_resp_msgs",
+            .name = "1k_pull_resp_msgs",
             .message_counts = .{
                 .n_ping = 0,
                 .n_push_message = 0,
-                .n_pull_response = 10_000,
+                .n_pull_response = 1_000,
             },
         },
     };
@@ -3050,10 +3050,10 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var timer = try std.time.Timer.start();
         while (true) {
             const v = gossip_service.stats.gossip_packets_processed.get();
+            std.debug.print("{d} messages processed\r", .{v});
             if (v >= msg_sent) {
                 break;
             }
-            std.debug.print("{d} messages processed\r", .{v});
         }
         const elapsed = timer.read();
         std.debug.print("\r", .{});
