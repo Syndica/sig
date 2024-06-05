@@ -2,7 +2,7 @@ name: check
 
 on:
   push:
-    branches: [main, pre-release, 19/cicd-gossip]
+    branches: [main, pre-release]
   pull_request_review:
     types: [submitted]
   pull_request:
