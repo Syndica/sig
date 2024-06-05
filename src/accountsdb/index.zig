@@ -6,6 +6,7 @@ const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/time.zig").Slot;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const AccountFile = @import("accounts_file.zig").AccountFile;
+const FileId = @import("accounts_file.zig").FileId;
 
 /// reference to an account (either in a file or cache)
 pub const AccountRef = struct {
@@ -16,7 +17,7 @@ pub const AccountRef = struct {
 
     pub const AccountLocation = union(enum(u8)) {
         File: struct {
-            file_id: u32,
+            file_id: FileId,
             offset: usize,
         },
         Cache: struct {
@@ -190,7 +191,7 @@ pub const AccountIndex = struct {
                 .slot = accounts_file.slot,
                 .location = .{
                     .File = .{
-                        .file_id = @as(u32, @intCast(accounts_file.id)),
+                        .file_id = FileId.fromInt(@intCast(accounts_file.id)),
                         .offset = offset,
                     },
                 },

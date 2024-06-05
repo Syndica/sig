@@ -42,8 +42,14 @@ const socket_tag = sig.gossip.socket_tag;
 const SOCKET_TIMEOUT_US = sig.net.SOCKET_TIMEOUT_US;
 const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 
+// TODO: use better allocator, unless GPA becomes more performant.
+
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
+
+var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
+
 const base58Encoder = base58.Encoder.init(.{});
 
 const gossip_host = struct {
@@ -529,6 +535,7 @@ fn initGossip(
 
     return try GossipService.init(
         gpa_allocator,
+        gossip_value_gpa_allocator,
         contact_info,
         my_keypair,
         entrypoints,
@@ -538,13 +545,8 @@ fn initGossip(
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
-    // TODO: use better allocator, unless GPA becomes more performant.
-    var gp_message_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    defer _ = gp_message_allocator.deinit();
-
     const gossip_config = config.current.gossip;
     return gossip_service.run(.{
-        .message_allocator = gp_message_allocator.allocator(),
         .spy_node = gossip_config.spy_node,
         .dump = gossip_config.dump,
     });
