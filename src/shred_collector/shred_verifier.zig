@@ -14,15 +14,15 @@ const Packet = sig.net.Packet;
 pub fn runShredVerifier(
     exit: *Atomic(bool),
     /// shred receiver --> me
-    unverified_shred_channel: *Channel(ArrayList(Packet)),
+    unverified_shred_receiver: *Channel(ArrayList(Packet)),
     /// me --> shred processor
-    verified_shred_channel: *Channel(ArrayList(Packet)),
+    verified_shred_sender: *Channel(ArrayList(Packet)),
     leader_schedule: LeaderScheduleCalculator,
 ) !void {
     var verified_count: usize = 0;
-    var buf = ArrayList(ArrayList(Packet)).init(unverified_shred_channel.allocator);
+    var buf = ArrayList(ArrayList(Packet)).init(unverified_shred_receiver.allocator);
     while (true) {
-        try unverified_shred_channel.tryDrainRecycle(&buf);
+        try unverified_shred_receiver.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;
@@ -36,7 +36,7 @@ pub fn runShredVerifier(
                     verified_count += 1;
                 }
             }
-            try verified_shred_channel.send(packet_batch);
+            try verified_shred_sender.send(packet_batch);
             if (exit.load(.monotonic)) return;
         }
     }
