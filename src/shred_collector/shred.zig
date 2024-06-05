@@ -4,7 +4,6 @@ const sig = @import("../lib.zig");
 const bincode = sig.bincode;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
 const Hash = sig.core.Hash;

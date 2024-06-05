@@ -21,7 +21,6 @@ const RepairMessage = shred_collector.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
 
-const endpointToString = sig.net.endpointToString;
 
 const num_tvu_receivers = 2;
 
