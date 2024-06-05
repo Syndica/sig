@@ -182,7 +182,7 @@ pub const BenchmarkPacketProcessing = struct {
                 }
             }
         }
-        std.debug.print("sent all packets.. waiting on receiver\r", .{});
+        // std.debug.print("sent all packets.. waiting on receiver\r", .{});
 
         recv_handle.join();
         const elapsed = timer.read();
@@ -206,7 +206,7 @@ pub fn benchmarkChannelRecv(
         for (values) |packet_batch| {
             count += packet_batch.items.len;
         }
-        std.debug.print("recv packet count: {d}\r", .{count});
+        // std.debug.print("recv packet count: {d}\r", .{count});
         if (count >= n_values_to_receive) {
             break;
         }

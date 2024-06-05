@@ -3050,13 +3050,13 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var timer = try std.time.Timer.start();
         while (true) {
             const v = gossip_service.stats.gossip_packets_processed.get();
-            std.debug.print("{d} messages processed\r", .{v});
+            // std.debug.print("{d} messages processed\r", .{v});
             if (v >= msg_sent) {
                 break;
             }
         }
         const elapsed = timer.read();
-        std.debug.print("\r", .{});
+        // std.debug.print("\r", .{});
 
         exit.store(true, .unordered);
         packet_handle.join();
@@ -3191,10 +3191,10 @@ pub const BenchmarkGossipServicePullRequests = struct {
             if (v >= msg_sent) {
                 break;
             }
-            std.debug.print("{d} messages processed\r", .{v});
+            // std.debug.print("{d} messages processed\r", .{v});
         }
         const elapsed = timer.read();
-        std.debug.print("\r", .{});
+        // std.debug.print("\r", .{});
 
         exit.store(true, .unordered);
         packet_handle.join();
