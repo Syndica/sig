@@ -11,6 +11,5 @@ pub const _private = struct {
 
 pub const ShredCollectorConfig = _private.service.ShredCollectorConfig;
 pub const ShredCollectorDependencies = _private.service.ShredCollectorDependencies;
-pub const ShredCollectorInterface = _private.service.ShredCollectorInterface;
 
 pub const start = _private.service.start;

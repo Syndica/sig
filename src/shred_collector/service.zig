@@ -26,26 +26,20 @@ const RepairService = shred_collector.repair_service.RepairService;
 const ShredReceiver = shred_collector.shred_receiver.ShredReceiver;
 const ShredReceiverMetrics = shred_collector.shred_receiver.ShredReceiverMetrics;
 
-/// Settings which tell the Shred Collector how to behave.
+/// Settings which instruct the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
     tvu_port: u16,
 };
 
-/// Basic resources that are required for
-/// the Shred Collector to operate.
+/// Resources that are required for the Shred Collector to operate.
 pub const ShredCollectorDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
     /// This validator's keypair
     my_keypair: *const KeyPair,
-};
-
-/// Interface between the Shred Collector and other components
-/// that are external to the Shred Collector.
-pub const ShredCollectorInterface = struct {
     /// Shared exit indicator, used to shutdown the Shred Collector.
     exit: *Atomic(bool),
     /// Shared state that is read from gossip
@@ -66,9 +60,8 @@ pub const ShredCollectorInterface = struct {
 pub fn start(
     conf: ShredCollectorConfig,
     deps: ShredCollectorDependencies,
-    interface: ShredCollectorInterface,
 ) !ServiceManager {
-    var service_manager = ServiceManager.init(deps.allocator, deps.logger, interface.exit);
+    var service_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit);
     var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
@@ -81,12 +74,12 @@ pub fn start(
     shred_receiver.* = ShredReceiver{
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
-        .exit = interface.exit,
+        .exit = deps.exit,
         .logger = deps.logger,
         .repair_socket = repair_socket,
         .tvu_socket = tvu_socket,
         .unverified_shred_channel = unverified_shred_channel,
-        .shred_version = interface.my_shred_version,
+        .shred_version = deps.my_shred_version,
         .metrics = try ShredReceiverMetrics.init(),
     };
     try service_manager.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
@@ -95,7 +88,7 @@ pub fn start(
     try service_manager.spawn(
         .{ .name = "Shred Verifier" },
         shred_collector.shred_verifier.runShredVerifier,
-        .{ interface.exit, unverified_shred_channel, verified_shred_channel, .{} },
+        .{ deps.exit, unverified_shred_channel, verified_shred_channel, .{} },
     );
 
     // tracker (shared state, internal to Shred Collector)
@@ -116,9 +109,9 @@ pub fn start(
     const repair_peer_provider = try RepairPeerProvider.init(
         deps.allocator,
         deps.random,
-        interface.gossip_table_rw,
+        deps.gossip_table_rw,
         Pubkey.fromPublicKey(&deps.my_keypair.public_key),
-        interface.my_shred_version,
+        deps.my_shred_version,
     );
     const repair_requester = try RepairRequester.init(
         deps.allocator,
@@ -126,14 +119,14 @@ pub fn start(
         deps.random,
         deps.my_keypair,
         repair_socket,
-        interface.exit,
+        deps.exit,
     );
     const repair_svc = try arena.create(RepairService);
     try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = RepairService.init(
         deps.allocator,
         deps.logger,
-        interface.exit,
+        deps.exit,
         repair_requester,
         repair_peer_provider,
         shred_tracker,

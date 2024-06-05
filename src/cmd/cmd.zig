@@ -23,6 +23,7 @@ const IpAddr = sig.net.IpAddr;
 const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
+const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -419,13 +420,11 @@ fn validator() !void {
     // shred collector
     var shred_collector = try sig.shred_collector.start(
         config.current.shred_collector,
-        .{
+        ShredCollectorDependencies{
             .allocator = gpa_allocator,
             .logger = logger,
             .random = rand.random(),
             .my_keypair = &my_keypair,
-        },
-        .{
             .exit = &exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
