@@ -7,7 +7,7 @@ const Channel = @import("../sync/channel.zig").Channel;
 const std = @import("std");
 const Logger = @import("../trace/log.zig").Logger;
 
-pub const SOCKET_TIMEOUT_MS: usize = 1 * std.time.ms_per_s;
+pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
 pub fn readSocket(
@@ -18,7 +18,7 @@ pub fn readSocket(
     logger: Logger,
 ) !void {
     // NOTE: we set to non-blocking to periodically check if we should exit
-    try socket.setReadTimeout(SOCKET_TIMEOUT_MS);
+    try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
     inf_loop: while (!exit.load(.unordered)) {
         // init a new batch
