@@ -5,7 +5,6 @@ const bincode = @import("../bincode/bincode.zig");
 const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
 const Nonce = @import("../core/shred.zig").Nonce;
 const Pong = @import("../gossip/ping_pong.zig").Pong;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;

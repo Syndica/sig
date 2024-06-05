@@ -44,7 +44,6 @@ const SOCKET_TIMEOUT_US = @import("../net/socket_utils.zig").SOCKET_TIMEOUT_US;
 const config = @import("config.zig");
 // var validator_config = config.current;
 
-const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
 const socket_tag = @import("../gossip/data.zig").socket_tag;
 
 // TODO: use better allocator, unless GPA becomes more performant.
