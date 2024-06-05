@@ -37,6 +37,12 @@ pub fn runShredProcessor(
                     else => return err,
                 };
                 var shred = try Shred.fromPayload(allocator, shred_payload);
+                if (shred == Shred.Data) {
+                    const parent = try shred.Data.parent();
+                    if (parent + 1 != slot) {
+                        try tracker.skipSlots(parent, slot);
+                    }
+                }
                 defer shred.deinit();
                 if (shred.isLastInSlot()) {
                     tracker.setLastShred(slot, index) catch |err| switch (err) {

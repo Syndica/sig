@@ -155,7 +155,7 @@ pub const DataShred = struct {
         return self.payload[consts.headers_size..size];
     }
 
-    fn parent(self: *const Self) !Slot {
+    pub fn parent(self: *const Self) !Slot {
         const slot = self.fields.common.slot;
         if (self.fields.custom.parent_offset == 0 and slot != 0) {
             return error.InvalidParentOffset;
