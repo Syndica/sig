@@ -24,6 +24,7 @@ const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
 const RepairRequester = shred_collector.repair_service.RepairRequester;
 const RepairService = shred_collector.repair_service.RepairService;
 const ShredReceiver = shred_collector.shred_receiver.ShredReceiver;
+const ShredReceiverMetrics = shred_collector.shred_receiver.ShredReceiverMetrics;
 
 /// Settings which tell the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
@@ -86,6 +87,7 @@ pub fn start(
         .tvu_socket = tvu_socket,
         .unverified_shred_channel = unverified_shred_channel,
         .shred_version = interface.my_shred_version,
+        .metrics = try ShredReceiverMetrics.init(),
     };
     try service_manager.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
 

@@ -36,6 +36,7 @@ pub const ShredReceiver = struct {
     /// me --> shred verifier
     unverified_shred_channel: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
+    metrics: ShredReceiverMetrics,
 
     const Self = @This();
 
@@ -130,13 +131,13 @@ pub const ShredReceiver = struct {
 
     /// Handle a ping message and return
     fn handlePing(self: *Self, packet: *const Packet, responses: *ArrayList(Packet)) !void {
-        const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch |e| {
-            self.logger.errf("could not deserialize ping: {} - {any}", .{ e, packet.data[0..packet.size] });
+        const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch {
+            self.metrics.invalid_repair_pings.inc();
             return;
         };
         const ping = repair_ping.Ping;
-        ping.verify() catch |e| {
-            self.logger.errf("ping failed verification: {} - {any}", .{ e, packet.data[0..packet.size] });
+        ping.verify() catch {
+            self.metrics.invalid_repair_pings.inc();
             return;
         };
 
@@ -199,3 +200,12 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 const REPAIR_RESPONSE_SERIALIZED_PING_BYTES = 132;
 
 const RepairPing = union(enum) { Ping: Ping };
+
+pub const ShredReceiverMetrics = struct {
+    invalid_repair_pings: *sig.prometheus.Counter,
+
+    pub fn init() !ShredReceiverMetrics {
+        const registry = sig.prometheus.globalRegistry();
+        return .{ .invalid_repair_pings = try registry.getOrCreateCounter("invalid_repair_pings") };
+    }
+};
