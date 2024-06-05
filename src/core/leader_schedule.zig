@@ -13,7 +13,7 @@ const WeightedRandomSampler = sig.rand.WeightedRandomSampler;
 
 pub const NUM_CONSECUTIVE_LEADER_SLOTS: u64 = 4;
 
-pub const SlotLeaderProvider = sig.utils.PointerClosure(Slot, ?Pubkey);
+pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 
 /// Only works for a single epoch. This is a basic limited approach that should
 /// only be used as a placeholder until a better approach is fleshed out.

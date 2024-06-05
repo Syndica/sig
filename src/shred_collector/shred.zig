@@ -4,17 +4,16 @@ const sig = @import("../lib.zig");
 const bincode = sig.bincode;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 
-const BitFlags = sig.utils.BitFlags;
+const BitFlags = sig.utils.bitflags.BitFlags;
 const Hash = sig.core.Hash;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-const checkedAdd = sig.utils.checkedAdd;
-const checkedSub = sig.utils.checkedSub;
+const checkedAdd = sig.utils.math.checkedAdd;
+const checkedSub = sig.utils.math.checkedSub;
 
 const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
 
@@ -49,7 +48,7 @@ pub const Shred = union(ShredType) {
     }
 
     pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-        const variant = shred_layout.getShredVariant(payload) orelse return error.uygugj;
+        const variant = layout.getShredVariant(payload) orelse return error.uygugj;
         return switch (variant.shred_type) {
             .Code => .{ .Code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload) } },
             .Data => .{ .Data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload) } },
@@ -74,7 +73,7 @@ pub const Shred = union(ShredType) {
 
     pub fn commonHeader(self: *const Self) *const ShredCommonHeader {
         return switch (self.*) {
-            inline .Code, .Data => |c| &c.common,
+            inline .Code, .Data => |c| &c.fields.common,
         };
     }
 };
@@ -88,36 +87,37 @@ pub const CodingShred = struct {
 
     fn sanitize(self: *const Self) error{InvalidNumCodingShreds}!void {
         try self.fields.sanitize();
-        if (self.custom.num_coding_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
+        if (self.fields.custom.num_coding_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
             return error.InvalidNumCodingShreds;
         }
+        try self.erasureShardIndex();
     }
 
     pub fn erasureShardIndex(self: *const Self) !usize {
         // Assert that the last shred index in the erasure set does not
         // overshoot MAX_{DATA,CODE}_SHREDS_PER_SLOT.
         if (try checkedAdd(
-            self.common.fec_set_index,
-            try checkedSub(@as(u32, @intCast(self.custom.num_data_shreds)), 1),
+            self.fields.common.fec_set_index,
+            try checkedSub(@as(u32, @intCast(self.fields.custom.num_data_shreds)), 1),
         ) >= data_shred.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
         if (try checkedAdd(
             try self.first_coding_index(),
-            try checkedSub(@as(u32, @intCast(self.custom.num_coding_shreds)), 1),
+            try checkedSub(@as(u32, @intCast(self.fields.custom.num_coding_shreds)), 1),
         ) >= coding_shred.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
-        const num_data_shreds: usize = @intCast(self.custom.num_data_shreds);
-        const num_coding_shreds: usize = @intCast(self.custom.num_coding_shreds);
-        const position: usize = @intCast(self.custom.position);
+        const num_data_shreds: usize = @intCast(self.fields.custom.num_data_shreds);
+        const num_coding_shreds: usize = @intCast(self.fields.custom.num_coding_shreds);
+        const position: usize = @intCast(self.fields.custom.position);
         const fec_set_size = try checkedAdd(num_data_shreds, num_coding_shreds);
         const index = try checkedAdd(position, num_data_shreds);
         return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
     }
 
     fn first_coding_index(self: *const Self) !u32 {
-        return checkedSub(self.common.index, self.custom.position);
+        return checkedSub(self.fields.common.index, self.fields.custom.position);
     }
 };
 
@@ -154,7 +154,7 @@ pub const DataShred = struct {
         return self.payload[consts.headers_size..size];
     }
 
-    fn parent(self: *const Self) !Slot {
+    pub fn parent(self: *const Self) !Slot {
         const slot = self.fields.common.slot;
         if (self.fields.custom.parent_offset == 0 and slot != 0) {
             return error.InvalidParentOffset;
@@ -339,7 +339,7 @@ fn codeIndex(shred: []const u8) ?usize {
 /// This only works for data shreds.
 fn dataIndex(shred: []const u8) ?usize {
     const fec_set_index = getInt(u32, shred, 79) orelse return null;
-    const layout_index = shred_layout.getIndex(shred) orelse return null;
+    const layout_index = layout.getIndex(shred) orelse return null;
     const index = checkedAdd(layout_index, fec_set_index) catch return null;
     return @intCast(index);
 }
@@ -527,7 +527,7 @@ pub const ShredConstants = struct {
     headers_size: usize,
 };
 
-pub const shred_layout = struct {
+pub const layout = struct {
     const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
     const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
     const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;

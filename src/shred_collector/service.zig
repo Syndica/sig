@@ -1,6 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -15,37 +16,31 @@ const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
-const ServiceManager = sig.utils.ServiceManager;
+const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
-const SlotLeaderGetter = sig.core.SlotLeaderProvider;
+const SlotLeaderGetter = sig.core.leader_schedule.SlotLeaderProvider;
 
-const this = sig.shred_collector;
-const BasicShredTracker = this.BasicShredTracker;
-const RepairPeerProvider = this.RepairPeerProvider;
-const RepairRequester = this.RepairRequester;
-const RepairService = this.RepairService;
-const ShredReceiver = this.ShredReceiver;
+const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
+const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
+const RepairRequester = shred_collector.repair_service.RepairRequester;
+const RepairService = shred_collector.repair_service.RepairService;
+const ShredReceiver = shred_collector.shred_receiver.ShredReceiver;
+const ShredReceiverMetrics = shred_collector.shred_receiver.ShredReceiverMetrics;
 
-/// Settings which tell the Shred Collector how to behave.
+/// Settings which instruct the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
     tvu_port: u16,
 };
 
-/// Basic resources that are required for
-/// the Shred Collector to operate.
+/// Resources that are required for the Shred Collector to operate.
 pub const ShredCollectorDependencies = struct {
     allocator: Allocator,
     logger: Logger,
     random: Random,
     /// This validator's keypair
     my_keypair: *const KeyPair,
-};
-
-/// Interface between the Shred Collector and other components
-/// that are external to the Shred Collector.
-pub const ShredCollectorInterface = struct {
     /// Shared exit indicator, used to shutdown the Shred Collector.
     exit: *Atomic(bool),
     /// Shared state that is read from gossip
@@ -67,9 +62,8 @@ pub const ShredCollectorInterface = struct {
 pub fn start(
     conf: ShredCollectorConfig,
     deps: ShredCollectorDependencies,
-    interface: ShredCollectorInterface,
 ) !ServiceManager {
-    var service_manager = ServiceManager.init(deps.allocator, deps.logger, interface.exit, "shred collector", .{}, .{});
+    var service_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit, "shred collector", .{}, .{});
     var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
@@ -88,24 +82,25 @@ pub fn start(
     shred_receiver.* = ShredReceiver{
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
-        .exit = interface.exit,
+        .exit = deps.exit,
         .logger = deps.logger,
         .repair_socket = repair_socket,
         .tvu_socket = tvu_socket,
         .unverified_shred_channel = unverified_shred_channel,
-        .shred_version = interface.my_shred_version,
+        .shred_version = deps.my_shred_version,
+        .metrics = try ShredReceiverMetrics.init(),
     };
     try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
     try service_manager.spawn(
         "Shred Verifier",
-        sig.shred_collector.runShredVerifier,
+        shred_collector.shred_verifier.runShredVerifier,
         .{
-            interface.exit,
+            deps.exit,
             unverified_shred_channel,
             verified_shreds_channel,
-            interface.leader_schedule,
+            deps.leader_schedule,
         },
     );
 
@@ -119,7 +114,7 @@ pub fn start(
     // processor (thread)
     try service_manager.spawn(
         "Shred Processor",
-        sig.shred_collector.runShredProcessor,
+        shred_collector.shred_processor.runShredProcessor,
         .{ deps.allocator, verified_shreds_channel, shred_tracker },
     );
 
@@ -127,9 +122,9 @@ pub fn start(
     const repair_peer_provider = try RepairPeerProvider.init(
         deps.allocator,
         deps.random,
-        interface.gossip_table_rw,
+        deps.gossip_table_rw,
         Pubkey.fromPublicKey(&deps.my_keypair.public_key),
-        interface.my_shred_version,
+        deps.my_shred_version,
     );
     const repair_requester = try RepairRequester.init(
         deps.allocator,
@@ -137,14 +132,14 @@ pub fn start(
         deps.random,
         deps.my_keypair,
         repair_socket,
-        interface.exit,
+        deps.exit,
     );
     const repair_svc = try arena.create(RepairService);
     try service_manager.defers.deferCall(RepairService.deinit, .{repair_svc});
     repair_svc.* = RepairService.init(
         deps.allocator,
         deps.logger,
-        interface.exit,
+        deps.exit,
         repair_requester,
         repair_peer_provider,
         shred_tracker,

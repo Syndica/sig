@@ -301,6 +301,7 @@ pub fn run() !void {
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(
         allocator,
+        allocator,
         fuzz_contact_info,
         fuzz_keypair,
         (&entrypoint)[0..1],
@@ -310,7 +311,6 @@ pub fn run() !void {
 
     const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
         &gossip_service_fuzzer, .{
-            .message_allocator = allocator,
             .spy_node = true,
             .dump = false,
         },

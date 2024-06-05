@@ -1,13 +1,14 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
-const shred_layout = sig.shred_collector.shred_layout;
+const shred_layout = shred_collector.shred.layout;
 
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
-const SlotLeaderGetter = sig.core.SlotLeaderProvider;
+const SlotLeaderGetter = sig.core.leader_schedule.SlotLeaderProvider;
 const Packet = sig.net.Packet;
 
 /// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
@@ -17,7 +18,7 @@ pub fn runShredVerifier(
     unverified_shred_channel: *Channel(ArrayList(Packet)),
     /// me --> shred processor
     verified_shred_channel: *Channel(ArrayList(Packet)),
-    leader_schedule: sig.core.SlotLeaderProvider,
+    leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
     var buf = ArrayList(ArrayList(Packet)).init(unverified_shred_channel.allocator);

@@ -16,7 +16,6 @@ const AccountsDB = sig.accounts_db.AccountsDB;
 const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
-const BasicShredTracker = sig.shred_collector.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
@@ -24,15 +23,14 @@ const IpAddr = sig.net.IpAddr;
 const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
-const RepairService = sig.shred_collector.RepairService;
-const ShredReceiver = sig.shred_collector.ShredReceiver;
+const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
-const enumFromName = sig.utils.enumFromName;
+const enumFromName = sig.utils.types.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
@@ -44,8 +42,14 @@ const socket_tag = sig.gossip.socket_tag;
 const SOCKET_TIMEOUT_US = sig.net.SOCKET_TIMEOUT_US;
 const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 
+// TODO: use better allocator, unless GPA becomes more performant.
+
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 const gpa_allocator = gpa.allocator();
+
+var gossip_value_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
+
 const base58Encoder = base58.Encoder.init(.{});
 
 const gossip_host = struct {
@@ -418,7 +422,6 @@ fn validator() !void {
     );
     defer gossip_service.deinit();
     var gossip_handle = try gossip_service.start(.{
-        .message_allocator = gpa_allocator,
         .spy_node = config.current.gossip.spy_node,
         .dump = config.current.gossip.dump,
     });
@@ -495,10 +498,10 @@ fn validator() !void {
     logger.infof("accounts-db setup done...", .{});
 
     // leader schedule
-    const leader_schedule = try sig.core.leaderScheduleFromBank(gpa_allocator, &bank);
+    const leader_schedule = try sig.core.leader_schedule.leaderScheduleFromBank(gpa_allocator, &bank);
     _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
     const epoch_start_slot = bank.bank_fields.slot - slot_index;
-    var slot_leader_getter = sig.core.SingleEpochLeaderSchedule{
+    var slot_leader_getter = sig.core.leader_schedule.SingleEpochLeaderSchedule{
         .leader_schedule = leader_schedule,
         .start_slot = epoch_start_slot,
     };
@@ -507,13 +510,11 @@ fn validator() !void {
     // shred collector
     var shred_collector = try sig.shred_collector.start(
         config.current.shred_collector,
-        .{
+        ShredCollectorDependencies{
             .allocator = gpa_allocator,
             .logger = logger,
             .random = rand.random(),
             .my_keypair = &my_keypair,
-        },
-        .{
             .exit = &exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
@@ -549,6 +550,7 @@ fn initGossip(
 
     return try GossipService.init(
         gpa_allocator,
+        gossip_value_gpa_allocator,
         contact_info,
         my_keypair,
         entrypoints,
@@ -558,13 +560,8 @@ fn initGossip(
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
-    // TODO: use better allocator, unless GPA becomes more performant.
-    var gp_message_allocator: std.heap.GeneralPurposeAllocator(.{}) = .{};
-    defer _ = gp_message_allocator.deinit();
-
     const gossip_config = config.current.gossip;
     return gossip_service.run(.{
-        .message_allocator = gp_message_allocator.allocator(),
         .spy_node = gossip_config.spy_node,
         .dump = gossip_config.dump,
     });

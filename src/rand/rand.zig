@@ -1,10 +1,12 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const chacha = @import("chacha.zig");
 
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 
-const ChaChaRng = sig.rand.ChaChaRng;
+pub const ChaCha = chacha.ChaCha;
+pub const ChaChaRng = chacha.ChaChaRng;
 
 /// Uniformly samples a collection of weighted items. This struct only deals with
 /// the weights, and it tells you which index it selects.
@@ -114,7 +116,7 @@ pub fn BlockRng(
 
 test "WeightedRandomSampler matches rust with chacha" {
     // generate data
-    var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
+    var rng = chacha.ChaChaRng(20).fromSeed(.{0} ** 32);
     var random = rng.random();
     var items: [100]u64 = undefined;
     for (0..100) |i| {

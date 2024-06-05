@@ -1,7 +1,7 @@
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
 
-const BitFlags = sig.utils.BitFlags;
+const BitFlags = sig.utils.bitflags.BitFlags;
 
 /// Maximum over-the-wire size of a Transaction
 ///   1280 is IPv6 minimum MTU

@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -7,7 +8,7 @@ const Mutex = std.Thread.Mutex;
 
 const Slot = sig.core.Slot;
 
-const MAX_SHREDS_PER_SLOT: usize = sig.shred_collector.MAX_SHREDS_PER_SLOT;
+const MAX_SHREDS_PER_SLOT: usize = shred_collector.shred.MAX_SHREDS_PER_SLOT;
 
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 200;
 
@@ -52,6 +53,24 @@ pub const BasicShredTracker = struct {
         }
     }
 
+    pub fn skipSlots(
+        self: *Self,
+        start_inclusive: Slot,
+        end_exclusive: Slot,
+    ) !void {
+        self.mux.lock();
+        defer self.mux.unlock();
+
+        for (start_inclusive..end_exclusive) |slot| {
+            const monitored_slot = try self.observeSlot(slot);
+            if (!monitored_slot.is_complete) {
+                monitored_slot.is_complete = true;
+                self.logger.infof("skipping slot: {}", .{slot});
+                self.max_slot_processed = @max(self.max_slot_processed, slot);
+            }
+        }
+    }
+
     pub fn registerShred(
         self: *Self,
         slot: Slot,
@@ -60,9 +79,7 @@ pub const BasicShredTracker = struct {
         self.mux.lock();
         defer self.mux.unlock();
 
-        self.maybeSetStart(slot);
-        self.max_slot_seen = @max(self.max_slot_seen, slot);
-        const monitored_slot = try self.getMonitoredSlot(slot);
+        const monitored_slot = try self.observeSlot(slot);
         const new = try monitored_slot.record(shred_index);
         if (new) self.logger.debugf("new slot: {}", .{slot});
         self.max_slot_processed = @max(self.max_slot_processed, slot);
@@ -72,8 +89,7 @@ pub const BasicShredTracker = struct {
         self.mux.lock();
         defer self.mux.unlock();
 
-        self.maybeSetStart(slot);
-        const monitored_slot = try self.getMonitoredSlot(slot);
+        const monitored_slot = try self.observeSlot(slot);
         if (monitored_slot.last_shred) |old_last| {
             monitored_slot.last_shred = @min(old_last, index);
         } else {
@@ -113,6 +129,15 @@ pub const BasicShredTracker = struct {
         return true;
     }
 
+    /// - Record that a slot has been observed.
+    /// - Acquire the slot's status for mutation.
+    fn observeSlot(self: *Self, slot: Slot) !*MonitoredSlot {
+        self.maybeSetStart(slot);
+        self.max_slot_seen = @max(self.max_slot_seen, slot);
+        const monitored_slot = try self.getMonitoredSlot(slot);
+        return monitored_slot;
+    }
+
     fn getMonitoredSlot(self: *Self, slot: Slot) error{ SlotUnderflow, SlotOverflow }!*MonitoredSlot {
         if (slot > self.current_bottom_slot + num_slots - 1) {
             return error.SlotOverflow;
@@ -125,7 +150,7 @@ pub const BasicShredTracker = struct {
     }
 };
 
-pub const MultiSlotReport = sig.utils.RecyclingList(
+pub const MultiSlotReport = sig.utils.collections.RecyclingList(
     SlotReport,
     SlotReport.initBlank,
     SlotReport.reset,

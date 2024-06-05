@@ -1,9 +1,10 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const bincode = sig.bincode;
-const layout = sig.shred_collector.shred_layout;
+const layout = shred_collector.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -16,11 +17,9 @@ const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
-const RepairMessage = sig.shred_collector.RepairMessage;
+const RepairMessage = shred_collector.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
-
-const endpointToString = sig.net.endpointToString;
 
 const num_tvu_receivers = 2;
 
@@ -35,6 +34,7 @@ pub const ShredReceiver = struct {
     /// me --> shred verifier
     unverified_shred_channel: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
+    metrics: ShredReceiverMetrics,
 
     const Self = @This();
 
@@ -64,12 +64,12 @@ pub const ShredReceiver = struct {
         const x = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, tvu_receivers, response_sender.channel, false },
+            .{ self, &tvu_receivers, response_sender.channel, false },
         );
         const y = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, .{repair_receiver.channel}, response_sender.channel, true },
+            .{ self, &.{repair_receiver.channel}, response_sender.channel, true },
         );
         x.join();
         y.join();
@@ -79,14 +79,14 @@ pub const ShredReceiver = struct {
     /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receivers: anytype,
+        receivers: []const *Channel(ArrayList(Packet)),
         response_sender: *Channel(ArrayList(Packet)),
         comptime is_repair: bool,
     ) !void {
         var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
         while (!self.exit.load(.unordered)) {
             var responses = ArrayList(Packet).init(self.allocator);
-            inline for (receivers) |receiver| {
+            for (receivers) |receiver| {
                 try receiver.tryDrainRecycle(&buf);
                 if (buf.items.len > 0) {
                     const shred_version = self.shred_version.load(.monotonic);
@@ -129,13 +129,13 @@ pub const ShredReceiver = struct {
 
     /// Handle a ping message and return
     fn handlePing(self: *Self, packet: *const Packet, responses: *ArrayList(Packet)) !void {
-        const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch |e| {
-            self.logger.errf("could not deserialize ping: {} - {any}", .{ e, packet.data[0..packet.size] });
+        const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch {
+            self.metrics.invalid_repair_pings.inc();
             return;
         };
         const ping = repair_ping.Ping;
-        ping.verify() catch |e| {
-            self.logger.errf("ping failed verification: {} - {any}", .{ e, packet.data[0..packet.size] });
+        ping.verify() catch {
+            self.metrics.invalid_repair_pings.inc();
             return;
         };
 
@@ -163,11 +163,11 @@ fn shouldDiscardShred(
     if (slot > max_slot) return true;
     switch (variant.shred_type) {
         .Code => {
-            if (index >= sig.shred_collector.coding_shred.max_per_slot) return true;
+            if (index >= shred_collector.shred.coding_shred.max_per_slot) return true;
             if (slot <= root) return true;
         },
         .Data => {
-            if (index >= sig.shred_collector.data_shred.max_per_slot) return true;
+            if (index >= shred_collector.shred.data_shred.max_per_slot) return true;
             const parent_offset = layout.getParentOffset(shred) orelse return true;
             const parent = slot -| @as(Slot, @intCast(parent_offset));
             if (!verifyShredSlots(slot, parent, root)) return true;
@@ -198,3 +198,12 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 const REPAIR_RESPONSE_SERIALIZED_PING_BYTES = 132;
 
 const RepairPing = union(enum) { Ping: Ping };
+
+pub const ShredReceiverMetrics = struct {
+    invalid_repair_pings: *sig.prometheus.Counter,
+
+    pub fn init() !ShredReceiverMetrics {
+        const registry = sig.prometheus.globalRegistry();
+        return .{ .invalid_repair_pings = try registry.getOrCreateCounter("invalid_repair_pings") };
+    }
+};
