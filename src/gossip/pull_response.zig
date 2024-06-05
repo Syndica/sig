@@ -20,6 +20,9 @@ const deinitGossipPullFilters = _pull_request.deinitGossipPullFilters;
 pub const GOSSIP_PULL_TIMEOUT_MS: u64 = 15000;
 
 pub fn filterSignedGossipDatas(
+    /// It is advised to use a PRNG, and not a true RNG, otherwise
+    /// the runtime of this function may be unbounded.
+    rand: std.Random,
     allocator: std.mem.Allocator,
     gossip_table: *const GossipTable,
     filter: *const GossipPullFilter,
@@ -30,11 +33,7 @@ pub fn filterSignedGossipDatas(
         return ArrayList(SignedGossipData).init(allocator);
     }
 
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-
-    const jitter = rng.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
+    const jitter = rand.intRangeAtMost(u64, 0, GOSSIP_PULL_TIMEOUT_MS / 4);
     const caller_wallclock_with_jitter = caller_wallclock + jitter;
 
     var bloom = filter.filter;
@@ -130,7 +129,10 @@ test "gossip.pull_response: test filtering values works" {
         try lg.mut().insert(v2, 0);
     }
 
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
     var values = try filterSignedGossipDatas(
+        maybe_failing_prng.random(),
         std.testing.allocator,
         lg.get(),
         &filter,
@@ -140,5 +142,8 @@ test "gossip.pull_response: test filtering values works" {
     defer values.deinit();
     lg.unlock();
 
-    try std.testing.expect(values.items.len > 0);
+    std.testing.expect(values.items.len > 0) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
 }
