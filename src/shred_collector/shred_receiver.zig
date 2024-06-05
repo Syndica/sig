@@ -21,7 +21,7 @@ const RepairMessage = shred_collector.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
 
-const num_tvu_receivers = 2;
+const NUM_TVU_RECEIVERS = 2;
 
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
@@ -51,8 +51,8 @@ pub const ShredReceiver = struct {
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit();
 
-        var tvu_receivers: [num_tvu_receivers]*Channel(ArrayList(Packet)) = undefined;
-        for (0..num_tvu_receivers) |i| {
+        var tvu_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
+        for (0..NUM_TVU_RECEIVERS) |i| {
             tvu_receivers[i] = (try SocketThread.initReceiver(
                 self.allocator,
                 self.logger,
