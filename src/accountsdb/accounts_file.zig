@@ -10,7 +10,27 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 
 const AccountFileInfo = @import("snapshots.zig").AccountFileInfo;
 
-pub const FileId = u32;
+/// Simple strictly-typed alias for an integer, used to represent a file ID.
+pub const FileId = enum(u32) {
+    _,
+
+    pub inline fn fromInt(int: u32) FileId {
+        return @enumFromInt(int);
+    }
+
+    pub inline fn toInt(file_id: FileId) u32 {
+        return @intFromEnum(file_id);
+    }
+
+    pub fn format(
+        _: FileId,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        _: anytype,
+    ) !void {
+        @compileError("Should not print " ++ @typeName(FileId) ++ " directly");
+    }
+};
 
 // an account thats stored in an AccountFile
 pub const AccountInFile = struct {
