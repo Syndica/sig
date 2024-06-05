@@ -45,14 +45,14 @@ pub const AccountInFile = struct {
     len: usize = 0,
 
     /// info about the account stored
-    pub const StorageInfo = struct {
+    pub const StorageInfo = extern struct {
         write_version_obsolete: u64,
         data_len: u64,
         pubkey: Pubkey,
     };
 
     /// on-chain account info about the account
-    pub const AccountInfo = struct {
+    pub const AccountInfo = extern struct {
         lamports: u64,
         rent_epoch: Epoch,
         owner: Pubkey,
