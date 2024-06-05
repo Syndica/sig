@@ -1195,7 +1195,10 @@ pub const GossipService = struct {
                 return;
             }
 
+            const filter_rng_seed: u64 = @intCast(std.time.milliTimestamp());
+            var filter_prng = std.Random.Xoshiro256.init(filter_rng_seed);
             const response_gossip_values = pull_response.filterSignedGossipDatas(
+                filter_prng.random(),
                 self.allocator,
                 self.gossip_table,
                 self.filter,
