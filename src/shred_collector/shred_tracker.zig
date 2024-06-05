@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -7,7 +8,7 @@ const Mutex = std.Thread.Mutex;
 
 const Slot = sig.core.Slot;
 
-const MAX_SHREDS_PER_SLOT: usize = sig.shred_collector.MAX_SHREDS_PER_SLOT;
+const MAX_SHREDS_PER_SLOT: usize = shred_collector.shred.MAX_SHREDS_PER_SLOT;
 
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 200;
 
@@ -125,7 +126,7 @@ pub const BasicShredTracker = struct {
     }
 };
 
-pub const MultiSlotReport = sig.utils.RecyclingList(
+pub const MultiSlotReport = sig.utils.collections.RecyclingList(
     SlotReport,
     SlotReport.initBlank,
     SlotReport.reset,

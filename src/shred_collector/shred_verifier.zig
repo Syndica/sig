@@ -1,7 +1,8 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
-const shred_layout = sig.shred_collector.shred_layout;
+const shred_layout = shred_collector.shred.layout;
 
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;

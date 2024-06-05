@@ -1,9 +1,10 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const bincode = sig.bincode;
-const layout = sig.shred_collector.shred_layout;
+const layout = shred_collector.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -16,7 +17,7 @@ const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Ping = sig.gossip.Ping;
 const Pong = sig.gossip.Pong;
-const RepairMessage = sig.shred_collector.RepairMessage;
+const RepairMessage = shred_collector.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
 
@@ -163,11 +164,11 @@ fn shouldDiscardShred(
     if (slot > max_slot) return true;
     switch (variant.shred_type) {
         .Code => {
-            if (index >= sig.shred_collector.coding_shred.max_per_slot) return true;
+            if (index >= shred_collector.shred.coding_shred.max_per_slot) return true;
             if (slot <= root) return true;
         },
         .Data => {
-            if (index >= sig.shred_collector.data_shred.max_per_slot) return true;
+            if (index >= shred_collector.shred.data_shred.max_per_slot) return true;
             const parent_offset = layout.getParentOffset(shred) orelse return true;
             const parent = slot -| @as(Slot, @intCast(parent_offset));
             if (!verifyShredSlots(slot, parent, root)) return true;

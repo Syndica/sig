@@ -1,6 +1,7 @@
 const std = @import("std");
 const zig_network = @import("zig-network");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const bincode = sig.bincode;
 const socket_tag = sig.gossip.socket_tag;
@@ -12,13 +13,13 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = zig_network.Socket;
 
-const BasicShredTracker = sig.shred_collector.BasicShredTracker;
+const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const ContactInfo = sig.gossip.ContactInfo;
 const GossipTable = sig.gossip.GossipTable;
-const HomogeneousThreadPool = sig.utils.HomogeneousThreadPool;
+const HomogeneousThreadPool = sig.utils.thread.HomogeneousThreadPool;
 const Logger = sig.trace.Logger;
-const LruCacheCustom = sig.common.LruCacheCustom;
-const MultiSlotReport = sig.shred_collector.MultiSlotReport;
+const LruCacheCustom = sig.utils.lru.LruCacheCustom;
+const MultiSlotReport = shred_collector.shred_tracker.MultiSlotReport;
 const Nonce = sig.core.Nonce;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
@@ -28,10 +29,10 @@ const SocketAddr = sig.net.SocketAddr;
 const SocketThread = sig.net.SocketThread;
 const Slot = sig.core.Slot;
 
-const RepairRequest = sig.shred_collector.RepairRequest;
-const RepairMessage = sig.shred_collector.RepairMessage;
+const RepairRequest = shred_collector.repair_message.RepairRequest;
+const RepairMessage = shred_collector.repair_message.RepairMessage;
 
-const serializeRepairRequest = sig.shred_collector.serializeRepairRequest;
+const serializeRepairRequest = shred_collector.repair_message.serializeRepairRequest;
 
 const repair_requester_threads = 4;
 
@@ -96,7 +97,7 @@ pub const RepairService = struct {
     }
 
     /// Used to run RepairService continuously.
-    pub const run_config = sig.utils.RunConfig{
+    pub const run_config = sig.utils.service_manager.RunConfig{
         .name = "Repair Service",
         .min_loop_duration_ns = 100 * std.time.ns_per_ms,
     };

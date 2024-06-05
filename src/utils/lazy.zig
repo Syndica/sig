@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
-const ParamsTuple = sig.utils.ParamsTuple;
+const ParamsTuple = sig.utils.types.ParamsTuple;
 
 /// A lazily evaluated instance of type T.
 ///

@@ -8,7 +8,7 @@ const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Logger = sig.trace.Logger;
-const Lazy = sig.utils.Lazy;
+const Lazy = sig.utils.lazy.Lazy;
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.

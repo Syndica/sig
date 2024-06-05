@@ -1,15 +1,16 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
-const layout = sig.shred_collector.shred_layout;
+const layout = shred_collector.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-const BasicShredTracker = sig.shred_collector.BasicShredTracker;
+const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Packet = sig.net.Packet;
-const Shred = sig.shred_collector.Shred;
+const Shred = shred_collector.shred.Shred;
 
 /// Analogous to [WindowService](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L395)
 pub fn runShredProcessor(

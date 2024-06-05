@@ -116,7 +116,7 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn initIpv6(octets: [16]u8, portt: u16) Self {
         return Self{
-            .V4 = .{ .ip = Ipv6Addr.init(octets), .port = portt },
+            .V6 = .{ .ip = Ipv6Addr.init(octets), .port = portt, .flowinfo = 0, .scope_id = 0 },
         };
     }
 

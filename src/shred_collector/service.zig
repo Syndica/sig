@@ -1,6 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
+const shred_collector = @import("lib.zig")._private;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -15,15 +16,14 @@ const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
-const ServiceManager = sig.utils.ServiceManager;
+const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
 
-const this = sig.shred_collector;
-const BasicShredTracker = this.BasicShredTracker;
-const RepairPeerProvider = this.RepairPeerProvider;
-const RepairRequester = this.RepairRequester;
-const RepairService = this.RepairService;
-const ShredReceiver = this.ShredReceiver;
+const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
+const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
+const RepairRequester = shred_collector.repair_service.RepairRequester;
+const RepairService = shred_collector.repair_service.RepairService;
+const ShredReceiver = shred_collector.shred_receiver.ShredReceiver;
 
 /// Settings which tell the Shred Collector how to behave.
 pub const ShredCollectorConfig = struct {
@@ -92,7 +92,7 @@ pub fn start(
     // verifier (thread)
     try service_manager.spawn(
         .{ .name = "Shred Verifier" },
-        sig.shred_collector.runShredVerifier,
+        shred_collector.shred_verifier.runShredVerifier,
         .{ interface.exit, unverified_shred_channel, verified_shred_channel, .{} },
     );
 
@@ -106,7 +106,7 @@ pub fn start(
     // processor (thread)
     try service_manager.spawn(
         .{ .name = "Shred Processor" },
-        sig.shred_collector.runShredProcessor,
+        shred_collector.shred_processor.runShredProcessor,
         .{ deps.allocator, verified_shred_channel, shred_tracker },
     );
 
