@@ -86,7 +86,7 @@ pub fn start(
         .logger = deps.logger,
         .repair_socket = repair_socket,
         .tvu_socket = tvu_socket,
-        .unverified_shred_channel = unverified_shred_channel,
+        .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try ShredReceiverMetrics.init(),
     };

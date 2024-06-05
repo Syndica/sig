@@ -21,7 +21,7 @@ const RepairMessage = shred_collector.repair_message.RepairMessage;
 const Slot = sig.core.Slot;
 const SocketThread = sig.net.SocketThread;
 
-const num_tvu_receivers = 2;
+const NUM_TVU_RECEIVERS = 2;
 
 /// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
@@ -32,7 +32,7 @@ pub const ShredReceiver = struct {
     repair_socket: Socket,
     tvu_socket: Socket,
     /// me --> shred verifier
-    unverified_shred_channel: *Channel(ArrayList(Packet)),
+    unverified_shred_sender: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
     metrics: ShredReceiverMetrics,
 
@@ -51,8 +51,8 @@ pub const ShredReceiver = struct {
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit();
 
-        var tvu_receivers: [num_tvu_receivers]*Channel(ArrayList(Packet)) = undefined;
-        for (0..num_tvu_receivers) |i| {
+        var tvu_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
+        for (0..NUM_TVU_RECEIVERS) |i| {
             tvu_receivers[i] = (try SocketThread.initReceiver(
                 self.allocator,
                 self.logger,
@@ -95,7 +95,7 @@ pub const ShredReceiver = struct {
                             try self.handlePacket(packet, &responses, shred_version);
                             if (is_repair) packet.flags.set(.repair);
                         }
-                        try self.unverified_shred_channel.send(batch);
+                        try self.unverified_shred_sender.send(batch);
                     }
                 } else {
                     std.time.sleep(10 * std.time.ns_per_ms);

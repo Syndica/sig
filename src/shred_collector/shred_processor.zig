@@ -16,13 +16,13 @@ const Shred = shred_collector.shred.Shred;
 pub fn runShredProcessor(
     allocator: Allocator,
     // shred verifier --> me
-    verified_shred_channel: *Channel(ArrayList(Packet)),
+    verified_shred_receiver: *Channel(ArrayList(Packet)),
     tracker: *BasicShredTracker,
 ) !void {
     var processed_count: usize = 0;
     var buf = ArrayList(ArrayList(Packet)).init(allocator);
     while (true) {
-        try verified_shred_channel.tryDrainRecycle(&buf);
+        try verified_shred_receiver.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;
