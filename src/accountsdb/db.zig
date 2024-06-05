@@ -1372,12 +1372,15 @@ pub const BenchmarkAccountsDB = struct {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         var allocator = gpa.allocator();
 
+        const disk_path = "test_data/tmp/";
+        std.fs.cwd().makeDir(disk_path) catch {};
+
         const logger = Logger{ .noop = {} };
         var accounts_db: AccountsDB = undefined;
         if (bench_args.index == .disk) {
             // std.debug.print("using disk index\n", .{});
             accounts_db = try AccountsDB.init(allocator, logger, .{
-                .disk_index_path = "test_data/tmp/tmp",
+                .disk_index_path = disk_path ++ "tmp",
             });
         } else {
             // std.debug.print("using ram index\n", .{});
@@ -1447,8 +1450,6 @@ pub const BenchmarkAccountsDB = struct {
                     );
                 }
                 const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
-                const disk_path = "test_data/tmp/";
-                try std.fs.cwd().makeDir(disk_path);
                 const filepath = try std.fmt.allocPrint(allocator, disk_path ++ "slot{d}.bin", .{s});
 
                 const length = blk: {
