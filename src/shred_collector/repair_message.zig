@@ -1,7 +1,7 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
-const bincode = @import("../bincode/bincode.zig");
+const bincode = sig.bincode;
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
@@ -11,7 +11,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-const SIGNATURE_LENGTH = @import("../core/signature.zig").SIGNATURE_LENGTH;
+const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
 
 /// Analogous to [SIGNED_REPAIR_TIME_WINDOW](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L89)
 const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
