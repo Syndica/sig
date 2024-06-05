@@ -84,5 +84,7 @@ jobs:
         with:
           version: 0.12.0
 
-      - name: gossip
+      - name: build release 
+        run: zig build -Doptimize=ReleaseSafe 
+      - name: run gossip
         run: bash scripts/gossip_test.sh 120 # in seconds
