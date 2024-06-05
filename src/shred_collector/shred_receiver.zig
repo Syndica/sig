@@ -65,12 +65,12 @@ pub const ShredReceiver = struct {
         const x = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, tvu_receivers, response_sender.channel, false },
+            .{ self, &tvu_receivers, response_sender.channel, false },
         );
         const y = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, .{repair_receiver.channel}, response_sender.channel, true },
+            .{ self, &.{repair_receiver.channel}, response_sender.channel, true },
         );
         x.join();
         y.join();
@@ -80,14 +80,14 @@ pub const ShredReceiver = struct {
     /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receivers: anytype,
+        receivers: []const *Channel(ArrayList(Packet)),
         response_sender: *Channel(ArrayList(Packet)),
         comptime is_repair: bool,
     ) !void {
         var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
         while (!self.exit.load(.unordered)) {
             var responses = ArrayList(Packet).init(self.allocator);
-            inline for (receivers) |receiver| {
+            for (receivers) |receiver| {
                 try receiver.tryDrainRecycle(&buf);
                 if (buf.items.len > 0) {
                     const shred_version = self.shred_version.load(.monotonic);
