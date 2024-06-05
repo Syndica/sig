@@ -1377,7 +1377,7 @@ pub const BenchmarkAccountsDB = struct {
         if (bench_args.index == .disk) {
             // std.debug.print("using disk index\n", .{});
             accounts_db = try AccountsDB.init(allocator, logger, .{
-                .disk_index_path = "test_data/tmp_benchmarks",
+                .disk_index_path = "test_data/tmp/tmp",
             });
         } else {
             // std.debug.print("using ram index\n", .{});
@@ -1447,7 +1447,9 @@ pub const BenchmarkAccountsDB = struct {
                     );
                 }
                 const aligned_size = std.mem.alignForward(usize, size, std.mem.page_size);
-                const filepath = try std.fmt.allocPrint(allocator, "test_data/tmp/slot{d}.bin", .{s});
+                const disk_path = "test_data/tmp/";
+                try std.fs.cwd().makeDir(disk_path);
+                const filepath = try std.fmt.allocPrint(allocator, disk_path ++ "slot{d}.bin", .{s});
 
                 const length = blk: {
                     var file = try std.fs.cwd().createFile(filepath, .{ .read = true });
