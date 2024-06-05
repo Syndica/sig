@@ -80,4 +80,6 @@ while n_removes > 0:
 
 print("total iterations: ", n_remove_iter)
 print("total lines removed: ", total_removes)
-            
+
+if (total_removes > 0):
+    exit(1) 

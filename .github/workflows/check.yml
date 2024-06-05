@@ -2,7 +2,7 @@ name: check
 
 on:
   push:
-    branches: [main, pre-release]
+    branches: [main, pre-release, 19/cicd-gossip]
   pull_request_review:
     types: [submitted]
   pull_request:
@@ -23,7 +23,18 @@ jobs:
       - name: lint
         run: |
           zig fmt --check src/
-          zig fmt --check build.zig
+
+   unused_imports:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v3
+      with:
+        python-version: "3.10"         zig fmt --check build.zig
+    
+    - name: remove unused imports
+      run: python remove_unused.py src/
 
   test:
     strategy:
