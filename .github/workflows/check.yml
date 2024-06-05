@@ -1,15 +1,16 @@
-name: test
+name: check
 
 on:
   push:
-    branches: [main, pre-release, 19/cicd-gossip]
-  pull_request:
     branches: [main, pre-release]
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [review_requested]
 
 jobs:
   lint:
     runs-on: ubuntu-latest
-
     steps:
       - name: checkout
         uses: actions/checkout@v2
