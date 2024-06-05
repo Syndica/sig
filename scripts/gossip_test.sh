@@ -26,7 +26,7 @@ echo "Running gossip test for $1 seconds"
 # Get the process ID of the last background command
 PID=$!
 
-# Sleep for 30 seconds
+# Sleep for N seconds
 sleep $1
 
 # Kill the process
