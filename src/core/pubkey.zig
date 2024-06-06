@@ -4,7 +4,7 @@ const Ed25519 = std.crypto.sign.Ed25519;
 const encoder = base58.Encoder.init(.{});
 const decoder = base58.Decoder.init(.{});
 
-pub const Pubkey = struct {
+pub const Pubkey = extern struct {
     data: [32]u8,
 
     const Self = @This();
