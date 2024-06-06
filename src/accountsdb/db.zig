@@ -341,7 +341,7 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        var file_map = &self.file_map;
+        const file_map = &self.file_map;
         try file_map.ensureTotalCapacity(file_names.len);
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
@@ -910,7 +910,7 @@ pub const AccountsDB = struct {
     /// periodically runs flush/clean/shrink
     pub fn runManagerLoop(self: *Self) !void {
         while (true) {
-            const timer = try std.time.Timer.start();
+            var timer = try std.time.Timer.start();
             defer {
                 const elapsed = timer.read();
                 if (elapsed < DB_MANAGER_UPDATE_NS) {
