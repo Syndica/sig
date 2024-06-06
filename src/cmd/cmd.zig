@@ -1,7 +1,6 @@
 const std = @import("std");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
-const dns = @import("zigdig");
 const network = @import("zig-network");
 const helpers = @import("helpers.zig");
 const sig = @import("../lib.zig");

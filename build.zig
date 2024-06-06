@@ -28,9 +28,6 @@ pub fn build(b: *Build) void {
     const httpz_dep = b.dependency("httpz", dep_opts);
     const httpz_mod = httpz_dep.module("httpz");
 
-    const zigdig_dep = b.dependency("zigdig", dep_opts);
-    const zigdig_mod = zigdig_dep.module("dns");
-
     const zstd_dep = b.dependency("zstd", dep_opts);
     const zstd_mod = zstd_dep.module("zstd");
 
@@ -45,7 +42,6 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("base58-zig", base58_module);
     sig_mod.addImport("zig-cli", zig_cli_module);
     sig_mod.addImport("httpz", httpz_mod);
-    sig_mod.addImport("zigdig", zigdig_mod);
     sig_mod.addImport("zstd", zstd_mod);
     sig_mod.addImport("curl", curl_mod);
 
@@ -62,7 +58,6 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("httpz", httpz_mod);
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
-    sig_exe.root_module.addImport("zigdig", zigdig_mod);
     sig_exe.root_module.addImport("zstd", zstd_mod);
 
     const main_exe_run = b.addRunArtifact(sig_exe);
