@@ -3,10 +3,8 @@ name: check
 on:
   push:
     branches: [main, pre-release]
-  pull_request_review:
-    types: [submitted]
   pull_request:
-    types: [review_requested]
+    branches: [main, pre-release]
 
 jobs:
   lint:
