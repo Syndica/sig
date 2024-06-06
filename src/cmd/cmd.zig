@@ -584,23 +584,53 @@ fn getMyDataFromIpEcho(
 }
 
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
+    const EntrypointSet = std.ArrayHashMap(void, void, struct {
+        // zig fmt: off
+        pub fn hash(_: @This(), _: void) u32 { unreachable; }
+        pub fn eql(_: @This(), _: void, _: void, _: usize) bool { unreachable; }
+        // zig fmt: on
+    }, true);
+    const EntrypointCtx = struct {
+        entrypoints: []const SocketAddr,
+        pub fn hash(_: @This(), entrypoint: SocketAddr) u32 {
+            const array, const len = entrypoint.toString();
+            return std.array_hash_map.hashString(array[0..len]);
+        }
+        pub fn eql(ctx: @This(), a: SocketAddr, _: void, b_index: usize) bool {
+            return a.eql(&ctx.entrypoints[b_index]);
+        }
+    };
+
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
+    errdefer entrypoints.deinit();
+
+    var entrypoint_set = EntrypointSet.init(gpa_allocator);
+    defer entrypoint_set.deinit();
+
+    try entrypoint_set.ensureTotalCapacity(config.current.gossip.entrypoints.len);
+    try entrypoints.ensureTotalCapacityPrecise(config.current.gossip.entrypoints.len);
+
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
-            var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
-            const domain_str = domain_and_port.next() orelse {
-                logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
-                return error.EntrypointDomainMissing;
-            };
-            const port_str = domain_and_port.next() orelse {
+            const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
                 logger.field("entrypoint", entrypoint).err("entrypoint port missing");
                 return error.EntrypointPortMissing;
             };
+            const domain_str = entrypoint[0..domain_port_sep];
+            if (domain_str.len == 0) {
+                logger.field("entrypoint", entrypoint).err("entrypoint domain not valid");
+                return error.EntrypointDomainNotValid;
+            }
+            // parse port from string
+            const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
+                logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
+                return error.EntrypointPortNotValid;
+            };
 
             // get dns address lists
-            var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+            const addr_list = try std.net.getAddressList(gpa_allocator, domain_str, port);
             defer addr_list.deinit();
+
             if (addr_list.addrs.len == 0) {
                 logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
                 return error.EntrypointDnsResolutionFailure;
@@ -609,30 +639,34 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
             // use first A record address
             const ipv4_addr = addr_list.addrs[0];
 
-            // parse port from string
-            const port = std.fmt.parseInt(u16, port_str, 10) catch {
-                logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
-                return error.EntrypointPortNotValid;
-            };
-
-            var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-            socket_addr.setPort(port);
+            const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+            std.debug.assert(socket_addr.port() == port);
             break :brk socket_addr;
         };
 
-        try entrypoints.append(socket_addr);
+        const gop = entrypoint_set.getOrPutAssumeCapacityAdapted(socket_addr, EntrypointCtx{ .entrypoints = entrypoints.items });
+        if (!gop.found_existing) {
+            entrypoints.appendAssumeCapacity(socket_addr);
+        }
     }
 
     // log entrypoints
-    var entrypoint_string = try gpa_allocator.alloc(u8, 53 * entrypoints.items.len);
-    defer gpa_allocator.free(entrypoint_string);
-    var stream = std.io.fixedBufferStream(entrypoint_string);
-    var writer = stream.writer();
-    for (0.., entrypoints.items) |i, entrypoint| {
-        try entrypoint.toAddress().format("", .{}, writer);
-        if (i != entrypoints.items.len - 1) try writer.writeAll(", ");
-    }
-    logger.infof("entrypoints: {s}", .{entrypoint_string[0..stream.pos]});
+    const EntrypointsFmt = struct {
+        entrypoints: []const SocketAddr,
+
+        pub fn format(
+            entrypoints_fmt: @This(),
+            comptime fmt_str: []const u8,
+            fmt_options: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            for (0.., entrypoints_fmt.entrypoints) |i, entrypoint| {
+                if (i != 0) try writer.writeAll(", ");
+                try entrypoint.toAddress().format(fmt_str, fmt_options, writer);
+            }
+        }
+    };
+    logger.infof("entrypoints: {}", .{EntrypointsFmt{ .entrypoints = entrypoints.items }});
 
     return entrypoints;
 }
