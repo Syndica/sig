@@ -980,7 +980,7 @@ pub const AccountsDB = struct {
         var offset: usize = 0;
         for (0..accounts.len) |i| {
             // update the reference
-            var ref = self.account_index.getSlotReference(&pubkeys[i], slot) orelse unreachable;
+            const ref = self.account_index.getSlotReference(&pubkeys[i], slot) orelse unreachable;
             ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
 
             // write the account to the file
@@ -1156,7 +1156,7 @@ pub const AccountsDB = struct {
         for (self.shrink_account_files.keys()) |old_file_id| {
             // SAFE: this should always succeed or something is wrong
             const file_map_entry = self.file_map.getEntry(old_file_id).?;
-            var old_account_file = file_map_entry.value_ptr;
+            const old_account_file = file_map_entry.value_ptr;
 
             // compute size of alive accounts
             var alive_accounts_size: usize = 0;
