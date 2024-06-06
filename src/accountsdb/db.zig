@@ -70,7 +70,7 @@ pub const AccountsDB = struct {
     delete_account_files: std.AutoArrayHashMap(FileId, void),
     // used for filenames when flushing accounts to disk
     // TODO: do we need this? since flushed slots will be unique
-    largest_file_id: FileId = 0,
+    largest_file_id: FileId = FileId.fromInt(0),
 
     // used for flushing/cleaning/purging/shrinking
     // TODO: when working on consensus, we'll swap this out
@@ -362,7 +362,7 @@ pub const AccountsDB = struct {
                 self.logger.warnf("failed to parse slot from {s}", .{file_name});
                 return err;
             };
-            const file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
+            const file_id_usize = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
             const file_infos: ArrayList(AccountFileInfo) = self.fields.file_map.get(slot) orelse {
@@ -377,8 +377,8 @@ pub const AccountsDB = struct {
                 std.debug.panic("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
             }
             const file_info = file_infos.items[0];
-            if (file_info.id != file_id) {
-                std.debug.panic("file_info.id ({d}) != file_id ({d})\n", .{ file_info.id, file_id });
+            if (file_info.id != file_id_usize) {
+                std.debug.panic("file_info.id ({d}) != file_id ({d})\n", .{ file_info.id, file_id_usize });
             }
 
             // read accounts file
@@ -395,7 +395,7 @@ pub const AccountsDB = struct {
             // NOTE: this is worse than doing nothing with the disk allocator rn
             refs_ptr.shrinkAndFree(refs_ptr.items.len);
 
-            const file_id = FileId.fromInt(@intCast(accounts_file_id));
+            const file_id = FileId.fromInt(@intCast(file_id_usize));
             file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
 
@@ -488,7 +488,7 @@ pub const AccountsDB = struct {
             while (iter.next()) |entry| {
                 try self.file_map.putNoClobber(entry.key_ptr.*, entry.value_ptr.*);
             }
-            self.largest_file_id = @max(self.largest_file_id, thread_db.largest_file_id);
+            self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
 
             // combine underlying memory
             var ref_iter = thread_db.account_index.reference_memory.iterator();
@@ -867,16 +867,17 @@ pub const AccountsDB = struct {
     }
 
     pub fn createAccountFile(self: *Self, size: usize, slot: Slot) !struct {
-        file: std.fs.File,
-        file_id: u32,
-        memory: []u8,
+        std.fs.File,
+        FileId,
+        []u8,
     } {
-        self.largest_file_id += 1;
+        self.largest_file_id = self.largest_file_id.increment();
         const file_id = self.largest_file_id;
+
         const accounts_file_path = try std.fmt.allocPrint(
             self.allocator,
             "{s}/accounts/{d}.{d}",
-            .{ self.config.snapshot_dir, slot, file_id },
+            .{ self.config.snapshot_dir, slot, file_id.toInt() },
         );
         defer self.allocator.free(accounts_file_path);
         self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
@@ -901,11 +902,7 @@ pub const AccountsDB = struct {
             0,
         );
 
-        return .{
-            .file = file,
-            .memory = memory,
-            .file_id = file_id,
-        };
+        return .{ file, file_id, memory };
     }
 
     /// periodically runs flush/clean/shrink
@@ -968,13 +965,7 @@ pub const AccountsDB = struct {
                 @sizeOf(u64),
             );
         }
-        const r = try self.createAccountFile(size, slot);
-
-        // // note: syntax highlighting doesnt work with the approach below
-        // const file_id, const file, const memory = .{ r.file_id, r.file, r.memory };
-        const file_id = r.file_id;
-        const file = r.file;
-        const memory = r.memory;
+        const file, const file_id, const memory = try self.createAccountFile(size, slot);
 
         // TODO: will likely need locks here when updating the references
         var offset: usize = 0;
@@ -989,7 +980,7 @@ pub const AccountsDB = struct {
         try file.sync();
 
         var account_file = try AccountFile.init(file, .{
-            .id = @intCast(file_id),
+            .id = @intCast(file_id.toInt()),
             .length = offset,
         }, slot);
         // fill in metadata such as alive_bytes, n_accounts, etc.
@@ -1135,7 +1126,7 @@ pub const AccountsDB = struct {
         const accounts_file_path = try std.fmt.allocPrint(
             self.allocator,
             "{s}/accounts/{d}.{d}",
-            .{ self.config.snapshot_dir, slot, file_id },
+            .{ self.config.snapshot_dir, slot, file_id.toInt() },
         );
         defer self.allocator.free(accounts_file_path);
 
@@ -1184,9 +1175,7 @@ pub const AccountsDB = struct {
 
             // alloc account file for accounts
             const slot = old_account_file.slot;
-            const result = try self.createAccountFile(alive_accounts_size, slot);
-            const new_memory = result.memory;
-            const new_file_id = result.file_id;
+            const new_file, const new_file_id, const new_memory = try self.createAccountFile(alive_accounts_size, slot);
 
             // delete old account file
             try self.deleteAccountFile(slot, old_file_id);
@@ -1256,10 +1245,9 @@ pub const AccountsDB = struct {
             // point to new block
             ref_memory_entry.value_ptr.* = new_ref_list;
 
-            const file = result.file;
             var new_account_file = try AccountFile.init(
-                file,
-                .{ .id = @intCast(new_file_id), .length = offset },
+                new_file,
+                .{ .id = @intCast(new_file_id.toInt()), .length = offset },
                 slot,
             );
 
@@ -1936,9 +1924,9 @@ test "accounts_db.db: full clean account file works" {
     try std.testing.expect(accounts_db.delete_account_files.count() == 1);
 
     // test delete
-    try std.testing.expect(accounts_db.file_map.get(2) != null);
+    try std.testing.expect(accounts_db.file_map.get(FileId.fromInt(2)) != null);
     try accounts_db.deleteAccountFiles();
-    try std.testing.expect(accounts_db.file_map.get(2) == null);
+    try std.testing.expect(accounts_db.file_map.get(FileId.fromInt(2)) == null);
 }
 
 test "accounts_db.db: shrink account file works" {

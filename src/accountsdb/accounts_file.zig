@@ -23,6 +23,10 @@ pub const FileId = enum(u32) {
         return @intFromEnum(file_id);
     }
 
+    pub inline fn increment(file_id: FileId) FileId {
+        return FileId.fromInt(file_id.toInt() + 1);
+    }
+
     pub inline fn max(a: FileId, b: FileId) FileId {
         return FileId.fromInt(@max(a.toInt(), b.toInt()));
     }
