@@ -881,7 +881,8 @@ pub const AccountsDB = struct {
         defer self.allocator.free(accounts_file_path);
         self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
 
-        var file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
+        const file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
+        errdefer file.close();
 
         // resize the file
         const file_size = (try file.stat()).size;
