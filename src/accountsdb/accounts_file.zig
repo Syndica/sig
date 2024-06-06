@@ -314,7 +314,7 @@ pub const AccountFile = struct {
     }
 
     pub const Iterator = struct {
-        accounts_file: *const Self,
+        accounts_file: *const AccountFile,
         offset: usize = 0,
 
         pub fn next(self: *Iterator) ?AccountInFile {
