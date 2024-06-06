@@ -263,12 +263,13 @@ pub fn downloadSnapshotsFromGossip(
                     null,
                 ) catch |err| {
                     // failure here is ok (for now?)
-                    logger.infof("failed to download inc_snapshot: {s}", .{@errorName(err)});
+                    logger.warnf("failed to download inc_snapshot: {s}", .{@errorName(err)});
                     return;
                 };
             }
 
             // success
+            logger.infof("snapshot downloaded finished", .{});
             return;
         }
     }
@@ -321,6 +322,10 @@ const DownloadProgress = struct {
         };
     }
 
+    pub fn deinit(self: *Self) void {
+        std.posix.munmap(self.mmap);
+    }
+
     pub fn bufferWriteCallback(ptr: [*c]c_char, size: c_uint, nmemb: c_uint, user_data: *anyopaque) callconv(.C) c_uint {
         const len = size * nmemb;
         var self: *Self = @alignCast(@ptrCast(user_data));
@@ -346,13 +351,15 @@ const DownloadProgress = struct {
             }
             const elapsed_sec = elapsed_ns / std.time.ns_per_s;
             const ns_per_mb = elapsed_ns / mb_read;
-            const mb_left = (self.download_size - self.bytes_read) / 1024 / 1024;
+            const mb_left = (self.download_size - self.file_memory_index) / 1024 / 1024;
             const time_left_ns = mb_left * ns_per_mb;
             const mb_per_second = mb_read / elapsed_sec;
 
-            self.logger.infof("[download progress]: {d}% done ({d} MB/s) (time left: {d})", .{
-                self.bytes_read * 100 / self.download_size,
+            self.logger.infof("[download progress]: {d}% done ({d} MB/s - {d}/{d}) (time left: {d})", .{
+                self.file_memory_index * 100 / self.download_size,
                 mb_per_second,
+                self.file_memory_index,
+                self.download_size,
                 std.fmt.fmtDuration(time_left_ns),
             });
 
@@ -394,7 +401,7 @@ pub fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
     url: [:0]const u8,
-    output_dir: []const u8,
+    output_dir_str: []const u8,
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !void {
@@ -420,11 +427,19 @@ pub fn downloadFile(
     easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
         logger,
-        output_dir,
+        output_dir_str,
         filename,
         download_size,
         min_mb_per_second,
     );
+    errdefer {
+        // NOTE: this shouldnt fail because we open the dir in DownloadProgress.init
+        const output_dir = std.fs.cwd().openDir(output_dir_str, .{}) catch {
+            std.debug.panic("failed to open output dir: {s}", .{output_dir_str});
+        };
+        output_dir.deleteFile(filename) catch {};
+    }
+    defer download_progress.deinit();
 
     try setNoBody(easy, false); // full download
     try easy.setUrl(url);

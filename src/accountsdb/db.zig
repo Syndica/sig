@@ -70,7 +70,7 @@ pub const AccountsDB = struct {
     delete_account_files: std.AutoArrayHashMap(FileId, void),
     // used for filenames when flushing accounts to disk
     // TODO: do we need this? since flushed slots will be unique
-    largest_file_id: u32 = 0,
+    largest_file_id: FileId = 0,
 
     // used for flushing/cleaning/purging/shrinking
     // TODO: when working on consensus, we'll swap this out
@@ -395,9 +395,9 @@ pub const AccountsDB = struct {
             // NOTE: this is worse than doing nothing with the disk allocator rn
             refs_ptr.shrinkAndFree(refs_ptr.items.len);
 
-            const file_id_u32: u32 = @intCast(file_id);
-            file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
-            self.largest_file_id = @max(self.largest_file_id, file_id_u32);
+            const file_id = FileId.fromInt(@intCast(accounts_file_id));
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
+            self.largest_file_id = FileId.max(self.largest_file_id, file_id);
 
             if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
@@ -1483,7 +1483,7 @@ pub const AccountsDB = struct {
 
         const refs_ptr = try self.account_index.allocReferenceBlock(account_file.slot, n_accounts);
         try self.account_index.validateAccountFile(account_file, bin_counts, refs_ptr);
-        try self.file_map.put(@as(u32, @intCast(account_file.id)), account_file.*);
+        try self.file_map.put(FileId.fromInt(@intCast(account_file.id)), account_file.*);
 
         // allocate enough memory here
         var total_accounts: usize = 0;

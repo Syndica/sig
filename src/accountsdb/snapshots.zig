@@ -247,7 +247,16 @@ pub const AccountFileInfo = struct {
     id: usize,
     length: usize, // amount of bytes used
 
-    pub fn validate(self: *const AccountFileInfo, file_size: usize) !void {
+    pub const ValidateError = error{
+        IdOverflow,
+        FileSizeTooSmall,
+        FileSizeTooLarge,
+        OffsetOutOfBounds,
+    };
+    pub fn validate(self: *const AccountFileInfo, file_size: usize) ValidateError!void {
+        if (self.id > std.math.maxInt(u32)) {
+            return error.IdOverflow;
+        }
         if (file_size == 0) {
             return error.FileSizeTooSmall;
         } else if (file_size > @as(usize, MAXIMUM_ACCOUNT_FILE_SIZE)) {
@@ -1016,6 +1025,7 @@ pub fn parallelUnpackZstdTarBall(
         0,
     );
     var tar_stream = try ZstdReader.init(memory);
+    defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
 
     try parallelUntarToFileSystem(
