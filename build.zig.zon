@@ -8,8 +8,8 @@
     },
     .dependencies = .{
         .@"base58-zig" = .{
-            .url = "https://github.com/ultd/base58-zig/archive/7cec0723c99d713149ad4e875f888918d2687ca6.tar.gz",
-            .hash = "1220995cd000a5d0f8595b119de29573769531c002fe3448a2c69fa6307bd1332620",
+            .url = "https://github.com/Syndica/base58-zig/archive/e1001fbe8b41eed36d81e37931ada66b784e51dc.tar.gz",
+            .hash = "12206e5050a03cd9dcb896781de0cf541081488006532675371653f61d00c1f27433",
         },
         .@"zig-network" = .{
             .url = "https://github.com/ikskuh/zig-network/archive/d4506cd1950de8a6e6d3f28aed68a0b4f64e0b44.tar.gz",
