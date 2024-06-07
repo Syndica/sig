@@ -31,7 +31,7 @@ pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
     /// tvu port in agave
-    turbine_port: u16,
+    turbine_recv_port: u16,
 };
 
 /// Resources that are required for the Shred Collector to operate.
@@ -66,7 +66,7 @@ pub fn start(
     var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
-    const turbine_socket = try bindUdpReusable(conf.turbine_port);
+    const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
     // receiver (threads)
     const unverified_shred_channel = Channel(ArrayList(Packet)).init(deps.allocator, 1000);

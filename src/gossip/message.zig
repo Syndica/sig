@@ -307,8 +307,8 @@ test "gossip.message: pull request serializes and deserializes" {
     const legacy_contact_info = LegacyContactInfo{
         .id = pubkey,
         .gossip = gossip_addr,
-        .turbine = unspecified_addr,
-        .turbine_quic = unspecified_addr,
+        .turbine_recv = unspecified_addr,
+        .turbine_recv_quic = unspecified_addr,
         .repair = unspecified_addr,
         .tpu = unspecified_addr,
         .tpu_forwards = unspecified_addr,
@@ -354,8 +354,8 @@ test "gossip.message: push message serializes and deserializes correctly" {
     const legacy_contact_info = LegacyContactInfo{
         .id = id,
         .gossip = gossip_addr,
-        .turbine = unspecified_addr,
-        .turbine_quic = unspecified_addr,
+        .turbine_recv = unspecified_addr,
+        .turbine_recv_quic = unspecified_addr,
         .repair = unspecified_addr,
         .tpu = unspecified_addr,
         .tpu_forwards = unspecified_addr,

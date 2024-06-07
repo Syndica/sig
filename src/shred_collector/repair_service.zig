@@ -403,7 +403,7 @@ pub const RepairPeerProvider = struct {
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
                 info.shred_version == self.my_shred_version.load(.monotonic) and // need compatible shreds
                 serve_repair_socket != null and // node must be able to receive repair requests
-                info.getSocket(socket_tag.TURBINE) != null) // node needs access to shreds
+                info.getSocket(socket_tag.TURBINE_RECV) != null) // node needs access to shreds
             {
                 potential_peers += 1;
                 // exclude nodes that are known to be missing this slot
@@ -460,7 +460,7 @@ test "RepairService sends repair request to gossip peer" {
     try peer_socket.setReadTimeout(100_000);
     var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
     try peer_contact_info.setSocket(socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
-    try peer_contact_info.setSocket(socket_tag.TURBINE, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(socket_tag.TURBINE_RECV, SocketAddr.fromEndpoint(&peer_endpoint));
     try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
 
     // init service
@@ -604,7 +604,7 @@ const TestPeerGenerator = struct {
             try contact_info.setSocket(socket_tag.SERVE_REPAIR, serve_repair_addr);
         }
         if (peer_type != .MissingTvuPort) {
-            try contact_info.setSocket(socket_tag.TURBINE, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
+            try contact_info.setSocket(socket_tag.TURBINE_RECV, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
         try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {
