@@ -1,7 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
-const shred_collector = @import("lib.zig")._private;
+const shred_collector = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;

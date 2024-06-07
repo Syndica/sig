@@ -1,7 +1,7 @@
 const std = @import("std");
 const zig_network = @import("zig-network");
 const sig = @import("../lib.zig");
-const shred_collector = @import("lib.zig")._private;
+const shred_collector = @import("lib.zig");
 
 const bincode = sig.bincode;
 const socket_tag = sig.gossip.socket_tag;

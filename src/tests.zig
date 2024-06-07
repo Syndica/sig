@@ -8,7 +8,7 @@ test {
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
 
     std.testing.log_level = std.log.Level.err;
-    refAllDeclsRecursive(lib, 3);
+    refAllDeclsRecursive(lib, 2);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:
