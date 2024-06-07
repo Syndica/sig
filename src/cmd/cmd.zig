@@ -617,12 +617,12 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
             };
             const domain_str = entrypoint[0..domain_port_sep];
             if (domain_str.len == 0) {
-                logger.field("entrypoint", entrypoint).err("entrypoint domain not valid");
+                logger.errf("'{s}': entrypoint domain not valid", .{entrypoint});
                 return error.EntrypointDomainNotValid;
             }
             // parse port from string
             const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
-                logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
+                logger.errf("'{s}': entrypoint port not valid", .{entrypoint});
                 return error.EntrypointPortNotValid;
             };
 
@@ -631,7 +631,7 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
             defer addr_list.deinit();
 
             if (addr_list.addrs.len == 0) {
-                logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
+                logger.errf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
                 return error.EntrypointDnsResolutionFailure;
             }
 
