@@ -61,6 +61,8 @@ pub const AccountsDB = struct {
 
     // track per-slot for purge/flush
     account_cache: std.AutoHashMap(Slot, PubkeysAndAccounts),
+    account_cache_mux: std.Thread.Mutex = .{},
+
     file_map: std.AutoArrayHashMap(FileId, AccountFile),
     // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
     unclean_account_files: std.ArrayList(FileId),
