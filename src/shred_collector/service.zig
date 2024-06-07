@@ -30,7 +30,8 @@ const ShredReceiverMetrics = shred_collector.shred_receiver.ShredReceiverMetrics
 pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
-    tvu_port: u16,
+    /// tvu port in agave
+    turbine_port: u16,
 };
 
 /// Resources that are required for the Shred Collector to operate.
@@ -56,7 +57,7 @@ pub const ShredCollectorDependencies = struct {
 /// Returns a ServiceManager representing the Shred Collector.
 /// This can be used to join and deinit the Shred Collector.
 ///
-/// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/tvu.rs#L119)
+/// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/turbine.rs#L119)
 pub fn start(
     conf: ShredCollectorConfig,
     deps: ShredCollectorDependencies,
@@ -65,7 +66,7 @@ pub fn start(
     var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
-    const tvu_socket = try bindUdpReusable(conf.tvu_port);
+    const turbine_socket = try bindUdpReusable(conf.turbine_port);
 
     // receiver (threads)
     const unverified_shred_channel = Channel(ArrayList(Packet)).init(deps.allocator, 1000);
@@ -77,7 +78,7 @@ pub fn start(
         .exit = deps.exit,
         .logger = deps.logger,
         .repair_socket = repair_socket,
-        .tvu_socket = tvu_socket,
+        .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try ShredReceiverMetrics.init(),

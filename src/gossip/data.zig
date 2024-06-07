@@ -463,14 +463,17 @@ pub const GossipData = union(enum(u32)) {
     }
 };
 
+/// analogous to [LegactContactInfo](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/legacy_contact_info.rs#L26)
 pub const LegacyContactInfo = struct {
     id: Pubkey,
     /// gossip address
     gossip: SocketAddr,
     /// address to connect to for replication
-    tvu: SocketAddr,
+    /// analogous to `tvu` in agave
+    turbine: SocketAddr,
     /// address to forward shreds to
-    tvu_forwards: SocketAddr,
+    /// analogous to `tvu_quic` in agave
+    turbine_quic: SocketAddr,
     /// address to send repair responses to
     repair: SocketAddr,
     /// transactions address
@@ -501,8 +504,8 @@ pub const LegacyContactInfo = struct {
         return LegacyContactInfo{
             .id = id,
             .gossip = unspecified_addr,
-            .tvu = unspecified_addr,
-            .tvu_forwards = unspecified_addr,
+            .turbine = unspecified_addr,
+            .turbine_quic = unspecified_addr,
             .repair = unspecified_addr,
             .tpu = unspecified_addr,
             .tpu_forwards = unspecified_addr,
@@ -519,8 +522,8 @@ pub const LegacyContactInfo = struct {
         return LegacyContactInfo{
             .id = Pubkey.random(rng),
             .gossip = SocketAddr.random(rng),
-            .tvu = SocketAddr.random(rng),
-            .tvu_forwards = SocketAddr.random(rng),
+            .turbine = SocketAddr.random(rng),
+            .turbine_quic = SocketAddr.random(rng),
             .repair = SocketAddr.random(rng),
             .tpu = SocketAddr.random(rng),
             .tpu_forwards = SocketAddr.random(rng),
@@ -537,8 +540,8 @@ pub const LegacyContactInfo = struct {
     pub fn toContactInfo(self: *const LegacyContactInfo, allocator: std.mem.Allocator) !ContactInfo {
         var ci = ContactInfo.init(allocator, self.id, self.wallclock, self.shred_version);
         try ci.setSocket(socket_tag.GOSSIP, self.gossip);
-        try ci.setSocket(socket_tag.TVU, self.tvu);
-        try ci.setSocket(socket_tag.TVU_FORWARDS, self.tvu_forwards);
+        try ci.setSocket(socket_tag.TURBINE, self.turbine);
+        try ci.setSocket(socket_tag.TURBINE_QUIC, self.turbine_quic);
         try ci.setSocket(socket_tag.REPAIR, self.repair);
         try ci.setSocket(socket_tag.TPU, self.tpu);
         try ci.setSocket(socket_tag.TPU_FORWARDS, self.tpu_forwards);
@@ -553,8 +556,8 @@ pub const LegacyContactInfo = struct {
         return .{
             .id = ci.pubkey,
             .gossip = ci.getSocket(socket_tag.GOSSIP) orelse SocketAddr.UNSPECIFIED,
-            .tvu = ci.getSocket(socket_tag.TVU) orelse SocketAddr.UNSPECIFIED,
-            .tvu_forwards = ci.getSocket(socket_tag.TVU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
+            .turbine = ci.getSocket(socket_tag.TURBINE) orelse SocketAddr.UNSPECIFIED,
+            .turbine_quic = ci.getSocket(socket_tag.TURBINE_QUIC) orelse SocketAddr.UNSPECIFIED,
             .repair = ci.getSocket(socket_tag.REPAIR) orelse SocketAddr.UNSPECIFIED,
             .tpu = ci.getSocket(socket_tag.TPU) orelse SocketAddr.UNSPECIFIED,
             .tpu_forwards = ci.getSocket(socket_tag.TPU_FORWARDS) orelse SocketAddr.UNSPECIFIED,
@@ -987,11 +990,12 @@ pub const socket_tag = struct {
     pub const TPU_FORWARDS_QUIC: u8 = 7;
     pub const TPU_QUIC: u8 = 8;
     pub const TPU_VOTE: u8 = 9;
-    pub const TVU: u8 = 10;
-    pub const TVU_FORWARDS: u8 = 11;
-    pub const TVU_QUIC: u8 = 12;
+    /// Analogous to [SOCKET_TAG_TVU](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/contact_info.rs#L36)
+    pub const TURBINE: u8 = 10;
+    /// Analogous to [SOCKET_TAG_TVU_QUIC](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/contact_info.rs#L37)
+    pub const TURBINE_QUIC: u8 = 11;
 };
-pub const SOCKET_CACHE_SIZE: usize = socket_tag.TVU_QUIC + 1;
+pub const SOCKET_CACHE_SIZE: usize = socket_tag.TURBINE_QUIC + 1;
 
 pub const ContactInfo = struct {
     pubkey: Pubkey,
@@ -1194,16 +1198,15 @@ const NodePort = union(enum) {
     tpu_forwards_quic: network.EndPoint,
     tpu_quic: network.EndPoint,
     tpu_vote: network.EndPoint,
-    tvu: network.EndPoint,
-    tvu_forwards: network.EndPoint,
-    tvu_quic: network.EndPoint,
+    turbine: network.EndPoint,
+    turbine_quic: network.EndPoint,
 };
 
 const Sockets = struct {
     gossip: UdpSocket,
     ip_echo: ?TcpListener,
-    tvu: ArrayList(UdpSocket),
-    tvu_forwards: ArrayList(UdpSocket),
+    turbine: ArrayList(UdpSocket),
+    turbine_quic: ArrayList(UdpSocket),
     tpu: ArrayList(UdpSocket),
     tpu_forwards: ArrayList(UdpSocket),
     tpu_vote: ArrayList(UdpSocket),
@@ -1217,7 +1220,7 @@ const Sockets = struct {
 };
 
 pub const SocketEntry = struct {
-    key: u8, // GossipMessageidentifier, e.g. tvu, tpu, etc
+    key: u8, // GossipMessageidentifier, e.g. turbine, tpu, etc
     index: u8, // IpAddr index in the accompanying addrs vector.
     offset: u16, // Port offset with respect to the previous entry.
 
@@ -1240,22 +1243,8 @@ pub const SocketEntry = struct {
     }
 };
 
-fn socket_addrs_unspecified() [13]SocketAddr {
-    return .{
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-        SocketAddr.unspecified(),
-    };
+fn socket_addrs_unspecified() [SOCKET_CACHE_SIZE]SocketAddr {
+    return .{SocketAddr.unspecified()} ** SOCKET_CACHE_SIZE;
 }
 
 pub const RestartHeaviestFork = struct {
