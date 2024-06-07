@@ -133,8 +133,8 @@ pub fn start(
         shred_tracker,
     );
     try service_manager.spawn(
-        RepairService.run_config,
-        RepairService.sendNecessaryRepairs,
+        .{ .name = "Repair Service" },
+        RepairService.run,
         .{repair_svc},
     );
 
