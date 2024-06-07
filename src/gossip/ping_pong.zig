@@ -209,31 +209,38 @@ pub const PingCache = struct {
     }
 
     /// Filters valid peers according to `PingCache` state and returns them along with any possible pings that need to be sent out.
-    ///
-    /// *Note*: caller is responsible for deinit `ArrayList`(s) returned!
     pub fn filterValidPeers(
         self: *Self,
-        allocator: std.mem.Allocator,
         our_keypair: KeyPair,
-        peers: []ContactInfo,
-    ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
+        peers: []const ContactInfo,
+        out: struct {
+            valid_peers: *std.ArrayList(usize),
+            pings: *std.ArrayList(PingAndSocketAddr),
+        },
+    ) error{OutOfMemory}!void {
         const now = std.time.Instant.now() catch @panic("time not supported by OS!");
-        var valid_peers = std.ArrayList(usize).init(allocator);
-        var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
+        // var valid_peers = std.ArrayList(usize).init(allocator);
+        // var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
+        const valid_peers = out.valid_peers;
+        const pings = out.pings;
+
+        valid_peers.clearRetainingCapacity();
+        pings.clearRetainingCapacity();
+
+        try valid_peers.ensureTotalCapacityPrecise(peers.len);
+        try pings.ensureTotalCapacityPrecise(peers.len);
 
         for (peers, 0..) |*peer, i| {
             if (peer.getSocket(socket_tag.GOSSIP)) |gossip_addr| {
                 const result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
-                    try valid_peers.append(i);
+                    valid_peers.appendAssumeCapacity(i);
                 }
                 if (result.maybe_ping) |ping| {
-                    try pings.append(.{ .ping = ping, .socket = gossip_addr });
+                    pings.appendAssumeCapacity(.{ .ping = ping, .socket = gossip_addr });
                 }
             }
         }
-
-        return .{ .valid_peers = valid_peers, .pings = pings };
     }
 
     // only used in tests/benchmarks
@@ -269,9 +276,16 @@ test "gossip.ping_pong: PingCache works" {
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
-    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]ContactInfo{});
-    defer result.valid_peers.deinit();
-    defer result.pings.deinit();
+    var valid_peers = std.ArrayList(usize).init(std.testing.allocator);
+    defer valid_peers.deinit();
+
+    var pings = std.ArrayList(PingAndSocketAddr).init(std.testing.allocator);
+    defer pings.deinit();
+
+    try ping_cache.filterValidPeers(our_kp, &[_]ContactInfo{}, .{
+        .valid_peers = &valid_peers,
+        .pings = &pings,
+    });
 
     try testing.expect(ping != null);
 }

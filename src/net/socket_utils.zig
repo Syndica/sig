@@ -11,20 +11,22 @@ pub const SOCKET_TIMEOUT_US: usize = 1 * std.time.us_per_s;
 pub const PACKETS_PER_BATCH: usize = 64;
 
 pub fn readSocket(
-    allocator: std.mem.Allocator,
     socket_: UdpSocket,
-    incoming_channel: *Channel(std.ArrayList(Packet)),
+    /// Allocator in charge of allocating & deallocating each packet batch in the `incoming_channel`.
+    packet_batches_allocator: std.mem.Allocator,
+    incoming_channel: *Channel(std.ArrayListUnmanaged(Packet)),
     exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) !void {
-    // NOTE: we set to non-blocking to periodically check if we should exit
     var socket = socket_;
+
+    // NOTE: we set to non-blocking to periodically check if we should exit
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
     inf_loop: while (!exit.load(.unordered)) {
         // init a new batch
         var packet_batch = try std.ArrayList(Packet).initCapacity(
-            allocator,
+            packet_batches_allocator,
             PACKETS_PER_BATCH,
         );
         errdefer packet_batch.deinit();
@@ -51,7 +53,10 @@ pub fn readSocket(
         }
 
         packet_batch.shrinkAndFree(packet_batch.items.len);
-        try incoming_channel.send(packet_batch);
+
+        var packet_batch_unmanaged = packet_batch.moveToUnmanaged();
+        errdefer packet_batch_unmanaged.deinit(packet_batches_allocator);
+        try incoming_channel.send(packet_batch_unmanaged);
     }
 
     logger.debugf("readSocket loop closed", .{});
@@ -59,7 +64,9 @@ pub fn readSocket(
 
 pub fn sendSocket(
     socket: UdpSocket,
-    outgoing_channel: *Channel(std.ArrayList(Packet)),
+    /// Allocator in charge of allocating & deallocating each packet batch in the `incoming_channel`.
+    packet_batches_allocator: std.mem.Allocator,
+    outgoing_channel: *Channel(std.ArrayListUnmanaged(Packet)),
     exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
@@ -74,7 +81,7 @@ pub fn sendSocket(
         };
         defer {
             for (packet_batches) |*packet_batch| {
-                packet_batch.deinit();
+                packet_batch.deinit(packet_batches_allocator);
             }
             outgoing_channel.allocator.free(packet_batches);
         }
@@ -100,27 +107,37 @@ pub fn sendSocket(
 /// was initialized. While you *could* send data to the channel for a "receiver"
 /// socket, the underlying thread won't actually read the data from the channel.
 pub const SocketThread = struct {
-    channel: *Channel(std.ArrayList(Packet)),
+    channel: *Channel(std.ArrayListUnmanaged(Packet)),
     exit: *std.atomic.Value(bool),
     handle: std.Thread,
 
     const Self = @This();
 
-    pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
-        const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
+    pub fn initSender(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        exit: *Atomic(bool),
+    ) !Self {
+        const channel = Channel(std.ArrayListUnmanaged(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
             .exit = exit,
-            .handle = try std.Thread.spawn(.{}, sendSocket, .{ socket, channel, exit, logger }),
+            .handle = try std.Thread.spawn(.{}, sendSocket, .{ socket, allocator, channel, exit, logger }),
         };
     }
 
-    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
-        const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
+    pub fn initReceiver(
+        allocator: Allocator,
+        logger: Logger,
+        socket: UdpSocket,
+        exit: *Atomic(bool),
+    ) !Self {
+        const channel = Channel(std.ArrayListUnmanaged(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
             .exit = exit,
-            .handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, exit, logger }),
+            .handle = try std.Thread.spawn(.{}, readSocket, .{ socket, allocator, channel, exit, logger }),
         };
     }
 
@@ -151,7 +168,7 @@ pub const BenchmarkPacketProcessing = struct {
         const n_packets = bench_args.n_packets;
         const allocator = std.heap.page_allocator;
 
-        var channel = Channel(std.ArrayList(Packet)).init(allocator, n_packets);
+        const channel = Channel(std.ArrayListUnmanaged(Packet)).init(allocator, n_packets);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);
@@ -162,8 +179,8 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Value(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, .noop });
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
+        const handle = try std.Thread.spawn(.{}, readSocket, .{ socket, allocator, channel, &exit, .noop });
+        const recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -197,7 +214,7 @@ pub const BenchmarkPacketProcessing = struct {
 };
 
 pub fn benchmarkChannelRecv(
-    channel: *Channel(std.ArrayList(Packet)),
+    channel: *Channel(std.ArrayListUnmanaged(Packet)),
     n_values_to_receive: usize,
 ) !void {
     var count: usize = 0;

@@ -46,7 +46,7 @@ pub fn Channel(comptime T: type) type {
             self.has_value.signal();
         }
 
-        pub fn sendBatch(self: *Self, value: std.ArrayList(T)) error{ OutOfMemory, ChannelClosed }!void {
+        pub fn sendBatch(self: *Self, value: []const T) error{ OutOfMemory, ChannelClosed }!void {
             if (self.closed.load(.monotonic)) {
                 return error.ChannelClosed;
             }
@@ -54,7 +54,7 @@ pub fn Channel(comptime T: type) type {
             defer buffer_lock.unlock();
 
             var buffer: *std.ArrayList(T) = buffer_lock.mut();
-            try buffer.appendSlice(value.items);
+            try buffer.appendSlice(value);
 
             self.has_value.signal();
         }

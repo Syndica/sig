@@ -380,7 +380,9 @@ pub fn run() !void {
         };
 
         // batch it
-        var packet_batch = std.ArrayList(Packet).init(allocator);
+        var packet_batch = std.ArrayList(Packet).init(gossip_service_fuzzer.allocator);
+        defer packet_batch.deinit();
+
         try packet_batch.append(send_packet);
         msg_count +|= 1;
 
@@ -391,7 +393,7 @@ pub fn run() !void {
         }
 
         // send it
-        try gossip_service_fuzzer.packet_outgoing_channel.send(packet_batch);
+        try gossip_service_fuzzer.packet_outgoing_channel.send(packet_batch.moveToUnmanaged());
 
         std.time.sleep(SLEEP_TIME);
 
