@@ -81,14 +81,15 @@ pub const AccountsDB = struct {
             config.storage_cache_size,
         );
 
-        var disk_allocator_ptr: ?*DiskMemoryAllocator = null;
-        var reference_allocator = std.heap.page_allocator;
-        if (config.disk_index_path) |disk_index_path| {
-            var ptr = try allocator.create(DiskMemoryAllocator);
+        const maybe_disk_allocator: ?*DiskMemoryAllocator, //
+        const reference_allocator: std.mem.Allocator //
+        = blk: {
+            const disk_index_path = config.disk_index_path orelse break :blk .{ null, std.heap.page_allocator };
+            const ptr = try allocator.create(DiskMemoryAllocator);
+            errdefer allocator.destroy(ptr);
             ptr.* = try DiskMemoryAllocator.init(disk_index_path);
-            reference_allocator = ptr.allocator();
-            disk_allocator_ptr = ptr;
-        }
+            break :blk .{ ptr, ptr.allocator() };
+        };
 
         const account_index = try AccountIndex.init(
             allocator,
@@ -96,9 +97,9 @@ pub const AccountsDB = struct {
             config.number_of_index_bins,
         );
 
-        return Self{
+        return .{
             .allocator = allocator,
-            .disk_allocator_ptr = disk_allocator_ptr,
+            .disk_allocator_ptr = maybe_disk_allocator,
             .storage = storage,
             .account_index = account_index,
             .logger = logger,
