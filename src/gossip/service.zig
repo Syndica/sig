@@ -277,9 +277,10 @@ pub const GossipService = struct {
 
     /// starts gossip and blocks until it exits
     pub fn run(self: *Self, params: RunThreadsParams) !void {
-        var service = try self.start(params);
-        service.join();
-        service.deinit();
+        var manager = ServiceManager.init(self.allocator, self.logger, self.exit, "gossip", .{}, .{});
+        try self.start(params, &manager);
+        manager.join();
+        manager.deinit();
     }
 
     /// spawns required threads for the gossip service and returns immediately
@@ -290,12 +291,15 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message) (only active if not a spy node)
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
-    pub fn start(self: *Self, params: RunThreadsParams) std.Thread.SpawnError!ServiceManager {
+    pub fn start(
+        self: *Self,
+        params: RunThreadsParams,
+        manager: *ServiceManager,
+    ) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         // TODO(Ahmad): need new server impl, for now we don't join server thread
         // because http.zig's server doesn't stop when you call server.stop() - it's broken
         // const echo_server_thread = try self.echo_server.listenAndServe();
         // _ = echo_server_thread;
-        var manager = ServiceManager.init(self.allocator, self.logger, self.exit, "gossip", .{}, .{});
         errdefer manager.deinit();
 
         try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
@@ -323,8 +327,6 @@ pub const GossipService = struct {
             .gossip_table_rw = &self.gossip_table_rw,
             .exit = self.exit,
         }});
-
-        return manager;
     }
 
     const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);

@@ -14,6 +14,7 @@ pub const AccountsDBConfig = _private.db.AccountsDBConfig;
 pub const AllSnapshotFields = _private.snapshots.AllSnapshotFields;
 pub const Bank = _private.bank.Bank;
 pub const GenesisConfig = _private.genesis_config.GenesisConfig;
+pub const SnapshotFields = _private.snapshots.SnapshotFields;
 pub const SnapshotFieldsAndPaths = _private.snapshots.SnapshotFieldsAndPaths;
 pub const SnapshotFiles = _private.snapshots.SnapshotFiles;
 pub const StatusCache = _private.snapshots.StatusCache;

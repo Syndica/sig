@@ -7,6 +7,7 @@ const helpers = @import("helpers.zig");
 const sig = @import("../lib.zig");
 const config = @import("config.zig");
 
+const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
@@ -346,6 +347,42 @@ var app = &cli.App{
                         },
                     },
                 },
+                &cli.Command{
+                    .name = "leader-schedule",
+                    .description = .{
+                        .one_line = "Prints the leader schedule from the snapshot",
+                        .detailed =
+                        \\- Starts gossip
+                        \\- acquires a snapshot if necessary
+                        \\- loads accounts db from the snapshot
+                        \\- calculates the leader schedule from the snaphot
+                        \\- prints the leader schedule in the same format as `solana leader-schedule`
+                        \\- exits
+                        ,
+                    },
+                    .options = &.{
+                        // gossip
+                        &gossip_host.option,
+                        &gossip_port_option,
+                        &gossip_entrypoints_option,
+                        &gossip_spy_node_option,
+                        &gossip_dump_option,
+                        // accounts-db
+                        &snapshot_dir_option,
+                        &n_threads_snapshot_load_option,
+                        &n_threads_snapshot_unpack_option,
+                        &disk_index_path_option,
+                        &force_unpack_snapshot_option,
+                        &min_snapshot_download_speed_mb_option,
+                        &force_new_snapshot_download_option,
+                        &trusted_validators_option,
+                    },
+                    .target = .{
+                        .action = .{
+                            .exec = printLeaderSchedule,
+                        },
+                    },
+                },
             },
         },
     },
@@ -365,167 +402,117 @@ fn identity() !void {
 
 /// entrypoint to run only gossip
 fn gossip() !void {
-    var logger = try spawnLogger();
-    defer logger.deinit();
-    const metrics_thread = try spawnMetrics(logger);
-    defer metrics_thread.detach();
+    var app_base = try AppBase.init(gpa_allocator);
 
-    var exit = std.atomic.Value(bool).init(false);
-    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
-    const entrypoints = try getEntrypoints(logger);
-    defer entrypoints.deinit();
-    const my_data = try getMyDataFromIpEcho(logger, entrypoints.items);
-
-    var gossip_service = try initGossip(
-        logger,
-        my_keypair,
-        &exit,
-        entrypoints.items,
-        my_data.shred_version,
-        my_data.ip,
-        &.{},
-    );
+    var gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_service.deinit();
+    defer gossip_manager.deinit();
 
-    try runGossipWithConfigValues(&gossip_service);
+    gossip_manager.join();
 }
 
 /// entrypoint to run a full solana validator
 fn validator() !void {
-    var logger = try spawnLogger();
-    defer logger.deinit();
-    const metrics_thread = try spawnMetrics(logger);
-    defer metrics_thread.detach();
-
-    var rand = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
-    var exit = std.atomic.Value(bool).init(false);
-    const my_keypair = try getOrInitIdentity(gpa_allocator, logger);
-    const entrypoints = try getEntrypoints(logger);
-    defer entrypoints.deinit();
-    const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+    var app_base = try AppBase.init(gpa_allocator);
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const tvu_port: u16 = config.current.shred_collector.repair_port;
 
-    // gossip
-    var gossip_service = try initGossip(
-        logger,
-        my_keypair,
-        &exit,
-        entrypoints.items,
-        ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
-        ip_echo_data.ip,
-        &.{
-            .{ .tag = socket_tag.REPAIR, .port = repair_port },
-            .{ .tag = socket_tag.TVU, .port = tvu_port },
-        },
-    );
-    defer gossip_service.deinit();
-    var gossip_handle = try gossip_service.start(.{
-        .spy_node = config.current.gossip.spy_node,
-        .dump = config.current.gossip.dump,
+    var gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{
+        .{ .tag = socket_tag.REPAIR, .port = repair_port },
+        .{ .tag = socket_tag.TVU, .port = tvu_port },
     });
-    defer gossip_handle.deinit();
+    defer gossip_service.deinit();
+    defer gossip_manager.deinit();
 
-    // accounts db
-    var snapshots = try getOrDownloadSnapshots(
-        gpa_allocator,
-        logger,
-        &gossip_service,
-    );
-    defer snapshots.deinit(gpa_allocator);
-
-    logger.infof("full snapshot: {s}", .{snapshots.full_path});
-    if (snapshots.incremental_path) |inc_path| {
-        logger.infof("incremental snapshot: {s}", .{inc_path});
-    }
-
-    // cli parsing
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_load: u32 = @intCast(config.current.accounts_db.num_threads_snapshot_load);
-    if (n_threads_snapshot_load == 0) {
-        n_threads_snapshot_load = n_cpus;
-    }
-
-    var accounts_db = try AccountsDB.init(
-        gpa_allocator,
-        logger,
-        AccountsDBConfig{
-            .disk_index_path = config.current.accounts_db.disk_index_path,
-            .storage_cache_size = @intCast(config.current.accounts_db.storage_cache_size),
-            .number_of_index_bins = @intCast(config.current.accounts_db.num_account_index_bins),
-        },
-    );
-    defer accounts_db.deinit();
-
-    const snapshot_fields = try accounts_db.loadWithDefaults(
-        &snapshots,
-        snapshot_dir_str,
-        n_threads_snapshot_load,
-        true, // validate too
-    );
-    const bank_fields = snapshot_fields.bank_fields;
-
-    // this should exist before we start to unpack
-    logger.infof("reading genesis...", .{});
-    const genesis_config = readGenesisConfig(gpa_allocator, snapshot_dir_str) catch |err| {
-        if (err == error.GenesisNotFound) {
-            logger.errf("genesis.bin not found - expecting {s}/genesis.bin to exist", .{snapshot_dir_str});
-        }
-        return err;
-    };
-    defer genesis_config.deinit(gpa_allocator);
-
-    logger.infof("validating bank...", .{});
-    const bank = Bank.init(&accounts_db, &bank_fields);
-    try Bank.validateBankFields(bank.bank_fields, &genesis_config);
-
-    // validate the status cache
-    logger.infof("validating status cache...", .{});
-    var status_cache = readStatusCache(gpa_allocator, snapshot_dir_str) catch |err| {
-        if (err == error.StatusCacheNotFound) {
-            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
-        }
-        return err;
-    };
-    defer status_cache.deinit();
-
-    var slot_history = try accounts_db.getSlotHistory();
-    defer slot_history.deinit(accounts_db.allocator);
-    try status_cache.validate(gpa_allocator, bank_fields.slot, &slot_history);
-
-    logger.infof("accounts-db setup done...", .{});
+    const snapshot = try loadSnapshot(gpa_allocator, app_base.logger, gossip_service, false);
 
     // leader schedule
-    const leader_schedule = try sig.core.leader_schedule.leaderScheduleFromBank(gpa_allocator, &bank);
-    _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
-    const epoch_start_slot = bank.bank_fields.slot - slot_index;
-    var slot_leader_getter = sig.core.leader_schedule.SingleEpochLeaderSchedule{
-        .leader_schedule = leader_schedule,
-        .start_slot = epoch_start_slot,
-    };
-    const getter = slot_leader_getter.provider();
+    var leader_schedule = try leaderSchedule(gpa_allocator, &snapshot.bank);
+    const leader_provider = leader_schedule.provider();
 
     // shred collector
+    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var shred_collector = try sig.shred_collector.start(
         config.current.shred_collector,
         ShredCollectorDependencies{
             .allocator = gpa_allocator,
-            .logger = logger,
-            .random = rand.random(),
-            .my_keypair = &my_keypair,
-            .exit = &exit,
+            .logger = app_base.logger,
+            .random = rng.random(),
+            .my_keypair = &app_base.my_keypair,
+            .exit = &app_base.exit,
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
-            .leader_schedule = getter,
+            .leader_schedule = leader_provider,
         },
     );
     defer shred_collector.deinit();
 
-    gossip_handle.join();
+    gossip_manager.join();
     shred_collector.join();
 }
+
+/// entrypoint to print the leader schedule and then exit
+fn printLeaderSchedule() !void {
+    const allocator = gpa_allocator;
+    var app_base = try AppBase.init(allocator);
+
+    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
+    defer gossip_service.deinit();
+    defer gossip_manager.deinit();
+
+    const snapshot = try loadSnapshot(allocator, app_base.logger, gossip_service, false);
+    const leader_schedule = try leaderSchedule(allocator, &snapshot.bank);
+
+    // const buf = try allocator.alloc(u8, 64 * leader_schedule.leader_schedule.len);
+    // var stream = std.io.fixedBufferStream(buf);
+    // const stdout = std.io.getStdOut();
+    var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+    const writer = stdout.writer();
+    for (leader_schedule.leader_schedule, 0..) |leader, i| {
+        try writer.print("  {}       {s}\n", .{ i + leader_schedule.start_slot, &leader.string() });
+    }
+    // try std.io.getStdOut().writeAll(buf[0..stream.pos]);
+}
+
+/// State that typically needs to be initialized at the start of the app,
+/// and deinitialized only when the app exits.
+const AppBase = struct {
+    exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    logger: Logger,
+    metrics_thread: std.Thread,
+    my_keypair: KeyPair,
+    entrypoints: std.ArrayList(SocketAddr),
+    shred_version: u16,
+    my_ip: IpAddr,
+
+    fn init(allocator: Allocator) !AppBase {
+        var logger = try spawnLogger();
+        errdefer logger.deinit();
+        const metrics_thread = try spawnMetrics(logger);
+        errdefer metrics_thread.detach();
+        const my_keypair = try getOrInitIdentity(allocator, logger);
+        const entrypoints = try getEntrypoints(logger);
+        errdefer entrypoints.deinit();
+        const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
+
+        return .{
+            .logger = logger,
+            .metrics_thread = metrics_thread,
+            .my_keypair = my_keypair,
+            .entrypoints = entrypoints,
+            .shred_version = ip_echo_data.shred_version,
+            .my_ip = ip_echo_data.ip,
+        };
+    }
+
+    pub fn deinit(self: @This()) void {
+        self.exit.store(true, .unordered);
+        self.entrypoints.deinit();
+        self.metrics_thread.detach();
+        self.logger.deinit();
+    }
+};
 
 /// Initialize an instance of GossipService and configure with CLI arguments
 fn initGossip(
@@ -557,6 +544,51 @@ fn initGossip(
         exit,
         logger,
     );
+}
+
+fn startGossip(
+    allocator: Allocator,
+    app_base: *AppBase,
+    /// Extra sockets to publish in gossip, other than the gossip socket
+    extra_sockets: []const struct { tag: u8, port: u16 },
+) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
+    const gossip_port = config.current.gossip.port;
+    app_base.logger.infof("gossip host: {any}", .{app_base.my_ip});
+    app_base.logger.infof("gossip port: {d}", .{gossip_port});
+
+    // setup contact info
+    const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+    var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
+    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.init(app_base.my_ip, gossip_port));
+    for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
+    contact_info.shred_version = app_base.shred_version;
+
+    var manager = sig.utils.service_manager.ServiceManager.init(
+        allocator,
+        app_base.logger,
+        &app_base.exit,
+        "gossip",
+        .{},
+        .{},
+    );
+    const service = try manager.arena().create(GossipService);
+    service.* = try GossipService.init(
+        gpa_allocator,
+        gossip_value_gpa_allocator,
+        contact_info,
+        app_base.my_keypair, // TODO: consider security implication of passing keypair by value
+        app_base.entrypoints.items,
+        &app_base.exit,
+        app_base.logger,
+    );
+    try manager.defers.deferCall(GossipService.deinit, .{service});
+
+    try service.start(.{
+        .spy_node = config.current.gossip.spy_node,
+        .dump = config.current.gossip.dump,
+    }, &manager);
+
+    return .{ service, manager };
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {
@@ -667,11 +699,121 @@ fn spawnLogger() !Logger {
     return logger;
 }
 
+fn leaderSchedule(
+    allocator: Allocator,
+    bank: *const Bank,
+) !sig.core.leader_schedule.SingleEpochLeaderSchedule {
+    const leader_schedule = try sig.core.leader_schedule.leaderScheduleFromBank(allocator, bank);
+    _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
+    const epoch_start_slot = bank.bank_fields.slot - slot_index;
+    const schedule = sig.core.leader_schedule.SingleEpochLeaderSchedule{
+        .leader_schedule = leader_schedule,
+        .start_slot = epoch_start_slot,
+    };
+    return schedule;
+}
+
+const LoadedSnapshot = struct {
+    allocator: Allocator,
+    accounts_db: AccountsDB,
+    snapshots: SnapshotFieldsAndPaths,
+    snapshot_fields: sig.accounts_db.SnapshotFields,
+    /// contains pointers to `accounts_db` and `snapshot_fields`
+    bank: Bank,
+    genesis_config: GenesisConfig,
+
+    pub fn deinit(self: *@This()) void {
+        self.genesis_config.deinit(self.allocator);
+        self.snapshot_fields.deinit(self.allocator);
+        self.accounts_db.deinit();
+        self.snapshots.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
+};
+
+fn loadSnapshot(
+    allocator: Allocator,
+    logger: Logger,
+    gossip_service: *GossipService,
+    validate: bool,
+) !*LoadedSnapshot {
+    const output = try allocator.create(LoadedSnapshot);
+    var snapshots = try getOrDownloadSnapshots(
+        allocator,
+        logger,
+        gossip_service,
+    );
+
+    logger.infof("full snapshot: {s}", .{snapshots.full_path});
+    if (snapshots.incremental_path) |inc_path| {
+        logger.infof("incremental snapshot: {s}", .{inc_path});
+    }
+
+    // cli parsing
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
+    var n_threads_snapshot_load: u32 = @intCast(config.current.accounts_db.num_threads_snapshot_load);
+    if (n_threads_snapshot_load == 0) {
+        n_threads_snapshot_load = n_cpus;
+    }
+
+    output.accounts_db = try AccountsDB.init(
+        allocator,
+        logger,
+        AccountsDBConfig{
+            .disk_index_path = config.current.accounts_db.disk_index_path,
+            .storage_cache_size = @intCast(config.current.accounts_db.storage_cache_size),
+            .number_of_index_bins = @intCast(config.current.accounts_db.num_account_index_bins),
+        },
+    );
+
+    output.snapshot_fields = try output.accounts_db.loadWithDefaults(
+        &snapshots,
+        snapshot_dir_str,
+        n_threads_snapshot_load,
+        true, // validate too
+    );
+
+    const bank_fields = &output.snapshot_fields.bank_fields;
+
+    // this should exist before we start to unpack
+    logger.infof("reading genesis...", .{});
+    output.genesis_config = readGenesisConfig(allocator, snapshot_dir_str) catch |err| {
+        if (err == error.GenesisNotFound) {
+            logger.errf("genesis.bin not found - expecting {s}/genesis.bin to exist", .{snapshot_dir_str});
+        }
+        return err;
+    };
+
+    logger.infof("validating bank...", .{});
+    output.bank = Bank.init(&output.accounts_db, bank_fields);
+
+    // TODO: remove this condition once these validations work reliably on all clusters
+    if (validate) {
+        try Bank.validateBankFields(output.bank.bank_fields, &output.genesis_config);
+
+        // validate the status cache
+        logger.infof("validating status cache...", .{});
+        var status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
+            if (err == error.StatusCacheNotFound) {
+                logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+            }
+            return err;
+        };
+        defer status_cache.deinit();
+
+        var slot_history = try output.accounts_db.getSlotHistory();
+        defer slot_history.deinit(output.accounts_db.allocator);
+        try status_cache.validate(allocator, bank_fields.slot, &slot_history);
+    }
+
+    logger.infof("accounts-db setup done...", .{});
+
+    return output;
+}
+
 /// load genesis config with default filenames
-fn readGenesisConfig(
-    allocator: std.mem.Allocator,
-    snapshot_dir: []const u8,
-) !GenesisConfig {
+fn readGenesisConfig(allocator: Allocator, snapshot_dir: []const u8) !GenesisConfig {
     const genesis_path = try std.fmt.allocPrint(
         allocator,
         "{s}/genesis.bin",
@@ -687,10 +829,7 @@ fn readGenesisConfig(
     return genesis_config;
 }
 
-fn readStatusCache(
-    allocator: std.mem.Allocator,
-    snapshot_dir: []const u8,
-) !StatusCache {
+fn readStatusCache(allocator: Allocator, snapshot_dir: []const u8) !StatusCache {
     const status_cache_path = try std.fmt.allocPrint(
         gpa_allocator,
         "{s}/{s}",
@@ -746,9 +885,7 @@ fn downloadSnapshot() !void {
     );
 }
 
-fn getTrustedValidators(
-    allocator: std.mem.Allocator,
-) !?std.ArrayList(Pubkey) {
+fn getTrustedValidators(allocator: Allocator) !?std.ArrayList(Pubkey) {
     var trusted_validators: ?std.ArrayList(Pubkey) = null;
     if (config.current.gossip.trusted_validators.len > 0) {
         trusted_validators = try std.ArrayList(Pubkey).initCapacity(
@@ -766,7 +903,7 @@ fn getTrustedValidators(
 }
 
 fn getOrDownloadSnapshots(
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
     logger: Logger,
     gossip_service: ?*GossipService,
 ) !SnapshotFieldsAndPaths {
