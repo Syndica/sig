@@ -1,10 +1,8 @@
 const std = @import("std");
-const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const exp = std.math.exp;
 
 const RwMux = @import("../sync/mux.zig").RwMux;
 const GossipTable = @import("table.zig").GossipTable;

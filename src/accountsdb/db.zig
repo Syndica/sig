@@ -17,8 +17,6 @@ const FileId = @import("../accountsdb/accounts_file.zig").FileId;
 const AccountInFile = @import("../accountsdb/accounts_file.zig").AccountInFile;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const Task = ThreadPool.Task;
-const Batch = ThreadPool.Batch;
 
 const NestedHashTree = @import("../common/merkle_tree.zig").NestedHashTree;
 const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
@@ -34,8 +32,6 @@ const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
 
 const _accounts_index = @import("index.zig");
 const AccountIndex = _accounts_index.AccountIndex;
-const DiskMemoryConfig = _accounts_index.DiskMemoryConfig;
-const RamMemoryConfig = _accounts_index.RamMemoryConfig;
 const RefMemoryLinkedList = _accounts_index.RefMemoryLinkedList;
 const AccountRef = _accounts_index.AccountRef;
 const DiskMemoryAllocator = _accounts_index.DiskMemoryAllocator;
@@ -45,7 +41,6 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
-const POSIX_MAP_TYPE_SHARED = 0x01; // This will work on linux and macos x86_64/aarch64
 
 pub const AccountsDBConfig = struct {
     // number of Accounts to preallocate for cache

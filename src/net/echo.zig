@@ -12,7 +12,6 @@ const bincode = @import("../bincode/bincode.zig");
 const httpz = @import("httpz");
 
 const MAX_PORT_COUNT_PER_MSG: usize = 4;
-const MAX_REQ_HEADER_SIZE = 8192;
 const SERVER_LISTENER_LINGERING_TIMEOUT: u64 = std.time.ns_per_s * 1;
 const HEADER_LENGTH: usize = 4;
 

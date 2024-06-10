@@ -22,7 +22,6 @@ const Batch = ThreadPool.Batch;
 const Transaction = @import("../core/transaction.zig").Transaction;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const RwLock = std.Thread.RwLock;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 
 const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;

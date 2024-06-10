@@ -12,7 +12,6 @@ const ArrayList = std.ArrayList;
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Value(bool);
 const UdpSocket = network.Socket;
-const Tuple = std.meta.Tuple;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 const endpointToString = @import("../net/net.zig").endpointToString;
 const _gossipMessages = @import("message.zig");

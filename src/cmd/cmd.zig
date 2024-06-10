@@ -8,8 +8,6 @@ const config = @import("config.zig");
 
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Random = std.rand.Random;
-const Socket = network.Socket;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
@@ -38,8 +36,6 @@ const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 
 const socket_tag = sig.gossip.socket_tag;
-const SOCKET_TIMEOUT_US = sig.net.SOCKET_TIMEOUT_US;
-const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 
 // TODO: use better allocator, unless GPA becomes more performant.
 
