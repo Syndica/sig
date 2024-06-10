@@ -7,7 +7,6 @@ const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
-const OnceCell = @import("../sync/once_cell.zig").OnceCell;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa_allocator = gpa.allocator();
 

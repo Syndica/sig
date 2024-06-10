@@ -1,0 +1,91 @@
+name: check
+
+on:
+  push:
+    branches: [main, pre-release]
+  pull_request:
+    branches: [main, pre-release]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.12.0
+
+      - name: lint
+        run: |
+          zig fmt --check src/
+          zig fmt --check build.zig
+
+  unused_imports:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v3
+        with: 
+          python-version: "3.10"         
+      - name: remove unused imports
+        run: python remove_unused.py src/
+
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{matrix.os}}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.12.0
+
+      - name: test
+        run: zig build test
+
+  benchmarks:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{matrix.os}}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.12.0
+
+      - name: benchmarks 
+        run: zig build -Doptimize=ReleaseSafe benchmark
+
+  gossip:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{matrix.os}}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.12.0
+
+      - name: build release 
+        run: zig build -Doptimize=ReleaseSafe 
+      - name: run gossip
+        run: bash scripts/gossip_test.sh 120 # in seconds
