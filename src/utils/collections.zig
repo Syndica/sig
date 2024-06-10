@@ -43,7 +43,7 @@ pub fn RecyclingList(
             self.len = 0;
         }
 
-        pub fn addOne(self: *Self) !*T {
+        pub fn addOne(self: *Self) Allocator.Error!*T {
             if (self.len < self.private.items.len) {
                 const item = &self.private.items[self.len];
                 resetItem(item);

@@ -103,7 +103,7 @@ pub fn start(
     try service_manager.spawn(
         .{ .name = "Shred Processor" },
         shred_collector.shred_processor.runShredProcessor,
-        .{ deps.allocator, verified_shred_channel, shred_tracker },
+        .{ deps.allocator, deps.logger, verified_shred_channel, shred_tracker },
     );
 
     // repair (thread)
