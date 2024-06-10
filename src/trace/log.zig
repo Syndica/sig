@@ -5,7 +5,6 @@ const logfmt = @import("logfmt.zig");
 const Entry = entry.Entry;
 const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
-const Mutex = std.Thread.Mutex;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
 const OnceCell = @import("../sync/once_cell.zig").OnceCell;

@@ -1,5 +1,4 @@
 const std = @import("std");
-const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
 const bincode = @import("../bincode/bincode.zig");
 const ArrayList = std.ArrayList;

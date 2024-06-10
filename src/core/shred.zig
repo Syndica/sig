@@ -1,7 +1,6 @@
 const Hash = @import("hash.zig").Hash;
 const std = @import("std");
 const HardForks = @import("hard_forks.zig").HardForks;
-const Allocator = std.mem.Allocator;
 
 pub const Nonce = u32;
 

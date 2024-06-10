@@ -1,6 +1,5 @@
 const std = @import("std");
 const SocketAddr = @import("../net/net.zig").SocketAddr;
-const Tuple = std.meta.Tuple;
 const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const Transaction = @import("../core/transaction.zig").Transaction;
@@ -24,7 +23,6 @@ const testing = std.testing;
 
 const ClientVersion = @import("../version/version.zig").ClientVersion;
 
-const Socket = network.Socket;
 const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
 const net = std.net;

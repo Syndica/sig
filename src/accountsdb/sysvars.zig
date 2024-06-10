@@ -9,8 +9,6 @@ const Hash = @import("../core/hash.zig").Hash;
 const StakeHistoryEntry = @import("./snapshots.zig").StakeHistoryEntry;
 const UnixTimestamp = @import("genesis_config.zig").UnixTimestamp;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const Task = ThreadPool.Task;
-const Batch = ThreadPool.Batch;
 
 const BitVec = @import("../bloom/bit_vec.zig").BitVec;
 const DynamicArrayBitSet = @import("../bloom/bit_set.zig").DynamicArrayBitSet;

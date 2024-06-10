@@ -1,6 +1,4 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const HashMap = std.AutoHashMap;
 
 const Account = @import("../core/account.zig").Account;
 const Hash = @import("../core/hash.zig").Hash;

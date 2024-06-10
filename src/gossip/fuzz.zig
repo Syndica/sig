@@ -8,7 +8,6 @@ const _gossip_service = @import("./service.zig");
 const GossipService = _gossip_service.GossipService;
 const ChunkType = _gossip_service.ChunkType;
 const gossipDataToPackets = _gossip_service.gossipDataToPackets;
-const MAX_PUSH_MESSAGE_PAYLOAD_SIZE = _gossip_service.MAX_PUSH_MESSAGE_PAYLOAD_SIZE;
 
 const Logger = @import("../trace/log.zig").Logger;
 const _gossip_data = @import("data.zig");
@@ -30,11 +29,8 @@ const Packet = @import("../net/packet.zig").Packet;
 const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
 const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
 
-const Thread = std.Thread;
-const Tuple = std.meta.Tuple;
 const _gossip_message = @import("message.zig");
 const GossipMessage = _gossip_message.GossipMessage;
-const PruneData = _gossip_message.PruneData;
 
 const Ping = @import("ping_pong.zig").Ping;
 const Pong = @import("ping_pong.zig").Pong;
@@ -43,13 +39,10 @@ const bincode = @import("../bincode/bincode.zig");
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const _gossip_table = @import("../gossip/table.zig");
-const GossipTable = _gossip_table.GossipTable;
-const HashTimeQueue = _gossip_table.HashTimeQueue;
 
 const _pull_request = @import("../gossip/pull_request.zig");
 const GossipPullFilterSet = _pull_request.GossipPullFilterSet;
 const GossipPullFilter = _pull_request.GossipPullFilter;
-const MAX_NUM_PULL_REQUESTS = _pull_request.MAX_NUM_PULL_REQUESTS;
 
 const Hash = @import("../core/hash.zig").Hash;
 

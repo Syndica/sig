@@ -8,7 +8,6 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const types = @import("types.zig");
 const Encoding = @import("types.zig").Encoding;
 const base64 = @import("std").base64.standard;
-const Response = jsonrpc.ResponsePayload;
 const testing = std.testing;
 
 const HTTP_ENDPOINT = "https://api.mainnet-beta.solana.com";
