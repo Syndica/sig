@@ -4,47 +4,43 @@ const cli = @import("zig-cli");
 const dns = @import("zigdig");
 const network = @import("zig-network");
 const helpers = @import("helpers.zig");
+const sig = @import("../lib.zig");
+const config = @import("config.zig");
 
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
 const Socket = network.Socket;
 
-const ContactInfo = @import("../gossip/data.zig").ContactInfo;
-const GossipService = @import("../gossip/service.zig").GossipService;
-const IpAddr = @import("../net/net.zig").IpAddr;
-const Level = @import("../trace/level.zig").Level;
-const Logger = @import("../trace/log.zig").Logger;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Registry = @import("../prometheus/registry.zig").Registry;
-const RepairService = @import("../tvu/repair_service.zig").RepairService;
-const RepairPeerProvider = @import("../tvu/repair_service.zig").RepairPeerProvider;
-const RepairRequester = @import("../tvu/repair_service.zig").RepairRequester;
-const ShredReceiver = @import("../tvu/shred_receiver.zig").ShredReceiver;
-const SocketAddr = @import("../net/net.zig").SocketAddr;
-const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
-const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
-const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
-const AccountsDB = @import("../accountsdb/db.zig").AccountsDB;
-const AccountsDBConfig = @import("../accountsdb/db.zig").AccountsDBConfig;
-const GenesisConfig = @import("../accountsdb/genesis_config.zig").GenesisConfig;
-const StatusCache = @import("../accountsdb/snapshots.zig").StatusCache;
-const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
-const Bank = @import("../accountsdb/bank.zig").Bank;
-const enumFromName = @import("../utils/types.zig").enumFromName;
+const AccountsDB = sig.accounts_db.AccountsDB;
+const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
+const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
+const Bank = sig.accounts_db.Bank;
+const ContactInfo = sig.gossip.ContactInfo;
+const GenesisConfig = sig.accounts_db.GenesisConfig;
+const GossipService = sig.gossip.GossipService;
+const IpAddr = sig.net.IpAddr;
+const Level = sig.trace.Level;
+const Logger = sig.trace.Logger;
+const Pubkey = sig.core.Pubkey;
+const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
+const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
+const SnapshotFiles = sig.accounts_db.SnapshotFiles;
+const SocketAddr = sig.net.SocketAddr;
+const StatusCache = sig.accounts_db.StatusCache;
+
+const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
+const enumFromName = sig.utils.types.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
-const globalRegistry = @import("../prometheus/registry.zig").globalRegistry;
-const getWallclockMs = @import("../gossip/data.zig").getWallclockMs;
-const requestIpEcho = @import("../net/echo.zig").requestIpEcho;
-const servePrometheus = @import("../prometheus/http.zig").servePrometheus;
-const parallelUnpackZstdTarBall = @import("../accountsdb/snapshots.zig").parallelUnpackZstdTarBall;
-const downloadSnapshotsFromGossip = @import("../accountsdb/download.zig").downloadSnapshotsFromGossip;
-const SOCKET_TIMEOUT_US = @import("../net/socket_utils.zig").SOCKET_TIMEOUT_US;
+const globalRegistry = sig.prometheus.globalRegistry;
+const getWallclockMs = sig.gossip.getWallclockMs;
+const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
+const requestIpEcho = sig.net.requestIpEcho;
+const servePrometheus = sig.prometheus.servePrometheus;
 
-const config = @import("config.zig");
-// var validator_config = config.current;
-
-const socket_tag = @import("../gossip/data.zig").socket_tag;
+const socket_tag = sig.gossip.socket_tag;
+const SOCKET_TIMEOUT_US = sig.net.SOCKET_TIMEOUT_US;
+const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
 
 // TODO: use better allocator, unless GPA becomes more performant.
 
@@ -89,16 +85,24 @@ var gossip_port_option = cli.Option{
 
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
-    .help = "The port to run tvu repair listener - default: 8002",
-    .value_ref = cli.mkRef(&config.current.repair.port),
+    .help = "The port to run shred repair listener - default: 8002",
+    .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
     .required = false,
     .value_name = "Repair Port",
+};
+
+var turbine_recv_port_option = cli.Option{
+    .long_name = "turbine-port",
+    .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
+    .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
+    .required = false,
+    .value_name = "Turbine Port",
 };
 
 var test_repair_option = cli.Option{
     .long_name = "test-repair-for-slot",
     .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value_ref = cli.mkRef(&config.current.repair.test_repair_slot),
+    .value_ref = cli.mkRef(&config.current.shred_collector.start_slot),
     .required = false,
     .value_name = "slot number",
 };
@@ -298,6 +302,7 @@ var app = &cli.App{
                         &gossip_spy_node_option,
                         &gossip_dump_option,
                         // repair
+                        &turbine_recv_port_option,
                         &repair_port_option,
                         &test_repair_option,
                         // accounts-db
@@ -399,7 +404,8 @@ fn validator() !void {
     defer entrypoints.deinit();
     const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
-    const repair_port: u16 = config.current.repair.port;
+    const repair_port: u16 = config.current.shred_collector.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
 
     // gossip
     var gossip_service = try initGossip(
@@ -409,35 +415,28 @@ fn validator() !void {
         entrypoints.items,
         ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
         ip_echo_data.ip,
-        &.{.{ .tag = socket_tag.REPAIR, .port = repair_port }},
+        &.{
+            .{ .tag = socket_tag.REPAIR, .port = repair_port },
+            .{ .tag = socket_tag.TURBINE_RECV, .port = turbine_recv_port },
+        },
     );
     defer gossip_service.deinit();
     const gossip_handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
 
-    // repair
-    var repair_socket = try Socket.create(network.AddressFamily.ipv4, network.Protocol.udp);
-    try repair_socket.bindToPort(repair_port);
-    try repair_socket.setReadTimeout(SOCKET_TIMEOUT_US);
-
-    var repair_svc = try initRepair(
-        logger,
-        &my_keypair,
-        &exit,
-        rand.random(),
-        &gossip_service,
-        &repair_socket,
+    // shred collector
+    var shred_collector = try sig.shred_collector.start(
+        config.current.shred_collector,
+        ShredCollectorDependencies{
+            .allocator = gpa_allocator,
+            .logger = logger,
+            .random = rand.random(),
+            .my_keypair = &my_keypair,
+            .exit = &exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+        },
     );
-    defer repair_svc.deinit();
-    var repair_handle = try std.Thread.spawn(.{}, RepairService.run, .{&repair_svc});
-
-    var shred_receiver = ShredReceiver{
-        .allocator = gpa_allocator,
-        .keypair = &my_keypair,
-        .exit = &exit,
-        .logger = logger,
-        .socket = &repair_socket,
-    };
-    var shred_receive_handle = try std.Thread.spawn(.{}, ShredReceiver.run, .{&shred_receiver});
+    defer shred_collector.deinit();
 
     // accounts db
     var snapshots = try getOrDownloadSnapshots(
@@ -510,8 +509,7 @@ fn validator() !void {
     logger.infof("accounts-db setup done...", .{});
 
     gossip_handle.join();
-    repair_handle.join();
-    shred_receive_handle.join();
+    shred_collector.join();
 }
 
 /// Initialize an instance of GossipService and configure with CLI arguments
@@ -544,37 +542,6 @@ fn initGossip(
         exit,
         logger,
     );
-}
-
-fn initRepair(
-    logger: Logger,
-    my_keypair: *const KeyPair,
-    exit: *Atomic(bool),
-    random: Random,
-    gossip_service: *GossipService,
-    socket: *Socket,
-) !RepairService {
-    const peer_provider = try RepairPeerProvider.init(
-        gpa_allocator,
-        random,
-        &gossip_service.gossip_table_rw,
-        Pubkey.fromPublicKey(&my_keypair.public_key),
-        &gossip_service.my_shred_version,
-    );
-    return RepairService{
-        .allocator = gpa_allocator,
-        .requester = RepairRequester{
-            .allocator = gpa_allocator,
-            .rng = random,
-            .udp_send_socket = socket,
-            .keypair = my_keypair,
-            .logger = logger,
-        },
-        .peer_provider = peer_provider,
-        .logger = logger,
-        .exit = exit,
-        .slot_to_request = if (config.current.repair.test_repair_slot) |n| @intCast(n) else null,
-    };
 }
 
 fn runGossipWithConfigValues(gossip_service: *GossipService) !void {

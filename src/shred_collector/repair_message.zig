@@ -1,24 +1,25 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
 
-const bincode = @import("../bincode/bincode.zig");
+const bincode = sig.bincode;
 
-const Allocator = std.mem.Allocator;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const Nonce = @import("../core/shred.zig").Nonce;
-const Pong = @import("../gossip/ping_pong.zig").Pong;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Signature = @import("../core/signature.zig").Signature;
-const Slot = @import("../core/time.zig").Slot;
-const SIGNATURE_LENGTH = @import("../core/signature.zig").SIGNATURE_LENGTH;
+const Nonce = sig.core.Nonce;
+const Pong = sig.gossip.Pong;
+const Pubkey = sig.core.Pubkey;
+const Signature = sig.core.Signature;
+const Slot = sig.core.Slot;
 
-/// Analogous to `SIGNED_REPAIR_TIME_WINDOW`
+const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
+
+/// Analogous to [SIGNED_REPAIR_TIME_WINDOW](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L89)
 const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
 
 /// Internal representation of a repair request.
 /// Does not contain any header or identification, only info about the desired shreds.
 ///
-/// Analogous to `solana_core::repair::serve_repair::ShredRepairType`
+/// Analogous to [ShredRepairType](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L95)
 pub const RepairRequest = union(enum) {
     /// Requesting `MAX_ORPHAN_REPAIR_RESPONSES` parent shreds
     Orphan: Slot,
@@ -26,6 +27,16 @@ pub const RepairRequest = union(enum) {
     HighestShred: struct { Slot, u64 },
     /// Requesting the missing shred at a particular index
     Shred: struct { Slot, u64 },
+
+    const Self = @This();
+
+    pub fn slot(self: *const Self) Slot {
+        return switch (self.*) {
+            .Orphan => |x| x,
+            .HighestShred => |x| x[0],
+            .Shred => |x| x[0],
+        };
+    }
 };
 
 /// Executes all three because they are tightly coupled:
@@ -33,9 +44,9 @@ pub const RepairRequest = union(enum) {
 /// - serialize message
 /// - sign message
 ///
-/// Analogous to `ServeRepair::map_repair_request`
+/// Analogous to [ServeRepair::map_repair_request](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L1141)
 pub fn serializeRepairRequest(
-    allocator: Allocator,
+    buf: []u8,
     request: RepairRequest,
     keypair: *const KeyPair,
     recipient: Pubkey,
@@ -65,10 +76,7 @@ pub fn serializeRepairRequest(
             .slot = r,
         } },
     };
-    const buf = try allocator.alloc(u8, RepairMessage.MAX_SERIALIZED_SIZE);
-    var stream = std.io.fixedBufferStream(buf);
-    try bincode.write(stream.writer(), msg, .{});
-    var serialized = try allocator.realloc(buf, stream.pos);
+    var serialized = try bincode.writeToSlice(buf, msg, .{});
 
     var signer = try keypair.signer(null); // TODO noise
     signer.update(serialized[0..4]);
@@ -81,7 +89,7 @@ pub fn serializeRepairRequest(
 /// Messaging data that is directly serialized and sent over repair sockets.
 /// Contains any header/identification as needed.
 ///
-/// Analogous to `solana_core::repair::serve_repair::RepairProtocol`
+/// Analogous to [RepairProtocol](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L221)
 pub const RepairMessage = union(enum(u8)) {
     Pong: Pong = 7,
     WindowIndex: struct {
@@ -131,7 +139,7 @@ pub const RepairMessage = union(enum(u8)) {
         }
     }
 
-    /// Analogous to `ServeRepair::verify_signed_packet`
+    /// Analogous to [ServeRepair::verify_signed_packet](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L847)
     pub fn verify(
         self: *const Self,
         /// bincode serialized data, from which this struct was deserialized
@@ -190,7 +198,7 @@ pub const RepairRequestHeader = struct {
     }
 };
 
-test "tvu.repair_message: signed/serialized RepairRequest is valid" {
+test "signed/serialized RepairRequest is valid" {
     const allocator = std.testing.allocator;
     var rand = std.rand.DefaultPrng.init(392138);
     const rng = rand.random();
@@ -207,15 +215,15 @@ test "tvu.repair_message: signed/serialized RepairRequest is valid" {
         const timestamp = rng.int(u64);
         const nonce = rng.int(Nonce);
 
+        var buf: [1232]u8 = undefined;
         var serialized = try serializeRepairRequest(
-            allocator,
+            &buf,
             request,
             &keypair,
             recipient,
             timestamp,
             nonce,
         );
-        defer allocator.free(serialized);
 
         var deserialized = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
         try deserialized.verify(serialized, recipient, timestamp);
@@ -226,7 +234,7 @@ test "tvu.repair_message: signed/serialized RepairRequest is valid" {
     }
 }
 
-test "tvu.repair_message: RepairRequestHeader serialization round trip" {
+test "RepairRequestHeader serialization round trip" {
     var rng = std.rand.DefaultPrng.init(5224);
     var signature: [SIGNATURE_LENGTH]u8 = undefined;
     rng.fill(&signature);
@@ -265,7 +273,7 @@ test "tvu.repair_message: RepairRequestHeader serialization round trip" {
     try std.testing.expect(header.eql(&roundtripped));
 }
 
-test "tvu.repair_message: RepairProtocolMessage.Pong serialization round trip" {
+test "RepairProtocolMessage.Pong serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(57340, .Pong, &[_]u8{
         7,   0,   0,   0,   252, 143, 181, 36,  240, 87,  69,  104, 157, 159, 242, 94,  101,
         48,  187, 120, 173, 241, 68,  167, 217, 67,  141, 46,  105, 85,  179, 69,  249, 140,
@@ -278,7 +286,7 @@ test "tvu.repair_message: RepairProtocolMessage.Pong serialization round trip" {
     });
 }
 
-test "tvu.repair_message: RepairProtocolMessage.WindowIndex serialization round trip" {
+test "RepairProtocolMessage.WindowIndex serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(4823794, .WindowIndex, &[_]u8{
         8,   0,   0,   0,   100, 7,   241, 74,  194, 88,  24,  128, 85,  15,  149, 108, 142,
         133, 234, 217, 3,   79,  124, 171, 68,  30,  189, 219, 173, 11,  184, 159, 208, 104,
@@ -293,7 +301,7 @@ test "tvu.repair_message: RepairProtocolMessage.WindowIndex serialization round 
     });
 }
 
-test "tvu.repair_message: RepairProtocolMessage.HighestWindowIndex serialization round trip" {
+test "RepairProtocolMessage.HighestWindowIndex serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(636345, .HighestWindowIndex, &[_]u8{
         9,   0,   0,   0,   44,  123, 16,  108, 173, 151, 229, 132, 4,  0,   5,   215, 25,
         179, 235, 166, 181, 42,  30,  231, 218, 43,  166, 238, 92,  80, 234, 87,  30,  123,
@@ -308,7 +316,7 @@ test "tvu.repair_message: RepairProtocolMessage.HighestWindowIndex serialization
     });
 }
 
-test "tvu.repair_message: RepairProtocolMessage.Orphan serialization round trip" {
+test "RepairProtocolMessage.Orphan serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(734566, .Orphan, &[_]u8{
         10,  0,   0,   0,   52,  54,  182, 49,  197, 238, 253, 118, 145, 61,  198, 235, 42,
         211, 229, 42,  2,   33,  5,   161, 179, 171, 26,  243, 51,  240, 82,  98,  121, 90,
@@ -322,7 +330,7 @@ test "tvu.repair_message: RepairProtocolMessage.Orphan serialization round trip"
     });
 }
 
-test "tvu.repair_message: RepairProtocolMessage.AncestorHashes serialization round trip" {
+test "RepairProtocolMessage.AncestorHashes serialization round trip" {
     try testHelpers.assertMessageSerializesCorrectly(6236757, .AncestorHashes, &[_]u8{
         11,  0,   0,   0,   192, 86,  218, 156, 168, 139, 216, 200, 30,  181, 244, 121, 90,
         41,  177, 117, 55,  40,  199, 207, 62,  118, 56,  134, 73,  88,  74,  2,   139, 189,
@@ -336,7 +344,7 @@ test "tvu.repair_message: RepairProtocolMessage.AncestorHashes serialization rou
     });
 }
 
-test "tvu.repair_message: RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
+test "RepairProtocolMessage serializes to size <= MAX_SERIALIZED_SIZE" {
     var rng = std.rand.DefaultPrng.init(184837);
     for (0..10) |_| {
         inline for (@typeInfo(RepairMessage.Tag).Enum.fields) |enum_field| {

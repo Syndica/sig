@@ -1,6 +1,7 @@
-# parse arg of file name 
+# parse arg of file name
 import sys
 import os
+import re
 
 if len(sys.argv) != 2:
     print("Usage: python remove_unused.py <dir name>")
@@ -8,78 +9,60 @@ if len(sys.argv) != 2:
 
 zig_files = []
 dirs = [sys.argv[1]]
-while 1: 
+while 1:
     d = dirs.pop()
     files = os.listdir(d)
-    for file in files: 
+    for file in files:
         full_path = os.path.join(d, file)
-        if os.path.isdir(full_path): 
+        if os.path.isdir(full_path):
             dirs.append(full_path)
-        else: 
-            # if file ends in .zig 
-            if file.endswith('.zig'):
+        else:
+            # if file ends in .zig
+            if file.endswith(".zig"):
                 zig_files.append(full_path)
 
-    if len(dirs) == 0: 
-        break 
+    if len(dirs) == 0:
+        break
 
-total_removes = 0
-n_remove_iter = 0
-n_removes = 1
-while n_removes > 0:
-    n_removes = 0
-    print(f"iteration: {n_remove_iter}, lines removed: {n_removes}")
-    n_remove_iter += 1
+import_line_regex = re.compile(
+    r'const ([a-zA-Z0-9_]+) = (@import\("[a-zA-Z0-9_]+"\))?[a-zA-Z0-9_.]*;'
+)
 
-    for filename in zig_files:
-        print(filename)
+total_num_lines_removed = 0
+lines_removed_this_time = 999  # get past 1st while check
 
-        # open and read lines of file 
-        with open(filename, 'r') as f:
-            full_lines = f.readlines()
+while lines_removed_this_time > 0:
+    lines_removed_this_time = 0
+    for path in zig_files:
+        with open(path) as f:
+            orig_file = f.read()
+        orig_lines = orig_file.split("\n")
+        if orig_lines[-1] == "":
+            orig_lines = orig_lines[0:-1]
+        imported_names = []
+        for line_num, line in enumerate(orig_lines):
+            match = import_line_regex.match(line)
+            if match:
+                imported_names.append((match.groups()[0], line_num))
+        lines_to_drop = set()
+        num_lines_to_remove = 0
+        for name, line in imported_names:
+            match = re.findall(f"[^a-zA-Z0-9_.]{name}[^a-zA-Z0-9_]", orig_file)
+            assert len(match) > 0
+            if len(match) == 1:
+                lines_to_drop.add(line)
+                num_lines_to_remove += 1
+        with open(path, "w") as f:
+            f.writelines(
+                f"{line}\n"
+                for i, line in enumerate(orig_lines)
+                if i not in lines_to_drop
+            )
+        lines_to_drop
+        print(path, num_lines_to_remove)
+        total_num_lines_removed += num_lines_to_remove
+        lines_removed_this_time += num_lines_to_remove
+    print("removed this iteration:", lines_removed_this_time)
+    print()
 
-        # parse the value {VAR} name in 'const {VAR} = @import ...' 
-        import_var_names = []
-        for (i, line) in enumerate(full_lines):
-            if not (line.startswith('const') or line.startswith('pub const')):
-                continue 
-
-            if '@import' not in line:
-                continue
-
-            start_index = line.index("const ")
-            end_index = line.index(" = ")
-            var_name = line[start_index + 6:end_index]
-            import_var_names.append((var_name, i))
-
-        unused_vars = import_var_names.copy()
-        for i, line in enumerate(full_lines):
-
-            for var, line_num in import_var_names: 
-                if (var in line) and (i != line_num):
-                    if (var, line_num) in unused_vars:
-                        unused_vars.remove((var, line_num))
-
-        new_lines = []
-        lines_to_remove = [i for (_, i) in unused_vars]
-        n_removes += len(lines_to_remove)
-        total_removes += len(lines_to_remove)
-
-        for (i, line) in enumerate(full_lines): 
-            if i in lines_to_remove: 
-                continue
-            new_lines.append(line)
-
-        if (len(lines_to_remove) > 0): 
-            print(filename) 
-            print(unused_vars)
-
-        # write 
-        with open(filename, 'w') as f:
-            f.writelines(new_lines)
-
-print("total iterations: ", n_remove_iter)
-print("total lines removed: ", total_removes)
-
-if (total_removes > 0):
-    exit(1) 
+print("total lines removed:", total_num_lines_removed)

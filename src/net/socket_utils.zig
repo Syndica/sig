@@ -12,12 +12,13 @@ pub const PACKETS_PER_BATCH: usize = 64;
 
 pub fn readSocket(
     allocator: std.mem.Allocator,
-    socket: *UdpSocket,
+    socket_: UdpSocket,
     incoming_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
     logger: Logger,
 ) !void {
     // NOTE: we set to non-blocking to periodically check if we should exit
+    var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
     inf_loop: while (!exit.load(.unordered)) {
@@ -57,7 +58,7 @@ pub fn readSocket(
 }
 
 pub fn sendSocket(
-    socket: *UdpSocket,
+    socket: UdpSocket,
     outgoing_channel: *Channel(std.ArrayList(Packet)),
     exit: *const std.atomic.Value(bool),
     logger: Logger,
@@ -105,7 +106,7 @@ pub const SocketThread = struct {
 
     const Self = @This();
 
-    pub fn initSender(allocator: Allocator, logger: Logger, socket: *UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -114,7 +115,7 @@ pub const SocketThread = struct {
         };
     }
 
-    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: *UdpSocket, exit: *Atomic(bool)) !Self {
+    pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
         const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
         return .{
             .channel = channel,
@@ -126,6 +127,7 @@ pub const SocketThread = struct {
     pub fn deinit(self: Self) void {
         self.exit.store(true, .unordered);
         self.handle.join();
+        self.channel.deinit();
     }
 };
 
@@ -160,7 +162,7 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Value(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, &socket, channel, &exit, .noop });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, .noop });
         var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
