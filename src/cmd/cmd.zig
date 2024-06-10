@@ -583,26 +583,10 @@ fn getMyDataFromIpEcho(
 }
 
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
-    const EntrypointSet = std.ArrayHashMap(void, void, struct {
-        // zig fmt: off
-        pub fn hash(_: @This(), _: void) u32 { unreachable; }
-        pub fn eql(_: @This(), _: void, _: void, _: usize) bool { unreachable; }
-        // zig fmt: on
-    }, true);
-    const EntrypointCtx = struct {
-        entrypoints: []const SocketAddr,
-        pub fn hash(_: @This(), entrypoint: SocketAddr) u32 {
-            const array, const len = entrypoint.toString();
-            return std.array_hash_map.hashString(array[0..len]);
-        }
-        pub fn eql(ctx: @This(), a: SocketAddr, _: void, b_index: usize) bool {
-            return a.eql(&ctx.entrypoints[b_index]);
-        }
-    };
-
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
 
+    const EntrypointSet = std.AutoArrayHashMap(SocketAddr, void);
     var entrypoint_set = EntrypointSet.init(gpa_allocator);
     defer entrypoint_set.deinit();
 
@@ -643,29 +627,14 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
             break :brk socket_addr;
         };
 
-        const gop = entrypoint_set.getOrPutAssumeCapacityAdapted(socket_addr, EntrypointCtx{ .entrypoints = entrypoints.items });
+        const gop = entrypoint_set.getOrPutAssumeCapacity(socket_addr);
         if (!gop.found_existing) {
             entrypoints.appendAssumeCapacity(socket_addr);
         }
     }
 
     // log entrypoints
-    const EntrypointsFmt = struct {
-        entrypoints: []const SocketAddr,
-
-        pub fn format(
-            entrypoints_fmt: @This(),
-            comptime fmt_str: []const u8,
-            fmt_options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            for (0.., entrypoints_fmt.entrypoints) |i, entrypoint| {
-                if (i != 0) try writer.writeAll(", ");
-                try entrypoint.toAddress().format(fmt_str, fmt_options, writer);
-            }
-        }
-    };
-    logger.infof("entrypoints: {}", .{EntrypointsFmt{ .entrypoints = entrypoints.items }});
+    logger.infof("entrypoints: {any}", .{entrypoints.items});
 
     return entrypoints;
 }
