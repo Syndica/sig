@@ -23,10 +23,6 @@
             .url = "https://github.com/karlseguin/http.zig/archive/d05b9889382d240c826c7654a999e4da515bd20a.tar.gz",
             .hash = "1220833d40f1767fa46b0efc4ae1af9bd5880a8e6fe7a66ee0215be916263f149e40",
         },
-        .zigdig = .{
-            .url = "https://github.com/lun-4/zigdig/archive/6d872bb061a85e416304b379ce3f3b868d6e835c.tar.gz",
-            .hash = "1220fe113318a795d366cd63d2d3f1abacfaa6ff0739bc3240eaf7b68b06d21e4917",
-        },
         .zstd = .{
             .url = "https://github.com/Syndica/zstd.zig/archive/a052e839a3dfc44feb00c2eb425815baa3c76e0d.tar.gz",
             .hash = "122001d56e43ef94e31243739ae83d7508abf0b8102795aff1ac91446e7ff450d875",

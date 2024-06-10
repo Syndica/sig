@@ -1,7 +1,6 @@
 const std = @import("std");
 const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
-const dns = @import("zigdig");
 const network = @import("zig-network");
 const helpers = @import("helpers.zig");
 const sig = @import("../lib.zig");
@@ -585,54 +584,57 @@ fn getMyDataFromIpEcho(
 
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
+    errdefer entrypoints.deinit();
+
+    const EntrypointSet = std.AutoArrayHashMap(SocketAddr, void);
+    var entrypoint_set = EntrypointSet.init(gpa_allocator);
+    defer entrypoint_set.deinit();
+
+    try entrypoint_set.ensureTotalCapacity(config.current.gossip.entrypoints.len);
+    try entrypoints.ensureTotalCapacityPrecise(config.current.gossip.entrypoints.len);
+
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            // if we couldn't parse as IpV4, we attempt to resolve DNS and get IP
-            var domain_and_port = std.mem.splitScalar(u8, entrypoint, ':');
-            const domain_str = domain_and_port.next() orelse {
-                logger.field("entrypoint", entrypoint).err("entrypoint domain missing");
-                return error.EntrypointDomainMissing;
-            };
-            const port_str = domain_and_port.next() orelse {
+            const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
                 logger.field("entrypoint", entrypoint).err("entrypoint port missing");
                 return error.EntrypointPortMissing;
             };
+            const domain_str = entrypoint[0..domain_port_sep];
+            if (domain_str.len == 0) {
+                logger.errf("'{s}': entrypoint domain not valid", .{entrypoint});
+                return error.EntrypointDomainNotValid;
+            }
+            // parse port from string
+            const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
+                logger.errf("'{s}': entrypoint port not valid", .{entrypoint});
+                return error.EntrypointPortNotValid;
+            };
 
             // get dns address lists
-            var addr_list = try dns.helpers.getAddressList(domain_str, gpa_allocator);
+            const addr_list = try std.net.getAddressList(gpa_allocator, domain_str, port);
             defer addr_list.deinit();
+
             if (addr_list.addrs.len == 0) {
-                logger.field("entrypoint", entrypoint).err("entrypoint resolve dns failed (no records found)");
+                logger.errf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
                 return error.EntrypointDnsResolutionFailure;
             }
 
             // use first A record address
             const ipv4_addr = addr_list.addrs[0];
 
-            // parse port from string
-            const port = std.fmt.parseInt(u16, port_str, 10) catch {
-                logger.field("entrypoint", entrypoint).err("entrypoint port not valid");
-                return error.EntrypointPortNotValid;
-            };
-
-            var socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-            socket_addr.setPort(port);
+            const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+            std.debug.assert(socket_addr.port() == port);
             break :brk socket_addr;
         };
 
-        try entrypoints.append(socket_addr);
+        const gop = entrypoint_set.getOrPutAssumeCapacity(socket_addr);
+        if (!gop.found_existing) {
+            entrypoints.appendAssumeCapacity(socket_addr);
+        }
     }
 
     // log entrypoints
-    var entrypoint_string = try gpa_allocator.alloc(u8, 53 * entrypoints.items.len);
-    defer gpa_allocator.free(entrypoint_string);
-    var stream = std.io.fixedBufferStream(entrypoint_string);
-    var writer = stream.writer();
-    for (0.., entrypoints.items) |i, entrypoint| {
-        try entrypoint.toAddress().format("", .{}, writer);
-        if (i != entrypoints.items.len - 1) try writer.writeAll(", ");
-    }
-    logger.infof("entrypoints: {s}", .{entrypoint_string[0..stream.pos]});
+    logger.infof("entrypoints: {any}", .{entrypoints.items});
 
     return entrypoints;
 }
