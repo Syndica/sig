@@ -374,8 +374,8 @@ pub const AccountsDB = struct {
                 std.debug.panic("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
             };
 
-            const file_id_u32: u32 = @intCast(accounts_file_id);
-            file_map.putAssumeCapacityNoClobber(file_id_u32, accounts_file);
+            const file_id = FileId.fromInt(@intCast(accounts_file_id));
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
 
             if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
@@ -1002,7 +1002,7 @@ pub const AccountsDB = struct {
         var refs = try ArrayList(AccountRef).initCapacity(reference_allocator, n_accounts);
 
         try self.account_index.validateAccountFile(account_file, bin_counts, &refs);
-        try self.storage.file_map.put(@as(u32, @intCast(account_file.id)), account_file.*);
+        try self.storage.file_map.put(FileId.fromInt(@intCast(account_file.id)), account_file.*);
         const refs_ptr = try self.account_index.addMemoryBlock(refs);
 
         // allocate enough memory here

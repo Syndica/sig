@@ -4,6 +4,13 @@ const testing = std.testing;
 
 const bincode = @This();
 
+pub const config = struct {
+    // TODO move these files to the bincode folder
+    pub const arraylist = @import("../utils/arraylist.zig");
+    pub const shortvec = @import("../utils/shortvec.zig");
+    pub const varint = @import("../utils/varint.zig");
+};
+
 pub const Params = struct {
     pub const legacy: Params = .{
         .endian = .little,
@@ -110,24 +117,24 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             } else {
                 inline for (info.fields) |field| {
                     if (field.is_comptime) continue;
-                    if (getFieldConfig(T, field)) |config| {
-                        if (shouldUseDefaultValue(field, config)) |default_value| {
+                    if (getFieldConfig(T, field)) |field_config| {
+                        if (shouldUseDefaultValue(field, field_config)) |default_value| {
                             @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
                             continue;
                         }
 
-                        if (config.deserializer) |deser_fcn| {
+                        if (field_config.deserializer) |deser_fcn| {
                             @field(data, field.name) = try deser_fcn(allocator, reader, params);
                             continue;
                         }
 
-                        if (config.default_on_eof) {
+                        if (field_config.default_on_eof) {
                             const field_type = field.type;
                             @field(data, field.name) = bincode.read(allocator, field_type, reader, params) catch |err| blk: {
                                 if (err == error.EndOfStream) {
                                     if (field.default_value) |default_value| {
                                         break :blk @as(*const field_type, @ptrCast(@alignCast(default_value))).*;
-                                    } else if (config.default_fn) |default_fcn| {
+                                    } else if (field_config.default_fn) |default_fcn| {
                                         break :blk default_fcn(allocator);
                                     } else {
                                         return error.MissingFieldDefaultValue;
@@ -346,8 +353,8 @@ pub fn free(allocator: std.mem.Allocator, value: anytype) void {
                 }
                 val.deinit();
             } else inline for (info.fields) |field| {
-                if (getFieldConfig(T, field)) |config| {
-                    if (config.free) |free_fcn| {
+                if (getFieldConfig(T, field)) |field_config| {
+                    if (field_config.free) |free_fcn| {
                         var field_value = @field(value, field.name);
                         switch (@typeInfo(field.type)) {
                             .Pointer => |*field_info| {
@@ -412,8 +419,8 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
         .Bool => return writer.writeByte(@intFromBool(data)),
         .Enum => |_| {
-            if (getConfig(T)) |config| {
-                if (config.serializer) |serialize_fcn| {
+            if (getConfig(T)) |type_config| {
+                if (type_config.serializer) |serialize_fcn| {
                     return serialize_fcn(writer, data, params);
                 }
             }
@@ -449,10 +456,10 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
                 inline for (info.fields) |field| {
                     if (field.is_comptime) continue;
 
-                    if (getFieldConfig(T, field)) |config| {
-                        if (config.skip) {
+                    if (getFieldConfig(T, field)) |field_config| {
+                        if (field_config.skip) {
                             continue;
-                        } else if (config.serializer) |ser_fcn| {
+                        } else if (field_config.serializer) |ser_fcn| {
                             try ser_fcn(writer, @field(data, field.name), params);
                             continue;
                         }
@@ -592,8 +599,8 @@ pub fn FieldConfig(comptime T: type) type {
 pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
     const bincode_field = "!bincode-config";
     if (@hasDecl(struct_type, bincode_field)) {
-        const config = @field(struct_type, bincode_field);
-        return config;
+        const type_config = @field(struct_type, bincode_field);
+        return type_config;
     }
     return null;
 }
@@ -601,14 +608,14 @@ pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
 pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
     const bincode_field = "!bincode-config:" ++ field.name;
     if (@hasDecl(struct_type, bincode_field)) {
-        const config = @field(struct_type, bincode_field);
-        return config;
+        const field_config = @field(struct_type, bincode_field);
+        return field_config;
     }
     return null;
 }
 
-pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime config: FieldConfig(field.type)) ?*const anyopaque {
-    if (config.skip) {
+pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime field_config: FieldConfig(field.type)) ?*const anyopaque {
+    if (field_config.skip) {
         if (field.default_value == null) {
             const field_type_name = @typeName(field.type);
             @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ field_type_name ++ "." ++ field.name ++ "' deserialization if no default value set\n\n");

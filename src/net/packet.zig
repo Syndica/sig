@@ -1,4 +1,7 @@
 const network = @import("zig-network");
+const sig = @import("../lib.zig");
+
+const BitFlags = sig.utils.bitflags.BitFlags;
 
 /// Maximum over-the-wire size of a Transaction
 ///   1280 is IPv6 minimum MTU
@@ -10,6 +13,7 @@ pub const Packet = struct {
     data: [PACKET_DATA_SIZE]u8,
     size: usize,
     addr: network.EndPoint,
+    flags: BitFlags(Flag) = .{},
 
     const Self = @This();
 
@@ -28,4 +32,19 @@ pub const Packet = struct {
             .size = 0,
         };
     }
+};
+
+/// TODO this violates separation of concerns. it's unusual for network-specific
+/// type definitions to include information that's specific to application
+/// components (like repair)
+///
+/// it would be nice to find another approach that is equally easy to use,
+/// without sacrificing safety, performance, or readability.
+pub const Flag = enum(u8) {
+    discard = 0b0000_0001,
+    // forwarded = 0b0000_0010,
+    repair = 0b0000_0100,
+    // simple_vote_tx = 0b0000_1000,
+    // tracer_packet = 0b0001_0000,
+    // round_compute_unit_price = 0b0010_0000,
 };

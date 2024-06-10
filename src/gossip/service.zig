@@ -327,7 +327,7 @@ pub const GossipService = struct {
 
         const receiver_thread = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
-            &self.gossip_socket,
+            self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
             self.logger,
@@ -346,7 +346,7 @@ pub const GossipService = struct {
         };
 
         const responder_thread = try Thread.spawn(.{}, socket_utils.sendSocket, .{
-            &self.gossip_socket,
+            self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
             self.logger,
@@ -1195,7 +1195,10 @@ pub const GossipService = struct {
                 return;
             }
 
+            const filter_rng_seed: u64 = @intCast(std.time.milliTimestamp());
+            var filter_prng = std.Random.Xoshiro256.init(filter_rng_seed);
             const response_gossip_values = pull_response.filterSignedGossipDatas(
+                filter_prng.random(),
                 self.allocator,
                 self.gossip_table,
                 self.filter,
