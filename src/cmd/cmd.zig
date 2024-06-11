@@ -411,8 +411,8 @@ fn validator() !void {
         ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
         ip_echo_data.ip,
         &.{
-            .{ .tag = socket_tag.REPAIR, .port = repair_port },
-            .{ .tag = socket_tag.TURBINE_RECV, .port = turbine_recv_port },
+            .{ .tag = .REPAIR, .port = repair_port },
+            .{ .tag = .TURBINE_RECV, .port = turbine_recv_port },
         },
     );
     defer gossip_service.deinit();
@@ -515,7 +515,7 @@ fn initGossip(
     entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
-    sockets: []const struct { tag: u8, port: u16 },
+    sockets: []const struct { tag: socket_tag, port: u16 },
 ) !GossipService {
     const gossip_port: u16 = config.current.gossip.port;
     logger.infof("gossip host: {any}", .{gossip_host_ip});
