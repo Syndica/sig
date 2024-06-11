@@ -676,6 +676,7 @@ pub const StatusCache = struct {
         bincode.free(self.bank_slot_deltas.allocator, self.*);
     }
 
+    /// [verify_slot_deltas](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/runtime/src/snapshot_bank_utils.rs#L709)
     pub fn validate(
         self: *const StatusCache,
         allocator: std.mem.Allocator,
@@ -714,6 +715,7 @@ pub const StatusCache = struct {
                 return error.SlotNotFoundInHistory;
             }
         }
+
 
         var slots_checked: u32 = 0;
         var slot = slot_history.newest();
