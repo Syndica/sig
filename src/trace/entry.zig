@@ -6,7 +6,6 @@ const logfmt = @import("logfmt.zig");
 const Logger = @import("./log.zig").Logger;
 const Channel = @import("../sync/channel.zig").Channel;
 const testing = std.testing;
-const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 
 pub const Entry = union(enum) {

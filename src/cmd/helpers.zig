@@ -5,7 +5,6 @@ const Logger = @import("../trace/log.zig").Logger;
 const Keypair = std.crypto.sign.Ed25519.KeyPair;
 const SecretKey = std.crypto.sign.Ed25519.SecretKey;
 const AtomicBool = std.atomic.Value(bool);
-const ArrayList = std.ArrayList;
 
 const IDENTITY_KEYPAIR_DIR = "/.sig";
 const IDENTITY_KEYPAIR_PATH = "/identity.key";

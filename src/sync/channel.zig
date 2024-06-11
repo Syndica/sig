@@ -1,6 +1,5 @@
 const std = @import("std");
 const Atomic = std.atomic.Value;
-const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;

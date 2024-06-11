@@ -5,10 +5,8 @@ const logfmt = @import("logfmt.zig");
 const Entry = entry.Entry;
 const StandardEntry = entry.StandardEntry;
 const testing = std.testing;
-const Mutex = std.Thread.Mutex;
 const AtomicBool = std.atomic.Value(bool);
 const Channel = @import("../sync/channel.zig").Channel;
-const OnceCell = @import("../sync/once_cell.zig").OnceCell;
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 var gpa_allocator = gpa.allocator();
 
@@ -262,11 +260,10 @@ pub const StandardErrLogger = struct {
 pub const StdErrSink = struct {
     const Self = @This();
 
-    pub fn consumeEntries(_: Self, entries: []*StandardEntry) void {
+    pub fn consumeEntries(_: Self, entries: []const *StandardEntry) void {
         const std_err_writer = std.io.getStdErr().writer();
-        var std_err_mux = std.debug.getStderrMutex();
-        std_err_mux.lock();
-        defer std_err_mux.unlock();
+        std.debug.lockStdErr();
+        defer std.debug.unlockStdErr();
 
         for (entries) |e| {
             logfmt.formatter(e, std_err_writer) catch unreachable;

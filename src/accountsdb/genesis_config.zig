@@ -1,5 +1,4 @@
 const std = @import("std");
-const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
 const Account = @import("../core/account.zig").Account;
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
