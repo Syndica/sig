@@ -716,7 +716,6 @@ pub const StatusCache = struct {
             }
         }
 
-
         var slots_checked: u32 = 0;
         var slot = slot_history.newest();
         while (slot >= slot_history.oldest() and slots_checked != MAX_CACHE_ENTRIES) {
