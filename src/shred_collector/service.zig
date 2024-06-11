@@ -1,7 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
-const shred_collector = @import("lib.zig")._private;
+const shred_collector = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -31,7 +31,8 @@ const ShredReceiverMetrics = shred_collector.shred_receiver.ShredReceiverMetrics
 pub const ShredCollectorConfig = struct {
     start_slot: ?Slot,
     repair_port: u16,
-    tvu_port: u16,
+    /// tvu port in agave
+    turbine_recv_port: u16,
 };
 
 /// Resources that are required for the Shred Collector to operate.
@@ -58,7 +59,7 @@ pub const ShredCollectorDependencies = struct {
 /// Returns a ServiceManager representing the Shred Collector.
 /// This can be used to join and deinit the Shred Collector.
 ///
-/// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/tvu.rs#L119)
+/// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/turbine.rs#L119)
 pub fn start(
     conf: ShredCollectorConfig,
     deps: ShredCollectorDependencies,
@@ -67,7 +68,7 @@ pub fn start(
     var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
-    const tvu_socket = try bindUdpReusable(conf.tvu_port);
+    const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
     // receiver (threads)
     const unverified_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
@@ -85,7 +86,7 @@ pub fn start(
         .exit = deps.exit,
         .logger = deps.logger,
         .repair_socket = repair_socket,
-        .tvu_socket = tvu_socket,
+        .turbine_socket = turbine_socket,
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try ShredReceiverMetrics.init(),
@@ -144,13 +145,7 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try service_manager.spawnCustom(
-        "Repair Service",
-        RepairService.run_config,
-        .{},
-        RepairService.sendNecessaryRepairs,
-        .{repair_svc},
-    );
+    try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
 
     return service_manager;
 }

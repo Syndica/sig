@@ -1,7 +1,7 @@
 const std = @import("std");
 const zig_network = @import("zig-network");
 const sig = @import("../lib.zig");
-const shred_collector = @import("lib.zig")._private;
+const shred_collector = @import("lib.zig");
 
 const bincode = sig.bincode;
 const socket_tag = sig.gossip.socket_tag;
@@ -96,11 +96,29 @@ pub const RepairService = struct {
         self.report.deinit();
     }
 
-    /// Used to run RepairService continuously.
-    pub const run_config = sig.utils.service_manager.RunConfig{
-        .return_handler = .{ .log_return = false },
-        .min_loop_duration_ns = 100 * std.time.ns_per_ms,
-    };
+    const min_loop_duration_ns = 100 * std.time.ns_per_ms;
+
+    pub fn run(self: *Self) !void {
+        var waiting_for_peers = false;
+        var timer = try std.time.Timer.start();
+        var last_iteration: u64 = 0;
+        while (!self.exit.load(.unordered)) {
+            if (self.sendNecessaryRepairs()) |_| {
+                if (waiting_for_peers) {
+                    waiting_for_peers = false;
+                    self.logger.infof("Acquired some repair peers.", .{});
+                }
+            } else |e| switch (e) {
+                error.NoRepairPeers => if (!waiting_for_peers) {
+                    self.logger.infof("Waiting for repair peers...", .{});
+                    waiting_for_peers = true;
+                },
+                else => return e,
+            }
+            last_iteration = timer.lap();
+            std.time.sleep(min_loop_duration_ns -| last_iteration);
+        }
+    }
 
     /// Identifies which repairs are needed based on the current state,
     /// and sends those repairs, then returns.
@@ -331,9 +349,15 @@ pub const RepairPeerProvider = struct {
         self.cache.deinit();
     }
 
+    pub const Error = error{
+        /// There are no known peers at all that could handle any repair
+        /// request for any slot (not just the current desired slot).
+        NoRepairPeers,
+    } || Allocator.Error;
+
     /// Selects a peer at random from gossip or cache that is expected
     /// to be able to handle a repair request for the specified slot.
-    pub fn getRandomPeer(self: *Self, slot: Slot) !?RepairPeer {
+    pub fn getRandomPeer(self: *Self, slot: Slot) Error!?RepairPeer {
         const peers = try self.getPeers(slot);
         if (peers.len == 0) return null;
         const index = self.rng.intRangeLessThan(usize, 0, peers.len);
@@ -341,7 +365,7 @@ pub const RepairPeerProvider = struct {
     }
 
     /// Tries to get peers that could have the slot. Checks cache, falling back to gossip.
-    fn getPeers(self: *Self, slot: Slot) ![]RepairPeer {
+    fn getPeers(self: *Self, slot: Slot) Error![]RepairPeer {
         const now: u64 = @intCast(std.time.timestamp());
 
         if (self.cache.get(slot)) |peers| {
@@ -365,35 +389,40 @@ pub const RepairPeerProvider = struct {
         self: *Self,
         allocator: Allocator,
         slot: Slot,
-    ) error{OutOfMemory}![]RepairPeer {
+    ) Error![]RepairPeer {
         var gossip_table_lock = self.gossip_table_rw.read();
         defer gossip_table_lock.unlock();
         const gossip_table: *const GossipTable = gossip_table_lock.get();
         const buf = try allocator.alloc(RepairPeer, gossip_table.contact_infos.count());
         errdefer allocator.free(buf);
-        var i: usize = 0;
+        var potential_peers: usize = 0; // total count of all repair peers, not just the ones for this slot.
+        var compatible_peers: usize = 0; // number of peers who can handle this slot.
         var infos = gossip_table.contactInfoIterator(0);
         while (infos.next()) |info| {
             const serve_repair_socket = info.getSocket(socket_tag.SERVE_REPAIR);
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
                 info.shred_version == self.my_shred_version.load(.monotonic) and // need compatible shreds
                 serve_repair_socket != null and // node must be able to receive repair requests
-                info.getSocket(socket_tag.TVU) != null) // node needs access to shreds
+                info.getSocket(socket_tag.TURBINE_RECV) != null) // node needs access to shreds
             {
+                potential_peers += 1;
                 // exclude nodes that are known to be missing this slot
                 if (gossip_table.get(.{ .LowestSlot = info.pubkey })) |lsv| {
                     if (lsv.value.data.LowestSlot[1].lowest > slot) {
                         continue;
                     }
                 }
-                buf[i] = .{
+                buf[compatible_peers] = .{
                     .pubkey = info.pubkey,
                     .serve_repair_socket = serve_repair_socket.?,
                 };
-                i += 1;
+                compatible_peers += 1;
             }
         }
-        return try allocator.realloc(buf, i);
+        if (potential_peers == 0) {
+            return error.NoRepairPeers;
+        }
+        return try allocator.realloc(buf, compatible_peers);
     }
 };
 
@@ -431,7 +460,7 @@ test "RepairService sends repair request to gossip peer" {
     try peer_socket.setReadTimeout(100_000);
     var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
     try peer_contact_info.setSocket(socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
-    try peer_contact_info.setSocket(socket_tag.TVU, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(socket_tag.TURBINE_RECV, SocketAddr.fromEndpoint(&peer_endpoint));
     try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
 
     // init service
@@ -558,7 +587,7 @@ const TestPeerGenerator = struct {
         MissingSlot,
         /// There is no serve repair port specified in the peer's contact info
         MissingServeRepairPort,
-        /// There is no tvu port specified in the peer's contact info
+        /// There is no turbine port specified in the peer's contact info
         MissingTvuPort,
         /// The peer has a different shred version
         WrongShredVersion,
@@ -575,7 +604,7 @@ const TestPeerGenerator = struct {
             try contact_info.setSocket(socket_tag.SERVE_REPAIR, serve_repair_addr);
         }
         if (peer_type != .MissingTvuPort) {
-            try contact_info.setSocket(socket_tag.TVU, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
+            try contact_info.setSocket(socket_tag.TURBINE_RECV, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
         try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {

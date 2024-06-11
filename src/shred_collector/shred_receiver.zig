@@ -1,7 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../lib.zig");
-const shred_collector = @import("lib.zig")._private;
+const shred_collector = @import("lib.zig");
 
 const bincode = sig.bincode;
 const layout = shred_collector.shred.layout;
@@ -30,7 +30,7 @@ pub const ShredReceiver = struct {
     exit: *Atomic(bool),
     logger: Logger,
     repair_socket: Socket,
-    tvu_socket: Socket,
+    turbine_socket: Socket,
     /// me --> shred verifier
     unverified_shred_sender: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
@@ -51,20 +51,20 @@ pub const ShredReceiver = struct {
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit();
 
-        var tvu_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
+        var turbine_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
         for (0..NUM_TVU_RECEIVERS) |i| {
-            tvu_receivers[i] = (try SocketThread.initReceiver(
+            turbine_receivers[i] = (try SocketThread.initReceiver(
                 self.allocator,
                 self.logger,
-                self.tvu_socket,
+                self.turbine_socket,
                 self.exit,
             )).channel;
         }
-        defer for (tvu_receivers) |r| r.deinit();
+        defer for (turbine_receivers) |r| r.deinit();
         const x = try std.Thread.spawn(
             .{},
             Self.runPacketHandler,
-            .{ self, &tvu_receivers, response_sender.channel, false },
+            .{ self, &turbine_receivers, response_sender.channel, false },
         );
         const y = try std.Thread.spawn(
             .{},

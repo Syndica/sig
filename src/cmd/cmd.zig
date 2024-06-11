@@ -86,18 +86,18 @@ var gossip_port_option = cli.Option{
 
 var repair_port_option = cli.Option{
     .long_name = "repair-port",
-    .help = "The port to run tvu repair listener - default: 8002",
+    .help = "The port to run shred repair listener - default: 8002",
     .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
     .required = false,
     .value_name = "Repair Port",
 };
 
-var tvu_port_option = cli.Option{
-    .long_name = "tvu-port",
-    .help = "The port to run turbine listener - default: 8003",
-    .value_ref = cli.mkRef(&config.current.shred_collector.tvu_port),
+var turbine_recv_port_option = cli.Option{
+    .long_name = "turbine-port",
+    .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
+    .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
     .required = false,
-    .value_name = "TVU Port",
+    .value_name = "Turbine Port",
 };
 
 var test_repair_option = cli.Option{
@@ -303,7 +303,7 @@ var app = &cli.App{
                         &gossip_spy_node_option,
                         &gossip_dump_option,
                         // repair
-                        &tvu_port_option,
+                        &turbine_recv_port_option,
                         &repair_port_option,
                         &test_repair_option,
                         // accounts-db
@@ -416,11 +416,11 @@ fn validator() !void {
     var app_base = try AppBase.init(gpa_allocator);
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
-    const tvu_port: u16 = config.current.shred_collector.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
 
     var gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{
         .{ .tag = socket_tag.REPAIR, .port = repair_port },
-        .{ .tag = socket_tag.TVU, .port = tvu_port },
+        .{ .tag = socket_tag.TURBINE_RECV, .port = turbine_recv_port },
     });
     defer gossip_service.deinit();
     defer gossip_manager.deinit();

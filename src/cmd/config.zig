@@ -26,7 +26,7 @@ const GossipConfig = struct {
 };
 
 const shred_collector_defaults = ShredCollectorConfig{
-    .tvu_port = 8002,
+    .turbine_recv_port = 8002,
     .repair_port = 8003,
     .start_slot = null,
 };
