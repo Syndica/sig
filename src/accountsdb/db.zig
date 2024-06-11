@@ -47,19 +47,6 @@ pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
-pub const AccountsDBConfig = struct {
-    // number of Accounts to preallocate for cache
-    storage_cache_size: usize = 0,
-    // number of bins to shard the index pubkeys across -- must be power of two
-    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
-    // how many RAM references to preallocate for each bin
-    index_ram_capacity: usize = 0,
-    // where to create disk indexes files (if null, will not use disk indexes)
-    disk_index_path: ?[]const u8 = null,
-    // how many DISK references to preallocate for each bin
-    index_disk_capacity: usize = 0,
-};
-
 /// database for accounts
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
