@@ -776,11 +776,7 @@ pub const AccountsDB = struct {
                         // for full snapshots, only include non-zero lamport accounts
                         .FullAccountHash => continue,
                         // zero-lamport accounts for incrementals = hash(pubkey)
-                        .IncrementalAccountHash => {
-                            var hasher = Blake3.init(.{});
-                            hasher.update(&key.data);
-                            hasher.final(&account_hash.data);
-                        },
+                        .IncrementalAccountHash => Blake3.hash(&key.data, &account_hash.data, .{}),
                     }
                 } else {
                     // hashes arent always stored correctly in snapshots
