@@ -1,6 +1,5 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Account = @import("../core/account.zig").Account;
 const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/time.zig").Slot;
