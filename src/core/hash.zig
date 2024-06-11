@@ -4,7 +4,7 @@ const base58 = @import("base58-zig");
 
 pub const HASH_SIZE: usize = 32;
 
-pub const Hash = struct {
+pub const Hash = extern struct {
     data: [HASH_SIZE]u8,
 
     pub fn default() Hash {
