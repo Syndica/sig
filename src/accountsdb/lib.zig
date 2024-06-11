@@ -8,7 +8,6 @@ pub const snapshots = @import("snapshots.zig");
 pub const sysvars = @import("sysvars.zig");
 
 pub const AccountsDB = db.AccountsDB;
-pub const AccountsDBConfig = db.AccountsDBConfig;
 pub const AllSnapshotFields = snapshots.AllSnapshotFields;
 pub const Bank = bank.Bank;
 pub const GenesisConfig = genesis_config.GenesisConfig;
