@@ -4,7 +4,7 @@ const Ed25519 = std.crypto.sign.Ed25519;
 const encoder = base58.Encoder.init(.{});
 const decoder = base58.Decoder.init(.{});
 
-pub const Pubkey = struct {
+pub const Pubkey = extern struct {
     data: [32]u8,
 
     const Self = @This();
@@ -81,7 +81,10 @@ pub const Pubkey = struct {
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        return writer.print("{s}", .{self.string()});
+        var dest: [44]u8 = undefined;
+        @memset(&dest, 0);
+        const written = encoder.encode(&self.data, &dest) catch return error.EncodingError;
+        return writer.print("{s}", .{dest[0..written]});
     }
 
     pub fn isDefault(self: *const Self) bool {

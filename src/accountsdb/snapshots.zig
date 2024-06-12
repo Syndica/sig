@@ -316,7 +316,12 @@ pub const SnapshotFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
-        var file = try std.fs.cwd().openFile(path, .{});
+        var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+            switch (err) {
+                error.FileNotFound => return error.SnapshotFieldsNotFound,
+                else => return err,
+            }
+        };
         defer file.close();
 
         const size = (try file.stat()).size;
@@ -676,6 +681,7 @@ pub const StatusCache = struct {
         bincode.free(self.bank_slot_deltas.allocator, self.*);
     }
 
+    /// [verify_slot_deltas](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/runtime/src/snapshot_bank_utils.rs#L709)
     pub fn validate(
         self: *const StatusCache,
         allocator: std.mem.Allocator,
@@ -710,14 +716,22 @@ pub const StatusCache = struct {
             return error.SlotHistoryMismatch;
         }
         for (slots_seen.keys()) |slot| {
-            if (slot_history.check(slot) != sysvars.SlotCheckResult.Found) {
+            if (slot_history.check(slot) != .Found) {
                 return error.SlotNotFoundInHistory;
             }
         }
-        for (slot_history.oldest()..slot_history.newest()) |slot| {
-            if (!slots_seen.contains(slot)) {
-                return error.SlotNotFoundInStatusCache;
+
+        var slots_checked: u32 = 0;
+        var slot = slot_history.newest();
+        while (slot >= slot_history.oldest() and slots_checked != MAX_CACHE_ENTRIES) {
+            if (slot_history.check(slot) == .Found) {
+                slots_checked += 1;
+                if (!slots_seen.contains(slot)) {
+                    return error.SlotNotFoundInStatusCache;
+                }
             }
+            if (slot == 0) break;
+            slot -= 1;
         }
     }
 };

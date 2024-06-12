@@ -116,7 +116,7 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn initIpv6(octets: [16]u8, portt: u16) Self {
         return Self{
-            .V4 = .{ .ip = Ipv6Addr.init(octets), .port = portt },
+            .V6 = .{ .ip = Ipv6Addr.init(octets), .port = portt, .flowinfo = 0, .scope_id = 0 },
         };
     }
 
@@ -240,9 +240,20 @@ pub const SocketAddr = union(enum(u8)) {
     /// - integer: length of the string within the array
     pub fn toString(self: Self) struct { [53]u8, usize } {
         var buf: [53]u8 = undefined;
-        var stream = std.io.fixedBufferStream(&buf);
+        const len = self.toStringBuf(&buf);
+        return .{ buf, len };
+    }
+
+    pub fn toStringBounded(self: Self) std.BoundedArray(u8, 53) {
+        var buf: [53]u8 = undefined;
+        const len = self.toStringBuf(&buf);
+        return std.BoundedArray(u8, 53).fromSlice(buf[0..len]) catch unreachable;
+    }
+
+    pub fn toStringBuf(self: Self, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
+        var stream = std.io.fixedBufferStream(buf);
         self.toAddress().format("", .{}, stream.writer()) catch unreachable;
-        return .{ buf, stream.pos };
+        return @intCast(stream.pos);
     }
 
     pub fn isUnspecified(self: *const Self) bool {
@@ -459,6 +470,14 @@ pub fn endpointToString(allocator: std.mem.Allocator, endpoint: *const network.E
     var endpoint_buf = try std.ArrayList(u8).initCapacity(allocator, 14);
     try endpoint.format(&[_]u8{}, std.fmt.FormatOptions{}, endpoint_buf.writer());
     return endpoint_buf;
+}
+
+/// Socket.enablePortReuse does not actually enable SO_REUSEPORT. It sets SO_REUSEADDR.
+/// This is the correct implementation to enable SO_REUSEPORT.
+pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
+    const setsockopt_fn = if (builtin.os.tag == .windows) @panic("windows not supported") else std.posix.setsockopt;
+    var opt: c_int = if (enabled) 1 else 0;
+    try setsockopt_fn(self.internal, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, std.mem.asBytes(&opt));
 }
 
 test "net.net: invalid ipv4 socket parsing" {

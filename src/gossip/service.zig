@@ -1,5 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
 const Packet = @import("../net/packet.zig").Packet;
@@ -12,7 +11,6 @@ const ArrayList = std.ArrayList;
 const Thread = std.Thread;
 const AtomicBool = std.atomic.Value(bool);
 const UdpSocket = network.Socket;
-const Tuple = std.meta.Tuple;
 const SocketAddr = @import("../net/net.zig").SocketAddr;
 const endpointToString = @import("../net/net.zig").endpointToString;
 const _gossipMessages = @import("message.zig");
@@ -327,7 +325,7 @@ pub const GossipService = struct {
 
         const receiver_thread = try Thread.spawn(.{}, socket_utils.readSocket, .{
             self.allocator,
-            &self.gossip_socket,
+            self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
             self.logger,
@@ -346,7 +344,7 @@ pub const GossipService = struct {
         };
 
         const responder_thread = try Thread.spawn(.{}, socket_utils.sendSocket, .{
-            &self.gossip_socket,
+            self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
             self.logger,
@@ -2936,27 +2934,27 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
     pub const args = [_]BenchmarkArgs{
         .{
-            .name = "10k_ping_msgs",
+            .name = "5k_ping_msgs",
             .message_counts = .{
-                .n_ping = 10_000,
+                .n_ping = 5_000,
                 .n_push_message = 0,
                 .n_pull_response = 0,
             },
         },
         .{
-            .name = "10k_push_msgs",
+            .name = "5k_push_msgs",
             .message_counts = .{
                 .n_ping = 0,
-                .n_push_message = 10_000,
+                .n_push_message = 5_000,
                 .n_pull_response = 0,
             },
         },
         .{
-            .name = "10k_pull_resp_msgs",
+            .name = "1k_pull_resp_msgs",
             .message_counts = .{
                 .n_ping = 0,
                 .n_push_message = 0,
-                .n_pull_response = 10_000,
+                .n_pull_response = 1_000,
             },
         },
     };
@@ -3053,13 +3051,13 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var timer = try std.time.Timer.start();
         while (true) {
             const v = gossip_service.stats.gossip_packets_processed.get();
+            // std.debug.print("{d} messages processed\r", .{v});
             if (v >= msg_sent) {
                 break;
             }
-            std.debug.print("{d} messages processed\r", .{v});
         }
         const elapsed = timer.read();
-        std.debug.print("\r", .{});
+        // std.debug.print("\r", .{});
 
         exit.store(true, .unordered);
         packet_handle.join();
@@ -3194,10 +3192,10 @@ pub const BenchmarkGossipServicePullRequests = struct {
             if (v >= msg_sent) {
                 break;
             }
-            std.debug.print("{d} messages processed\r", .{v});
+            // std.debug.print("{d} messages processed\r", .{v});
         }
         const elapsed = timer.read();
-        std.debug.print("\r", .{});
+        // std.debug.print("\r", .{});
 
         exit.store(true, .unordered);
         packet_handle.join();

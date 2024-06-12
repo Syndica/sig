@@ -3,12 +3,9 @@ const logger = @import("./trace/log.zig");
 
 const Decl = std.builtin.Type.Declaration;
 
-const debug = std.debug;
 const io = std.io;
 const math = std.math;
-const mem = std.mem;
 const meta = std.meta;
-const time = std.time;
 
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip

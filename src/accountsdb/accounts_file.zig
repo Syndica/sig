@@ -1,6 +1,4 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const HashMap = std.AutoHashMap;
 
 const Account = @import("../core/account.zig").Account;
 const writeIntLittleMem = @import("../core/account.zig").writeIntLittleMem;
@@ -54,15 +52,17 @@ pub const AccountInFile = struct {
     len: usize = 0,
 
     /// info about the account stored
-    pub const StorageInfo = struct {
+    pub const StorageInfo = extern struct {
         write_version_obsolete: u64,
         data_len: u64,
         pubkey: Pubkey,
 
-        pub fn writeToBuf(self: *const StorageInfo, buf: []u8) !usize {
+        pub fn writeToBuf(self: *const StorageInfo, buf: []u8) usize {
+            std.debug.assert(buf.len >= @sizeOf(StorageInfo));
+
             var offset: usize = 0;
-            offset += try writeIntLittleMem(self.write_version_obsolete, buf[offset..]);
-            offset += try writeIntLittleMem(self.data_len, buf[offset..]);
+            offset += writeIntLittleMem(self.write_version_obsolete, buf[offset..]);
+            offset += writeIntLittleMem(self.data_len, buf[offset..]);
             @memcpy(buf[offset..(offset + 32)], &self.pubkey.data);
             offset += 32;
             offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
@@ -71,19 +71,21 @@ pub const AccountInFile = struct {
     };
 
     /// on-chain account info about the account
-    pub const AccountInfo = struct {
+    pub const AccountInfo = extern struct {
         lamports: u64,
         rent_epoch: Epoch,
         owner: Pubkey,
         executable: bool,
 
-        pub fn writeToBuf(self: *const AccountInfo, buf: []u8) !usize {
+        pub fn writeToBuf(self: *const AccountInfo, buf: []u8) usize {
+            std.debug.assert(buf.len >= @sizeOf(AccountInfo));
+
             var offset: usize = 0;
-            offset += try writeIntLittleMem(self.lamports, buf[offset..]);
-            offset += try writeIntLittleMem(self.rent_epoch, buf[offset..]);
+            offset += writeIntLittleMem(self.lamports, buf[offset..]);
+            offset += writeIntLittleMem(self.rent_epoch, buf[offset..]);
             @memcpy(buf[offset..(offset + 32)], &self.owner.data);
             offset += 32;
-            offset += try writeIntLittleMem(
+            offset += writeIntLittleMem(
                 @as(u8, @intFromBool(self.executable)),
                 buf[offset..],
             );
@@ -152,11 +154,12 @@ pub const AccountInFile = struct {
         return self.hash_ptr;
     }
 
-    pub fn writeToBuf(self: *const Self, buf: []u8) !usize {
-        var offset: usize = 0;
+    pub fn writeToBuf(self: *const Self, buf: []u8) usize {
+        std.debug.assert(buf.len >= STATIC_SIZE + self.data.len);
 
-        offset += try self.store_info.writeToBuf(buf[offset..]);
-        offset += try self.account_info.writeToBuf(buf[offset..]);
+        var offset: usize = 0;
+        offset += self.store_info.writeToBuf(buf[offset..]);
+        offset += self.account_info.writeToBuf(buf[offset..]);
 
         @memcpy(buf[offset..(offset + 32)], &self.hash().data);
         offset += 32;

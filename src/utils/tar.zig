@@ -7,8 +7,6 @@ const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
 /// Unpack tarball is related to accounts_db so we reuse it's progress bar
 const TAR_PROGRESS_UPDATES_NS = @import("../accountsdb/db.zig").DB_PROGRESS_UPDATES_NS;
 
-const Options = std.tar.Options;
-
 fn stripComponents(path: []const u8, count: u32) ![]const u8 {
     var i: usize = 0;
     var c = count;
@@ -78,8 +76,7 @@ pub fn parallelUntarToFileSystem(
         thread_pool.deinit();
     }
 
-    logger.infof("using {d} threads to unpack snapshot\n", .{n_threads});
-
+    logger.infof("using {d} threads to unpack snapshot", .{n_threads});
     const tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
 

@@ -2,7 +2,6 @@ const std = @import("std");
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const network = @import("zig-network");
 const EndPoint = network.EndPoint;
-const UdpSocket = network.Socket;
 const _gossip_data = @import("../gossip/data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
 const getWallclockMs = _gossip_data.getWallclockMs;
