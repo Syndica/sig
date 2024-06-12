@@ -68,7 +68,7 @@ pub const AccountsDB = struct {
 
     logger: Logger,
     config: AccountsDBConfig,
-    fields: AccountsDbFields = undefined,
+    fields: ?AccountsDbFields = null,
 
     const Self = @This();
 
@@ -82,14 +82,18 @@ pub const AccountsDB = struct {
             config.storage_cache_size,
         );
 
-        var disk_allocator_ptr: ?*DiskMemoryAllocator = null;
-        var reference_allocator = std.heap.page_allocator;
-        if (config.disk_index_path) |disk_index_path| {
-            var ptr = try allocator.create(DiskMemoryAllocator);
-            ptr.* = try DiskMemoryAllocator.init(disk_index_path);
-            reference_allocator = ptr.allocator();
-            disk_allocator_ptr = ptr;
-        }
+        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
+        const reference_allocator: std.mem.Allocator //
+        = blk: {
+            if (config.disk_index_path) |disk_index_path| {
+                const ptr = try allocator.create(DiskMemoryAllocator);
+                errdefer allocator.destroy(ptr);
+                ptr.* = try DiskMemoryAllocator.init(disk_index_path);
+                break :blk .{ ptr, ptr.allocator() };
+            } else {
+                break :blk .{ null, std.heap.page_allocator };
+            }
+        };
 
         const account_index = try AccountIndex.init(
             allocator,
@@ -97,9 +101,9 @@ pub const AccountsDB = struct {
             config.number_of_index_bins,
         );
 
-        return Self{
+        return .{
             .allocator = allocator,
-            .disk_allocator_ptr = disk_allocator_ptr,
+            .disk_allocator_ptr = maybe_disk_allocator_ptr,
             .storage = storage,
             .account_index = account_index,
             .logger = logger,
@@ -281,7 +285,8 @@ pub const AccountsDB = struct {
         timer.reset();
     }
 
-    /// multithread entrypoint into parseAndBinAccountFiles
+    /// multithread entrypoint into parseAndBinAccountFiles.
+    /// Assumes that `loading_threads[thread_id].fields != null`.
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         filenames: [][]const u8,
@@ -304,6 +309,7 @@ pub const AccountsDB = struct {
 
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
+    /// Assumes `self.fields != null`.
     pub fn loadAndVerifyAccountsFiles(
         self: *Self,
         accounts_dir_path: []const u8,
@@ -312,6 +318,8 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
+        std.debug.assert(self.fields != null);
+
         var file_map = &self.storage.file_map;
         try file_map.ensureTotalCapacity(file_names.len);
 
@@ -341,7 +349,7 @@ pub const AccountsDB = struct {
             const accounts_file_id = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
-            const file_infos: ArrayList(AccountFileInfo) = self.fields.file_map.get(slot) orelse {
+            const file_infos: ArrayList(AccountFileInfo) = self.fields.?.file_map.get(slot) orelse {
                 // dont read account files which are not in the file_map
                 // note: this can happen when we load from a snapshot and there are extra account files
                 // in the directory which dont correspond to the snapshot were loading
@@ -613,7 +621,7 @@ pub const AccountsDB = struct {
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
     ) !void {
-        const expected_accounts_hash = self.fields.bank_hash_info.accounts_hash;
+        const expected_accounts_hash = self.fields.?.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
