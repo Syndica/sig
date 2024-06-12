@@ -16,7 +16,7 @@ pub const Pubkey = extern struct {
     pub fn fromString(str: []const u8) !Self {
         var out: [32]u8 = undefined;
         const written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
-        if (written != 32) @panic("written is not 32");
+        if (written != 32) return Error.InvalidBytesLength;
 
         return Self{ .data = out };
     }

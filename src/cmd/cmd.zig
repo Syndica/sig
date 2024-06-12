@@ -22,6 +22,7 @@ const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
+const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
 const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
@@ -32,9 +33,12 @@ const enumFromName = sig.utils.types.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
+const leaderScheduleFromBank = sig.core.leader_schedule.leaderScheduleFromBank;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
+const parseLeaderSchedule = sig.core.leader_schedule.parseLeaderSchedule;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
+const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
 const socket_tag = sig.gossip.socket_tag;
 
@@ -93,6 +97,14 @@ var turbine_recv_port_option = cli.Option{
     .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
     .required = false,
     .value_name = "Turbine Port",
+};
+
+var leader_schedule_option = cli.Option{
+    .long_name = "leader-schedule",
+    .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
+    .value_ref = cli.mkRef(&config.current.leader_schedule_path),
+    .required = false,
+    .value_name = "Leader schedule source",
 };
 
 var test_repair_option = cli.Option{
@@ -310,6 +322,8 @@ var app = &cli.App{
                         &min_snapshot_download_speed_mb_option,
                         &force_new_snapshot_download_option,
                         &trusted_validators_option,
+                        // general
+                        &leader_schedule_option,
                     },
                     .target = .{
                         .action = .{
@@ -371,6 +385,8 @@ var app = &cli.App{
                         &min_snapshot_download_speed_mb_option,
                         &force_new_snapshot_download_option,
                         &trusted_validators_option,
+                        // general
+                        &leader_schedule_option,
                     },
                     .target = .{
                         .action = .{
@@ -408,22 +424,24 @@ fn gossip() !void {
 
 /// entrypoint to run a full solana validator
 fn validator() !void {
-    var app_base = try AppBase.init(gpa_allocator);
+    const allocator = gpa_allocator;
+    var app_base = try AppBase.init(allocator);
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
 
-    var gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{
+    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = socket_tag.REPAIR, .port = repair_port },
         .{ .tag = socket_tag.TURBINE_RECV, .port = turbine_recv_port },
     });
     defer gossip_service.deinit();
     defer gossip_manager.deinit();
 
-    const snapshot = try loadSnapshot(gpa_allocator, app_base.logger, gossip_service, false);
+    const snapshot = try loadSnapshot(allocator, app_base.logger, gossip_service, false);
 
     // leader schedule
-    var leader_schedule = try leaderSchedule(gpa_allocator, &snapshot.bank);
+    var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse
+        try leaderScheduleFromBank(allocator, &snapshot.bank);
     const leader_provider = leader_schedule.provider();
 
     // shred collector
@@ -431,7 +449,7 @@ fn validator() !void {
     var shred_collector = try sig.shred_collector.start(
         config.current.shred_collector,
         ShredCollectorDependencies{
-            .allocator = gpa_allocator,
+            .allocator = allocator,
             .logger = app_base.logger,
             .random = rng.random(),
             .my_keypair = &app_base.my_keypair,
@@ -452,22 +470,27 @@ fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
     var app_base = try AppBase.init(allocator);
 
-    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
-    defer gossip_service.deinit();
-    defer gossip_manager.deinit();
+    const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+        var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
+        defer gossip_service.deinit();
+        defer gossip_manager.deinit();
+        const snapshot = try loadSnapshot(allocator, app_base.logger, gossip_service, false);
+        break :b try leaderScheduleFromBank(allocator, &snapshot.bank);
+    };
 
-    const snapshot = try loadSnapshot(allocator, app_base.logger, gossip_service, false);
-    const leader_schedule = try leaderSchedule(allocator, &snapshot.bank);
-
-    // const buf = try allocator.alloc(u8, 64 * leader_schedule.leader_schedule.len);
-    // var stream = std.io.fixedBufferStream(buf);
-    // const stdout = std.io.getStdOut();
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
-    const writer = stdout.writer();
-    for (leader_schedule.leader_schedule, 0..) |leader, i| {
-        try writer.print("  {}       {s}\n", .{ i + leader_schedule.start_slot, &leader.string() });
-    }
-    // try std.io.getStdOut().writeAll(buf[0..stream.pos]);
+    try writeLeaderSchedule(leader_schedule, stdout.writer());
+    try stdout.flush();
+}
+
+fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
+    return if (config.current.leader_schedule_path) |path|
+        if (std.mem.eql(u8, "--", path))
+            try parseLeaderSchedule(allocator, std.io.getStdIn().reader())
+        else
+            try parseLeaderSchedule(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
+    else
+        null;
 }
 
 /// State that typically needs to be initialized at the start of the app,
@@ -695,20 +718,6 @@ fn spawnLogger() !Logger {
     var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
     logger.spawn();
     return logger;
-}
-
-fn leaderSchedule(
-    allocator: Allocator,
-    bank: *const Bank,
-) !sig.core.leader_schedule.SingleEpochLeaderSchedule {
-    const leader_schedule = try sig.core.leader_schedule.leaderScheduleFromBank(allocator, bank);
-    _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
-    const epoch_start_slot = bank.bank_fields.slot - slot_index;
-    const schedule = sig.core.leader_schedule.SingleEpochLeaderSchedule{
-        .leader_schedule = leader_schedule,
-        .start_slot = epoch_start_slot,
-    };
-    return schedule;
 }
 
 const LoadedSnapshot = struct {
