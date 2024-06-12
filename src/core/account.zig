@@ -44,7 +44,7 @@ pub const Account = struct {
     }
 
     /// writes account to buf in snapshot format
-    pub fn writeToBuf(self: *const Account, pubkey: *const Pubkey, buf: []u8) !usize {
+    pub fn writeToBuf(self: *const Account, pubkey: *const Pubkey, buf: []u8) usize {
         var offset: usize = 0;
 
         const storage_info = AccountInFile.StorageInfo{
@@ -52,7 +52,7 @@ pub const Account = struct {
             .data_len = self.data.len,
             .pubkey = pubkey.*,
         };
-        offset += try storage_info.writeToBuf(buf[offset..]);
+        offset += storage_info.writeToBuf(buf[offset..]);
 
         const account_info = AccountInFile.AccountInfo{
             .lamports = self.lamports,
@@ -60,7 +60,7 @@ pub const Account = struct {
             .owner = self.owner,
             .executable = self.executable,
         };
-        offset += try account_info.writeToBuf(buf[offset..]);
+        offset += account_info.writeToBuf(buf[offset..]);
 
         const account_hash = self.hash(pubkey);
         @memcpy(buf[offset..(offset + 32)], &account_hash.data);
@@ -79,7 +79,7 @@ pub const Account = struct {
 pub fn writeIntLittleMem(
     x: anytype,
     memory: []u8,
-) !usize {
+) usize {
     const Tx = @TypeOf(x);
     const x_size: usize = @bitSizeOf(Tx) / 8;
     std.mem.writeInt(Tx, memory[0..x_size], x, .little);

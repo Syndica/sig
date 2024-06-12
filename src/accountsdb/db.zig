@@ -994,7 +994,7 @@ pub const AccountsDB = struct {
             ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
 
             // write the account to the file
-            offset += try accounts[i].writeToBuf(&pubkeys[i], memory[offset..]);
+            offset += accounts[i].writeToBuf(&pubkeys[i], memory[offset..]);
         }
         try file.sync();
 
@@ -1252,7 +1252,7 @@ pub const AccountsDB = struct {
                     }
 
                     // write to new account file
-                    offset += try account.writeToBuf(new_memory[offset..]);
+                    offset += account.writeToBuf(new_memory[offset..]);
                 }
             }
 
@@ -2374,7 +2374,7 @@ pub const BenchmarkAccountsDB = struct {
                         const account = try Account.random(allocator, rng, i % 1_000);
                         defer allocator.free(account.data);
                         var pubkey = pubkeys[i % n_accounts];
-                        offset += try account.writeToBuf(&pubkey, memory[offset..]);
+                        offset += account.writeToBuf(&pubkey, memory[offset..]);
                     }
                     break :blk offset;
                 };
