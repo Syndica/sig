@@ -18,7 +18,7 @@ const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
-const SlotLeaderGetter = sig.core.leader_schedule.SlotLeaderProvider;
+const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
@@ -48,7 +48,7 @@ pub const ShredCollectorDependencies = struct {
     gossip_table_rw: *RwMux(GossipTable),
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
-    leader_schedule: SlotLeaderGetter,
+    leader_schedule: SlotLeaderProvider,
 };
 
 /// Start the Shred Collector.

@@ -8,7 +8,7 @@ const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
-const SlotLeaderGetter = sig.core.leader_schedule.SlotLeaderProvider;
+const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const Packet = sig.net.Packet;
 
 /// Analogous to [run_shred_sigverify](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/turbine/src/sigverify_shreds.rs#L82)
@@ -18,7 +18,7 @@ pub fn runShredVerifier(
     unverified_shred_receiver: *Channel(ArrayList(Packet)),
     /// me --> shred processor
     verified_shred_sender: *Channel(ArrayList(Packet)),
-    leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
+    leader_schedule: SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
     var buf = ArrayList(ArrayList(Packet)).init(unverified_shred_receiver.allocator);
@@ -44,7 +44,7 @@ pub fn runShredVerifier(
 }
 
 /// verify_shred_cpu
-fn verifyShred(packet: *const Packet, leader_schedule: SlotLeaderGetter) bool {
+fn verifyShred(packet: *const Packet, leader_schedule: SlotLeaderProvider) bool {
     if (packet.flags.isSet(.discard)) return false;
     const shred = shred_layout.getShred(packet) orelse return false;
     const slot = shred_layout.getSlot(shred) orelse return false;

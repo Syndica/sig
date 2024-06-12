@@ -276,6 +276,7 @@ fn getMerkleNode(shred: []const u8, start: usize, end: usize) !Hash {
     return hashv(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }
 
+/// [get_merkle_root](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/ledger/src/shred/merkle.rs#L702)
 fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofEntryList) !Hash {
     var index = start_index;
     var node = start_node;
@@ -287,7 +288,7 @@ fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofE
             joinNodes(&other, &node.data);
         index = index >> 1;
     }
-    if (index == 0) return error.InvalidMerkleProf;
+    if (index != 0) return error.InvalidMerkleProof;
     return node;
 }
 
@@ -340,7 +341,7 @@ fn codeIndex(shred: []const u8) ?usize {
 fn dataIndex(shred: []const u8) ?usize {
     const fec_set_index = getInt(u32, shred, 79) orelse return null;
     const layout_index = layout.getIndex(shred) orelse return null;
-    const index = checkedAdd(layout_index, fec_set_index) catch return null;
+    const index = checkedSub(layout_index, fec_set_index) catch return null;
     return @intCast(index);
 }
 
@@ -358,6 +359,7 @@ pub fn Iterator(comptime Collection: type, comptime Item: type) type {
             if (self.index >= self.list.len) {
                 return null;
             }
+            defer self.index += 1;
             return self.list.get(self.index);
         }
     };
@@ -625,3 +627,65 @@ fn testShredVariantRoundTrip(expected_byte: u8, start_variant: ShredVariant) !vo
             start_variant.resigned == end_variant.resigned,
     );
 }
+
+test "getShredVariant" {
+    const variant = layout.getShredVariant(&test_data_shred).?;
+    try std.testing.expect(.Data == variant.shred_type);
+    try std.testing.expect(!variant.chained);
+    try std.testing.expect(!variant.resigned);
+    try std.testing.expect(6 == variant.proof_size);
+}
+
+test "dataIndex" {
+    try std.testing.expect(31 == dataIndex(&test_data_shred).?);
+}
+
+test "getIndex" {
+    try std.testing.expect(65 == layout.getIndex(&test_data_shred).?);
+}
+
+test "getMerkleRoot" {
+    const variant = layout.getShredVariant(&test_data_shred).?;
+    const merkle_root = try getMerkleRoot(&test_data_shred, data_shred, variant);
+    const expected_signed_data = [_]u8{
+        224, 241, 85,  253, 247, 62,  137, 179, 152, 192, 186, 203, 121, 194, 178, 130,
+        33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,
+    };
+    try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &merkle_root.data));
+}
+
+test "getSignature" {
+    const signature = layout.getSignature(&test_data_shred).?;
+    const expected_signature = [_]u8{
+        102, 205, 108, 67,  218, 3,   214, 186, 28,  110, 167, 22,  75,  135, 233, 156, 45,  215, 209, 1,
+        253, 53,  142, 52,  6,   98,  158, 51,  157, 207, 190, 22,  96,  106, 68,  248, 244, 162, 13,  205,
+        193, 194, 143, 192, 142, 141, 134, 85,  93,  252, 43,  200, 224, 101, 12,  28,  97,  202, 230, 215,
+        34,  217, 20,  7,
+    };
+    try std.testing.expect(std.mem.eql(u8, &expected_signature, &signature.data));
+}
+
+test "getSignedData" {
+    const signed_data = layout.getSignedData(&test_data_shred).?;
+    const expected_signed_data = [_]u8{
+        224, 241, 85,  253, 247, 62,  137, 179, 152, 192, 186, 203, 121, 194, 178, 130,
+        33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,
+    };
+    try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &signed_data.data));
+}
+
+const test_data_shred = [_]u8{
+    102, 205, 108, 67,  218, 3,   214, 186, 28,  110, 167, 22,  75,  135, 233, 156, 45,  215,
+    209, 1,   253, 53,  142, 52,  6,   98,  158, 51,  157, 207, 190, 22,  96,  106, 68,  248,
+    244, 162, 13,  205, 193, 194, 143, 192, 142, 141, 134, 85,  93,  252, 43,  200, 224, 101,
+    12,  28,  97,  202, 230, 215, 34,  217, 20,  7,   134, 105, 170, 47,  18,  0,   0,   0,
+    0,   65,  0,   0,   0,   71,  176, 34,  0,   0,   0,   1,   0,   192, 88,
+} ++ .{0} ** 996 ++ .{
+    247, 170, 109, 175, 191, 111, 108, 73,  56,  57,  34,  185, 81,  218, 60,  244, 53,  227,
+    243, 72,  15,  175, 148, 58,  42,  0,   133, 246, 67,  118, 164, 221, 109, 136, 179, 199,
+    15,  177, 139, 110, 105, 222, 165, 194, 78,  25,  172, 56,  165, 69,  28,  80,  215, 72,
+    10,  21,  144, 236, 44,  107, 166, 65,  197, 164, 106, 113, 9,   68,  227, 37,  134, 158,
+    192, 200, 22,  30,  244, 177, 106, 84,  161, 246, 35,  21,  26,  163, 104, 181, 13,  189,
+    247, 250, 214, 101, 190, 52,  28,  152, 85,  9,   49,  168, 162, 199, 128, 242, 217, 219,
+    71,  219, 72,  191, 107, 210, 46,  255, 206, 122, 234, 142, 229, 214, 240, 186,
+};
