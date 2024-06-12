@@ -84,6 +84,7 @@ pub fn start(
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try ShredReceiverMetrics.init(),
+        .root_slot = if (conf.start_slot) |s| s - 1 else 0,
     };
     try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 

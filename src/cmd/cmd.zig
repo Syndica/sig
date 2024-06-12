@@ -445,9 +445,11 @@ fn validator() !void {
     const leader_provider = leader_schedule.provider();
 
     // shred collector
+    var shred_col_conf = config.current.shred_collector;
+    shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var shred_collector = try sig.shred_collector.start(
-        config.current.shred_collector,
+        shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
             .logger = app_base.logger,

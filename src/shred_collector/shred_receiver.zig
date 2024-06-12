@@ -35,6 +35,7 @@ pub const ShredReceiver = struct {
     unverified_shred_sender: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
     metrics: ShredReceiverMetrics,
+    root_slot: Slot,
 
     const Self = @This();
 
@@ -118,10 +119,8 @@ pub const ShredReceiver = struct {
             try self.handlePing(packet, responses);
             packet.flags.set(.discard);
         } else {
-            // TODO set correct values once using snapshot + blockstore
-            const root = 0;
-            const max_slot = std.math.maxInt(Slot);
-            if (shouldDiscardShred(packet, root, shred_version, max_slot)) {
+            const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
+            if (shouldDiscardShred(packet, self.root_slot, shred_version, max_slot)) {
                 packet.flags.set(.discard);
             }
         }
