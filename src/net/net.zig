@@ -246,7 +246,8 @@ pub const SocketAddr = union(enum(u8)) {
 
     pub fn toStringBounded(self: Self) std.BoundedArray(u8, 53) {
         var buf: [53]u8 = undefined;
-        return std.BoundedArray(u8, 53).fromSlice(buf[0..self.toStringBuf(&buf)]) catch unreachable;
+        const len = self.toStringBuf(&buf);
+        return std.BoundedArray(u8, 53).fromSlice(buf[0..len]) catch unreachable;
     }
 
     pub fn toStringBuf(self: Self, buf: *[53]u8) std.math.IntFittingRange(0, 53) {
