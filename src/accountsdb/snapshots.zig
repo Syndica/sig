@@ -773,6 +773,7 @@ pub const StatusCache = struct {
                     return error.SlotNotFoundInStatusCache;
                 }
             }
+            if (slot == 0) break;
             slot -= 1;
         }
     }
