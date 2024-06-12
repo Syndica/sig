@@ -71,14 +71,8 @@ pub fn start(
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
     // receiver (threads)
-    const unverified_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
-        deps.allocator,
-        1000,
-    );
-    const verified_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
-        deps.allocator,
-        1000,
-    );
+    const unverified_shred_channel = Channel(ArrayList(Packet)).init(deps.allocator, 1000);
+    const verified_shred_channel = Channel(ArrayList(Packet)).init(deps.allocator, 1000);
     const shred_receiver = try arena.create(ShredReceiver);
     shred_receiver.* = ShredReceiver{
         .allocator = deps.allocator,
