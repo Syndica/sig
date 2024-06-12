@@ -742,7 +742,7 @@ fn loadSnapshot(
     allocator: Allocator,
     logger: Logger,
     gossip_service: *GossipService,
-    validate: bool,
+    validate_genesis: bool,
 ) !*LoadedSnapshot {
     const output = try allocator.create(LoadedSnapshot);
     var snapshots = try getOrDownloadSnapshots(
@@ -795,24 +795,25 @@ fn loadSnapshot(
     logger.infof("validating bank...", .{});
     output.bank = Bank.init(&output.accounts_db, bank_fields);
 
-    // TODO: remove this condition once these validations work reliably on all clusters
-    if (validate) {
-        try Bank.validateBankFields(output.bank.bank_fields, &output.genesis_config);
+    Bank.validateBankFields(output.bank.bank_fields, &output.genesis_config) catch |e| switch (e) {
+        // TODO: remove when genesis validation works on all clusters
+        error.BankAndGenesisMismatch => if (validate_genesis) return e,
+        else => return e,
+    };
 
-        // validate the status cache
-        logger.infof("validating status cache...", .{});
-        var status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
-            if (err == error.StatusCacheNotFound) {
-                logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
-            }
-            return err;
-        };
-        defer status_cache.deinit();
+    // validate the status cache
+    logger.infof("validating status cache...", .{});
+    var status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
+        if (err == error.StatusCacheNotFound) {
+            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+        }
+        return err;
+    };
+    defer status_cache.deinit();
 
-        var slot_history = try output.accounts_db.getSlotHistory();
-        defer slot_history.deinit(output.accounts_db.allocator);
-        try status_cache.validate(allocator, bank_fields.slot, &slot_history);
-    }
+    var slot_history = try output.accounts_db.getSlotHistory();
+    defer slot_history.deinit(output.accounts_db.allocator);
+    try status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
 
