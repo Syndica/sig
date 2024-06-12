@@ -95,7 +95,7 @@ pub const VoteAccount = struct {
 
 pub const VoteState = struct {
     /// The variant of the rust enum
-    tag: u32,  // TODO: consider varint bincode serialization (in rust this is enum)
+    tag: u32, // TODO: consider varint bincode serialization (in rust this is enum)
     /// the node that votes in this account
     node_pubkey: Pubkey,
 };
