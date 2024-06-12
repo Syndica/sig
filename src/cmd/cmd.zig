@@ -709,7 +709,7 @@ fn downloadSnapshot() !void {
     try downloadSnapshotsFromGossip(
         gpa_allocator,
         logger,
-        trusted_validators,
+        if (trusted_validators) |trusted| trusted.items else null,
         &gossip_service,
         snapshot_dir_str,
         @intCast(min_mb_per_sec),
@@ -782,7 +782,7 @@ fn getOrDownloadSnapshots(
         try downloadSnapshotsFromGossip(
             allocator,
             logger,
-            trusted_validators,
+            if (trusted_validators) |trusted| trusted.items else null,
             gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
             snapshot_dir_str,
             @intCast(min_mb_per_sec),

@@ -36,7 +36,7 @@ pub const NestedHashTree = struct {
         var i: usize = 0;
         while (i < self.hashes.len) {
             const nested_len = self.hashes[i].items.len;
-            if ((search_index + nested_len) > index) {
+            if (search_index + nested_len > index) {
                 const index_in_nested = index - search_index;
                 return &self.hashes[i].items[index_in_nested];
             } else {

@@ -39,15 +39,19 @@ const PeerSearchResult = struct {
 pub fn findPeersToDownloadFromAssumeCapacity(
     allocator: std.mem.Allocator,
     table: *const GossipTable,
-    contact_infos: []ContactInfo,
+    contact_infos: []const ContactInfo,
     my_shred_version: usize,
     my_pubkey: Pubkey,
-    blacklist: []Pubkey,
-    trusted_validators: ?std.ArrayList(Pubkey),
+    blacklist: []const Pubkey,
+    trusted_validators: ?[]const Pubkey,
+    /// `.capacity` must be >= `contact_infos.len`.
+    /// The arraylist is first cleared, and then the outputs
+    /// are appended to it.
     valid_peers: *std.ArrayList(PeerSnapshotHash),
 ) !PeerSearchResult {
     // clear the list
     valid_peers.clearRetainingCapacity();
+    std.debug.assert(valid_peers.capacity >= contact_infos.len);
 
     const TrustedMapType = std.AutoHashMap(
         SlotAndHash, // full snapshot hash
@@ -62,7 +66,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         // populate with the hashes of trusted validators
         var trusted_count: usize = 0;
         // SAFE: the perf is safe because maybe_ is non null only if trusted_validators is non-null
-        for (trusted_validators.?.items) |trusted_validator| {
+        for (trusted_validators.?) |trusted_validator| {
             const gossip_data = table.get(.{ .SnapshotHashes = trusted_validator }) orelse continue;
             const trusted_hashes = gossip_data.value.data.SnapshotHashes;
             trusted_count += 1;
@@ -154,7 +158,7 @@ pub fn downloadSnapshotsFromGossip(
     allocator: std.mem.Allocator,
     logger: Logger,
     // if null, then we trust any peer for snapshot download
-    maybe_trusted_validators: ?std.ArrayList(Pubkey),
+    maybe_trusted_validators: ?[]const Pubkey,
     gossip_service: *GossipService,
     output_dir: []const u8,
     min_mb_per_sec: usize,
@@ -209,8 +213,8 @@ pub fn downloadSnapshotsFromGossip(
             defer allocator.free(snapshot_filename);
 
             const rpc_socket = peer.contact_info.getSocket(socket_tag.RPC).?;
-            const r = rpc_socket.toString();
-            const rpc_url = r[0][0..r[1]];
+            const rpc_url_bounded = rpc_socket.toStringBounded();
+            const rpc_url = rpc_url_bounded.constSlice();
 
             const snapshot_url = try std.fmt.allocPrintZ(allocator, "http://{s}/{s}", .{
                 rpc_url,
@@ -520,7 +524,7 @@ test "accounts_db.download: test remove untrusted peers" {
         my_shred_version,
         my_pubkey,
         &.{},
-        trusted_validators,
+        trusted_validators.items,
         &valid_peers,
     );
     try std.testing.expectEqual(valid_peers.items.len, 10);
@@ -535,7 +539,7 @@ test "accounts_db.download: test remove untrusted peers" {
         my_shred_version,
         my_pubkey,
         &.{},
-        trusted_validators,
+        trusted_validators.items,
         &valid_peers,
     );
     try std.testing.expectEqual(valid_peers.items.len, 8);

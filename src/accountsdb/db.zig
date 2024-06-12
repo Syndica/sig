@@ -15,6 +15,7 @@ const AccountFileInfo = @import("../accountsdb/snapshots.zig").AccountFileInfo;
 const AccountFile = @import("../accountsdb/accounts_file.zig").AccountFile;
 const FileId = @import("../accountsdb/accounts_file.zig").FileId;
 const AccountInFile = @import("../accountsdb/accounts_file.zig").AccountInFile;
+const Blake3 = std.crypto.hash.Blake3;
 
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
 
@@ -74,7 +75,7 @@ pub const AccountsDB = struct {
 
     logger: Logger,
     config: AccountsDBConfig,
-    fields: AccountsDbFields = undefined,
+    fields: ?AccountsDbFields = null,
 
     const Self = @This();
     const PubkeysAndAccounts = struct { []Pubkey, []Account };
@@ -84,21 +85,26 @@ pub const AccountsDB = struct {
         logger: Logger,
         config: AccountsDBConfig,
     ) !Self {
-        var disk_allocator_ptr: ?*DiskMemoryAllocator = null;
-        var reference_allocator = std.heap.page_allocator;
-        if (config.use_disk_index) {
-            var ptr = try allocator.create(DiskMemoryAllocator);
-            // make the disk directory
-            const disk_dir = try std.fmt.allocPrint(allocator, "{s}/index", .{config.snapshot_dir});
-            defer allocator.free(disk_dir);
-            try std.fs.cwd().makePath(disk_dir);
+        const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
+        const reference_allocator: std.mem.Allocator //
+        = blk: {
+            if (config.use_disk_index) {
+                // make the disk directory
+                const disk_dir = try std.fmt.allocPrint(allocator, "{s}/index", .{config.snapshot_dir});
+                defer allocator.free(disk_dir);
+                try std.fs.cwd().makePath(disk_dir);
 
-            const disk_file_suffix = try std.fmt.allocPrint(allocator, "{s}/bin", .{disk_dir});
-            logger.infof("using disk index in {s}", .{disk_file_suffix});
-            ptr.* = try DiskMemoryAllocator.init(disk_file_suffix);
-            reference_allocator = ptr.allocator();
-            disk_allocator_ptr = ptr;
-        }
+                const disk_file_suffix = try std.fmt.allocPrint(allocator, "{s}/bin", .{disk_dir});
+                logger.infof("using disk index in {s}", .{disk_file_suffix});
+
+                const ptr = try allocator.create(DiskMemoryAllocator);
+                ptr.* = try DiskMemoryAllocator.init(disk_file_suffix);
+
+                break :blk .{ ptr, ptr.allocator() };
+            } else {
+                break :blk .{ null, std.heap.page_allocator };
+            }
+        };
 
         const account_index = try AccountIndex.init(
             allocator,
@@ -106,9 +112,9 @@ pub const AccountsDB = struct {
             config.num_index_bins,
         );
 
-        return Self{
+        return .{
             .allocator = allocator,
-            .disk_allocator_ptr = disk_allocator_ptr,
+            .disk_allocator_ptr = maybe_disk_allocator_ptr,
             .account_index = account_index,
             .logger = logger,
             .config = config,
@@ -306,7 +312,8 @@ pub const AccountsDB = struct {
         timer.reset();
     }
 
-    /// multithread entrypoint into parseAndBinAccountFiles
+    /// multithread entrypoint into parseAndBinAccountFiles.
+    /// Assumes that `loading_threads[thread_id].fields != null`.
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         filenames: [][]const u8,
@@ -329,6 +336,7 @@ pub const AccountsDB = struct {
 
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
+    /// Assumes `self.fields != null`.
     pub fn loadAndVerifyAccountsFiles(
         self: *Self,
         accounts_dir_path: []const u8,
@@ -337,7 +345,9 @@ pub const AccountsDB = struct {
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        const file_map = &self.file_map;
+        std.debug.assert(self.fields != null);
+
+        var file_map = &self.file_map;
         try file_map.ensureTotalCapacity(file_names.len);
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
@@ -361,7 +371,7 @@ pub const AccountsDB = struct {
             const file_id_usize = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
-            const file_infos: ArrayList(AccountFileInfo) = self.fields.file_map.get(slot) orelse {
+            const file_infos: ArrayList(AccountFileInfo) = self.fields.?.file_map.get(slot) orelse {
                 // dont read account files which are not in the file_map
                 // note: this can happen when we load from a snapshot and there are extra account files
                 // in the directory which dont correspond to the snapshot were loading
@@ -642,7 +652,7 @@ pub const AccountsDB = struct {
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
     ) !void {
-        const expected_accounts_hash = self.fields.bank_hash_info.accounts_hash;
+        const expected_accounts_hash = self.fields.?.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
@@ -793,11 +803,24 @@ pub const AccountsDB = struct {
                 } orelse continue;
                 const result = try self.getAccountHashAndLamportsFromRef(max_slot_ref);
 
-                // only include non-zero lamport accounts (for full snapshots)
                 const lamports = result.lamports;
-                if (config == .FullAccountHash and lamports == 0) continue;
+                var account_hash = result.hash;
+                if (lamports == 0) {
+                    switch (config) {
+                        // for full snapshots, only include non-zero lamport accounts
+                        .FullAccountHash => continue,
+                        // zero-lamport accounts for incrementals = hash(pubkey)
+                        .IncrementalAccountHash => Blake3.hash(&key.data, &account_hash.data, .{}),
+                    }
+                } else {
+                    // hashes arent always stored correctly in snapshots
+                    if (account_hash.order(&Hash.default()) == .eq) {
+                        const account = try self.getAccountFromRef(max_slot_ref);
+                        account_hash = account.hash(&key);
+                    }
+                }
 
-                hashes.appendAssumeCapacity(result.hash);
+                hashes.appendAssumeCapacity(account_hash);
                 local_total_lamports += lamports;
             }
 

@@ -48,7 +48,7 @@ pub const Shred = union(ShredType) {
     }
 
     pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-        const variant = layout.getShredVariant(payload) orelse return error.uygugj;
+        const variant = layout.getShredVariant(payload) orelse return error.InvalidShredVariant;
         return switch (variant.shred_type) {
             .Code => .{ .Code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload) } },
             .Data => .{ .Data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload) } },
@@ -154,7 +154,7 @@ pub const DataShred = struct {
         return self.payload[consts.headers_size..size];
     }
 
-    pub fn parent(self: *const Self) !Slot {
+    pub fn parent(self: *const Self) error{InvalidParentOffset}!Slot {
         const slot = self.fields.common.slot;
         if (self.fields.custom.parent_offset == 0 and slot != 0) {
             return error.InvalidParentOffset;
