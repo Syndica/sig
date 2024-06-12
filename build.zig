@@ -81,6 +81,7 @@ pub fn build(b: *Build) void {
     const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe_run.step);
 
+    // fuzz testing
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
         .root_source_file = b.path("src/fuzz.zig"),
@@ -96,6 +97,7 @@ pub fn build(b: *Build) void {
     fuzz_exe_run.addArgs(b.args orelse &.{});
     fuzz_step.dependOn(&fuzz_exe_run.step);
 
+    // benchmarks
     const benchmark_exe = b.addExecutable(.{
         .name = "benchmark",
         .root_source_file = b.path("src/benchmarks.zig"),
@@ -106,6 +108,7 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("base58-zig", base58_module);
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
+    benchmark_exe.root_module.addImport("zstd", zstd_mod);
 
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
     benchmark_exe_run.addArgs(b.args orelse &.{});

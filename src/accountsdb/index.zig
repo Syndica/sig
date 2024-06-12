@@ -232,7 +232,7 @@ pub const AccountIndex = struct {
             const account = accounts_file.readAccount(offset) catch break;
             try account.validate();
 
-            try account_refs.append(.{
+            account_refs.append(.{
                 .pubkey = account.store_info.pubkey,
                 .slot = accounts_file.slot,
                 .location = .{
@@ -241,7 +241,9 @@ pub const AccountIndex = struct {
                         .offset = offset,
                     },
                 },
-            });
+            }) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfReferenceMemory,
+            };
 
             const pubkey = &account.store_info.pubkey;
             const bin_index = self.getBinIndex(pubkey);
@@ -864,6 +866,7 @@ pub const DiskMemoryAllocator = struct {
     pub fn free(_: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
         _ = log2_align;
         _ = return_address;
+        // TODO: build a mapping from ptr to file so we can delete the corresponding file on free
         const buf_aligned_len = std.mem.alignForward(usize, buf.len, std.mem.page_size);
         std.posix.munmap(@alignCast(buf.ptr[0..buf_aligned_len]));
     }

@@ -354,6 +354,25 @@ pub const AccountsDB = struct {
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
+        // allocate all the references in one shot with a wrapper allocator
+        // without this large allocation, snapshot loading is very slow
+        var references = try ArrayList(AccountRef).initCapacity(
+            self.account_index.reference_allocator,
+            file_names.len * accounts_per_file_est,
+        );
+        const references_ptr = references.items.ptr;
+        defer {
+            // rn we dont support resizing - something went wrong if we resized
+            std.debug.assert(references.items.ptr == references_ptr);
+        }
+
+        const counting_alloc_ptr = try self.allocator.create(CountingAllocator);
+        counting_alloc_ptr.* = .{
+            .deinit_self_allocator = self.allocator,
+            .references = references,
+            .alloc_count = 0,
+        };
+
         // NOTE: might need to be longer depending on abs path length
         var buf: [1024]u8 = undefined;
         var timer = try std.time.Timer.start();
@@ -394,12 +413,29 @@ pub const AccountsDB = struct {
                 std.debug.panic("failed to *open* AccountsFile {s}: {s}\n", .{ file_name, @errorName(err) });
             };
 
-            const refs_ptr = try self.account_index.allocReferenceBlock(slot, accounts_per_file_est);
-            self.account_index.validateAccountFile(&accounts_file, bin_counts, refs_ptr) catch |err| {
+            const reference_slice_start = references.items.len;
+            self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
+                if (err == error.OutOfReferenceMemory) {
+                    // TODO: support retry - panic for now
+                    std.debug.panic(
+                        "out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n",
+                        .{},
+                    );
+                }
                 std.debug.panic("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
             };
-            // NOTE: this is worse than doing nothing with the disk allocator rn
-            refs_ptr.shrinkAndFree(refs_ptr.items.len);
+
+            const reference_slice_end = references.items.len;
+            if (reference_slice_end > reference_slice_start) {
+                const ref_slice = references.items[reference_slice_start..reference_slice_end];
+                const ref_list = ArrayList(AccountRef).fromOwnedSlice(
+                    // deinit allocator uses the counting allocator
+                    counting_alloc_ptr.allocator(),
+                    ref_slice,
+                );
+                counting_alloc_ptr.alloc_count += 1;
+                try self.account_index.reference_memory.putNoClobber(slot, ref_list);
+            }
 
             const file_id = FileId.fromInt(@intCast(file_id_usize));
             file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
@@ -507,11 +543,6 @@ pub const AccountsDB = struct {
         }
         const largest_slot = self.file_map.get(self.largest_file_id).?.slot;
         self.largest_root_slot.store(largest_slot, .unordered);
-
-        for (handles.items) |handle| {
-            handle.join();
-        }
-        handles.deinit();
     }
 
     /// combines multiple thread indexes into the given index.
@@ -1509,6 +1540,69 @@ pub const AccountsDB = struct {
     }
 };
 
+/// allocator which frees the underlying arraylist after multiple free calls.
+/// useful for when you want to allocate a large Arraylist and split it across
+/// multiple different ArrayLists -- alloc and resize are not implemented.
+const CountingAllocator = struct {
+    /// optional heap allocator to deinit the ptr on deinit
+    deinit_self_allocator: std.mem.Allocator,
+    references: ArrayList(AccountRef),
+    alloc_count: usize,
+
+    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
+        return std.mem.Allocator{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .free = free,
+            },
+        };
+    }
+
+    pub fn deinit(self: *CountingAllocator) void {
+        // this shouldnt happen often but just in case
+        if (self.alloc_count != 0) {
+            std.debug.print(
+                "Reference Counting Allocator deinit with count = {}\n",
+                .{self.alloc_count},
+            );
+        }
+        self.references.deinit();
+        // free pointer
+        self.deinit_self_allocator.destroy(self);
+    }
+
+    pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+        _ = ctx;
+        _ = n;
+        _ = log2_align;
+        _ = return_address;
+        @panic("not implemented");
+    }
+
+    pub fn resize(ctx: *anyopaque, buf: []u8, log2_align: u8, new_len: usize, return_address: usize) bool {
+        _ = ctx;
+        _ = buf;
+        _ = log2_align;
+        _ = new_len;
+        _ = return_address;
+        @panic("not implemented");
+    }
+
+    pub fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
+        _ = buf;
+        _ = log2_align;
+        _ = return_address;
+
+        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.alloc_count -|= 1;
+        if (self.alloc_count == 0) {
+            self.deinit();
+        }
+    }
+};
+
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
@@ -2074,13 +2168,29 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         const dir_path = "test_data/bench_snapshot/";
         const accounts_path = dir_path ++ "accounts";
 
-        _ = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
-            std.debug.print("need to setup an snapshot dir for this benchmark...\n", .{});
+        // const logger = Logger{ .noop = {} };
+        const logger = Logger.init(allocator, .debug);
+        defer logger.deinit();
+        logger.spawn();
+
+        const snapshot_dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch {
+            std.debug.print("need to setup a snapshot in {s} for this benchmark...\n", .{dir_path});
             return 0;
         };
 
         var snapshot_files = try SnapshotFiles.find(allocator, dir_path);
         defer snapshot_files.deinit(allocator);
+
+        std.fs.cwd().access(accounts_path, .{}) catch {
+            try parallelUnpackZstdTarBall(
+                allocator,
+                logger,
+                snapshot_files.full_snapshot.filename,
+                snapshot_dir,
+                try std.Thread.getCpuCount() / 2,
+                true,
+            );
+        };
 
         var snapshots = try AllSnapshotFields.fromFiles(allocator, dir_path, snapshot_files);
         defer {
@@ -2090,11 +2200,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             }
         }
         const snapshot = try snapshots.all_fields.collapse();
-        const logger = Logger{ .noop = {} };
-
-        // const logger = Logger.init(allocator, .debug);
-        // defer logger.deinit();
-        // logger.spawn();
 
         var accounts_db = try AccountsDB.init(allocator, logger, .{
             .num_index_bins = 32,
