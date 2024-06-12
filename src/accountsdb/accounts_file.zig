@@ -58,6 +58,8 @@ pub const AccountInFile = struct {
         pubkey: Pubkey,
 
         pub fn writeToBuf(self: *const StorageInfo, buf: []u8) usize {
+            std.debug.assert(buf.len >= @sizeOf(StorageInfo));
+
             var offset: usize = 0;
             offset += writeIntLittleMem(self.write_version_obsolete, buf[offset..]);
             offset += writeIntLittleMem(self.data_len, buf[offset..]);
@@ -76,6 +78,8 @@ pub const AccountInFile = struct {
         executable: bool,
 
         pub fn writeToBuf(self: *const AccountInfo, buf: []u8) usize {
+            std.debug.assert(buf.len >= @sizeOf(AccountInfo));
+
             var offset: usize = 0;
             offset += writeIntLittleMem(self.lamports, buf[offset..]);
             offset += writeIntLittleMem(self.rent_epoch, buf[offset..]);
@@ -151,8 +155,9 @@ pub const AccountInFile = struct {
     }
 
     pub fn writeToBuf(self: *const Self, buf: []u8) usize {
-        var offset: usize = 0;
+        std.debug.assert(buf.len >= STATIC_SIZE + self.data.len);
 
+        var offset: usize = 0;
         offset += self.store_info.writeToBuf(buf[offset..]);
         offset += self.account_info.writeToBuf(buf[offset..]);
 
