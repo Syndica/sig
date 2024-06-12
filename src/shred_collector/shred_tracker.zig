@@ -57,7 +57,7 @@ pub const BasicShredTracker = struct {
         self: *Self,
         start_inclusive: Slot,
         end_exclusive: Slot,
-    ) !void {
+    ) SlotOutOfBounds!void {
         self.mux.lock();
         defer self.mux.unlock();
 
@@ -75,17 +75,17 @@ pub const BasicShredTracker = struct {
         self: *Self,
         slot: Slot,
         shred_index: u64,
-    ) !void {
+    ) SlotOutOfBounds!void {
         self.mux.lock();
         defer self.mux.unlock();
 
         const monitored_slot = try self.observeSlot(slot);
-        const new = try monitored_slot.record(shred_index);
+        const new = monitored_slot.record(shred_index);
         if (new) self.logger.debugf("new slot: {}", .{slot});
         self.max_slot_processed = @max(self.max_slot_processed, slot);
     }
 
-    pub fn setLastShred(self: *Self, slot: Slot, index: usize) !void {
+    pub fn setLastShred(self: *Self, slot: Slot, index: usize) SlotOutOfBounds!void {
         self.mux.lock();
         defer self.mux.unlock();
 
@@ -98,7 +98,7 @@ pub const BasicShredTracker = struct {
     }
 
     /// returns whether it makes sense to send any repair requests
-    pub fn identifyMissing(self: *Self, slot_reports: *MultiSlotReport) !bool {
+    pub fn identifyMissing(self: *Self, slot_reports: *MultiSlotReport) (Allocator.Error || SlotOutOfBounds)!bool {
         if (self.start_slot == null) return false;
         self.mux.lock();
         defer self.mux.unlock();
@@ -131,14 +131,14 @@ pub const BasicShredTracker = struct {
 
     /// - Record that a slot has been observed.
     /// - Acquire the slot's status for mutation.
-    fn observeSlot(self: *Self, slot: Slot) !*MonitoredSlot {
+    fn observeSlot(self: *Self, slot: Slot) SlotOutOfBounds!*MonitoredSlot {
         self.maybeSetStart(slot);
         self.max_slot_seen = @max(self.max_slot_seen, slot);
         const monitored_slot = try self.getMonitoredSlot(slot);
         return monitored_slot;
     }
 
-    fn getMonitoredSlot(self: *Self, slot: Slot) error{ SlotUnderflow, SlotOverflow }!*MonitoredSlot {
+    fn getMonitoredSlot(self: *Self, slot: Slot) SlotOutOfBounds!*MonitoredSlot {
         if (slot > self.current_bottom_slot + num_slots - 1) {
             return error.SlotOverflow;
         }
@@ -179,6 +179,8 @@ pub const SlotReport = struct {
 
 const ShredSet = std.bit_set.ArrayBitSet(usize, MAX_SHREDS_PER_SLOT / 10);
 
+pub const SlotOutOfBounds = error{ SlotUnderflow, SlotOverflow };
+
 const MonitoredSlot = struct {
     shreds: ShredSet = ShredSet.initEmpty(),
     max_seen: ?usize = null,
@@ -189,7 +191,7 @@ const MonitoredSlot = struct {
     const Self = @This();
 
     /// returns whether this is the first shred received for the slot
-    pub fn record(self: *Self, shred_index: usize) !bool {
+    pub fn record(self: *Self, shred_index: usize) bool {
         if (self.is_complete) return false;
         self.shreds.set(shred_index);
         if (self.max_seen == null) {
@@ -201,7 +203,7 @@ const MonitoredSlot = struct {
         return false;
     }
 
-    pub fn identifyMissing(self: *Self, missing_shreds: *ArrayList(Range)) !void {
+    pub fn identifyMissing(self: *Self, missing_shreds: *ArrayList(Range)) Allocator.Error!void {
         missing_shreds.clearRetainingCapacity();
         if (self.is_complete) return;
         const highest_shred_to_check = self.last_shred orelse self.max_seen orelse 0;

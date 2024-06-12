@@ -62,25 +62,24 @@ pub fn build(b: *Build) void {
 
     const main_exe_run = b.addRunArtifact(sig_exe);
     main_exe_run.addArgs(b.args orelse &.{});
-    main_exe_run.step.dependOn(b.getInstallStep());
     run_step.dependOn(&main_exe_run.step);
 
     // unit tests
-    const unit_tests = b.addTest(.{
+    const unit_tests_exe = b.addTest(.{
         .root_source_file = b.path("src/tests.zig"),
         .target = target,
         .optimize = optimize,
         .filters = filters orelse &.{},
     });
-    b.installArtifact(unit_tests);
-    unit_tests.root_module.addImport("base58-zig", base58_module);
-    unit_tests.root_module.addImport("curl", curl_mod);
-    unit_tests.root_module.addImport("httpz", httpz_mod);
-    unit_tests.root_module.addImport("zig-network", zig_network_module);
-    unit_tests.root_module.addImport("zstd", zstd_mod);
+    b.installArtifact(unit_tests_exe);
+    unit_tests_exe.root_module.addImport("base58-zig", base58_module);
+    unit_tests_exe.root_module.addImport("curl", curl_mod);
+    unit_tests_exe.root_module.addImport("httpz", httpz_mod);
+    unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
+    unit_tests_exe.root_module.addImport("zstd", zstd_mod);
 
-    const unit_tests_run = b.addRunArtifact(unit_tests);
-    test_step.dependOn(&unit_tests_run.step);
+    const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
+    test_step.dependOn(&unit_tests_exe_run.step);
 
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
@@ -95,7 +94,6 @@ pub fn build(b: *Build) void {
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
     fuzz_exe_run.addArgs(b.args orelse &.{});
-    fuzz_exe_run.step.dependOn(b.getInstallStep());
     fuzz_step.dependOn(&fuzz_exe_run.step);
 
     const benchmark_exe = b.addExecutable(.{
@@ -110,7 +108,6 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
 
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
-    benchmark_exe_run.step.dependOn(b.getInstallStep());
     benchmark_exe_run.addArgs(b.args orelse &.{});
     benchmark_step.dependOn(&benchmark_exe_run.step);
 }

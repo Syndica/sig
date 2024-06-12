@@ -75,7 +75,7 @@ pub fn start(
         deps.allocator,
         1000,
     );
-    const verified_shreds_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
+    const verified_shred_channel = sig.sync.Channel(std.ArrayList(sig.net.Packet)).init(
         deps.allocator,
         1000,
     );
@@ -100,7 +100,7 @@ pub fn start(
         .{
             deps.exit,
             unverified_shred_channel,
-            verified_shreds_channel,
+            verified_shred_channel,
             deps.leader_schedule,
         },
     );
@@ -116,7 +116,7 @@ pub fn start(
     try service_manager.spawn(
         "Shred Processor",
         shred_collector.shred_processor.runShredProcessor,
-        .{ deps.allocator, verified_shreds_channel, shred_tracker },
+        .{ deps.allocator, deps.logger, verified_shred_channel, shred_tracker },
     );
 
     // repair (thread)
