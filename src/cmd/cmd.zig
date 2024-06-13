@@ -35,7 +35,7 @@ const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 
-const socket_tag = sig.gossip.socket_tag;
+const SocketTag = sig.gossip.SocketTag;
 
 // TODO: use better allocator, unless GPA becomes more performant.
 
@@ -411,8 +411,8 @@ fn validator() !void {
         ip_echo_data.shred_version, // TODO atomic owned at top level? or owned by gossip is good?
         ip_echo_data.ip,
         &.{
-            .{ .tag = socket_tag.REPAIR, .port = repair_port },
-            .{ .tag = socket_tag.TURBINE_RECV, .port = turbine_recv_port },
+            .{ .tag = .repair, .port = repair_port },
+            .{ .tag = .turbine_recv, .port = turbine_recv_port },
         },
     );
     defer gossip_service.deinit();
@@ -515,7 +515,7 @@ fn initGossip(
     entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
-    sockets: []const struct { tag: u8, port: u16 },
+    sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
     const gossip_port: u16 = config.current.gossip.port;
     logger.infof("gossip host: {any}", .{gossip_host_ip});
@@ -524,7 +524,7 @@ fn initGossip(
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.init(gossip_host_ip, gossip_port));
+    try contact_info.setSocket(.gossip, SocketAddr.init(gossip_host_ip, gossip_port));
     for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
     contact_info.shred_version = shred_version;
 
