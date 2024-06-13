@@ -7,7 +7,6 @@ const ContactInfo = @import("../gossip/data.zig").ContactInfo;
 const GossipTable = @import("../gossip/table.zig").GossipTable;
 const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
 const Logger = @import("../trace/log.zig").Logger;
-const socket_tag = @import("../gossip/data.zig").socket_tag;
 const Hash = @import("../core/hash.zig").Hash;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
@@ -96,7 +95,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             result.invalid_shred_version += 1;
             continue;
         }
-        _ = peer_contact_info.getSocket(socket_tag.RPC) orelse {
+        _ = peer_contact_info.getSocket(.rpc) orelse {
             result.no_rpc_count += 1;
             continue;
         };
@@ -212,7 +211,7 @@ pub fn downloadSnapshotsFromGossip(
             });
             defer allocator.free(snapshot_filename);
 
-            const rpc_socket = peer.contact_info.getSocket(socket_tag.RPC).?;
+            const rpc_socket = peer.contact_info.getSocket(.rpc).?;
             const rpc_url_bounded = rpc_socket.toStringBounded();
             const rpc_url = rpc_url_bounded.constSlice();
 

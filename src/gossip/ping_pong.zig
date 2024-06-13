@@ -4,7 +4,6 @@ const Hash = @import("../core/hash.zig").Hash;
 const Signature = @import("../core/signature.zig").Signature;
 const _gossip_data = @import("data.zig");
 const ContactInfo = _gossip_data.ContactInfo;
-const socket_tag = _gossip_data.socket_tag;
 const getWallclockMs = _gossip_data.getWallclockMs;
 
 const DefaultPrng = std.rand.DefaultPrng;
@@ -222,7 +221,7 @@ pub const PingCache = struct {
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (peer.getSocket(socket_tag.GOSSIP)) |gossip_addr| {
+            if (peer.getSocket(.gossip)) |gossip_addr| {
                 const result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);

@@ -19,4 +19,4 @@ pub const Ping = ping_pong.Ping;
 pub const Pong = ping_pong.Pong;
 
 pub const getWallclockMs = data.getWallclockMs;
-pub const socket_tag = data.socket_tag;
+pub const SocketTag = data.SocketTag;
