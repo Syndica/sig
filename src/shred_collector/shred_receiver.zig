@@ -35,7 +35,7 @@ pub const ShredReceiver = struct {
     unverified_shred_sender: *Channel(ArrayList(Packet)),
     shred_version: *const Atomic(u16),
     metrics: ShredReceiverMetrics,
-    root_slot: Slot,
+    root_slot: Slot, // TODO: eventually, this should be handled by BankForks
 
     const Self = @This();
 

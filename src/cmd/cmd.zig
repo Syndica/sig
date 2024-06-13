@@ -796,10 +796,13 @@ fn loadSnapshot(
 
     logger.infof("validating bank...", .{});
     output.bank = Bank.init(&output.accounts_db, bank_fields);
-
     Bank.validateBankFields(output.bank.bank_fields, &output.genesis_config) catch |e| switch (e) {
         // TODO: remove when genesis validation works on all clusters
-        error.BankAndGenesisMismatch => if (validate_genesis) return e,
+        error.BankAndGenesisMismatch => if (validate_genesis) {
+            return e;
+        } else {
+            logger.err("Bank failed genesis validation.");
+        },
         else => return e,
     };
 
