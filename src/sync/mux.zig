@@ -251,6 +251,13 @@ pub fn RwMux(comptime T: type) type {
                 .valid = true,
             };
         }
+
+        pub fn readField(self: *Self, comptime field: []const u8) @TypeOf(@field(self.private.v, field)) {
+            self.private.r.lockShared();
+            const value = @field(self.private.v, field);
+            self.private.r.unlockShared();
+            return value;
+        }
     };
 }
 

@@ -130,6 +130,16 @@ pub const AccountInFile = struct {
         }
     }
 
+    pub fn toAccount(self: *const Self) Account {
+        return .{
+            .data = self.data,
+            .executable = self.executable().*,
+            .lamports = self.lamports().*,
+            .owner = self.owner().*,
+            .rent_epoch = self.rent_epoch().*,
+        };
+    }
+
     pub inline fn pubkey(self: *const Self) *Pubkey {
         return &self.store_info.pubkey;
     }
@@ -191,6 +201,8 @@ pub const AccountFile = struct {
     // is populated when file is read
     // note: need a separate counter vs mmap.len because of padding
     account_bytes: usize = 0,
+    // when shrinking or deleting, this is set to true
+    deinit_was_called: bool = false,
 
     const Self = @This();
 
@@ -222,6 +234,7 @@ pub const AccountFile = struct {
     pub fn deinit(self: *Self) void {
         std.posix.munmap(self.memory);
         self.file.close();
+        self.deinit_was_called = true;
     }
 
     pub fn validate(self: *Self) !void {
