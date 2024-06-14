@@ -481,7 +481,11 @@ pub const AccountsDB = struct {
         var total_accounts: usize = 0;
         for (bin_counts, 0..) |count, bin_index| {
             if (count > 0) {
-                try self.account_index.getBin(bin_index).ensureTotalCapacity(@intCast(count));
+                const bin_rw = self.account_index.getBin(bin_index);
+                const bin, var bin_lg = bin_rw.writeWithLock();
+                defer bin_lg.unlock();
+
+                try bin.ensureTotalCapacity(@intCast(count));
                 total_accounts += count;
             }
         }
@@ -598,22 +602,32 @@ pub const AccountsDB = struct {
         const print_progress = thread_id == 0;
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
-            const index_bin = index.getBin(bin_index);
+            const index_bin_rw = index.getBin(bin_index);
 
             // sum size across threads
             var bin_n_accounts: usize = 0;
             for (thread_dbs) |*thread_db| {
-                bin_n_accounts += thread_db.account_index.getBin(bin_index).count();
+                var bin_rw = thread_db.account_index.getBin(bin_index);
+                const bin, var bin_lg = bin_rw.readWithLock();
+                defer bin_lg.unlock();
+
+                bin_n_accounts += bin.count();
             }
             // prealloc
             if (bin_n_accounts > 0) {
+                const index_bin, var index_bin_lg = index_bin_rw.writeWithLock();
+                defer index_bin_lg.unlock();
+
                 try index_bin.ensureTotalCapacity(@intCast(bin_n_accounts));
             }
 
             for (thread_dbs) |*thread_db| {
-                const thread_refs = thread_db.account_index.getBin(bin_index);
+                var bin_rw = thread_db.account_index.getBin(bin_index);
+                const bin, var bin_lg = bin_rw.readWithLock();
+                defer bin_lg.unlock();
+
                 // insert all of the thread entries into the main index
-                var iter = thread_refs.iterator();
+                var iter = bin.iterator();
                 while (iter.next()) |thread_entry| {
                     const thread_ref_ptr = thread_entry.value_ptr.*;
                     // NOTE: we dont have to check for duplicates because the duplicate
@@ -807,7 +821,7 @@ pub const AccountsDB = struct {
     pub fn getHashesFromIndex(
         self: *AccountsDB,
         config: AccountsDB.AccountHashesConfig,
-        thread_bins: []const AccountIndex.RefMap,
+        thread_bins: []RwMux(AccountIndex.RefMap),
         hashes_allocator: std.mem.Allocator,
         hashes: *ArrayListUnmanaged(Hash),
         total_lamports: *u64,
@@ -815,7 +829,10 @@ pub const AccountsDB = struct {
         print_progress: bool,
     ) !void {
         var total_n_pubkeys: usize = 0;
-        for (thread_bins) |*bin| {
+        for (thread_bins) |*bin_rw| {
+            const bin, var bin_lg = bin_rw.readWithLock();
+            defer bin_lg.unlock();
+
             total_n_pubkeys += bin.count();
         }
         try hashes.ensureTotalCapacity(hashes_allocator, total_n_pubkeys);
@@ -827,10 +844,13 @@ pub const AccountsDB = struct {
         var local_total_lamports: u64 = 0;
         var timer = try std.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
-        for (thread_bins, 1..) |*bin_ptr, count| {
+        for (thread_bins, 1..) |*bin_rw, count| {
             // get and sort pubkeys in bin
-            const bin_refs = bin_ptr;
-            const n_pubkeys_in_bin = bin_refs.count();
+            // TODO: may be holding this lock for too long
+            const bin, var bin_lg = bin_rw.readWithLock();
+            defer bin_lg.unlock();
+
+            const n_pubkeys_in_bin = bin.count();
             if (n_pubkeys_in_bin == 0) {
                 continue;
             }
@@ -846,7 +866,7 @@ pub const AccountsDB = struct {
             }
 
             var i: usize = 0;
-            var key_iter = bin_refs.iterator();
+            var key_iter = bin.iterator();
             while (key_iter.next()) |entry| {
                 keys[i] = entry.key_ptr.*;
                 i += 1;
@@ -861,7 +881,7 @@ pub const AccountsDB = struct {
 
             // get the hashes
             for (bin_pubkeys) |key| {
-                const ref_ptr = bin_refs.get(key).?;
+                const ref_ptr = bin.get(key).?;
 
                 // get the most recent state of the account
                 const max_slot_ref = switch (config) {
@@ -935,7 +955,10 @@ pub const AccountsDB = struct {
         }
 
         for (0..n_bins) |bin_index| {
-            const bin = self.account_index.getBin(bin_index);
+            const bin_rw = self.account_index.getBin(bin_index);
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
+
             const new_len = bin_counts[bin_index] + bin.count();
             if (new_len > 0) {
                 try bin.ensureTotalCapacity(@intCast(new_len));
@@ -1319,7 +1342,6 @@ pub const AccountsDB = struct {
             var shrink_account_file_rw = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
-
                 break :blk file_map.get(shrink_file_id).?;
             };
 
@@ -1386,19 +1408,26 @@ pub const AccountsDB = struct {
                         var new_ref = old_ref_ptr.*;
                         new_ref.location.File.offset = offset;
                         new_ref.location.File.file_id = new_file_id;
-                        // copy the reference
-                        new_ref_list.appendAssumeCapacity(new_ref);
-                        // this is our new ptr value
-                        const new_ref_ptr = &new_ref_list.items[new_ref_list.items.len - 1];
+
+                        const new_ref_ptr = new_ref_list.addOneAssumeCapacity();
+                        new_ref_ptr.* = new_ref;
+
+                        // TODO: maybe just do a remove + add instead of updating below
 
                         // update the reference value to be new_ref_ptr
                         const pubkey = account.pubkey();
-                        const bin = self.account_index.getBinFromPubkey(pubkey);
+                        const bin_rw = self.account_index.getBinFromPubkey(pubkey);
+                        const bin, var bin_lg = bin_rw.readWithLock();
+
+                        const ref_ptr_ptr: **AccountRef = bin.getPtr(pubkey.*) orelse unreachable;
+                        bin_lg.unlock();
+
+                        // TODO: lock the ref_ptr list
+
                         // this is the old ptr value
                         // NOTE: we NEED a double pointer so that we can update it to *point* to the new value
                         // - this means either updating the hashmap pointer
                         // - or updating the linked list next_ptr field
-                        const ref_ptr_ptr: **AccountRef = bin.getPtr(pubkey.*) orelse unreachable;
 
                         // base case: element is at the head
                         if (ref_ptr_ptr.*.slot == slot) {
@@ -1618,8 +1647,7 @@ pub const AccountsDB = struct {
 
     /// gets an account given an associated pubkey. mut ref is required for locks.
     pub fn getAccount(self: *Self, pubkey: *const Pubkey) !Account {
-        const bin = self.account_index.getBinFromPubkey(pubkey);
-        const ref = bin.get(pubkey.*) orelse return error.PubkeyNotInIndex;
+        const ref = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(ref, null, null).?;
         const account = try self.getAccountFromRef(max_ref);
@@ -1668,7 +1696,10 @@ pub const AccountsDB = struct {
         var total_accounts: usize = 0;
         for (bin_counts, 0..) |count, bin_index| {
             if (count > 0) {
-                const bin = self.account_index.getBin(bin_index);
+                const bin_rw = self.account_index.getBin(bin_index);
+                const bin, var bin_lg = bin_rw.writeWithLock();
+                defer bin_lg.unlock();
+
                 try bin.ensureTotalCapacity(bin.count() + count);
                 total_accounts += count;
             }
@@ -2596,7 +2627,7 @@ pub const BenchmarkAccountsDB = struct {
         // },
     };
 
-    pub fn readAccounts(bench_args: BenchArgs) !u64 {
+    pub fn readWriteAccounts(bench_args: BenchArgs) !u64 {
         const n_accounts = bench_args.n_accounts;
         const slot_list_len = bench_args.slot_list_len;
         const total_n_accounts = n_accounts * slot_list_len;

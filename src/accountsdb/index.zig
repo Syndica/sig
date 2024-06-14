@@ -1,11 +1,14 @@
 const std = @import("std");
+const lib = @import("../lib.zig");
+
 const ArrayList = std.ArrayList;
-const Account = @import("../core/account.zig").Account;
-const Hash = @import("../core/hash.zig").Hash;
-const Slot = @import("../core/time.zig").Slot;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const AccountFile = @import("accounts_file.zig").AccountFile;
-const FileId = @import("accounts_file.zig").FileId;
+const Account = lib.core.account.Account;
+const Hash = lib.core.hash.Hash;
+const Slot = lib.core.time.Slot;
+const Pubkey = lib.core.pubkey.Pubkey;
+const AccountFile = lib.accounts_db.accounts_file.AccountFile;
+const FileId = lib.accounts_db.accounts_file.FileId;
+const RwMux = lib.sync.RwMux;
 
 /// reference to an account (either in a file or cache)
 pub const AccountRef = struct {
@@ -40,7 +43,7 @@ pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
     reference_allocator: std.mem.Allocator,
     reference_memory: std.AutoHashMap(Slot, ArrayList(AccountRef)),
-    bins: []RefMap,
+    bins: []RwMux(RefMap),
     calculator: PubkeyBinCalculator,
 
     pub const RefMap = SwissMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
@@ -55,9 +58,9 @@ pub const AccountIndex = struct {
         // number of bins to shard across
         number_of_bins: usize,
     ) !Self {
-        const bins = try allocator.alloc(RefMap, number_of_bins);
+        const bins = try allocator.alloc(RwMux(RefMap), number_of_bins);
         for (bins) |*bin| {
-            bin.* = RefMap.init(allocator);
+            bin.* = RwMux(RefMap).init(RefMap.init(allocator));
         }
         const calculator = PubkeyBinCalculator.init(number_of_bins);
 
@@ -71,7 +74,9 @@ pub const AccountIndex = struct {
     }
 
     pub fn deinit(self: *Self, free_memory: bool) void {
-        for (self.bins) |*bin| {
+        for (self.bins) |*bin_rw| {
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
             bin.deinit();
         }
         self.allocator.free(self.bins);
@@ -100,55 +105,20 @@ pub const AccountIndex = struct {
         }
     }
 
-    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
-        var current_reference = self.getReference(pubkey) orelse return error.PubkeyNotFound;
-        const previous_reference: ?AccountRef = null;
-
-        while (true) {
-            // found the slot
-            if (current_reference.slot == slot) {
-                // remove it from the index (eg, remove [b])
-                const b = current_reference;
-                if (previous_reference) |a| {
-                    // .. -> a -> [b] -> c  => ... -> a -> c
-                    const c = b.next_ptr;
-                    a.next_ptr = c;
-                } else {
-                    if (b.next_ptr) |a| {
-                        // head: [b] -> a => a
-                        b.* = a.*;
-                    } else {
-                        // head: [b] => { remove entry from hashmap }
-                        var bin = self.getBinFromPubkey(pubkey);
-                        bin.remove(pubkey.*) catch unreachable;
-                    }
-                }
-                return;
-            } else {
-                // keep traversing
-                if (current_reference.next_ptr) |next_ptr| {
-                    current_reference = next_ptr;
-                } else {
-                    return error.SlotNotFound;
-                }
-            }
-        }
-    }
-
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
         return self.calculator.binIndex(pubkey);
     }
 
-    pub inline fn getBin(self: *const Self, index: usize) *RefMap {
+    pub inline fn getBin(self: *const Self, index: usize) *RwMux(RefMap) {
         return &self.bins[index];
     }
 
     pub inline fn getBinFromPubkey(
         self: *const Self,
         pubkey: *const Pubkey,
-    ) *RefMap {
+    ) *RwMux(RefMap) {
         const bin_index = self.calculator.binIndex(pubkey);
-        return &self.bins[bin_index];
+        return self.getBin(bin_index);
     }
 
     pub inline fn numberOfBins(self: *const Self) usize {
@@ -157,8 +127,12 @@ pub const AccountIndex = struct {
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot)
     pub fn indexRefIfNotDuplicateSlot(self: *Self, account_ref: *AccountRef) bool {
-        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
+
+        const bin, var bin_lg = bin_rw.writeWithLock();
         const result = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+        bin_lg.unlock();
+
         if (result.found_existing) {
             // traverse until you find the end
             var curr: *AccountRef = result.value_ptr.*;
@@ -183,8 +157,12 @@ pub const AccountIndex = struct {
 
     /// adds a reference to the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
-        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
+
+        const bin, var bin_lg = bin_rw.writeWithLock();
         const result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+        bin_lg.unlock();
+
         if (result.found_existing) {
             // traverse until you find the end
             var curr: *AccountRef = result.value_ptr.*;
@@ -201,14 +179,53 @@ pub const AccountIndex = struct {
         }
     }
 
+    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
+        var current_reference = self.getReference(pubkey) orelse return error.PubkeyNotFound;
+        const previous_reference: ?AccountRef = null;
+
+        while (true) {
+            // found the slot
+            if (current_reference.slot == slot) {
+                // remove it from the index (eg, remove [b])
+                const b = current_reference;
+                if (previous_reference) |a| {
+                    // .. -> a -> [b] -> c  => ... -> a -> c
+                    const c = b.next_ptr;
+                    a.next_ptr = c;
+                } else {
+                    if (b.next_ptr) |a| {
+                        // head: [b] -> a => a
+                        b.* = a.*;
+                    } else {
+                        // head: [b] => { remove entry from hashmap }
+                        var bin_rw = self.getBinFromPubkey(pubkey);
+                        const bin, var bin_lg = bin_rw.writeWithLock();
+                        defer bin_lg.unlock();
+                        bin.remove(pubkey.*) catch unreachable;
+                    }
+                }
+                return;
+            } else {
+                // keep traversing
+                if (current_reference.next_ptr) |next_ptr| {
+                    current_reference = next_ptr;
+                } else {
+                    return error.SlotNotFound;
+                }
+            }
+        }
+    }
+
     pub fn getReference(self: *Self, pubkey: *const Pubkey) ?*AccountRef {
-        const bin = self.getBinFromPubkey(pubkey);
+        const bin_rw = self.getBinFromPubkey(pubkey);
+        const bin, var bin_lg = bin_rw.readWithLock();
+        defer bin_lg.unlock();
+
         return bin.get(pubkey.*);
     }
 
     pub fn getSlotReference(self: *Self, pubkey: *const Pubkey, slot: Slot) ?*AccountRef {
-        const bin = self.getBinFromPubkey(pubkey);
-        var curr_ref = bin.get(pubkey.*);
+        var curr_ref = self.getReference(pubkey);
         while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
             if (ref.slot == slot) return ref;
         }
@@ -888,7 +905,7 @@ pub const DiskMemoryAllocator = struct {
     }
 };
 
-test "accounts_db.index: tests disk allocator on hashmaps" {
+test "tests disk allocator on hashmaps" {
     var allocator = try DiskMemoryAllocator.init("test_data/tmp");
     defer allocator.deinit(null);
 
@@ -905,7 +922,7 @@ test "accounts_db.index: tests disk allocator on hashmaps" {
     try std.testing.expect(std.meta.eql(r, ref));
 }
 
-test "accounts_db.index: tests disk allocator" {
+test "tests disk allocator" {
     var allocator = try DiskMemoryAllocator.init("test_data/tmp");
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
@@ -950,7 +967,7 @@ test "accounts_db.index: tests disk allocator" {
     try std.testing.expect(did_error);
 }
 
-test "accounts_db.index: tests swissmap read/write/delete" {
+test "tests swissmap read/write/delete" {
     const allocator = std.testing.allocator;
 
     const n_accounts = 10_000;
@@ -1001,7 +1018,7 @@ test "accounts_db.index: tests swissmap read/write/delete" {
     }
 }
 
-test "accounts_db.index: tests swissmap read/write" {
+test "tests swissmap read/write" {
     const allocator = std.testing.allocator;
 
     const n_accounts = 10_000;
