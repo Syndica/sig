@@ -147,15 +147,13 @@ pub const AccountsDB = struct {
         }
 
         {
-            var account_cache_lg = self.account_cache.write();
+            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
-            var account_cache: *AccountCache = account_cache_lg.mut();
             account_cache.deinit();
         }
         {
-            var file_map_lg = self.file_map.write();
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
-            var file_map: *FileMap = file_map_lg.mut();
             file_map.deinit();
         }
 
@@ -293,9 +291,9 @@ pub const AccountsDB = struct {
             // the the main accounts-db index
             for (loading_threads.items) |*loading_thread| {
                 // NOTE: deinit hashmap, dont close the files
-                var thread_lg = loading_thread.file_map.write();
-                thread_lg.mut().deinit();
-                thread_lg.unlock();
+                const file_map, var file_map_lg = self.file_map.writeWithLock();
+                defer file_map_lg.unlock();
+                file_map.deinit();
                 // NOTE: important `false` (ie, 1))
                 loading_thread.account_index.deinit(false);
             }
@@ -367,12 +365,11 @@ pub const AccountsDB = struct {
     ) !void {
         std.debug.assert(self.fields != null);
 
-        var file_map_lg = self.file_map.write();
         // NOTE: we can hold this lock for the entire function
         // because nothing else should be access the filemap
         // while loading from a snapshot
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
-        var file_map: *FileMap = file_map_lg.mut();
         try file_map.ensureTotalCapacity(file_names.len);
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
@@ -550,11 +547,10 @@ pub const AccountsDB = struct {
         }
         try self.account_index.reference_memory.ensureTotalCapacity(m);
 
-        // note: nothing else should try to access the file_map
+        // NOTE: nothing else should try to access the file_map
         // while we are merging so this long hold is ok.
-        var file_map_lg = self.file_map.write();
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
-        var file_map: *FileMap = file_map_lg.mut();
 
         for (thread_dbs) |*thread_db| {
             // combine file maps
@@ -921,10 +917,8 @@ pub const AccountsDB = struct {
         if (accounts.len == 0) return;
 
         {
-            var account_cache_lg = self.account_cache.write();
+            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
-            var account_cache: *@TypeOf(self.account_cache.private.v) = account_cache_lg.mut();
-
             // TODO: handle when slot already exists in the index
             try account_cache.putNoClobber(slot, .{ pubkeys, accounts });
         }
@@ -1021,9 +1015,8 @@ pub const AccountsDB = struct {
 
             // flush slots <= root slot
             {
-                const account_cache_lg = self.account_cache.read();
+                const account_cache, var account_cache_lg = self.account_cache.readWithLock();
                 defer account_cache_lg.unlock();
-                const account_cache: @TypeOf(self.account_cache.private.v) = account_cache_lg.get();
 
                 var cache_slot_iter = account_cache.keyIterator();
                 while (cache_slot_iter.next()) |cache_slot| {
@@ -1058,9 +1051,8 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     pub fn flushSlot(self: *Self, slot: Slot) !void {
         const pubkeys, const accounts = blk: {
-            var account_cache_lg = self.account_cache.write();
+            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
-            var account_cache: *@TypeOf(self.account_cache.private.v) = account_cache_lg.mut();
 
             const pubkeys, const accounts = account_cache.get(slot) orelse return error.SlotNotFound;
             _ = account_cache.remove(slot);
@@ -1111,10 +1103,8 @@ pub const AccountsDB = struct {
 
         // update the file map
         {
-            var file_map_lg = self.file_map.write();
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
-            var file_map: *FileMap = file_map_lg.mut();
-
             try file_map.putNoClobber(file_id, RwMux(AccountFile).init(account_file));
         }
 
@@ -1152,9 +1142,8 @@ pub const AccountsDB = struct {
             // because only shrink or delete modifies the account files
             // in the file map (which never run in parallel to clean)
             var account_file_rw = blk: {
-                var file_map_lg = self.file_map.read();
+                const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
-                var file_map: *const FileMap = file_map_lg.get();
 
                 break :blk file_map.get(file_id).?;
             };
@@ -1162,8 +1151,8 @@ pub const AccountsDB = struct {
             // NOTE: this read-lock is held for a while but
             // is not expensive since modifications only happen
             // during shrink/delete
-            var account_file_lg = account_file_rw.read();
-            const account_file: *const AccountFile = account_file_lg.get();
+            const account_file, var account_file_lg = account_file_rw.readWithLock();
+            defer account_file_lg.unlock();
 
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
@@ -1236,15 +1225,13 @@ pub const AccountsDB = struct {
                         };
                         defer ref_account.deinit(self.allocator);
 
-                        // SAFE: this is the **only** place where dead_bytes is modified
-                        // note: ... maybe this is bad ...
                         var ref_account_length = AccountInFile.STATIC_SIZE + ref_account.data.len;
                         ref_account_length = std.mem.alignForward(usize, ref_account_length, @sizeOf(u64));
+                        // SAFE: this is the **only** place where dead_bytes is modified
                         account_file_lg.private.v.dead_bytes += ref_account_length;
+                        const dead_bytes = account_file_lg.private.v.dead_bytes;
 
-                        // queue file for shrink or delete
-                        // SAFE: this is the **only** place where dead_bytes is read
-                        const dead_percentage = account_file_lg.private.v.dead_bytes * 100 / account_file.account_bytes;
+                        const dead_percentage = dead_bytes * 100 / account_file.account_bytes;
                         if (dead_percentage == 100) {
                             // queue for delete
                             try self.delete_account_files.put(file_id, {});
@@ -1276,9 +1263,8 @@ pub const AccountsDB = struct {
 
         for (self.delete_account_files.keys()) |file_id| {
             var account_file_rw = blk: {
-                var file_map_lg = self.file_map.write();
+                const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
-                var file_map: *FileMap = file_map_lg.mut();
 
                 // remove file from map
                 const account_file = file_map.get(file_id).?;
@@ -1288,10 +1274,9 @@ pub const AccountsDB = struct {
                 break :blk account_file;
             };
 
-            var account_file_lg = account_file_rw.write();
-            defer account_file_lg.unlock();
-            const account_file: *AccountFile = account_file_lg.mut();
+            const account_file, var account_file_lg = account_file_rw.writeWithLock();
             account_file.deinit();
+            account_file_lg.unlock();
 
             // NOTE: this should always succeed or something is wrong
             // remove from map - delete file from disk
@@ -1332,18 +1317,16 @@ pub const AccountsDB = struct {
         var total_accounts_deleted: u64 = 0;
         for (self.shrink_account_files.keys()) |shrink_file_id| {
             var shrink_account_file_rw = blk: {
-                var file_map_lg = self.file_map.read();
+                const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
 
-                var file_map: *const FileMap = file_map_lg.get();
                 break :blk file_map.get(shrink_file_id).?;
             };
 
             // compute size of alive accounts (read)
             const alive_accounts_size, const num_alive_accounts, const num_accounts_deleted, const slot = blk: {
-                var shrink_account_file_lg = shrink_account_file_rw.read();
+                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.readWithLock();
                 defer shrink_account_file_lg.unlock();
-                const shrink_account_file: *const AccountFile = shrink_account_file_lg.get();
 
                 var num_accounts_deleted: u64 = 0;
                 var alive_accounts_size: u64 = 0;
@@ -1391,9 +1374,8 @@ pub const AccountsDB = struct {
 
             // update the index
             const file_length = blk: {
-                var shrink_account_file_lg = shrink_account_file_rw.read();
+                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.readWithLock();
                 defer shrink_account_file_lg.unlock();
-                const shrink_account_file: *const AccountFile = shrink_account_file_lg.get();
 
                 var account_iter = shrink_account_file.iterator();
                 var offset: usize = 0;
@@ -1466,9 +1448,8 @@ pub const AccountsDB = struct {
 
             // update the file map
             {
-                var file_map_lg = self.file_map.write();
+                const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
-                var file_map: *FileMap = file_map_lg.mut();
 
                 const file_map_entry = file_map.getEntry(shrink_file_id).?;
                 file_map_entry.value_ptr.* = RwMux(AccountFile).init(new_account_file);
@@ -1477,9 +1458,9 @@ pub const AccountsDB = struct {
 
             // delete old account file
             {
-                var shrink_account_file_lg = shrink_account_file_rw.write();
+                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.writeWithLock();
                 defer shrink_account_file_lg.unlock();
-                shrink_account_file_lg.mut().deinit();
+                shrink_account_file.deinit();
             }
             self.deleteAccountFile(slot, shrink_file_id) catch |err| {
                 self.logger.errf(
@@ -1499,9 +1480,8 @@ pub const AccountsDB = struct {
     /// only exist in the cache, and not on disk).
     pub fn purgeSlot(self: *Self, slot: Slot, allocator: std.mem.Allocator) void {
         const pubkeys, const accounts = blk: {
-            var account_cache_lg = self.account_cache.write();
+            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
-            var account_cache: *@TypeOf(self.account_cache.private.v) = account_cache_lg.mut();
 
             const pubkeys, const accounts = account_cache.get(slot) orelse {
                 // the way it works right now, account files only exist for rooted slots
@@ -1547,26 +1527,6 @@ pub const AccountsDB = struct {
         };
     }
 
-    pub inline fn slotListMaxWithinBounds(
-        ref_ptr: *AccountRef,
-        min_slot: ?Slot,
-        max_slot: ?Slot,
-    ) ?*AccountRef {
-        var biggest: ?*AccountRef = null;
-        if (inBoundsIf(ref_ptr.slot, min_slot, max_slot)) {
-            biggest = ref_ptr;
-        }
-
-        var curr = ref_ptr;
-        while (curr.next_ptr) |ref| {
-            if (inBoundsIf(ref.slot, min_slot, max_slot) and (biggest == null or ref.slot > biggest.?.slot)) {
-                biggest = ref;
-            }
-            curr = ref;
-        }
-        return biggest;
-    }
-
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
@@ -1579,9 +1539,8 @@ pub const AccountsDB = struct {
                 return account;
             },
             .Cache => |ref_info| {
-                var account_cache_lg = self.account_cache.read();
+                const account_cache, var account_cache_lg = self.account_cache.readWithLock();
                 defer account_cache_lg.unlock();
-                var account_cache: *const AccountCache = account_cache_lg.get();
 
                 _, const accounts = account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
                 const account = accounts[ref_info.index];
@@ -1598,18 +1557,16 @@ pub const AccountsDB = struct {
         offset: usize,
     ) !Account {
         var account_file_rw: RwMux(AccountFile) = blk: {
-            var file_map_lg = self.file_map.read();
+            const file_map, var file_map_lg = self.file_map.readWithLock();
             defer file_map_lg.unlock();
-            var file_map: *const FileMap = file_map_lg.get();
 
             break :blk file_map.get(file_id) orelse {
                 return error.FileIdNotFound;
             };
         };
 
-        var account_file_lg = account_file_rw.read();
+        const account_file, var account_file_lg = account_file_rw.readWithLock();
         defer account_file_lg.unlock();
-        const account_file: *const AccountFile = account_file_lg.get();
 
         // NOTE: if this happens, it may be because the shrink happened
         // here: we get account_file_rw
@@ -1631,19 +1588,18 @@ pub const AccountsDB = struct {
     ) !struct { hash: Hash, lamports: u64 } {
         switch (account_ref.location) {
             .File => |ref_info| {
-                var account_file_rw: RwMux(AccountFile) = blk: {
-                    var file_map_lg = self.file_map.read();
+                var account_file_rw = blk: {
+                    const file_map, var file_map_lg = self.file_map.readWithLock();
                     defer file_map_lg.unlock();
-                    var file_map: *const FileMap = file_map_lg.get();
 
                     break :blk file_map.get(ref_info.file_id) orelse {
                         return error.FileIdNotFound;
                     };
                 };
 
-                var account_file_lg = account_file_rw.read();
+                const account_file, var account_file_lg = account_file_rw.readWithLock();
                 defer account_file_lg.unlock();
-                const account_file: *const AccountFile = account_file_lg.get();
+
                 const result = account_file.getAccountHashAndLamports(
                     ref_info.offset,
                 ) catch return error.InvalidOffset;
@@ -1699,10 +1655,9 @@ pub const AccountsDB = struct {
         const refs_ptr = try self.account_index.allocReferenceBlock(account_file.slot, n_accounts);
         try self.account_index.validateAccountFile(account_file, bin_counts, refs_ptr);
         {
-            var file_map_lg = self.file_map.write();
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
 
-            var file_map: *FileMap = file_map_lg.mut();
             try file_map.put(
                 FileId.fromInt(@intCast(account_file.id)),
                 RwMux(AccountFile).init(account_file.*),
@@ -1723,6 +1678,26 @@ pub const AccountsDB = struct {
         for (refs_ptr.items) |*ref| {
             self.account_index.indexRef(ref);
         }
+    }
+
+    pub inline fn slotListMaxWithinBounds(
+        ref_ptr: *AccountRef,
+        min_slot: ?Slot,
+        max_slot: ?Slot,
+    ) ?*AccountRef {
+        var biggest: ?*AccountRef = null;
+        if (inBoundsIf(ref_ptr.slot, min_slot, max_slot)) {
+            biggest = ref_ptr;
+        }
+
+        var curr = ref_ptr;
+        while (curr.next_ptr) |ref| {
+            if (inBoundsIf(ref.slot, min_slot, max_slot) and (biggest == null or ref.slot > biggest.?.slot)) {
+                biggest = ref;
+            }
+            curr = ref;
+        }
+        return biggest;
     }
 
     inline fn lessThanIf(
@@ -2028,9 +2003,8 @@ test "flushing slots works" {
     try accounts_db.flushSlot(slot);
 
     // try the validation
-    var file_map_lg = accounts_db.file_map.read();
+    const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
     defer file_map_lg.unlock();
-    const file_map: *const FileMap = file_map_lg.get();
 
     const file_id = file_map.keys()[0];
     var account_file_rw = file_map.get(file_id).?;
@@ -2278,18 +2252,16 @@ test "full clean account file works" {
 
     // test delete
     {
-        var file_map_lg = accounts_db.file_map.read();
+        const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
-        const file_map = file_map_lg.get();
         try std.testing.expect(file_map.get(FileId.fromInt(2)) != null);
     }
 
     accounts_db.deleteAccountFiles();
 
     {
-        var file_map_lg = accounts_db.file_map.read();
+        const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
-        const file_map = file_map_lg.get();
         try std.testing.expect(file_map.get(FileId.fromInt(2)) == null);
     }
 }
@@ -2348,9 +2320,7 @@ test "shrink account file works" {
     _ = try accounts_db.cleanAccountFiles(new_slot + 100);
     try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
 
-    var file_map_lg = accounts_db.file_map.read();
-    const file_map: *const FileMap = file_map_lg.get();
-
+    const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
     const slot_file_id: FileId = for (file_map.keys()) |file_id| {
         var account_file_rw = file_map.get(file_id).?;
         if (account_file_rw.readField("slot") == slot) {
@@ -2371,9 +2341,9 @@ test "shrink account file works" {
     try std.testing.expect(r.num_accounts_deleted == 9);
 
     // test: new account file is shrunk
-    var file_map_lg2 = accounts_db.file_map.read();
+    const file_map2, var file_map_lg2 = accounts_db.file_map.readWithLock();
     defer file_map_lg2.unlock();
-    const file_map2: *const FileMap = file_map_lg2.get();
+
     const new_slot_file_id: FileId = for (file_map2.keys()) |file_id| {
         var account_file_rw = file_map2.get(file_id).?;
         if (account_file_rw.readField("slot") == slot) {
