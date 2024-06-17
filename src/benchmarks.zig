@@ -31,8 +31,9 @@ pub fn main() !void {
     // TODO: very manual for now (bc we only have 2 benchmarks)
     // if we have more benchmarks we can make this more efficient
     const max_time_per_bench = 2 * std.time.ms_per_s; // !!
+    const run_all_benchmarks = filter.len == 0;
 
-    if (std.mem.startsWith(u8, filter, "swissmap")) {
+    if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
         try benchmark(
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
@@ -40,9 +41,9 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "accounts_db")) {
+    if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {
         var run_all = false;
-        if (std.mem.eql(u8, "accounts_db", filter)) {
+        if (std.mem.eql(u8, "accounts_db", filter) or run_all_benchmarks) {
             run_all = true;
         }
 
@@ -65,7 +66,7 @@ pub fn main() !void {
         }
     }
 
-    if (std.mem.startsWith(u8, filter, "socket_utils")) {
+    if (std.mem.startsWith(u8, filter, "socket_utils") or run_all_benchmarks) {
         try benchmark(
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
@@ -73,7 +74,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "gossip")) {
+    if (std.mem.startsWith(u8, filter, "gossip") or run_all_benchmarks) {
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
@@ -86,7 +87,7 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "sync")) {
+    if (std.mem.startsWith(u8, filter, "sync") or run_all_benchmarks) {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,

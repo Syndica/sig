@@ -43,11 +43,13 @@ pub const AccountRef = struct {
     }
 };
 
+const ReferenceMemory = std.AutoHashMap(Slot, ArrayList(AccountRef));
+
 /// stores the mapping from Pubkey to the account location (AccountRef)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
     reference_allocator: std.mem.Allocator,
-    reference_memory: std.AutoHashMap(Slot, ArrayList(AccountRef)),
+    reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
     calculator: PubkeyBinCalculator,
 
@@ -75,7 +77,7 @@ pub const AccountIndex = struct {
             .reference_allocator = reference_allocator,
             .bins = bins,
             .calculator = calculator,
-            .reference_memory = std.AutoHashMap(Slot, ArrayList(AccountRef)).init(allocator),
+            .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
         };
     }
 
@@ -87,43 +89,34 @@ pub const AccountIndex = struct {
         }
         self.allocator.free(self.bins);
 
-        if (free_memory) {
-            var iter = self.reference_memory.iterator();
-            while (iter.next()) |entry| {
-                entry.value_ptr.deinit();
+        {
+            var reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
+            defer reference_memory_lg.unlock();
+
+            if (free_memory) {
+                var iter = reference_memory.iterator();
+                while (iter.next()) |entry| {
+                    entry.value_ptr.deinit();
+                }
             }
+            reference_memory.deinit();
         }
-        self.reference_memory.deinit();
     }
 
-    pub fn allocReferenceBlock(self: *Self, slot: Slot, capacity: usize) !*ArrayList(AccountRef) {
-        const references = try ArrayList(AccountRef).initCapacity(
-            self.reference_allocator,
-            capacity,
-        );
-        try self.reference_memory.putNoClobber(slot, references);
-        return self.reference_memory.getEntry(slot).?.value_ptr;
+    pub fn putReferenceBlock(self: *Self, slot: Slot, references: ArrayList(AccountRef)) !void {
+        var reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
+        defer reference_memory_lg.unlock();
+        try reference_memory.putNoClobber(slot, references);
     }
 
     pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
-        if (!self.reference_memory.remove(slot)) {
+        var reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
+        defer reference_memory_lg.unlock();
+
+        if (!reference_memory.remove(slot)) {
             return error.MemoryNotFound;
         }
     }
-
-    // pub fn getReferenceSlot(self: *Self, pubkey: *const Pubkey, slot: Slot) !struct { *AccountRef, AccountReferenceHead } {
-    //     var head_reference_rw = self.getReference(pubkey) orelse return error.PubkeyNotFound;
-    //     const head_ref, var head_reference_lg = head_reference_rw.readWithLock();
-    //     defer head_reference_lg.unlock();
-
-    //     // find the slot in the reference list
-    //     var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-    //     const ref = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
-    //         if (ref.slot == slot) break ref;
-    //     } else return error.SlotNotFound;
-
-    //     return .{ ref, head_reference_rw };
-    // }
 
     pub fn getReference(self: *Self, pubkey: *const Pubkey) ?AccountReferenceHead {
         const bin_rw = self.getBinFromPubkey(pubkey);
@@ -215,7 +208,8 @@ pub const AccountIndex = struct {
 
         const head_ref, var head_reference_lg = blk: {
             const bin_rw = self.getBinFromPubkey(pubkey);
-            const bin, var bin_lg = bin_rw.writeWithLock();
+            // NOTE: we only get a read since most of the time it will update the linked-list and not the head
+            const bin, var bin_lg = bin_rw.readWithLock();
             defer bin_lg.unlock();
 
             var head_reference_rw = bin.get(pubkey.*) orelse return error.PubkeyNotFound;
@@ -235,7 +229,8 @@ pub const AccountIndex = struct {
 
             if (curr_reference.next_ptr) |next_ptr| {
                 // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
-                // so we release the head_lock so we can get a pointer
+                // so we release the head_lock so we can get a pointer -- because we need a pointer,
+                // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
                 head_reference_lg.unlock();
                 // NOTE: `getPtr` is important here vs `get` used above
                 var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;

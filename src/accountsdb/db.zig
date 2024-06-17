@@ -291,9 +291,10 @@ pub const AccountsDB = struct {
             // the the main accounts-db index
             for (loading_threads.items) |*loading_thread| {
                 // NOTE: deinit hashmap, dont close the files
-                const file_map, var file_map_lg = self.file_map.writeWithLock();
+                const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
                 defer file_map_lg.unlock();
                 file_map.deinit();
+
                 // NOTE: important `false` (ie, 1))
                 loading_thread.account_index.deinit(false);
             }
@@ -400,7 +401,11 @@ pub const AccountsDB = struct {
         var timer = try std.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
 
-        try self.account_index.reference_memory.ensureTotalCapacity(@intCast(file_names.len));
+        // its ok to hold this lock for the entire function because nothing else
+        // should be accessing the account index while loading from a snapshot
+        var reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
+        defer reference_memory_lg.unlock();
+        try reference_memory.ensureTotalCapacity(@intCast(file_names.len));
 
         for (file_names, 1..) |file_name, file_count| {
             // parse "{slot}.{id}" from the file_name
@@ -456,7 +461,8 @@ pub const AccountsDB = struct {
                     ref_slice,
                 );
                 counting_alloc_ptr.alloc_count += 1;
-                try self.account_index.reference_memory.putNoClobber(slot, ref_list);
+
+                try reference_memory.putNoClobber(slot, ref_list);
             }
 
             const file_id = FileId.fromInt(@intCast(file_id_usize));
@@ -498,9 +504,10 @@ pub const AccountsDB = struct {
 
         var ref_count: usize = 0;
         timer.reset();
-        var slot_iter = self.account_index.reference_memory.keyIterator();
+
+        var slot_iter = reference_memory.keyIterator();
         while (slot_iter.next()) |slot| {
-            const refs = self.account_index.reference_memory.get(slot.*).?;
+            const refs = reference_memory.get(slot.*).?;
             for (refs.items) |*ref| {
                 _ = self.account_index.indexRefIfNotDuplicateSlot(ref);
                 ref_count += 1;
@@ -547,9 +554,16 @@ pub const AccountsDB = struct {
         // ensure enough capacity
         var m: u32 = 0;
         for (thread_dbs) |*thread_db| {
-            m += thread_db.account_index.reference_memory.count();
+            const reference_memory, var reference_memory_lg = thread_db.account_index.reference_memory.readWithLock();
+            defer reference_memory_lg.unlock();
+            m += reference_memory.count();
         }
-        try self.account_index.reference_memory.ensureTotalCapacity(m);
+
+        // NOTE: its ok to hold this lock while we merge because
+        // nothing else should be accessing the account index while loading from a snapshot
+        const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
+        defer reference_memory_lg.unlock();
+        try reference_memory.ensureTotalCapacity(m);
 
         // NOTE: nothing else should try to access the file_map
         // while we are merging so this long hold is ok.
@@ -559,9 +573,8 @@ pub const AccountsDB = struct {
         for (thread_dbs) |*thread_db| {
             // combine file maps
             {
-                var thread_file_map_lg = self.file_map.write();
+                var thread_file_map, var thread_file_map_lg = thread_db.file_map.readWithLock();
                 defer thread_file_map_lg.unlock();
-                var thread_file_map: *FileMap = thread_file_map_lg.mut();
 
                 var iter = thread_file_map.iterator();
                 while (iter.next()) |entry| {
@@ -571,9 +584,12 @@ pub const AccountsDB = struct {
             self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
 
             // combine underlying memory
-            var ref_iter = thread_db.account_index.reference_memory.iterator();
+            var reference_memory_thread, var reference_memory_thread_lg = thread_db.account_index.reference_memory.readWithLock();
+            defer reference_memory_thread_lg.unlock();
+
+            var ref_iter = reference_memory_thread.iterator();
             while (ref_iter.next()) |entry| {
-                self.account_index.reference_memory.putAssumeCapacityNoClobber(
+                reference_memory.putAssumeCapacityNoClobber(
                     entry.key_ptr.*,
                     entry.value_ptr.*,
                 );
@@ -1450,13 +1466,18 @@ pub const AccountsDB = struct {
             };
 
             // update slot's reference memory
-            const ref_memory_entry = self.account_index.reference_memory.getEntry(slot) orelse {
-                std.debug.panic("missing corresponding reference memory for slot {d}\n", .{slot});
-            };
-            // deinit old block of reference memory
-            ref_memory_entry.value_ptr.deinit();
-            // point to new block
-            ref_memory_entry.value_ptr.* = new_ref_list;
+            {
+                const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
+                defer reference_memory_lg.unlock();
+
+                const reference_memory_entry = reference_memory.getEntry(slot) orelse {
+                    std.debug.panic("missing corresponding reference memory for slot {d}\n", .{slot});
+                };
+                // deinit old block of reference memory
+                reference_memory_entry.value_ptr.deinit();
+                // point to new block
+                reference_memory_entry.value_ptr.* = new_ref_list;
+            }
 
             var new_account_file = try AccountFile.init(
                 new_file,
@@ -1673,8 +1694,13 @@ pub const AccountsDB = struct {
         defer self.allocator.free(bin_counts);
         @memset(bin_counts, 0);
 
-        const refs_ptr = try self.account_index.allocReferenceBlock(account_file.slot, n_accounts);
-        try self.account_index.validateAccountFile(account_file, bin_counts, refs_ptr);
+        var references = try ArrayList(AccountRef).initCapacity(
+            self.account_index.reference_allocator,
+            n_accounts,
+        );
+        try self.account_index.validateAccountFile(account_file, bin_counts, &references);
+        try self.account_index.putReferenceBlock(account_file.slot, references);
+
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
@@ -1699,7 +1725,7 @@ pub const AccountsDB = struct {
         }
 
         // compute how many account_references for each pubkey
-        for (refs_ptr.items) |*ref| {
+        for (references.items) |*ref| {
             self.account_index.indexRef(ref);
         }
     }
@@ -1744,16 +1770,20 @@ pub const AccountsDB = struct {
         }
 
         // update index
-        const refs_ptr = try self.account_index.allocReferenceBlock(slot, accounts.len);
+        var references = try ArrayList(AccountRef).initCapacity(
+            self.account_index.reference_allocator,
+            accounts.len,
+        );
         for (0..accounts.len) |i| {
             const account_ref = AccountRef{
                 .pubkey = pubkeys[i],
                 .slot = slot,
                 .location = .{ .Cache = .{ .index = i } },
             };
-            refs_ptr.appendAssumeCapacity(account_ref);
-            self.account_index.indexRef(&refs_ptr.items[i]);
+            references.appendAssumeCapacity(account_ref);
+            self.account_index.indexRef(&references.items[i]);
         }
+        try self.account_index.putReferenceBlock(slot, references);
     }
 
     pub inline fn slotListMaxWithinBounds(
@@ -2085,9 +2115,8 @@ test "flushing slots works" {
     const file_id = file_map.keys()[0];
     var account_file_rw = file_map.get(file_id).?;
 
-    var account_file_lg = account_file_rw.write();
+    var account_file, var account_file_lg = account_file_rw.writeWithLock();
     defer account_file_lg.unlock();
-    const account_file = account_file_lg.mut();
     try account_file.validate();
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
@@ -2137,7 +2166,12 @@ test "purge accounts in cache works" {
     accounts_db.purgeSlot(slot, allocator);
 
     // ref backing memory is cleared
-    try std.testing.expect(accounts_db.account_index.reference_memory.count() == 0);
+    {
+        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        defer reference_memory_lg.unlock();
+
+        try std.testing.expect(reference_memory.count() == 0);
+    }
     // account cache is cleared
     {
         var lg = accounts_db.account_cache.read();
@@ -2409,8 +2443,13 @@ test "shrink account file works" {
     file_map_lg.unlock();
 
     // full memory block
-    const ref_mem = accounts_db.account_index.reference_memory.get(new_slot).?;
-    try std.testing.expect(ref_mem.items.len == accounts2.len);
+    {
+        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        defer reference_memory_lg.unlock();
+
+        const slot_mem = reference_memory.get(new_slot).?;
+        try std.testing.expect(slot_mem.items.len == accounts2.len);
+    }
 
     // test: files were shrunk
     const r = try accounts_db.shrinkAccountFiles();
@@ -2432,8 +2471,13 @@ test "shrink account file works" {
     try std.testing.expect(post_shrink_size < pre_shrink_size);
 
     // test: memory block is shrunk too
-    const ref_mem_small = accounts_db.account_index.reference_memory.get(slot).?;
-    try std.testing.expectEqual(1, ref_mem_small.items.len);
+    {
+        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        defer reference_memory_lg.unlock();
+
+        const slot_mem = reference_memory.get(slot).?;
+        try std.testing.expectEqual(1, slot_mem.items.len);
+    }
 
     // last account ref should still be accessible
     var account = try accounts_db.getAccount(&pubkey_remain);
