@@ -49,7 +49,6 @@ pub const DB_MANAGER_UPDATE_NS = 5 * std.time.ns_per_s;
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
-pub const MAX_FLUSH_SLOTS_PER_ITER = 10;
 
 const PubkeysAndAccounts = struct { []Pubkey, []Account };
 const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
@@ -1005,10 +1004,7 @@ pub const AccountsDB = struct {
 
     /// periodically runs flush/clean/shrink
     pub fn runManagerLoop(self: *Self, exit: *std.atomic.Value(bool)) !void {
-        // TODO: decide the best value for this
-        var flush_slots_buf: [MAX_FLUSH_SLOTS_PER_ITER]Slot = undefined;
-        var flush_slots = std.ArrayListUnmanaged(Slot).fromOwnedSlice(&flush_slots_buf);
-        flush_slots.clearRetainingCapacity();
+        var flush_slots = ArrayList(Slot).init(self.allocator);
 
         while (!exit.load(.unordered)) {
             var timer = try std.time.Timer.start();
@@ -1030,11 +1026,9 @@ pub const AccountsDB = struct {
 
                 var cache_slot_iter = account_cache.keyIterator();
                 while (cache_slot_iter.next()) |cache_slot| {
-                    // at capacity - stop
                     if (cache_slot.* <= root_slot) {
-                        flush_slots.appendAssumeCapacity(cache_slot.*);
+                        try flush_slots.append(cache_slot.*);
                     }
-                    if (flush_slots.items.len == flush_slots.capacity) break;
                 }
             }
 
@@ -1045,21 +1039,21 @@ pub const AccountsDB = struct {
                 // flush the slots
                 for (flush_slots.items) |flush_slot| {
                     self.flushSlot(flush_slot) catch |err| {
-                        const trace = @errorReturnTrace().?.*;
-                        std.debug.dumpStackTrace(trace);
+                        // const trace = @errorReturnTrace().?.*;
+                        // std.debug.dumpStackTrace(trace);
 
                         // flush fail = loss of account data on slot -- should never happen
-                        std.debug.panic("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
+                        std.debug.print("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
                     };
                 }
 
-                // clean the flushed slots account files
-                const clean_result = try self.cleanAccountFiles(root_slot);
-                self.logger.debugf("clean_result: {any}", .{clean_result});
+                // // clean the flushed slots account files
+                // const clean_result = try self.cleanAccountFiles(root_slot);
+                // self.logger.debugf("clean_result: {any}", .{clean_result});
 
-                // shrink any account files which have been cleaned
-                const shrink_results = try self.shrinkAccountFiles();
-                self.logger.debugf("shrink_results: {any}", .{shrink_results});
+                // // shrink any account files which have been cleaned
+                // const shrink_results = try self.shrinkAccountFiles();
+                // self.logger.debugf("shrink_results: {any}", .{shrink_results});
             }
 
             // TODO: check for files to delete
@@ -1071,23 +1065,15 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     pub fn flushSlot(self: *Self, slot: Slot) !void {
         const pubkeys, const accounts: []Account = blk: {
-            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
+            // NOTE: flush should the only function to delete/free cache slices of a flushed slot
+            // -- purgeSlot removes slices but we should never purge rooted slots
+            const account_cache, var account_cache_lg = self.account_cache.readWithLock();
             defer account_cache_lg.unlock();
 
             const pubkeys, const accounts = account_cache.get(slot) orelse return error.SlotNotFound;
-            _ = account_cache.remove(slot);
-
             break :blk .{ pubkeys, accounts };
         };
         std.debug.assert(accounts.len == pubkeys.len);
-
-        defer {
-            self.allocator.free(pubkeys);
-            for (accounts) |account| {
-                self.allocator.free(account.data);
-            }
-            self.allocator.free(accounts);
-        }
 
         // create account file which is big enough
         var size: usize = 0;
@@ -1100,23 +1086,11 @@ pub const AccountsDB = struct {
         }
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
 
+        const offsets = try self.allocator.alloc(u64, accounts.len);
+        defer self.allocator.free(offsets);
         var offset: usize = 0;
         for (0..accounts.len) |i| {
-            // update the reference
-            {
-                var head_reference_rw = self.account_index.getReference(&pubkeys[i]) orelse return error.PubkeyNotFound;
-                const head_ref, var head_reference_lg = head_reference_rw.writeWithLock();
-                defer head_reference_lg.unlock();
-
-                // find the slot in the reference list
-                var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-                const ref = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
-                    if (ref.slot == slot) break ref;
-                } else return error.SlotNotFound;
-
-                ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
-            }
-
+            offsets[i] = offset;
             // write the account to the file
             offset += accounts[i].writeToBuf(&pubkeys[i], memory[offset..]);
         }
@@ -1135,8 +1109,43 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
-
             try file_map.putNoClobber(file_id, RwMux(AccountFile).init(account_file));
+        }
+
+        // update the reference AFTER the data exists
+        for (0..accounts.len) |i| {
+            var head_reference_rw = self.account_index.getReference(&pubkeys[i]) orelse return error.PubkeyNotFound;
+            const head_ref, var head_reference_lg = head_reference_rw.writeWithLock();
+            defer head_reference_lg.unlock();
+
+            // find the slot in the reference list
+            var did_update = false;
+            var curr_ref: ?*AccountRef = head_ref.ref_ptr;
+            while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+                if (ref.slot == slot) { 
+                    ref.location = .{ .File = .{ .file_id = file_id, .offset = offsets[i] } };
+                    did_update = true;
+                    break;
+                }
+            }
+            std.debug.assert(did_update);
+        }
+
+        // remove old references 
+        { 
+            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
+            defer account_cache_lg.unlock();
+
+            // remove from cache map 
+            const did_remove = account_cache.remove(slot);
+            std.debug.assert(did_remove);
+
+            // free slices
+            for (accounts) |account| {
+                self.allocator.free(account.data);
+            }
+            self.allocator.free(accounts);
+            self.allocator.free(pubkeys);
         }
 
         // queue for cleaning
@@ -1244,15 +1253,21 @@ pub const AccountsDB = struct {
 
                         // increment dead bytes
                         var ref_account = blk: {
-                            if (ref.location.File.file_id == file_id) {
+                            // NOTE: this requires all rooted slots to be flushed
+                            std.debug.assert(ref.location == .File);
+
+                            const ref_location = ref.location.File;
+                            if (ref_location.file_id == file_id) {
+                                // read from the currently account file since we already have the lock
                                 const account_in_file = try account_file.readAccount(
-                                    ref.location.File.offset,
+                                    ref_location.offset,
                                 );
                                 break :blk try account_in_file.toAccount().clone(self.allocator);
                             } else {
+                                // read from another account file
                                 break :blk try self.getAccountInFile(
-                                    ref.location.File.file_id,
-                                    ref.location.File.offset,
+                                    ref_location.file_id,
+                                    ref_location.offset,
                                 );
                             }
                         };
@@ -1691,12 +1706,14 @@ pub const AccountsDB = struct {
     /// gets an account given an associated pubkey. mut ref is required for locks.
     pub fn getAccount(self: *Self, pubkey: *const Pubkey) !Account {
         var head_ref_rw = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
+
         const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+        defer head_ref_lg.unlock();
+
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        head_ref_lg.unlock();
-
         const account = try self.getAccountFromRef(max_ref);
+
         return account;
     }
 
@@ -1807,14 +1824,17 @@ pub const AccountsDB = struct {
             accounts.len,
         );
         for (0..accounts.len) |i| {
-            const account_ref = AccountRef{
+            const account_ref_ptr = references.addOneAssumeCapacity();
+            account_ref_ptr.* = AccountRef{
                 .pubkey = pubkeys[i],
                 .slot = slot,
                 .location = .{ .Cache = .{ .index = i } },
             };
-            references.appendAssumeCapacity(account_ref);
-            self.account_index.indexRef(&references.items[i]);
+            self.account_index.indexRef(account_ref_ptr);
+
+            std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
         }
+
         try self.account_index.putReferenceBlock(slot, references);
     }
 
