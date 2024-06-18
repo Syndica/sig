@@ -253,7 +253,6 @@ pub const AccountFile = struct {
         }
 
         self.number_of_accounts = number_of_accounts;
-        self.account_bytes = account_bytes;
     }
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)
