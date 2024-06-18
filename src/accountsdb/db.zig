@@ -988,12 +988,13 @@ pub const AccountsDB = struct {
     }
 
     /// periodically runs flush/clean/shrink
-    pub fn runManagerLoop(self: *Self) !void {
+    pub fn runManagerLoop(self: *Self, exit: *std.atomic.Value(bool)) !void {
         // TODO: decide the best value for this
-        const flush_slots_buf: [MAX_FLUSH_SLOTS_PER_ITER]Slot = undefined;
+        var flush_slots_buf: [MAX_FLUSH_SLOTS_PER_ITER]Slot = undefined;
         var flush_slots = std.ArrayListUnmanaged(Slot).fromOwnedSlice(&flush_slots_buf);
+        flush_slots.clearRetainingCapacity();
 
-        while (true) {
+        while (!exit.load(.unordered)) {
             var timer = try std.time.Timer.start();
             defer {
                 const elapsed = timer.read();
@@ -1014,10 +1015,10 @@ pub const AccountsDB = struct {
                 var cache_slot_iter = account_cache.keyIterator();
                 while (cache_slot_iter.next()) |cache_slot| {
                     // at capacity - stop
-                    if (flush_slots.items.len == flush_slots.capacity) break;
-                    if (cache_slot <= root_slot) {
-                        flush_slots.appendAssumeCapacity(cache_slot);
+                    if (cache_slot.* <= root_slot) {
+                        flush_slots.appendAssumeCapacity(cache_slot.*);
                     }
+                    if (flush_slots.items.len == flush_slots.capacity) break;
                 }
             }
 
@@ -1026,14 +1027,15 @@ pub const AccountsDB = struct {
                     // flush fail = loss of account data on slot -- should never happen
                     std.debug.panic("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
                 };
+                flush_slots.clearRetainingCapacity();
             }
 
             // clean the flushed slots account files
             if (flush_slots.items.len > 0) {
-                self.cleanAccountFiles(root_slot);
+                _ = try self.cleanAccountFiles(root_slot);
             }
 
-            self.shrinkAccountFiles();
+            _ = try self.shrinkAccountFiles();
 
             // TODO: check for files to delete
         }

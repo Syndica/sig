@@ -81,7 +81,7 @@ pub fn build(b: *Build) void {
     const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe_run.step);
 
-    // fuzz testing
+    // fuzz test
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
         .root_source_file = b.path("src/fuzz.zig"),
