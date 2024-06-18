@@ -10,6 +10,8 @@ const AccountFile = lib.accounts_db.accounts_file.AccountFile;
 const FileId = lib.accounts_db.accounts_file.FileId;
 const RwMux = lib.sync.RwMux;
 
+// RwMux(Vec<>)
+
 // for sync reasons we need a stable head with a lock
 pub const AccountReferenceHead = RwMux(struct {
     ref_ptr: *AccountRef,
@@ -218,7 +220,7 @@ pub const AccountIndex = struct {
         var curr_reference = head_ref.ref_ptr;
 
         // structure will always be: head -> [a] -> [b] -> [c]
-        // 1) handle base case with head: head -> [a]
+        // 1) handle base case with head: head -> [a] -> [b] => head -> [b]
         // 2) handle normal linked-list case: [a] -> [b] -> [c]
 
         // 1) it relates to the head

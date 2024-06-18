@@ -197,6 +197,7 @@ pub const AccountFile = struct {
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
     // size of accounts which are either old-state or zero-lamport
+    // only used during cleaning
     dead_bytes: usize = 0,
     // is populated when file is read
     // note: need a separate counter vs mmap.len because of padding

@@ -1,44 +1,44 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 const builtin = @import("builtin");
-
-const bincode = @import("../bincode/bincode.zig");
-const sysvars = @import("../accountsdb/sysvars.zig");
+const bincode = sig.bincode;
 
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Blake3 = std.crypto.hash.Blake3;
 
-const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const Account = sig.core.Account;
-const Hash = @import("../core/hash.zig").Hash;
-const Slot = @import("../core/time.zig").Slot;
-const Epoch = @import("../core/time.zig").Epoch;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const AccountsDbFields = @import("../accountsdb/snapshots.zig").AccountsDbFields;
-const AccountFileInfo = @import("../accountsdb/snapshots.zig").AccountFileInfo;
-const AccountFile = @import("../accountsdb/accounts_file.zig").AccountFile;
-const FileId = @import("../accountsdb/accounts_file.zig").FileId;
-const AccountInFile = @import("../accountsdb/accounts_file.zig").AccountInFile;
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const NestedHashTree = @import("../common/merkle_tree.zig").NestedHashTree;
-const SnapshotFields = @import("../accountsdb/snapshots.zig").SnapshotFields;
-const BankIncrementalSnapshotPersistence = @import("../accountsdb/snapshots.zig").BankIncrementalSnapshotPersistence;
-const Bank = @import("bank.zig").Bank;
-const readDirectory = @import("../utils/directory.zig").readDirectory;
-const SnapshotFiles = @import("../accountsdb/snapshots.zig").SnapshotFiles;
-const AllSnapshotFields = @import("../accountsdb/snapshots.zig").AllSnapshotFields;
-const SnapshotFieldsAndPaths = @import("../accountsdb/snapshots.zig").SnapshotFieldsAndPaths;
-const parallelUnpackZstdTarBall = @import("snapshots.zig").parallelUnpackZstdTarBall;
-const Logger = @import("../trace/log.zig").Logger;
-const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
+const Hash = sig.core.hash.Hash;
+const Slot = sig.core.time.Slot;
+const Epoch = sig.core.time.Epoch;
+const Pubkey = sig.core.pubkey.Pubkey;
 
-const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
+const sysvars = sig.accounts_db.sysvars;
+const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
+const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
+const AccountFile = sig.accounts_db.accounts_file.AccountFile;
+const FileId = sig.accounts_db.accounts_file.FileId;
+const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
+const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
+const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
+const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
+const SnapshotFieldsAndPaths = sig.accounts_db.snapshots.SnapshotFieldsAndPaths;
+const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
+const Bank = sig.accounts_db.bank.Bank;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
+const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 
+const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
+const readDirectory = sig.utils.directory.readDirectory;
+const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const RwMux = sig.sync.RwMux;
+const Logger = sig.trace.log.Logger;
+const printTimeEstimate = sig.time.estimate.printTimeEstimate;
+const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
+
+const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
@@ -67,6 +67,7 @@ pub const AccountsDB = struct {
     account_cache: RwMux(AccountCache),
     file_map: RwMux(FileMap),
 
+    // TODO: make these a local field
     // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
     unclean_account_files: std.ArrayList(FileId),
     // files which have a small number of accounts alive and should be shrunk
@@ -112,6 +113,21 @@ pub const AccountsDB = struct {
                 break :blk .{ null, std.heap.page_allocator };
             }
         };
+
+        // ensure accounts/ exists
+        {
+            const accounts_dir = try std.fmt.allocPrint(
+                allocator,
+                "{s}/accounts/",
+                .{config.snapshot_dir},
+            );
+            defer allocator.free(accounts_dir);
+
+            std.fs.cwd().makePath(accounts_dir) catch |err| switch (err) {
+                error.PathAlreadyExists => {},
+                else => |e| return e,
+            };
+        }
 
         const account_index = try AccountIndex.init(
             allocator,
@@ -1022,20 +1038,27 @@ pub const AccountsDB = struct {
                 }
             }
 
-            for (flush_slots.items) |flush_slot| {
-                self.flushSlot(flush_slot) catch |err| {
-                    // flush fail = loss of account data on slot -- should never happen
-                    std.debug.panic("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
-                };
-                flush_slots.clearRetainingCapacity();
-            }
-
-            // clean the flushed slots account files
             if (flush_slots.items.len > 0) {
-                _ = try self.cleanAccountFiles(root_slot);
-            }
+                self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
+                defer flush_slots.clearRetainingCapacity();
 
-            _ = try self.shrinkAccountFiles();
+                // flush the slots
+                for (flush_slots.items) |flush_slot| {
+                    self.flushSlot(flush_slot) catch |err| {
+                        const trace = @errorReturnTrace().?.*;
+                        std.debug.dumpStackTrace(trace);
+
+                        // flush fail = loss of account data on slot -- should never happen
+                        std.debug.panic("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
+                    };
+                }
+
+                // clean the flushed slots account files
+                _ = try self.cleanAccountFiles(root_slot);
+
+                // shrink any account files which have been cleaned
+                _ = try self.shrinkAccountFiles();
+            }
 
             // TODO: check for files to delete
         }
@@ -1110,6 +1133,7 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
+
             try file_map.putNoClobber(file_id, RwMux(AccountFile).init(account_file));
         }
 
@@ -1147,7 +1171,7 @@ pub const AccountsDB = struct {
             // because only shrink or delete modifies the account files
             // in the file map (which never run in parallel to clean)
             var account_file_rw = blk: {
-                const file_map, var file_map_lg = self.file_map.writeWithLock();
+                const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
 
                 break :blk file_map.get(file_id).?;
@@ -1256,6 +1280,10 @@ pub const AccountsDB = struct {
             for (references_to_delete.items) |ref| {
                 try self.account_index.removeReference(&ref.pubkey, ref.slot);
                 // sanity check -- should we keep it here?
+                // @import("builtin") for debug only
+                if (std.debug.runtime_safety) { // only debug/release-safe
+
+                }
                 std.debug.assert(!self.account_index.exists(&ref.pubkey, ref.slot));
             }
             references_to_delete.clearRetainingCapacity();
