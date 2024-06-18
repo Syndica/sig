@@ -64,10 +64,12 @@ pub const TrackedAccount = struct {
 pub fn run(args: *std.process.ArgIterator) !void {
     _ = args;
 
-    const seed = std.crypto.random.int(u64);
+    // const seed = std.crypto.random.int(u64);
+    const seed: u64 = 6461539248993497688;
+    std.debug.print("seed: {}\n", .{seed});
+
     var prng = std.rand.DefaultPrng.init(seed);
     const rand = prng.random();
-    std.debug.print("seed: {}\n", .{seed});
 
     var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa_allocator.allocator();
@@ -91,6 +93,8 @@ pub fn run(args: *std.process.ArgIterator) !void {
     });
     defer accounts_db.deinit(true);
 
+    // try accounts_db.account_index.ensureTotalCapacity(10_000);
+
     const exit = try allocator.create(std.atomic.Value(bool));
     exit.* = std.atomic.Value(bool).init(false);
 
@@ -112,6 +116,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
     var slot: usize = 0;
 
     const Actions = enum { put, get };
+    // var put_count: u64 = 0;
 
     // get/put a bunch of accounts
     var timer = try std.time.Timer.start();
@@ -123,7 +128,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
         switch (action) {
             .put => {
-                const N_ACCOUNTS_PER_SLOT = 5;
+                const N_ACCOUNTS_PER_SLOT = 1;
 
                 const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
                 const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);

@@ -198,10 +198,7 @@ pub const AccountFile = struct {
     number_of_accounts: usize = 0,
     // size of accounts which are either old-state or zero-lamport
     // only used during cleaning
-    dead_bytes: usize = 0,
-    // is populated when file is read
-    // note: need a separate counter vs mmap.len because of padding
-    account_bytes: usize = 0,
+    number_of_dead_accounts: usize = 0,
     // when shrinking or deleting, this is set to true
     deinit_was_called: bool = false,
 
@@ -253,22 +250,6 @@ pub const AccountFile = struct {
 
         if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
             return error.InvalidAccountFileLength;
-        }
-
-        self.number_of_accounts = number_of_accounts;
-        self.account_bytes = account_bytes;
-    }
-
-    pub fn populateMetadata(self: *Self) void {
-        var offset: usize = 0;
-        var number_of_accounts: usize = 0;
-        var account_bytes: usize = 0;
-
-        while (true) {
-            const account = self.readAccount(offset) catch break;
-            offset = offset + account.len;
-            number_of_accounts += 1;
-            account_bytes += account.len;
         }
 
         self.number_of_accounts = number_of_accounts;

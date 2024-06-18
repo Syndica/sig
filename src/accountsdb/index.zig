@@ -55,7 +55,6 @@ pub const AccountIndex = struct {
     bins: []RwMux(RefMap),
     calculator: PubkeyBinCalculator,
 
-    // need the value on the heap for the consistent rw lock
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
 
     const Self = @This();
@@ -102,6 +101,15 @@ pub const AccountIndex = struct {
                 }
             }
             reference_memory.deinit();
+        }
+    }
+
+    pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
+        for (self.bins) |*bin_rw| {
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
+
+            try bin.ensureTotalCapacity(size);
         }
     }
 
@@ -183,9 +191,11 @@ pub const AccountIndex = struct {
 
         const bin, var bin_lg = bin_rw.writeWithLock();
         const result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
-        bin_lg.unlock();
 
         if (result.found_existing) {
+            // we can release the lock now
+            bin_lg.unlock();
+
             // traverse until you find the end
             var head_ref_rw: AccountReferenceHead = result.value_ptr.*;
             const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
@@ -202,6 +212,7 @@ pub const AccountIndex = struct {
             }
         } else {
             result.value_ptr.* = AccountReferenceHead.init(.{ .ref_ptr = account_ref });
+            bin_lg.unlock();
         }
     }
 
