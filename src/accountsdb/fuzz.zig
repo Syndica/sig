@@ -99,13 +99,14 @@ pub fn run(args: *std.process.ArgIterator) !void {
         exit,
     });
 
-    var tracked_accounts = try ArrayList(TrackedAccount).initCapacity(allocator, 10_000);
+    var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(allocator);
     defer {
-        for (tracked_accounts.items) |*account| {
-            account.deinit(allocator);
+        for (tracked_accounts.keys()) |key| {
+            tracked_accounts.getEntry(key).?.value_ptr.deinit(allocator);
         }
         tracked_accounts.deinit();
     }
+    try tracked_accounts.ensureTotalCapacity(10_000);
 
     var largest_rooted_slot: usize = 0;
     var slot: usize = 0;
@@ -120,21 +121,32 @@ pub fn run(args: *std.process.ArgIterator) !void {
         const action_int = rand.intRangeAtMost(u8, 0, 1);
         const action: Actions = @enumFromInt(action_int);
 
-        switch (action) { 
-            .put => { 
+        switch (action) {
+            .put => {
                 const N_ACCOUNTS_PER_SLOT = 5;
 
                 const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
                 const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);
 
                 for (0..N_ACCOUNTS_PER_SLOT) |i| {
-                    const tracked_account = try TrackedAccount.random(rand, slot, allocator);
-                    const account = try tracked_account.toAccount(allocator);
+                    var tracked_account = try TrackedAccount.random(rand, slot, allocator);
 
-                    accounts[i] = account;
+                    const existing_pubkey = rand.boolean();
+                    if (existing_pubkey and tracked_accounts.count() > 0) {
+                        const index = rand.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                        const key = tracked_accounts.keys()[index];
+                        tracked_account.pubkey = key;
+                    }
+
+                    accounts[i] = try tracked_account.toAccount(allocator);
                     pubkeys[i] = tracked_account.pubkey;
 
-                    try tracked_accounts.append(tracked_account);
+                    const r = try tracked_accounts.getOrPut(tracked_account.pubkey);
+                    if (r.found_existing) {
+                        r.value_ptr.deinit(allocator);
+                    }
+                    // always overwrite the old slot
+                    r.value_ptr.* = tracked_account;
                 }
 
                 try accounts_db.putAccountSlice(
@@ -142,9 +154,22 @@ pub fn run(args: *std.process.ArgIterator) !void {
                     pubkeys,
                     slot,
                 );
-            }, 
-            .get => { 
+            },
+            .get => {
+                const n_keys = tracked_accounts.count();
+                if (n_keys == 0) {
+                    continue;
+                }
+                const index = rand.intRangeAtMost(usize, 0, tracked_accounts.count() - 1);
+                const key = tracked_accounts.keys()[index];
 
+                const tracked_account = tracked_accounts.get(key).?;
+                var account = try accounts_db.getAccount(&tracked_account.pubkey);
+                defer account.deinit(allocator);
+
+                if (!std.mem.eql(u8, tracked_account.data, account.data)) {
+                    @panic("found accounts with different data");
+                }
             },
         }
 

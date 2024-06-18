@@ -1054,10 +1054,12 @@ pub const AccountsDB = struct {
                 }
 
                 // clean the flushed slots account files
-                _ = try self.cleanAccountFiles(root_slot);
+                const clean_result = try self.cleanAccountFiles(root_slot);
+                self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                _ = try self.shrinkAccountFiles();
+                const shrink_results = try self.shrinkAccountFiles();
+                self.logger.debugf("shrink_results: {any}", .{shrink_results});
             }
 
             // TODO: check for files to delete
