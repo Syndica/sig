@@ -58,19 +58,22 @@ pub const StakedNode = struct { id: Pubkey, stake: u64 };
 
 pub fn leaderSchedule(
     allocator: Allocator,
-    staked_nodes: *const std.AutoHashMap(Pubkey, u64),
+    staked_nodes: *const std.AutoArrayHashMap(Pubkey, u64),
     slots_in_epoch: Slot,
     epoch: Epoch,
 ) Allocator.Error![]Pubkey {
-    const Entry = std.AutoHashMap(Pubkey, u64).Entry;
+    const Entry = std.AutoArrayHashMap(Pubkey, u64).Entry;
 
     const nodes = try allocator.alloc(Entry, staked_nodes.count());
     defer allocator.free(nodes);
-    var iter = staked_nodes.iterator();
-    var index: usize = 0;
-    while (iter.next()) |staked_node_entry| : (index += 1) {
-        nodes[index] = staked_node_entry;
+
+    for (nodes, staked_nodes.keys(), staked_nodes.values()) |*node, *key_ptr, *value_ptr| {
+        node.* = .{
+            .key_ptr = key_ptr,
+            .value_ptr = value_ptr,
+        };
     }
+
     std.mem.sortUnstable(Entry, nodes, {}, struct {
         fn gt(_: void, lhs: Entry, rhs: Entry) bool {
             return switch (std.math.order(lhs.value_ptr.*, rhs.value_ptr.*)) {
@@ -161,7 +164,7 @@ test "leaderSchedule calculation matches agave" {
     var rng = ChaChaRng(20).fromSeed(.{0} ** 32);
     const random = rng.random();
     var pubkey_bytes: [32]u8 = undefined;
-    var staked_nodes = std.AutoHashMap(Pubkey, u64).init(std.testing.allocator);
+    var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(std.testing.allocator);
     defer staked_nodes.deinit();
     for (0..100) |_| {
         random.bytes(&pubkey_bytes);

@@ -806,7 +806,7 @@ fn loadFromSnapshot(
         }
         return err;
     };
-    defer status_cache.deinit();
+    defer status_cache.deinit(allocator);
 
     var slot_history = try output.accounts_db.getSlotHistory();
     defer slot_history.deinit(output.accounts_db.allocator);
