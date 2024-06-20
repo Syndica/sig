@@ -1,3 +1,5 @@
+//! system variables definitions and addresses (clock, slot_history, …)
+
 const std = @import("std");
 const ArrayList = std.ArrayList;
 
@@ -16,11 +18,14 @@ const BitVecConfig = @import("../bloom/bit_vec.zig").BitVecConfig;
 const bincode = @import("../bincode/bincode.zig");
 
 pub const MAX_ENTRIES: u64 = 1024 * 1024; // 1 million slots is about 5 days
+/// Analogous to [Check](https://github.com/anza-xyz/agave/blob/fc2a8794be2526e9fd6cdbc9b304c055b2d9cc57/sdk/program/src/slot_history.rs#L46)
 pub const SlotCheckResult = enum { Future, TooOld, Found, NotFound };
 
-// note: depreciated sysvars not included:
-// - fees
-// - recent_blockhashes
+/// note: depreciated sysvars not included:
+/// - fees
+/// - recent_blockhashes
+///
+/// Analogous to [SysvarCache](https://github.com/anza-xyz/agave/blob/ebd063eb79c6e2f14da660ccfc90f1d4c0b7db1f/program-runtime/src/sysvar_cache.rs#L28)
 pub const IDS = struct {
     pub const clock = Pubkey.fromString("SysvarC1ock11111111111111111111111111111111") catch unreachable;
     pub const epoch_schedule = Pubkey.fromString("SysvarEpochSchedu1e111111111111111111111111") catch unreachable;
@@ -32,6 +37,7 @@ pub const IDS = struct {
     pub const last_restart_slot = Pubkey.fromString("SysvarLastRestartS1ot1111111111111111111111") catch unreachable;
 };
 
+/// Analogous to [Clock](https://github.com/anza-xyz/agave/blob/fc2a8794be2526e9fd6cdbc9b304c055b2d9cc57/sdk/program/src/clock.rs#L180)
 pub const Clock = extern struct {
     /// The current `Slot`.
     slot: Slot,
@@ -54,6 +60,7 @@ pub const Clock = extern struct {
     unix_timestamp: UnixTimestamp,
 };
 
+/// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/epoch_schedule.rs#L35)
 pub const EpochSchedule = struct {
     /// The maximum number of slots in each epoch.
     slots_per_epoch: u64,
@@ -76,6 +83,7 @@ pub const EpochSchedule = struct {
     first_normal_slot: Slot,
 };
 
+/// Analogous to [UiEpochRewards](https://github.com/anza-xyz/agave/blob/cf1299a871b5299e70c97f5ad0de3bc3aca0f84a/account-decoder/src/parse_sysvar.rs#L244)
 pub const EpochRewards = struct {
     /// total rewards for the current epoch, in lamports
     total_rewards: u64,
@@ -88,6 +96,7 @@ pub const EpochRewards = struct {
     distribution_complete_block_height: u64,
 };
 
+/// Analogous to [UiRent](https://github.com/anza-xyz/agave/blob/cf1299a871b5299e70c97f5ad0de3bc3aca0f84a/account-decoder/src/parse_sysvar.rs#L163)
 pub const Rent = struct {
     /// Rental rate in lamports/byte-year.
     lamports_per_byte_year: u64,
@@ -104,17 +113,22 @@ pub const Rent = struct {
 };
 
 const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
+
+/// Analogous to [SysvarAccountType::SlotHashes](https://github.com/anza-xyz/agave/blob/cf1299a871b5299e70c97f5ad0de3bc3aca0f84a/account-decoder/src/parse_sysvar.rs#L118C5-L118C15)
 pub const SlotHashes = ArrayList(SlotAndHash);
 
+/// Analogous to [SysvarAccountType::StakeHistory](https://github.com/anza-xyz/agave/blob/cf1299a871b5299e70c97f5ad0de3bc3aca0f84a/account-decoder/src/parse_sysvar.rs#L120)
 pub const StakeHistory = ArrayList(struct {
     epoch: Epoch,
     stake_history_entry: StakeHistoryEntry,
 });
 
+/// Analogous to [SysvarAccountType::LastRestartSlot](https://github.com/anza-xyz/agave/blob/cf1299a871b5299e70c97f5ad0de3bc3aca0f84a/account-decoder/src/parse_sysvar.rs#L121)
 pub const LastRestartSlot = struct {
     last_restart_slot: Slot,
 };
 
+/// Analogous to [UiSlotHistory](https://github.com/anza-xyz/agave/blob/cf1299a871b5299e70c97f5ad0de3bc3aca0f84a/account-decoder/src/parse_sysvar.rs#L209)
 pub const SlotHistory = struct {
     bits: DynamicArrayBitSet(u64),
     next_slot: Slot,
