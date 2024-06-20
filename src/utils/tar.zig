@@ -86,8 +86,10 @@ pub fn parallelUntarToFileSystem(
     const strip_components: u32 = 0;
     loop: while (true) {
         const header_buf = try allocator.alloc(u8, 512);
-        if (try reader.readAtLeast(header_buf, 512) != 512) {
-            std.debug.panic("Actual file size too small for header (< 512).", .{});
+        switch (try reader.readAtLeast(header_buf, 512)) {
+            0 => break,
+            512 => {},
+            else => |actual_size| std.debug.panic("Actual file size ({d}) too small for header (< 512).", .{actual_size}),
         }
 
         const header: TarHeaderMinimal = .{ .bytes = header_buf[0..512] };
