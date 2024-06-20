@@ -10,14 +10,16 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const AccountFileInfo = @import("snapshots.zig").AccountFileInfo;
 
 /// Simple strictly-typed alias for an integer, used to represent a file ID.
-pub const FileId = enum(u32) {
+pub const FileId = enum(Int) {
     _,
+
+    pub const Int = u32;
 
     pub inline fn fromInt(int: u32) FileId {
         return @enumFromInt(int);
     }
 
-    pub inline fn toInt(file_id: FileId) u32 {
+    pub inline fn toInt(file_id: FileId) Int {
         return @intFromEnum(file_id);
     }
 
