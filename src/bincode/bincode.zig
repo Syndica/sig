@@ -3,6 +3,7 @@ pub const shortvec = @import("shortvec.zig");
 pub const varint = @import("varint.zig");
 
 const std = @import("std");
+const sig = @import("../lib.zig");
 
 const testing = std.testing;
 
@@ -91,21 +92,26 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
         .Struct => |info| {
             var data: T = undefined;
 
-            if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
-                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
-                const ElementType = @typeInfo(T.Slice).Pointer.child;
+            if (comptime sig.utils.types.arrayListInfo(T)) |al_info| {
+                const ElementType = al_info.Elem;
                 const len = try bincode.read(allocator, u64, reader, params);
                 data = try T.initCapacity(allocator, len);
                 for (0..len) |_| {
                     data.appendAssumeCapacity(try bincode.read(allocator, ElementType, reader, params));
                 }
-            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
-                const K = std.meta.fieldInfo(T.KV, .key).type;
-                const V = std.meta.fieldInfo(T.KV, .value).type;
+            } else if (comptime sig.utils.types.hashMapInfo(T)) |hm_info| {
+                const K = hm_info.Key;
+                const V = hm_info.Value;
                 const len = try bincode.read(allocator, u64, reader, params);
 
-                data = T.init(allocator);
-                try data.ensureTotalCapacity(@intCast(len));
+                data = switch (hm_info.management) {
+                    .managed => T.init(allocator),
+                    .unmanaged => .{},
+                };
+                switch (hm_info.management) {
+                    .managed => try data.ensureTotalCapacity(@intCast(len)),
+                    .unmanaged => try data.ensureTotalCapacity(allocator, @intCast(len)),
+                }
                 for (0..len) |_| {
                     const key = try bincode.read(allocator, K, reader, params);
                     const value = try bincode.read(allocator, V, reader, params);
