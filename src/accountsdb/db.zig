@@ -1,3 +1,5 @@
+//! includes the main database struct `AccountsDB`
+
 const std = @import("std");
 const builtin = @import("builtin");
 const ArrayList = std.ArrayList;
@@ -43,6 +45,7 @@ pub const ACCOUNT_INDEX_BINS: usize = 8192;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 
+/// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
 pub const AccountsDBConfig = struct {
     // number of Accounts to preallocate for cache
     storage_cache_size: usize = 0,
@@ -57,6 +60,8 @@ pub const AccountsDBConfig = struct {
 };
 
 /// database for accounts
+///
+/// Analogous to [AccountsDb](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1363)
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
 
@@ -1022,6 +1027,8 @@ pub const AccountsDB = struct {
 };
 
 /// where accounts are stored
+///
+/// Analogous to [AccountStorage](https://github.com/anza-xyz/agave/blob/9a7bada2284e06e421db6186b6d9c715d9eb56cb/accounts-db/src/account_storage.rs#L24)
 pub const AccountStorage = struct {
     file_map: std.AutoArrayHashMap(FileId, AccountFile),
     cache: std.ArrayList(Account),
