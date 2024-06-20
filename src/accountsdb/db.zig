@@ -39,6 +39,8 @@ const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
+const ClientVersion = sig.version.ClientVersion;
+const StatusCache = sig.accounts_db.StatusCache;
 
 const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
@@ -2132,7 +2134,142 @@ const CountingAllocator = struct {
     }
 };
 
+pub fn writeSnapshotTar(
+    allocator: std.mem.Allocator,
+    archive_writer: anytype,
+    version: ClientVersion,
+    status_cache: StatusCache,
+    snapshot_fields: SnapshotFields,
+    storage: AccountStorage,
+) !void {
+    _ = allocator;
+    const slot: Slot = snapshot_fields.bank_fields.slot;
+
+    var counting_writer_state = std.io.countingWriter(archive_writer);
+    const writer = counting_writer_state.writer();
+
+    { // write the version file
+        var version_str_buf: [5]u8 = undefined;
+        const version_str = try std.fmt.bufPrint(&version_str_buf, "{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+        try writeTarHeader(writer, .regular, "version", version_str.len);
+        try writer.writeAll(version_str);
+        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+    }
+
+    // create the snapshots dir
+    try writeTarHeader(writer, .directory, "snapshots/", 0);
+
+    // write the status cache
+    try writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+    try bincode.write(writer, status_cache, .{});
+    try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+
+    { // write the manifest
+        const manifest = snapshot_fields;
+        const manifest_encoded_size = bincode.sizeOf(manifest, .{});
+
+        var str_buf: [std.fmt.count("snapshots/{0d}/{0d}", .{std.math.maxInt(Slot)})]u8 = undefined;
+        try writeTarHeader(writer, .directory, std.fmt.bufPrint(&str_buf, "snapshots/{d}/", .{slot}) catch unreachable, 0);
+        try writeTarHeader(writer, .regular, std.fmt.bufPrint(&str_buf, "snapshots/{0d}/{0d}", .{slot}) catch unreachable, manifest_encoded_size);
+        try bincode.write(writer, manifest, .{});
+        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+    }
+
+    // create the accounts dir
+    try writeTarHeader(writer, .directory, "accounts/", 0);
+
+    for (storage.file_map.keys(), storage.file_map.values()) |file_id, acc_file| {
+        if (acc_file.slot < slot) continue;
+        var name_buf: [std.fmt.count("accounts/{d}.{d}", .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) })]u8 = undefined;
+        try writeTarHeader(writer, .regular, std.fmt.bufPrint(&name_buf, "accounts/{d}.{d}", .{ slot, file_id.toInt() }) catch unreachable, acc_file.memory.len);
+        try writer.writeAll(acc_file.memory);
+        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+        counting_writer_state.bytes_written %= 512;
+        std.debug.assert(counting_writer_state.bytes_written == 0);
+    }
+
+    // write the sentinel blocks
+    try writer.writeByteNTimes(0, 512 * 2);
+}
+
+const TarOutputHeader = std.tar.output.Header;
+fn writeTarHeader(writer: anytype, typeflag: TarOutputHeader.FileType, path: []const u8, size: u64) !void {
+    var header = TarOutputHeader.init();
+    _ = try std.fmt.bufPrint(&header.name, "{s}", .{path});
+    try header.setSize(size);
+    header.typeflag = typeflag;
+
+    const mode: u21 = switch (typeflag) {
+        // allow read & write, but not execution by anyone
+        .regular => 0o666,
+
+        // allow read, write, and traversal by anyone
+        .directory => 0o777,
+
+        // we don't really use anything else, so just set no permissions so that it's obvious something is wrong if this somehow occurs
+        else => 0,
+    };
+    _ = std.fmt.bufPrint(&header.mode, "{o:0>7}", .{mode}) catch unreachable;
+
+    try header.updateChecksum();
+    try writer.writeAll(std.mem.asBytes(&header));
+}
+
+/// Returns the number of padding bytes that must be written in order to have a round 512 byte block.
+/// The result is 0 if the number of bytes written already form a round 512 byte block, or if there
+/// are 0 bytes written.
+fn paddingBytes(
+    /// The actual number of bytes written, or the number of bytes written modulo 512.
+    bytes_written_maybe_modulo: u64,
+) std.math.IntFittingRange(0, 512 - 1) {
+    const modulo = bytes_written_maybe_modulo % 512;
+    if (modulo == 0) return 0; // we don't want any padding if it's already a round 512 block
+    return @intCast(512 - modulo);
+}
+
+/// where accounts are stored
+pub const AccountStorage = struct {
+    file_map: std.AutoArrayHashMap(FileId, AccountFile),
+    cache: std.ArrayList(Account),
+
+    pub fn init(allocator: std.mem.Allocator, cache_size: usize) !AccountStorage {
+        return AccountStorage{
+            .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
+            .cache = try std.ArrayList(Account).initCapacity(allocator, cache_size),
+        };
+    }
+
+    pub fn deinit(self: *AccountStorage) void {
+        for (self.file_map.values()) |*af| {
+            af.deinit();
+        }
+        self.file_map.deinit();
+        self.cache.deinit();
+    }
+
+    pub fn getAccountFile(self: *const AccountStorage, file_id: FileId) ?AccountFile {
+        return self.file_map.get(file_id);
+    }
+
+    /// gets an account given an file_id and offset value
+    pub fn getAccountInFile(
+        self: *const AccountStorage,
+        file_id: FileId,
+        offset: usize,
+    ) !AccountInFile {
+        const accounts_file: AccountFile = self.getAccountFile(file_id) orelse {
+            return error.FileIdNotFound;
+        };
+        const account = accounts_file.readAccount(offset) catch {
+            return error.InvalidOffset;
+        };
+        return account;
+    }
+};
+
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
+    std.debug.assert(builtin.is_test); // should only be used in tests
+
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
