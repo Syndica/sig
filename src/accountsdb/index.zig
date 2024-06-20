@@ -151,7 +151,8 @@ pub const AccountIndex = struct {
         return does_exists;
     }
 
-    /// adds the reference to the index if there is not a duplicate (ie, the same slot)
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
+    /// returns if the reference was inserted.
     pub fn indexRefIfNotDuplicateSlot(self: *Self, account_ref: *AccountRef) bool {
         const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
 

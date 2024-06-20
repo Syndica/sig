@@ -128,7 +128,11 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
         switch (action) {
             .put => {
-                const N_ACCOUNTS_PER_SLOT = 1;
+                // if (put_count == 5) {
+                //     continue;
+                // }
+                // put_count += 1;
+                const N_ACCOUNTS_PER_SLOT = 10;
 
                 const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
                 const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);

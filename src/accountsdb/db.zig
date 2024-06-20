@@ -54,6 +54,31 @@ const PubkeysAndAccounts = struct { []Pubkey, []Account };
 const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
 const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
 
+const Registry = sig.prometheus.registry.Registry;
+const globalRegistry = sig.prometheus.registry.globalRegistry;
+const GetMetricError = sig.prometheus.registry.GetMetricError;
+const Counter = sig.prometheus.counter.Counter;
+
+pub const AccountsDBStats = struct {
+    number_files_flushed: *Counter,
+    number_files_cleaned: *Counter,
+    number_files_shrunk: *Counter,
+    number_files_deleted: *Counter,
+
+    const Self = @This();
+
+    pub fn init() GetMetricError!Self {
+        var self: Self = undefined;
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(Self).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
+            @field(self, field.name) = field_counter;
+        }
+        return self;
+    }
+};
+
 /// database for accounts
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
@@ -81,6 +106,7 @@ pub const AccountsDB = struct {
     // TODO: when working on consensus, we'll swap this out
     largest_root_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
 
+    stats: AccountsDBStats,
     logger: Logger,
     config: AccountsDBConfig,
     fields: ?AccountsDbFields = null,
@@ -134,6 +160,8 @@ pub const AccountsDB = struct {
             config.num_index_bins,
         );
 
+        const stats = try AccountsDBStats.init();
+
         return .{
             .allocator = allocator,
             .disk_allocator_ptr = maybe_disk_allocator_ptr,
@@ -145,6 +173,7 @@ pub const AccountsDB = struct {
             .unclean_account_files = std.ArrayList(FileId).init(allocator),
             .shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
             .delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
+            .stats = stats,
         };
     }
 
@@ -963,6 +992,8 @@ pub const AccountsDB = struct {
         total_lamports.* = local_total_lamports;
     }
 
+    /// creates a unique accounts file associated with a slot. uses the
+    /// largest_file_id field to ensure its a unique file
     pub fn createAccountFile(self: *Self, size: usize, slot: Slot) !struct {
         std.fs.File,
         FileId,
@@ -977,7 +1008,7 @@ pub const AccountsDB = struct {
             .{ self.config.snapshot_dir, slot, file_id.toInt() },
         );
         defer self.allocator.free(accounts_file_path);
-        self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
+        // self.logger.infof("writing slot accounts file: {s} with {d} bytes", .{ accounts_file_path, size });
 
         const file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
         errdefer file.close();
@@ -1027,6 +1058,9 @@ pub const AccountsDB = struct {
                 var cache_slot_iter = account_cache.keyIterator();
                 while (cache_slot_iter.next()) |cache_slot| {
                     if (cache_slot.* <= root_slot) {
+                        // NOTE: need to flush all references <= root_slot before we call clean
+                        // or things break by trying to clean cache references
+                        // NOTE: this might be too much in production, not sure
                         try flush_slots.append(cache_slot.*);
                     }
                 }
@@ -1051,9 +1085,10 @@ pub const AccountsDB = struct {
                 // shrink any account files which have been cleaned
                 const shrink_results = try self.shrinkAccountFiles();
                 self.logger.debugf("shrink_results: {any}", .{shrink_results});
-            }
 
-            // TODO: check for files to delete
+                // delete any empty account files
+                self.deleteAccountFiles();
+            }
         }
     }
 
@@ -1061,6 +1096,8 @@ pub const AccountsDB = struct {
     /// note: this deallocates the []account and []pubkey data from the cache, as well
     /// as the data field ([]u8) for each account.
     pub fn flushSlot(self: *Self, slot: Slot) !void {
+        defer self.stats.number_files_flushed.inc();
+
         const pubkeys, const accounts: []Account = blk: {
             // NOTE: flush should the only function to delete/free cache slices of a flushed slot
             // -- purgeSlot removes slices but we should never purge rooted slots
@@ -1119,6 +1156,10 @@ pub const AccountsDB = struct {
                 if (ref.slot == slot) {
                     ref.location = .{ .File = .{ .file_id = file_id, .offset = offsets[i] } };
                     did_update = true;
+                    // NOTE: we break here because we dont allow multiple account states per slot
+                    // NOTE: if there are multiple states, then it will likely break during clean
+                    // trying to access a .File location which is actually still .Cache (bc it
+                    // was never updated)
                     break;
                 }
             }
@@ -1152,15 +1193,20 @@ pub const AccountsDB = struct {
     /// a small number of 'alive' accounts.
     ///
     /// note: this method should not be called in parallel to shrink or delete.
-    pub fn cleanAccountFiles(self: *Self, highest_rooted_slot: Slot) !struct {
+    pub fn cleanAccountFiles(self: *Self, rooted_slot_max: Slot) !struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
         defer self.unclean_account_files.clearRetainingCapacity();
+        defer {
+            const number_of_files = self.unclean_account_files.items.len;
+            self.stats.number_files_cleaned.add(number_of_files);
+        }
 
         var num_zero_lamports: usize = 0;
         var num_old_states: usize = 0;
 
+        // TODO: move this out into a CleanState struct to reduce allocations
         // track then delete all to avoid deleting while iterating
         var references_to_delete = std.ArrayList(*AccountRef).init(self.allocator);
         defer references_to_delete.deinit();
@@ -1170,23 +1216,21 @@ pub const AccountsDB = struct {
         defer cleaned_pubkeys.deinit();
 
         for (self.unclean_account_files.items) |file_id| {
-            // SAFE: this should always succeed or something is wrong
-
-            // NOTE: reading account_files without a lock is safe
-            // because only shrink or delete modifies the account files
-            // in the file map (which never run in parallel to clean)
             var account_file_rw = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
 
+                // SAFE: this should always succeed or something is wrong
                 break :blk file_map.get(file_id).?;
             };
 
             // NOTE: this read-lock is held for a while but
-            // is not expensive since modifications only happen
-            // during shrink/delete
+            // is not expensive since writes only happen
+            // during shrink/delete (which dont happen in parallel to this fcn)
             const account_file, var account_file_lg = account_file_rw.readWithLock();
             defer account_file_lg.unlock();
+
+            self.logger.infof("cleaning slot: {}...", .{account_file.slot});
 
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
@@ -1202,17 +1246,17 @@ pub const AccountsDB = struct {
                 defer head_ref_lg.unlock();
 
                 // get the highest slot <= highest_rooted_slot
-                var highest_ref_slot: usize = 0;
+                var ref_slot_max: usize = 0;
                 var rooted_ref_count: usize = 0;
                 var curr: ?*AccountRef = head_ref.ref_ptr;
                 while (curr) |ref| : (curr = ref.next_ptr) {
                     // only track states less than the rooted slot (ie, they are also rooted)
-                    const is_not_rooted = ref.slot > highest_rooted_slot;
+                    const is_not_rooted = ref.slot > rooted_slot_max;
                     if (is_not_rooted) continue;
 
-                    const is_larger_slot = ref.slot > highest_ref_slot or rooted_ref_count == 0;
+                    const is_larger_slot = ref.slot > ref_slot_max or rooted_ref_count == 0;
                     if (is_larger_slot) {
-                        highest_ref_slot = ref.slot;
+                        ref_slot_max = ref.slot;
                     }
                     rooted_ref_count += 1;
                 }
@@ -1223,19 +1267,19 @@ pub const AccountsDB = struct {
                 // if there are extra references, remove them
                 curr = head_ref.ref_ptr;
                 while (curr) |ref| : (curr = ref.next_ptr) {
-                    const is_not_rooted = ref.slot > highest_rooted_slot;
+                    const is_not_rooted = ref.slot > rooted_slot_max;
                     if (is_not_rooted) continue;
 
                     // the only reason to delete the highest ref is if it is zero-lamports
-                    const is_highest_ref_slot = ref.slot == highest_ref_slot;
                     var is_zero_lamports = false;
-                    if (is_highest_ref_slot) {
+                    const is_ref_slot_max = ref.slot == ref_slot_max;
+                    if (is_ref_slot_max) {
                         // check if account is zero-lamports
                         const ref_info = try self.getAccountHashAndLamportsFromRef(ref);
                         is_zero_lamports = ref_info.lamports == 0;
                     }
 
-                    const is_old_state = ref.slot < highest_ref_slot;
+                    const is_old_state = ref.slot < ref_slot_max;
 
                     if (is_old_state) num_old_states += 1;
                     if (is_zero_lamports) num_zero_lamports += 1;
@@ -1245,16 +1289,17 @@ pub const AccountsDB = struct {
                         // queeue for deletion
                         try references_to_delete.append(ref);
 
+                        // NOTE: we dont delete references which point to the cache
                         const ref_file_id = ref.location.File.file_id;
 
-                        const accounts_alive_count, const accounts_dead_count = blk: {
+                        const accounts_count, const accounts_dead_count = blk: {
                             if (ref_file_id.toInt() == file_id.toInt()) { // update the current account file
                                 // TODO: maybe dont do this
                                 // SAFE: this is the **only** place where dead_bytes is modified
                                 account_file_lg.private.v.number_of_dead_accounts += 1;
                                 const number_of_dead_accounts = account_file_lg.private.v.number_of_dead_accounts;
 
-                                break :blk .{ number_of_dead_accounts, account_file.number_of_accounts };
+                                break :blk .{ account_file.number_of_accounts, number_of_dead_accounts };
                             } else {
                                 const file_map, var file_map_lg = self.file_map.readWithLock();
                                 defer file_map_lg.unlock();
@@ -1265,15 +1310,21 @@ pub const AccountsDB = struct {
 
                                 ref_account_file.number_of_dead_accounts += 1;
 
-                                break :blk .{ ref_account_file.number_of_dead_accounts, ref_account_file.number_of_accounts };
+                                break :blk .{ ref_account_file.number_of_accounts, ref_account_file.number_of_dead_accounts };
                             }
                         };
-                        std.debug.assert(accounts_dead_count <= accounts_alive_count);
+                        std.debug.assert(accounts_dead_count <= accounts_count);
 
-                        const dead_percentage = 100 * accounts_dead_count / accounts_alive_count;
+                        const dead_percentage = 100 * accounts_dead_count / accounts_count;
                         if (dead_percentage == 100) {
                             // queue for delete
                             try self.delete_account_files.put(file_id, {});
+
+                            // if its queued for shrink, remove it
+                            if (self.shrink_account_files.contains(file_id)) {
+                                const did_remove = self.shrink_account_files.swapRemove(file_id);
+                                std.debug.assert(did_remove);
+                            }
                         } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
                             // queue for shrink
                             try self.shrink_account_files.put(file_id, {});
@@ -1305,9 +1356,13 @@ pub const AccountsDB = struct {
     /// exist in the index).
     pub fn deleteAccountFiles(self: *Self) void {
         defer self.delete_account_files.clearRetainingCapacity();
+        defer {
+            const number_of_files = self.delete_account_files.count();
+            self.stats.number_files_deleted.add(number_of_files);
+        }
 
         for (self.delete_account_files.keys()) |file_id| {
-            var account_file_rw = blk: {
+            var account_file_rw: RwMux(AccountFile) = blk: {
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
 
@@ -1320,6 +1375,8 @@ pub const AccountsDB = struct {
             };
 
             const account_file, var account_file_lg = account_file_rw.writeWithLock();
+            // sanity check
+            std.debug.assert(account_file.number_of_dead_accounts == account_file.number_of_dead_accounts);
             account_file.deinit();
             account_file_lg.unlock();
 
@@ -1339,6 +1396,7 @@ pub const AccountsDB = struct {
         slot: Slot,
         file_id: FileId,
     ) !void {
+        // TODO: pull this format out into a formatting function which is used in create too
         const accounts_file_path = try std.fmt.allocPrint(
             self.allocator,
             "{s}/accounts/{d}.{d}",
@@ -1358,6 +1416,10 @@ pub const AccountsDB = struct {
     /// resizes account files to reduce disk usage and remove dead accounts.
     pub fn shrinkAccountFiles(self: *Self) !struct { num_accounts_deleted: usize } {
         defer self.shrink_account_files.clearRetainingCapacity();
+        defer {
+            const number_of_files = self.shrink_account_files.count();
+            self.stats.number_files_shrunk.add(number_of_files);
+        }
 
         var total_accounts_deleted: u64 = 0;
         for (self.shrink_account_files.keys()) |shrink_file_id| {
@@ -1369,24 +1431,20 @@ pub const AccountsDB = struct {
 
             // compute size of alive accounts (read)
             const alive_accounts_size, const num_alive_accounts, const num_accounts_deleted, const slot = blk: {
-                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.readWithLock();
+                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.writeWithLock();
                 defer shrink_account_file_lg.unlock();
 
                 var num_accounts_deleted: u64 = 0;
                 var alive_accounts_size: u64 = 0;
                 var num_alive_accounts: u64 = 0;
                 var account_iter = shrink_account_file.iterator();
-                while (account_iter.next()) |*account| {
-                    const pubkey = account.pubkey();
+                while (account_iter.next()) |*account_in_file| {
+                    const pubkey = account_in_file.pubkey();
                     // account is dead if it is not in the index; dead accounts
                     // are removed from the index during cleaning
                     const is_account_alive = self.account_index.exists(pubkey, shrink_account_file.slot);
                     if (is_account_alive) {
-                        alive_accounts_size += std.mem.alignForward(
-                            usize,
-                            AccountInFile.STATIC_SIZE + account.data.len,
-                            @sizeOf(u64),
-                        );
+                        alive_accounts_size += account_in_file.getSizeInFile();
                         num_alive_accounts += 1;
                     } else {
                         num_accounts_deleted += 1;
@@ -1394,7 +1452,7 @@ pub const AccountsDB = struct {
                 }
                 // if there are no alive accounts, it should have been queued for deletion
                 std.debug.assert(num_alive_accounts > 0);
-                // if there are no dead accounts, it should have not been queued for deletion
+                // if there are no dead accounts, it should have not been queued for shrink
                 std.debug.assert(num_accounts_deleted > 0);
 
                 break :blk .{
@@ -1447,52 +1505,10 @@ pub const AccountsDB = struct {
                         const new_ref_ptr = new_ref_list.addOneAssumeCapacity();
                         new_ref_ptr.* = new_ref;
 
-                        // TODO: maybe just do a remove + add instead of updating below
-
-                        // update the reference value to be new_ref_ptr
-                        // const bin_rw = self.account_index.getBinFromPubkey(pubkey);
-                        // const bin, var bin_lg = bin_rw.readWithLock();
-
+                        // remove + re-add new reference
                         head_ref_lg.unlock();
                         try self.account_index.removeReference(pubkey, slot);
                         self.account_index.indexRef(new_ref_ptr);
-
-                        // const ref_ptr_ptr: **AccountRef = bin.getPtr(pubkey.*) orelse unreachable;
-                        // bin_lg.unlock();
-
-                        // TODO: lock the ref_ptr list
-
-                        // this is the old ptr value
-                        // NOTE: we NEED a double pointer so that we can update it to *point* to the new value
-                        // - this means either updating the hashmap pointer
-                        // - or updating the linked list next_ptr field
-
-                        // // base case: element is at the head
-                        // const rw_mux = &ref_ptr_ptr.*.rw_mux;
-                        // rw_mux.lock();
-                        // defer rw_mux.unlock();
-
-                        // if (ref_ptr_ptr.*.slot == slot) {
-                        //     // note: this is ok because new_ref_ptr has the same next_ptr already
-                        //     ref_ptr_ptr.* = new_ref_ptr;
-                        // } else {
-                        //     // other cases: element is not at the head - need to update next pointer
-                        //     var prev_ptr = ref_ptr_ptr.*;
-                        //     // SAFE: we know this next_ptr is non_null because `slot` is not at the head and must exist
-                        //     var curr_ptr = prev_ptr.next_ptr.?;
-                        //     while (true) {
-                        //         if (curr_ptr.slot == slot) {
-                        //             // a -> b*
-                        //             prev_ptr.next_ptr = new_ref_ptr;
-                        //             // b* -> c
-                        //             new_ref_ptr.next_ptr = curr_ptr.next_ptr;
-                        //             break;
-                        //         }
-                        //         // SAFE: we know this next_ptr is non_null because `slot` was not found yet and must exist
-                        //         prev_ptr = curr_ptr;
-                        //         curr_ptr = curr_ptr.next_ptr.?;
-                        //     }
-                        // }
 
                         // write to new account file
                         offset += account.writeToBuf(new_memory[offset..]);
@@ -1768,7 +1784,16 @@ pub const AccountsDB = struct {
 
         // compute how many account_references for each pubkey
         for (references.items) |*ref| {
-            self.account_index.indexRef(ref);
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref);
+            if (!was_inserted) {
+                self.logger.warnf(
+                    "account was not referenced because its slot was a duplicate: {any}",
+                    .{.{
+                        .slot = ref.slot,
+                        .pubkey = ref.pubkey,
+                    }},
+                );
+            }
         }
     }
 
@@ -1785,7 +1810,7 @@ pub const AccountsDB = struct {
         {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
-            // TODO: handle when slot already exists in the index
+            // NOTE: there should only be a single state per slot
             try account_cache.putNoClobber(slot, .{ pubkeys, accounts });
         }
 
@@ -1817,14 +1842,20 @@ pub const AccountsDB = struct {
             accounts.len,
         );
         for (0..accounts.len) |i| {
-            const account_ref_ptr = references.addOneAssumeCapacity();
-            account_ref_ptr.* = AccountRef{
+            const ref_ptr = references.addOneAssumeCapacity();
+            ref_ptr.* = AccountRef{
                 .pubkey = pubkeys[i],
                 .slot = slot,
                 .location = .{ .Cache = .{ .index = i } },
             };
-            self.account_index.indexRef(account_ref_ptr);
 
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref_ptr);
+            if (!was_inserted) {
+                self.logger.warnf(
+                    "duplicate reference not inserted: slot: {d} pubkey: {s}",
+                    .{ ref_ptr.slot, ref_ptr.pubkey },
+                );
+            }
             std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
         }
 

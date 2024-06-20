@@ -85,6 +85,7 @@ pub const AccountInFile = struct {
             offset += writeIntLittleMem(self.rent_epoch, buf[offset..]);
             @memcpy(buf[offset..(offset + 32)], &self.owner.data);
             offset += 32;
+
             offset += writeIntLittleMem(
                 @as(u8, @intFromBool(self.executable)),
                 buf[offset..],
@@ -110,6 +111,14 @@ pub const AccountInFile = struct {
     };
 
     pub const Self = @This();
+
+    pub fn getSizeInFile(self: *const Self) u64 {
+        return std.mem.alignForward(
+            usize,
+            AccountInFile.STATIC_SIZE + self.data.len,
+            @sizeOf(u64),
+        );
+    }
 
     pub fn validate(self: *const Self) !void {
         // make sure upper bits are zero
