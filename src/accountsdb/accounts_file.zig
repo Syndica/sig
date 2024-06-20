@@ -1,3 +1,5 @@
+//! includes the main struct for reading + validating account files
+
 const std = @import("std");
 
 const Account = @import("../core/account.zig").Account;
@@ -9,6 +11,8 @@ const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const AccountFileInfo = @import("snapshots.zig").AccountFileInfo;
 
 /// Simple strictly-typed alias for an integer, used to represent a file ID.
+///
+/// Analogous to [AccountsFileId](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L824)
 pub const FileId = enum(u32) {
     _,
 
@@ -30,7 +34,9 @@ pub const FileId = enum(u32) {
     }
 };
 
-// an account thats stored in an AccountFile
+/// an account thats stored in an AccountFile
+///
+/// Analogous to [StoredAccountMeta::AppendVec](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L21)
 pub const AccountInFile = struct {
     // pointers to mmap contents
     store_info: *StorageInfo,
@@ -43,6 +49,8 @@ pub const AccountInFile = struct {
     len: usize = 0,
 
     /// info about the account stored
+    /// 
+    /// Analogous to [StoredMeta](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L134)
     pub const StorageInfo = extern struct {
         write_version_obsolete: u64,
         data_len: u64,
@@ -50,6 +58,8 @@ pub const AccountInFile = struct {
     };
 
     /// on-chain account info about the account
+    /// 
+    /// Analogous to [AccountMeta](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L149)
     pub const AccountInfo = extern struct {
         lamports: u64,
         rent_epoch: Epoch,
@@ -118,6 +128,7 @@ pub const AccountInFile = struct {
     }
 };
 
+/// Analogous to [AccountStorageEntry](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1069)
 pub const AccountFile = struct {
     // file contents
     memory: []align(std.mem.page_size) u8,
