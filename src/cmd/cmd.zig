@@ -480,7 +480,7 @@ fn validator() !void {
         }
         return err;
     };
-    defer status_cache.deinit();
+    defer status_cache.deinit(gpa_allocator);
 
     var slot_history = try accounts_db.getSlotHistory();
     defer slot_history.deinit(accounts_db.allocator);
