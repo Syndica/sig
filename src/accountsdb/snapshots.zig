@@ -1,3 +1,5 @@
+//! fields + data to deserialize snapshot metadata
+
 const std = @import("std");
 const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
@@ -26,14 +28,17 @@ pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 const CACHED_KEY_SIZE: usize = 20;
 
+/// Analogous to [StakeHistoryEntry](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L17)
 pub const StakeHistoryEntry = struct {
     effective: u64, // effective stake at this epoch
     activating: u64, // sum of portion of stakes not fully warmed up
     deactivating: u64, // requested to be cooled down, not fully deactivated yet
 };
 
+/// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
 const StakeHistory = ArrayList(struct { Epoch, StakeHistoryEntry });
 
+/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
 pub const Stakes = struct {
     /// vote accounts
     vote_accounts: VoteAccounts,
@@ -51,6 +56,7 @@ pub const Stakes = struct {
     stake_history: StakeHistory,
 };
 
+/// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
 pub const VoteAccounts = struct {
     vote_accounts: HashMap(Pubkey, struct { u64, Account }),
 
@@ -62,6 +68,7 @@ pub const VoteAccounts = struct {
     pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?HashMap(Pubkey, u64)){ .skip = true };
 };
 
+/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/f807911531359e0ae4cfcaf371bd3843ec52f1c6/sdk/program/src/stake/state.rs#L587)
 pub const Delegation = struct {
     /// to whom the stake is delegated
     voter_pubkey: Pubkey,
@@ -76,6 +83,7 @@ pub const Delegation = struct {
     warmup_cooldown_rate: f64,
 };
 
+/// Analogous to [RentCollector](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/rent_collector.rs#L16)
 pub const RentCollector = struct {
     epoch: Epoch,
     epoch_schedule: EpochSchedule,
@@ -83,6 +91,7 @@ pub const RentCollector = struct {
     rent: Rent,
 };
 
+/// Analogous to (FeeCalculator)[https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L13]
 pub const FeeCalculator = struct {
     /// The current cost of a signature.
     ///
@@ -91,12 +100,14 @@ pub const FeeCalculator = struct {
     lamports_per_signature: u64,
 };
 
+/// Analogous to [HashInfo](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L13)
 pub const HashAge = struct {
     fee_calculator: FeeCalculator,
     hash_index: u64,
     timestamp: u64,
 };
 
+/// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
 pub const BlockhashQueue = struct {
     last_hash_index: u64,
 
@@ -113,23 +124,28 @@ pub fn HashSet(comptime T: type) type {
     return HashMap(T, void);
 }
 
+/// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)
 pub const UnusedAccounts = struct {
     unused1: HashSet(Pubkey),
     unused2: HashSet(Pubkey),
     unused3: HashMap(Pubkey, u64),
 };
 
+/// Analogous to [AncestorsForSerialization](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/ancestors.rs#L8)
 pub const Ancestors = HashMap(Slot, usize);
 
+/// Analogous to [HardForks](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/hard_forks.rs#L13)
 pub const HardForks = struct {
     hard_forks: std.ArrayList(struct { Slot, usize }),
 };
 
+/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
     vote_accounts: ArrayList(Pubkey),
     total_stake: u64,
 };
 
+/// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
 pub const EpochStakes = struct {
     stakes: Stakes,
     total_stake: u64,
@@ -137,6 +153,7 @@ pub const EpochStakes = struct {
     epoch_authorized_voters: HashMap(Pubkey, Pubkey),
 };
 
+/// Analogous to [BankIncrementalSnapshotPersistence](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L100)
 pub const BankIncrementalSnapshotPersistence = struct {
     /// slot of full snapshot
     full_slot: Slot,
@@ -160,12 +177,14 @@ pub const BankIncrementalSnapshotPersistence = struct {
     }
 };
 
+/// Analogous to [StakeReward](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/stake_rewards.rs#L12)
 pub const StakeReward = struct {
     stake_pubkey: Pubkey,
     stake_reward_info: RewardInfo,
     stake_account: Account,
 };
 
+/// Analogous to [RewardInfo](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_info.rs#L5)
 pub const RewardInfo = struct {
     reward_type: RewardType,
     lamports: i64, // Reward amount
@@ -173,6 +192,7 @@ pub const RewardInfo = struct {
     commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
 };
 
+/// Analogous to [RewardType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_type.rs#L7)
 pub const RewardType = enum {
     Fee,
     Rent,
@@ -180,6 +200,7 @@ pub const RewardType = enum {
     Voting,
 };
 
+/// Analogous to [StartBlockHeightAndRewards](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L60)
 pub const StartBlockHeightAndRewards = struct {
     /// the block height of the parent of the slot at which rewards distribution began
     parent_start_block_height: u64,
@@ -187,6 +208,7 @@ pub const StartBlockHeightAndRewards = struct {
     calculated_epoch_stake_rewards: ArrayList(StakeReward),
 };
 
+/// Analogous to [EpochRewardStatus](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L70)
 pub const EpochRewardStatus = union(enum) {
     Active: StartBlockHeightAndRewards,
     Inactive: void,
@@ -196,6 +218,8 @@ pub const EpochRewardStatus = union(enum) {
     }
 };
 
+/// Analogous to most of the fields of [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
+/// and [BankFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L459)
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
     ancestors: Ancestors,
@@ -242,17 +266,20 @@ pub const BankFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
 };
 
+/// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
 pub const AccountFileInfo = struct {
     // note: serialized id is a usize but in code its FileId (u32)
     id: usize,
     length: usize, // amount of bytes used
 
+    /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
         IdOverflow,
         FileSizeTooSmall,
         FileSizeTooLarge,
         OffsetOutOfBounds,
     };
+    /// Analogous to [sanitize_len_and_size](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L376)
     pub fn validate(self: *const AccountFileInfo, file_size: usize) ValidateError!void {
         if (self.id > std.math.maxInt(u32)) {
             return error.IdOverflow;
@@ -267,12 +294,14 @@ pub const AccountFileInfo = struct {
     }
 };
 
+/// Analogous to [BankHashInfo](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L115)
 pub const BankHashInfo = struct {
     accounts_delta_hash: Hash,
     accounts_hash: Hash,
     stats: BankHashStats,
 };
 
+/// Analogous to [BankHashStats](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1299)
 pub const BankHashStats = struct {
     num_updated_accounts: u64,
     num_removed_accounts: u64,
@@ -283,6 +312,7 @@ pub const BankHashStats = struct {
 
 pub const SlotAndHash = struct { slot: Slot, hash: Hash };
 
+/// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
     file_map: HashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
@@ -346,6 +376,7 @@ pub const SnapshotFields = struct {
     }
 };
 
+/// Analogous to [InstructionError](https://github.com/anza-xyz/agave/blob/25ec30452c7d74e2aeb00f2fa35876de9ce718c6/sdk/program/src/instruction.rs#L36)
 pub const InstructionError = union(enum) {
     /// Deprecated! Use CustomError instead!
     /// The program instruction returned an error
@@ -527,6 +558,7 @@ pub const InstructionError = union(enum) {
     // conversions must also be added
 };
 
+/// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)
 const TransactionError = union(enum) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
@@ -649,13 +681,16 @@ const Result = union(enum) {
     Error: TransactionError,
 };
 
+/// Analogous to [Status](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L24)
 const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
     key_slice: [CACHED_KEY_SIZE]u8,
     result: Result,
 }) });
 
+/// Analogous to [SlotDelta](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L35)
 const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
 
+/// Analogous to [StatusCache](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L39)
 pub const StatusCache = struct {
     bank_slot_deltas: ArrayList(BankSlotDelta),
 
@@ -732,6 +767,8 @@ pub const StatusCache = struct {
 };
 
 /// information on a full snapshot including the filename, slot, and hash
+///
+/// Analogous to [SnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L44)
 pub const FullSnapshotFileInfo = struct {
     filename: []const u8,
     slot: Slot,
@@ -768,6 +805,8 @@ pub const FullSnapshotFileInfo = struct {
 };
 
 /// information on an incremental snapshot including the filename, base slot (full snapshot), slot, and hash
+///
+/// Analogous to [IncrementalSnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L103)
 pub const IncrementalSnapshotFileInfo = struct {
     filename: []const u8,
     // this references the full snapshot slot
@@ -897,6 +936,8 @@ pub const SnapshotFieldsAndPaths = struct {
 };
 
 /// contains all fields from a snapshot (full and incremental)
+///
+/// Analogous to [SnapshotBankFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L299)
 pub const AllSnapshotFields = struct {
     full: SnapshotFields,
     incremental: ?SnapshotFields,
