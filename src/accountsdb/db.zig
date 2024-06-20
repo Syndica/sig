@@ -228,7 +228,7 @@ pub const AccountsDB = struct {
             timer.reset();
             const full_snapshot = snapshot_fields_and_paths.all_fields.full;
             try self.validateLoadFromSnapshot(
-                snapshot_fields.bank_fields.incremental_snapshot_persistence,
+                snapshot_fields.bank_fields_inc.snapshot_persistence,
                 full_snapshot.bank_fields.slot,
                 full_snapshot.bank_fields.capitalization,
             );
@@ -2135,14 +2135,12 @@ const CountingAllocator = struct {
 };
 
 pub fn writeSnapshotTar(
-    allocator: std.mem.Allocator,
     archive_writer: anytype,
     version: ClientVersion,
     status_cache: StatusCache,
     snapshot_fields: SnapshotFields,
     storage: AccountStorage,
 ) !void {
-    _ = allocator;
     const slot: Slot = snapshot_fields.bank_fields.slot;
 
     var counting_writer_state = std.io.countingWriter(archive_writer);
@@ -2372,7 +2370,7 @@ test "load and validate from test snapshot using disk index" {
     }
 
     try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields.incremental_snapshot_persistence,
+        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
     );
@@ -2388,7 +2386,7 @@ test "load and validate from test snapshot" {
     }
 
     try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields.incremental_snapshot_persistence,
+        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
     );

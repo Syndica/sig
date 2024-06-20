@@ -310,15 +310,15 @@ pub const BankFields = struct {
     epoch_stakes: std.AutoArrayHashMap(Epoch, EpochStakes),
     is_delta: bool,
 
-    // we skip these values now because they may be at
-    // the end of the snapshot (after account_db_fields)
-    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    epoch_reward_status: ?EpochRewardStatus = null,
+    pub const Incremental = struct {
+        snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+        epoch_accounts_hash: ?Hash = null,
+        epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .skip = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .skip = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
+        pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
+        pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
+        pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
+    };
 };
 
 /// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
@@ -388,47 +388,29 @@ pub const AccountsDbFields = struct {
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
-
-    // incremental snapshot fields (to be added to bank_fields)
     lamports_per_signature: u64 = 0,
-    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    epoch_reward_status: ?EpochRewardStatus = null,
+    /// incremental snapshot fields (to accompany added to bank_fields)
+    bank_fields_inc: BankFields.Incremental = .{},
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
-        var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
             switch (err) {
                 error.FileNotFound => return error.SnapshotFieldsNotFound,
                 else => return err,
             }
         };
         defer file.close();
+        return try decodeFromBincode(allocator, file.reader());
+    }
 
-        const size = (try file.stat()).size;
-        const contents = try file.readToEndAlloc(allocator, size);
-        defer allocator.free(contents);
-
-        var snapshot_fields: SnapshotFields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
-
-        // if these are available, we push them onto the banks
-        var bank_fields = &snapshot_fields.bank_fields;
-        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
-        if (snapshot_fields.incremental_snapshot_persistence != null) {
-            bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence.?;
-        }
-        if (snapshot_fields.epoch_accounts_hash != null) {
-            bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash.?;
-        }
-        if (snapshot_fields.epoch_reward_status != null) {
-            bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status.?;
-        }
-
-        return snapshot_fields;
+    pub fn decodeFromBincode(
+        allocator: std.mem.Allocator,
+        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
+        reader: anytype,
+    ) !SnapshotFields {
+        return try bincode.read(allocator, SnapshotFields, reader, .{});
     }
 
     pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
@@ -751,7 +733,7 @@ pub const Status = struct {
         result: Result,
     };
 };
-pub const HashStatusMap = std.AutoArrayHashMap(Hash, Status);
+pub const HashStatusMap = std.AutoArrayHashMapUnmanaged(Hash, Status);
 /// Analogous to [SlotDelta](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L35)
 pub const BankSlotDelta = struct {
     slot: Slot,
@@ -763,17 +745,18 @@ pub const BankSlotDelta = struct {
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
-    pub fn init(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
+    pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
         var status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
+        return try decodeFromBincode(allocator, status_cache_file.reader());
+    }
 
-        const status_cache = try bincode.read(
-            allocator,
-            StatusCache,
-            status_cache_file.reader(),
-            .{},
-        );
-        return status_cache;
+    pub fn decodeFromBincode(
+        allocator: std.mem.Allocator,
+        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
+        reader: anytype,
+    ) !StatusCache {
+        return try bincode.read(allocator, StatusCache, reader, .{});
     }
 
     pub fn deinit(self: StatusCache, allocator: std.mem.Allocator) void {
@@ -1180,7 +1163,7 @@ test "core.accounts_db.snapshotss: parse status cache" {
     const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";
-    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    var status_cache = try StatusCache.initFromPath(allocator, status_cache_path);
     defer status_cache.deinit(allocator);
 
     try std.testing.expect(status_cache.bank_slot_deltas.len > 0);
@@ -1202,5 +1185,5 @@ test "core.accounts_db.snapshotss: parse incremental snapshot fields" {
     defer snapshot_fields.deinit(allocator);
 
     try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.?.full_slot, 10);
+    try std.testing.expectEqual(snapshot_fields.bank_fields_inc.snapshot_persistence.?.full_slot, 10);
 }

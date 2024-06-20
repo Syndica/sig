@@ -846,8 +846,7 @@ fn readStatusCache(allocator: Allocator, snapshot_dir: []const u8) !StatusCache 
         return error.StatusCacheNotFound;
     };
 
-    const status_cache = try StatusCache.init(allocator, status_cache_path);
-    return status_cache;
+    return try StatusCache.initFromPath(allocator, status_cache_path);
 }
 
 /// entrypoint to download snapshot
