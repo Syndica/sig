@@ -1,6 +1,5 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
-const HashMap = std.AutoArrayHashMap;
 
 const _genesis_config = @import("genesis_config.zig");
 const UnixTimestamp = _genesis_config.UnixTimestamp;
@@ -39,7 +38,7 @@ pub const Stakes = struct {
     vote_accounts: VoteAccounts,
 
     /// stake_delegations
-    stake_delegations: HashMap(Pubkey, Delegation),
+    stake_delegations: std.AutoArrayHashMap(Pubkey, Delegation),
 
     /// unused
     unused: u64,
@@ -52,14 +51,14 @@ pub const Stakes = struct {
 };
 
 pub const VoteAccounts = struct {
-    vote_accounts: HashMap(Pubkey, struct { u64, Account }),
+    vote_accounts: std.AutoArrayHashMap(Pubkey, struct { u64, Account }),
 
-    staked_nodes: ?HashMap(
+    staked_nodes: ?std.AutoArrayHashMap(
         Pubkey, // VoteAccount.vote_state.node_pubkey.
         u64, // Total stake across all vote-accounts.
     ) = null,
 
-    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?HashMap(Pubkey, u64)){ .skip = true };
+    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?std.AutoArrayHashMap(Pubkey, u64)){ .skip = true };
 };
 
 pub const Delegation = struct {
@@ -102,7 +101,7 @@ pub const BlockhashQueue = struct {
 
     /// last hash to be registered
     last_hash: ?Hash,
-    ages: HashMap(Hash, HashAge),
+    ages: std.AutoArrayHashMap(Hash, HashAge),
 
     /// hashes older than `max_age` will be dropped from the queue
     max_age: usize,
@@ -110,16 +109,16 @@ pub const BlockhashQueue = struct {
 
 // TODO: move this elsewhere
 pub fn HashSet(comptime T: type) type {
-    return HashMap(T, void);
+    return std.AutoArrayHashMap(T, void);
 }
 
 pub const UnusedAccounts = struct {
     unused1: HashSet(Pubkey),
     unused2: HashSet(Pubkey),
-    unused3: HashMap(Pubkey, u64),
+    unused3: std.AutoArrayHashMap(Pubkey, u64),
 };
 
-pub const Ancestors = HashMap(Slot, usize);
+pub const Ancestors = std.AutoArrayHashMap(Slot, usize);
 
 pub const HardForks = struct {
     hard_forks: std.ArrayList(struct { Slot, usize }),
@@ -133,8 +132,8 @@ pub const NodeVoteAccounts = struct {
 pub const EpochStakes = struct {
     stakes: Stakes,
     total_stake: u64,
-    node_id_to_vote_accounts: HashMap(Pubkey, NodeVoteAccounts),
-    epoch_authorized_voters: HashMap(Pubkey, Pubkey),
+    node_id_to_vote_accounts: std.AutoArrayHashMap(Pubkey, NodeVoteAccounts),
+    epoch_authorized_voters: std.AutoArrayHashMap(Pubkey, Pubkey),
 };
 
 pub const BankIncrementalSnapshotPersistence = struct {
@@ -228,18 +227,18 @@ pub const BankFields = struct {
     inflation: Inflation,
     stakes: Stakes,
     unused_accounts: UnusedAccounts, // required for deserialization
-    epoch_stakes: HashMap(Epoch, EpochStakes),
+    epoch_stakes: std.AutoArrayHashMap(Epoch, EpochStakes),
     is_delta: bool,
 
-    // we skip these values now because they may be at
-    // the end of the snapshot (after account_db_fields)
-    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    epoch_reward_status: ?EpochRewardStatus = null,
+    pub const Incremental = struct {
+        snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+        epoch_accounts_hash: ?Hash = null,
+        epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .skip = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .skip = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
+        pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
+        pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
+        pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
+    };
 };
 
 pub const AccountFileInfo = struct {
@@ -284,7 +283,7 @@ pub const BankHashStats = struct {
 pub const SlotAndHash = struct { slot: Slot, hash: Hash };
 
 pub const AccountsDbFields = struct {
-    file_map: HashMap(Slot, ArrayList(AccountFileInfo)),
+    file_map: std.AutoArrayHashMap(Slot, ArrayList(AccountFileInfo)),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,
@@ -303,47 +302,29 @@ pub const AccountsDbFields = struct {
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
-
-    // incremental snapshot fields (to be added to bank_fields)
     lamports_per_signature: u64 = 0,
-    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    epoch_reward_status: ?EpochRewardStatus = null,
+    /// incremental snapshot fields (to accompany added to bank_fields)
+    bank_fields_inc: BankFields.Incremental = .{},
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
-        var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
             switch (err) {
                 error.FileNotFound => return error.SnapshotFieldsNotFound,
                 else => return err,
             }
         };
         defer file.close();
+        return try decodeFromBincode(allocator, file.reader());
+    }
 
-        const size = (try file.stat()).size;
-        const contents = try file.readToEndAlloc(allocator, size);
-        defer allocator.free(contents);
-
-        var snapshot_fields: SnapshotFields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
-
-        // if these are available, we push them onto the banks
-        var bank_fields = &snapshot_fields.bank_fields;
-        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
-        if (snapshot_fields.incremental_snapshot_persistence != null) {
-            bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence.?;
-        }
-        if (snapshot_fields.epoch_accounts_hash != null) {
-            bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash.?;
-        }
-        if (snapshot_fields.epoch_reward_status != null) {
-            bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status.?;
-        }
-
-        return snapshot_fields;
+    pub fn decodeFromBincode(
+        allocator: std.mem.Allocator,
+        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
+        reader: anytype,
+    ) !SnapshotFields {
+        return try bincode.read(allocator, SnapshotFields, reader, .{});
     }
 
     pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
@@ -663,7 +644,7 @@ pub const Status = struct {
         result: Result,
     };
 };
-pub const HashStatusMap = HashMap(Hash, Status);
+pub const HashStatusMap = std.AutoArrayHashMapUnmanaged(Hash, Status);
 pub const BankSlotDelta = struct {
     slot: Slot,
     is_root: bool,
@@ -673,17 +654,18 @@ pub const BankSlotDelta = struct {
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
-    pub fn init(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
+    pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
         var status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
+        return try decodeFromBincode(allocator, status_cache_file.reader());
+    }
 
-        const status_cache = try bincode.read(
-            allocator,
-            StatusCache,
-            status_cache_file.reader(),
-            .{},
-        );
-        return status_cache;
+    pub fn decodeFromBincode(
+        allocator: std.mem.Allocator,
+        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
+        reader: anytype,
+    ) !StatusCache {
+        return try bincode.read(allocator, StatusCache, reader, .{});
     }
 
     pub fn deinit(self: StatusCache, allocator: std.mem.Allocator) void {
@@ -1084,7 +1066,7 @@ test "core.accounts_db.snapshotss: parse status cache" {
     const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";
-    var status_cache = try StatusCache.init(allocator, status_cache_path);
+    var status_cache = try StatusCache.initFromPath(allocator, status_cache_path);
     defer status_cache.deinit(allocator);
 
     try std.testing.expect(status_cache.bank_slot_deltas.len > 0);
@@ -1106,5 +1088,5 @@ test "core.accounts_db.snapshotss: parse incremental snapshot fields" {
     defer snapshot_fields.deinit(allocator);
 
     try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.?.full_slot, 10);
+    try std.testing.expectEqual(snapshot_fields.bank_fields_inc.snapshot_persistence.?.full_slot, 10);
 }
