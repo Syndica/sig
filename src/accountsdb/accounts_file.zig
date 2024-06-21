@@ -205,8 +205,6 @@ pub const AccountFile = struct {
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
-    // when shrinking or deleting, this is set to true
-    deinit_was_called: bool = false,
 
     const Self = @This();
 
@@ -238,7 +236,6 @@ pub const AccountFile = struct {
     pub fn deinit(self: *Self) void {
         std.posix.munmap(self.memory);
         self.file.close();
-        self.deinit_was_called = true;
     }
 
     pub fn validate(self: *Self) !usize {

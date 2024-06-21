@@ -1575,18 +1575,19 @@ pub const AccountsDB = struct {
             {
                 shrink_account_file_lg.unlock();
 
-                const shrink_account_file_write, var shrink_account_file_write_lg = shrink_account_file_rw.writeWithLock();
-                defer shrink_account_file_write_lg.unlock();
-                shrink_account_file_write.deinit();
-            }
-
-            // remove from filemap
-            {
+                // NOTE: we write lock the file_map and the account_file before
+                // we de-init the account-file that way we guarantee no-one else has
+                // a reference to the account file
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
 
                 const did_remove = file_map.swapRemove(shrink_file_id);
                 std.debug.assert(did_remove);
+
+                const shrink_account_file_write, var shrink_account_file_write_lg = shrink_account_file_rw.writeWithLock();
+                defer shrink_account_file_write_lg.unlock();
+
+                shrink_account_file_write.deinit();
             }
 
             self.deleteAccountFile(slot, shrink_file_id) catch |err| {
@@ -1706,13 +1707,6 @@ pub const AccountsDB = struct {
         const account_file, var account_file_lg = account_file_rw.readWithLock();
         defer account_file_lg.unlock();
 
-        // NOTE: if this happens, it may be because the shrink happened
-        // here: we get account_file_rw
-        // shrink: update file_map, deinit() account_file_rw, set length to zero
-        // here: exists == false
-        if (account_file.deinit_was_called) {
-            return error.AccountFileEmpty;
-        }
         const account_in_file = account_file.readAccount(offset) catch {
             return error.InvalidOffset;
         };
