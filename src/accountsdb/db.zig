@@ -121,7 +121,7 @@ pub const AccountsDB = struct {
                 logger.infof("using disk index in {s}", .{disk_file_suffix});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = try DiskMemoryAllocator.init(disk_file_suffix);
+                ptr.* = DiskMemoryAllocator.init(disk_file_suffix);
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {

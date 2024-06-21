@@ -885,7 +885,7 @@ pub const DiskMemoryAllocator = struct {
 
     const Self = @This();
 
-    pub fn init(filepath: []const u8) !Self {
+    pub fn init(filepath: []const u8) Self {
         return Self{
             .filepath = filepath,
         };
@@ -1011,7 +1011,7 @@ pub const DiskMemoryAllocator = struct {
 };
 
 test "tests disk allocator on hashmaps" {
-    var allocator = try DiskMemoryAllocator.init("test_data/tmp");
+    var allocator = DiskMemoryAllocator.init("test_data/tmp");
     defer allocator.deinit(null);
 
     var refs = std.AutoHashMap(Pubkey, AccountRef).init(allocator.allocator());
@@ -1028,7 +1028,7 @@ test "tests disk allocator on hashmaps" {
 }
 
 test "tests disk allocator" {
-    var allocator = try DiskMemoryAllocator.init("test_data/tmp");
+    var allocator = DiskMemoryAllocator.init("test_data/tmp");
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
         allocator.allocator(),
