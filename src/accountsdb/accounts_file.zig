@@ -49,7 +49,7 @@ pub const AccountInFile = struct {
     len: usize = 0,
 
     /// info about the account stored
-    /// 
+    ///
     /// Analogous to [StoredMeta](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L134)
     pub const StorageInfo = extern struct {
         write_version_obsolete: u64,
@@ -58,7 +58,7 @@ pub const AccountInFile = struct {
     };
 
     /// on-chain account info about the account
-    /// 
+    ///
     /// Analogous to [AccountMeta](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L149)
     pub const AccountInfo = extern struct {
         lamports: u64,
