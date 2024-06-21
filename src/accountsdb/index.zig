@@ -743,7 +743,7 @@ pub fn SwissMap(
 
         /// fills a group with a key value and increments count
         /// where the fill index requires is_free_vec[index] == true
-        pub fn fill(
+        fn fill(
             self: *Self,
             key: Key,
             value: Value,
