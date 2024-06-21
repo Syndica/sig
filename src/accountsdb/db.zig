@@ -53,6 +53,7 @@ pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more 
 const PubkeysAndAccounts = struct { []Pubkey, []Account };
 const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
 const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
+const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
 
 const Registry = sig.prometheus.registry.Registry;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
@@ -98,6 +99,8 @@ pub const AccountsDB = struct {
     shrink_account_files: std.AutoArrayHashMap(FileId, void),
     // files which have zero accounts and should be deleted
     delete_account_files: std.AutoArrayHashMap(FileId, void),
+    dead_accounts_counter: RwMux(DeadAccountsCounter),
+
     // used for filenames when flushing accounts to disk
     // TODO: do we need this? since flushed slots will be unique
     largest_file_id: FileId = FileId.fromInt(0),
@@ -173,6 +176,7 @@ pub const AccountsDB = struct {
             .unclean_account_files = std.ArrayList(FileId).init(allocator),
             .shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
             .delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
+            .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .stats = stats,
         };
     }
@@ -204,6 +208,11 @@ pub const AccountsDB = struct {
         self.unclean_account_files.deinit();
         self.shrink_account_files.deinit();
         self.delete_account_files.deinit();
+        {
+            const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_counter_lg.unlock();
+            dead_accounts_counter.deinit();
+        }
     }
 
     /// easier to use load function
@@ -1112,11 +1121,7 @@ pub const AccountsDB = struct {
         // create account file which is big enough
         var size: usize = 0;
         for (accounts) |*account| {
-            size += std.mem.alignForward(
-                usize,
-                AccountInFile.STATIC_SIZE + account.data.len,
-                @sizeOf(u64),
-            );
+            size += account.getSizeInFile();
         }
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
 
@@ -1220,7 +1225,6 @@ pub const AccountsDB = struct {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
 
-                // SAFE: this should always succeed or something is wrong
                 break :blk file_map.get(file_id).?;
             };
 
@@ -1291,43 +1295,45 @@ pub const AccountsDB = struct {
 
                         // NOTE: we dont delete references which point to the cache
                         const ref_file_id = ref.location.File.file_id;
+                        const ref_slot = ref.slot;
 
-                        const accounts_count, const accounts_dead_count = blk: {
+                        const accounts_total_count, const accounts_dead_count = blk: {
+                            const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.readWithLock();
+                            defer dead_accounts_counter_lg.unlock();
+
+                            const number_dead_accounts_ptr = dead_accounts_counter.getPtr(ref_slot).?;
+                            number_dead_accounts_ptr.* = number_dead_accounts_ptr.* + 1;
+                            const accounts_dead_count = number_dead_accounts_ptr.*;
+
                             if (ref_file_id.toInt() == file_id.toInt()) { // update the current account file
-                                // TODO: maybe dont do this
-                                // SAFE: this is the **only** place where dead_bytes is modified
-                                account_file_lg.private.v.number_of_dead_accounts += 1;
-                                const number_of_dead_accounts = account_file_lg.private.v.number_of_dead_accounts;
-
-                                break :blk .{ account_file.number_of_accounts, number_of_dead_accounts };
+                                break :blk .{ account_file.number_of_accounts, accounts_dead_count };
                             } else {
-                                const file_map, var file_map_lg = self.file_map.readWithLock();
-                                defer file_map_lg.unlock();
-
-                                var ref_account_file_rw = file_map.get(file_id).?;
-                                const ref_account_file, var ref_account_file_lg = ref_account_file_rw.writeWithLock();
+                                var ref_account_file_rw = ref_blk: {
+                                    const file_map, var file_map_lg = self.file_map.readWithLock();
+                                    defer file_map_lg.unlock();
+                                    break :ref_blk file_map.get(ref_file_id).?;
+                                };
+                                const ref_account_file, var ref_account_file_lg = ref_account_file_rw.readWithLock();
                                 defer ref_account_file_lg.unlock();
 
-                                ref_account_file.number_of_dead_accounts += 1;
-
-                                break :blk .{ ref_account_file.number_of_accounts, ref_account_file.number_of_dead_accounts };
+                                break :blk .{ ref_account_file.number_of_accounts, accounts_dead_count };
                             }
                         };
-                        std.debug.assert(accounts_dead_count <= accounts_count);
+                        std.debug.assert(accounts_dead_count <= accounts_total_count);
 
-                        const dead_percentage = 100 * accounts_dead_count / accounts_count;
+                        const dead_percentage = 100 * accounts_dead_count / accounts_total_count;
                         if (dead_percentage == 100) {
                             // queue for delete
-                            try self.delete_account_files.put(file_id, {});
+                            try self.delete_account_files.put(ref_file_id, {});
 
                             // if its queued for shrink, remove it
-                            if (self.shrink_account_files.contains(file_id)) {
-                                const did_remove = self.shrink_account_files.swapRemove(file_id);
+                            if (self.shrink_account_files.contains(ref_file_id)) {
+                                const did_remove = self.shrink_account_files.swapRemove(ref_file_id);
                                 std.debug.assert(did_remove);
                             }
                         } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
                             // queue for shrink
-                            try self.shrink_account_files.put(file_id, {});
+                            try self.shrink_account_files.put(ref_file_id, {});
                         }
                     }
                 }
@@ -1368,7 +1374,8 @@ pub const AccountsDB = struct {
 
                 // remove file from map
                 const account_file = file_map.get(file_id).?;
-                _ = file_map.swapRemove(file_id);
+                const did_remove = file_map.swapRemove(file_id);
+                std.debug.assert(did_remove);
 
                 // return slot
                 break :blk account_file;
@@ -1376,7 +1383,12 @@ pub const AccountsDB = struct {
 
             const account_file, var account_file_lg = account_file_rw.writeWithLock();
             // sanity check
-            std.debug.assert(account_file.number_of_dead_accounts == account_file.number_of_dead_accounts);
+            {
+                const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.readWithLock();
+                defer dead_accounts_counter_lg.unlock();
+                const number_of_dead_accounts = dead_accounts_counter.get(account_file.slot).?;
+                std.debug.assert(account_file.number_of_accounts == number_of_dead_accounts);
+            }
             account_file.deinit();
             account_file_lg.unlock();
 
@@ -1388,6 +1400,13 @@ pub const AccountsDB = struct {
                     .{ account_file.slot, file_id.toInt(), @errorName(err) },
                 );
             };
+
+            {
+                const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
+                defer dead_accounts_counter_lg.unlock();
+                const did_remove = dead_accounts_counter.swapRemove(account_file.slot);
+                std.debug.assert(did_remove);
+            }
         }
     }
 
@@ -1429,39 +1448,37 @@ pub const AccountsDB = struct {
                 break :blk file_map.get(shrink_file_id).?;
             };
 
+            const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.readWithLock();
+            errdefer shrink_account_file_lg.unlock();
+
+            const slot = shrink_account_file.slot;
+
             // compute size of alive accounts (read)
-            const alive_accounts_size, const num_alive_accounts, const num_accounts_deleted, const slot = blk: {
-                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.writeWithLock();
-                defer shrink_account_file_lg.unlock();
+            var is_alive_flags = try std.ArrayList(bool).initCapacity(self.allocator, shrink_account_file.number_of_accounts);
+            defer is_alive_flags.deinit();
 
-                var num_accounts_deleted: u64 = 0;
-                var alive_accounts_size: u64 = 0;
-                var num_alive_accounts: u64 = 0;
-                var account_iter = shrink_account_file.iterator();
-                while (account_iter.next()) |*account_in_file| {
-                    const pubkey = account_in_file.pubkey();
-                    // account is dead if it is not in the index; dead accounts
-                    // are removed from the index during cleaning
-                    const is_account_alive = self.account_index.exists(pubkey, shrink_account_file.slot);
-                    if (is_account_alive) {
-                        alive_accounts_size += account_in_file.getSizeInFile();
-                        num_alive_accounts += 1;
-                    } else {
-                        num_accounts_deleted += 1;
-                    }
+            var num_accounts_deleted: u64 = 0;
+            var alive_accounts_size: u64 = 0;
+            var num_alive_accounts: u64 = 0;
+            var account_iter = shrink_account_file.iterator();
+            while (account_iter.next()) |*account_in_file| {
+                const pubkey = account_in_file.pubkey();
+                // account is dead if it is not in the index; dead accounts
+                // are removed from the index during cleaning
+                const is_account_alive = self.account_index.exists(pubkey, shrink_account_file.slot);
+                if (is_account_alive) {
+                    alive_accounts_size += account_in_file.getSizeInFile();
+                    num_alive_accounts += 1;
+                    is_alive_flags.appendAssumeCapacity(true);
+                } else {
+                    num_accounts_deleted += 1;
+                    is_alive_flags.appendAssumeCapacity(false);
                 }
-                // if there are no alive accounts, it should have been queued for deletion
-                std.debug.assert(num_alive_accounts > 0);
-                // if there are no dead accounts, it should have not been queued for shrink
-                std.debug.assert(num_accounts_deleted > 0);
-
-                break :blk .{
-                    alive_accounts_size,
-                    num_alive_accounts,
-                    num_accounts_deleted,
-                    shrink_account_file.slot,
-                };
-            };
+            }
+            // if there are no alive accounts, it should have been queued for deletion
+            std.debug.assert(num_alive_accounts > 0);
+            // if there are no dead accounts, it should have not been queued for shrink
+            std.debug.assert(num_accounts_deleted > 0);
             total_accounts_deleted += num_accounts_deleted;
 
             // alloc account file for accounts
@@ -1470,52 +1487,74 @@ pub const AccountsDB = struct {
                 slot,
             );
 
-            // alloc new reference memory block
+            // write the alive accounts
+            var offsets = try std.ArrayList(u64).initCapacity(self.allocator, num_alive_accounts);
+            defer offsets.deinit();
+
+            account_iter.reset();
+            var offset: usize = 0;
+            for (is_alive_flags.items) |is_alive| {
+                const account = &(account_iter.next().?);
+                if (is_alive) {
+                    offsets.appendAssumeCapacity(offset);
+                    offset += account.writeToBuf(new_memory[offset..]);
+                }
+            }
+
+            // add file to map
+            var new_account_file = try AccountFile.init(
+                new_file,
+                .{ .id = @intCast(new_file_id.toInt()), .length = offset },
+                slot,
+            );
+            new_account_file.number_of_accounts = num_alive_accounts;
+
+            {
+                const file_map, var file_map_lg = self.file_map.writeWithLock();
+                defer file_map_lg.unlock();
+                try file_map.putNoClobber(new_file_id, RwMux(AccountFile).init(new_account_file));
+            }
+
+            // update the references
             var new_ref_list = try ArrayList(AccountRef).initCapacity(
                 self.account_index.reference_allocator,
                 num_alive_accounts,
             );
 
-            // update the index
-            const file_length = blk: {
-                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.readWithLock();
-                defer shrink_account_file_lg.unlock();
+            account_iter.reset();
+            var offset_index: u64 = 0;
+            for (is_alive_flags.items) |is_alive| {
+                const account = &(account_iter.next().?);
+                if (is_alive) {
+                    // find the slot in the reference list
+                    const pubkey = account.pubkey();
+                    var head_ref_rw = self.account_index.getReference(pubkey) orelse unreachable;
+                    const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
 
-                var account_iter = shrink_account_file.iterator();
-                var offset: usize = 0;
-                while (account_iter.next()) |*account| {
-                    // write the alive accounts
-                    if (self.account_index.exists(account.pubkey(), slot)) {
+                    var curr_ref: ?*AccountRef = head_ref.ref_ptr;
+                    const old_ref_ptr = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+                        if (ref.slot == slot) break ref;
+                    } else unreachable;
 
-                        // find the slot in the reference list
-                        const pubkey = account.pubkey();
-                        var head_ref_rw = self.account_index.getReference(pubkey) orelse unreachable;
-                        const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+                    // copy + update the values
+                    var new_ref = old_ref_ptr.*;
+                    new_ref.location.File.offset = offsets.items[offset_index];
+                    new_ref.location.File.file_id = new_file_id;
+                    offset_index += 1;
 
-                        var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-                        const old_ref_ptr = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
-                            if (ref.slot == slot) break ref;
-                        } else unreachable;
+                    const new_ref_ptr = new_ref_list.addOneAssumeCapacity();
+                    new_ref_ptr.* = new_ref;
 
-                        // copy + update the values
-                        var new_ref = old_ref_ptr.*;
-                        new_ref.location.File.offset = offset;
-                        new_ref.location.File.file_id = new_file_id;
-
-                        const new_ref_ptr = new_ref_list.addOneAssumeCapacity();
-                        new_ref_ptr.* = new_ref;
-
-                        // remove + re-add new reference
-                        head_ref_lg.unlock();
+                    // remove + re-add new reference
+                    head_ref_lg.unlock();
+                    {
+                        // TODO: to not run into memory issues, need to ensure we
+                        // remove + insert in one bin lock
                         try self.account_index.removeReference(pubkey, slot);
                         self.account_index.indexRef(new_ref_ptr);
-
-                        // write to new account file
-                        offset += account.writeToBuf(new_memory[offset..]);
                     }
                 }
-                break :blk offset;
-            };
+            }
 
             // update slot's reference memory
             {
@@ -1525,41 +1564,44 @@ pub const AccountsDB = struct {
                 const reference_memory_entry = reference_memory.getEntry(slot) orelse {
                     std.debug.panic("missing corresponding reference memory for slot {d}\n", .{slot});
                 };
+                // NOTE: this is ok because nothing points to this old reference memory
                 // deinit old block of reference memory
                 reference_memory_entry.value_ptr.deinit();
                 // point to new block
                 reference_memory_entry.value_ptr.* = new_ref_list;
             }
 
-            var new_account_file = try AccountFile.init(
-                new_file,
-                .{ .id = @intCast(new_file_id.toInt()), .length = file_length },
-                slot,
-            );
-            new_account_file.number_of_accounts = num_alive_accounts;
+            // delete old account file
+            {
+                shrink_account_file_lg.unlock();
 
-            // update the file map
+                const shrink_account_file_write, var shrink_account_file_write_lg = shrink_account_file_rw.writeWithLock();
+                defer shrink_account_file_write_lg.unlock();
+                shrink_account_file_write.deinit();
+            }
+
+            // remove from filemap
             {
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
 
-                const file_map_entry = file_map.getEntry(shrink_file_id).?;
-                file_map_entry.value_ptr.* = RwMux(AccountFile).init(new_account_file);
-                file_map_entry.key_ptr.* = new_file_id;
+                const did_remove = file_map.swapRemove(shrink_file_id);
+                std.debug.assert(did_remove);
             }
 
-            // delete old account file
-            {
-                const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.writeWithLock();
-                defer shrink_account_file_lg.unlock();
-                shrink_account_file.deinit();
-            }
             self.deleteAccountFile(slot, shrink_file_id) catch |err| {
                 self.logger.errf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
                     .{ slot, shrink_file_id.toInt(), @errorName(err) },
                 );
             };
+
+            // reset to zero dead accounts
+            {
+                const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
+                defer dead_accounts_counter_lg.unlock();
+                dead_accounts_counter.getPtr(slot).?.* = 0;
+            }
         }
 
         return .{
@@ -1783,9 +1825,11 @@ pub const AccountsDB = struct {
         }
 
         // compute how many account_references for each pubkey
+        var accounts_dead_count: u64 = 0;
         for (references.items) |*ref| {
             const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref);
             if (!was_inserted) {
+                accounts_dead_count += 1;
                 self.logger.warnf(
                     "account was not referenced because its slot was a duplicate: {any}",
                     .{.{
@@ -1794,6 +1838,12 @@ pub const AccountsDB = struct {
                     }},
                 );
             }
+        }
+
+        {
+            const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_lg.unlock();
+            try dead_accounts.putNoClobber(account_file.slot, accounts_dead_count);
         }
     }
 
@@ -1837,6 +1887,7 @@ pub const AccountsDB = struct {
         }
 
         // update index
+        var accounts_dead_count: u64 = 0;
         var references = try ArrayList(AccountRef).initCapacity(
             self.account_index.reference_allocator,
             accounts.len,
@@ -1855,10 +1906,16 @@ pub const AccountsDB = struct {
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",
                     .{ ref_ptr.slot, ref_ptr.pubkey },
                 );
+                accounts_dead_count += 1;
             }
             std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
         }
 
+        {
+            const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_lg.unlock();
+            try dead_accounts.putNoClobber(slot, accounts_dead_count);
+        }
         try self.account_index.putReferenceBlock(slot, references);
     }
 
@@ -2315,8 +2372,9 @@ test "clean to shrink account file works with zero-lamports" {
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == new_len);
     // shrink
-    try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
-    try std.testing.expect(accounts_db.delete_account_files.count() == 0);
+    try std.testing.expectEqual(1, accounts_db.shrink_account_files.count());
+    // slot 500 will be fully dead because its all zero lamports
+    try std.testing.expectEqual(1, accounts_db.delete_account_files.count());
 
     var account = try accounts_db.getAccount(&pubkey_remain);
     defer account.deinit(allocator);
@@ -2435,12 +2493,13 @@ test "full clean account file works" {
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
     try std.testing.expect(accounts_db.delete_account_files.count() == 1);
+    const delete_file_id = accounts_db.delete_account_files.keys()[0];
 
     // test delete
     {
         const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
-        try std.testing.expect(file_map.get(FileId.fromInt(2)) != null);
+        try std.testing.expect(file_map.get(delete_file_id) != null);
     }
 
     accounts_db.deleteAccountFiles();
@@ -2448,7 +2507,7 @@ test "full clean account file works" {
     {
         const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
-        try std.testing.expect(file_map.get(FileId.fromInt(2)) == null);
+        try std.testing.expect(file_map.get(delete_file_id) == null);
     }
 }
 
@@ -2542,6 +2601,7 @@ test "shrink account file works" {
             break file_id;
         }
     } else return error.NoSlotFile;
+
     var new_account_file = file_map2.get(new_slot_file_id).?;
     const post_shrink_size = new_account_file.readField("file_size");
     try std.testing.expect(post_shrink_size < pre_shrink_size);

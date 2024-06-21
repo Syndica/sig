@@ -205,9 +205,6 @@ pub const AccountFile = struct {
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
-    // size of accounts which are either old-state or zero-lamport
-    // only used during cleaning
-    number_of_dead_accounts: usize = 0,
     // when shrinking or deleting, this is set to true
     deinit_was_called: bool = false,
 
