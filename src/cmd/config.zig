@@ -39,7 +39,7 @@ pub const AccountsDBConfig = struct {
     // number of threads to unpack snapshot from .tar.zstd
     num_threads_snapshot_unpack: u16 = 0,
     // number of shards to use across the index
-    num_index_bins: usize = ACCOUNT_INDEX_BINS,
+    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
     // use disk based index for accounts index
     use_disk_index: bool = false,
     // force unpacking a fresh snapshot even if an accounts/ dir exists

@@ -11,6 +11,28 @@ const RwMux = lib.sync.RwMux;
 // for sync reasons we need a stable head with a lock
 pub const AccountReferenceHead = RwMux(struct {
     ref_ptr: *AccountRef,
+
+    const Self = @This();
+
+    pub fn highestRootedSlot(self: *const Self, rooted_slot_max: Slot) struct { usize, Slot } {
+        var ref_slot_max: usize = 0;
+        var rooted_ref_count: usize = 0;
+
+        var curr: ?*AccountRef = self.ref_ptr;
+        while (curr) |ref| : (curr = ref.next_ptr) {
+            // only track states less than the rooted slot (ie, they are also rooted)
+            const is_not_rooted = ref.slot > rooted_slot_max;
+            if (is_not_rooted) continue;
+
+            const is_larger_slot = ref.slot > ref_slot_max or rooted_ref_count == 0;
+            if (is_larger_slot) {
+                ref_slot_max = ref.slot;
+            }
+            rooted_ref_count += 1;
+        }
+
+        return .{ rooted_ref_count, ref_slot_max };
+    }
 });
 
 /// reference to an account (either in a file or cache)
@@ -131,6 +153,22 @@ pub const AccountIndex = struct {
 
         const ref_head_rw = bin.get(pubkey.*);
         return ref_head_rw;
+    }
+
+    /// returns a reference to the slot in the index which is a local copy
+    /// useful for reading the slot without holding the lock.
+    /// NOTE: its not safe to read the underlying data without holding the lock
+    pub fn getReferenceSlot(self: *Self, pubkey: *const Pubkey, slot: Slot) ?AccountRef {
+        var head_ref_rw = self.getReference(pubkey) orelse return null;
+        const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+        defer head_ref_lg.unlock();
+
+        var curr_ref: ?*AccountRef = head_ref.ref_ptr;
+        const slot_ref = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+            if (ref.slot == slot) break ref.*;
+        } else null;
+
+        return slot_ref;
     }
 
     pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {

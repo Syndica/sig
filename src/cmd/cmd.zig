@@ -216,7 +216,7 @@ var min_snapshot_download_speed_mb_option = cli.Option{
 var number_of_index_bins_option = cli.Option{
     .long_name = "number-of-index-bins",
     .help = "number of bins to shard the index pubkeys across",
-    .value_ref = cli.mkRef(&config.current.accounts_db.num_index_bins),
+    .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
     .required = false,
     .value_name = "number_of_index_bins",
 };
