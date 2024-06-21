@@ -479,30 +479,34 @@ pub const AccountsDB = struct {
             };
             // if this is hit, its likely an old snapshot
             if (file_infos.items.len != 1) {
-                std.debug.panic("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
+                self.logger.errf("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
+                return error.InvalidSnapshot;
             }
             const file_info = file_infos.items[0];
             if (file_info.id != file_id_usize) {
-                std.debug.panic("file_info.id ({d}) != file_id ({d})\n", .{ file_info.id, file_id_usize });
+                self.logger.errf("file_id from metadata for slot {d} doesnt match file_id from filename: {d} vs {d}\n", .{ slot, file_info.id, file_id_usize });
             }
 
             // read accounts file
             const abs_path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ accounts_dir_path, file_name });
             const accounts_file_file = try std.fs.cwd().openFile(abs_path, .{ .mode = .read_write });
             var accounts_file = AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
-                std.debug.panic("failed to *open* AccountsFile {s}: {s}\n", .{ file_name, @errorName(err) });
+                self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name, @errorName(err) });
+                return err;
             };
 
             const reference_slice_start = references.items.len;
             self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
                 if (err == error.OutOfReferenceMemory) {
-                    // TODO: support retry - panic for now
-                    std.debug.panic(
+                    // TODO: support retry - error for now
+                    self.logger.errf(
                         "out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n",
                         .{},
                     );
+                    return error.OutOfReferenceMemory;
                 }
-                std.debug.panic("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
+                self.logger.errf("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
+                return err;
             };
 
             const reference_slice_end = references.items.len;
