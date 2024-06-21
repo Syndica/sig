@@ -86,13 +86,6 @@ pub const AccountsDB = struct {
     account_cache: RwMux(AccountCache),
     file_map: RwMux(FileMap),
 
-    // TODO: make these a local field
-    // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
-    unclean_account_files: std.ArrayList(FileId),
-    // files which have a small number of accounts alive and should be shrunk
-    shrink_account_files: std.AutoArrayHashMap(FileId, void),
-    // files which have zero accounts and should be deleted
-    delete_account_files: std.AutoArrayHashMap(FileId, void),
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
     // used for filenames when flushing accounts to disk
@@ -167,9 +160,6 @@ pub const AccountsDB = struct {
             .config = config,
             .account_cache = RwMux(AccountCache).init(AccountCache.init(allocator)),
             .file_map = RwMux(FileMap).init(FileMap.init(allocator)),
-            .unclean_account_files = std.ArrayList(FileId).init(allocator),
-            .shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
-            .delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator),
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .stats = stats,
         };
@@ -198,10 +188,6 @@ pub const AccountsDB = struct {
             defer file_map_lg.unlock();
             file_map.deinit();
         }
-
-        self.unclean_account_files.deinit();
-        self.shrink_account_files.deinit();
-        self.delete_account_files.deinit();
         {
             const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_counter_lg.unlock();
@@ -1045,6 +1031,18 @@ pub const AccountsDB = struct {
         var timer = try std.time.Timer.start();
         var flush_slots = ArrayList(Slot).init(self.allocator);
 
+        // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
+        var unclean_account_files = std.ArrayList(FileId).init(self.allocator);
+        defer unclean_account_files.deinit();
+
+        // files which have a small number of accounts alive and should be shrunk
+        var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(self.allocator);
+        defer shrink_account_files.deinit();
+
+        // files which have zero accounts and should be deleted
+        var delete_account_files = std.AutoArrayHashMap(FileId, void).init(self.allocator);
+        defer delete_account_files.deinit();
+
         while (!exit.load(.unordered)) {
             defer {
                 const elapsed = timer.read();
@@ -1075,26 +1073,36 @@ pub const AccountsDB = struct {
 
             if (flush_slots.items.len > 0) {
                 self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
-                defer flush_slots.clearRetainingCapacity();
+                defer {
+                    flush_slots.clearRetainingCapacity();
+                    unclean_account_files.clearRetainingCapacity();
+                    shrink_account_files.clearRetainingCapacity();
+                    delete_account_files.clearRetainingCapacity();
+                }
 
                 // flush the slots
                 for (flush_slots.items) |flush_slot| {
-                    self.flushSlot(flush_slot) catch |err| {
+                    self.flushSlot(flush_slot, &unclean_account_files) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
                         std.debug.print("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
                     };
                 }
 
                 // clean the flushed slots account files
-                const clean_result = try self.cleanAccountFiles(root_slot);
+                const clean_result = try self.cleanAccountFiles(
+                    root_slot,
+                    &unclean_account_files,
+                    &shrink_account_files,
+                    &delete_account_files,
+                );
                 self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                const shrink_results = try self.shrinkAccountFiles();
+                const shrink_results = try self.shrinkAccountFiles(&shrink_account_files);
                 self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
-                self.deleteAccountFiles();
+                self.deleteAccountFiles(&delete_account_files);
             }
         }
     }
@@ -1102,7 +1110,7 @@ pub const AccountsDB = struct {
     /// flushes a slot account data from the cache onto disk, and updates the index
     /// note: this deallocates the []account and []pubkey data from the cache, as well
     /// as the data field ([]u8) for each account.
-    pub fn flushSlot(self: *Self, slot: Slot) !void {
+    pub fn flushSlot(self: *Self, slot: Slot, unclean_account_files: *ArrayList(FileId)) !void {
         defer self.stats.number_files_flushed.inc();
 
         const pubkeys, const accounts: []Account = blk: {
@@ -1187,7 +1195,7 @@ pub const AccountsDB = struct {
         }
 
         // queue for cleaning
-        try self.unclean_account_files.append(file_id);
+        try unclean_account_files.append(file_id);
     }
 
     /// removes stale accounts and zero-lamport accounts from disk
@@ -1196,13 +1204,18 @@ pub const AccountsDB = struct {
     /// a small number of 'alive' accounts.
     ///
     /// note: this method should not be called in parallel to shrink or delete.
-    pub fn cleanAccountFiles(self: *Self, rooted_slot_max: Slot) !struct {
+    pub fn cleanAccountFiles(
+        self: *Self,
+        rooted_slot_max: Slot,
+        unclean_account_files: *ArrayList(FileId),
+        shrink_account_files: *std.AutoArrayHashMap(FileId, void),
+        delete_account_files: *std.AutoArrayHashMap(FileId, void),
+    ) !struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
-        defer self.unclean_account_files.clearRetainingCapacity();
         defer {
-            const number_of_files = self.unclean_account_files.items.len;
+            const number_of_files = unclean_account_files.items.len;
             self.stats.number_files_cleaned.add(number_of_files);
         }
 
@@ -1218,7 +1231,7 @@ pub const AccountsDB = struct {
         var cleaned_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
         defer cleaned_pubkeys.deinit();
 
-        for (self.unclean_account_files.items) |file_id| {
+        for (unclean_account_files.items) |file_id| {
             var account_file_rw = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
@@ -1322,16 +1335,16 @@ pub const AccountsDB = struct {
                         const dead_percentage = 100 * accounts_dead_count / accounts_total_count;
                         if (dead_percentage == 100) {
                             // queue for delete
-                            try self.delete_account_files.put(ref_file_id, {});
+                            try delete_account_files.put(ref_file_id, {});
 
                             // if its queued for shrink, remove it
-                            if (self.shrink_account_files.contains(ref_file_id)) {
-                                const did_remove = self.shrink_account_files.swapRemove(ref_file_id);
+                            if (shrink_account_files.contains(ref_file_id)) {
+                                const did_remove = shrink_account_files.swapRemove(ref_file_id);
                                 std.debug.assert(did_remove);
                             }
                         } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
                             // queue for shrink
-                            try self.shrink_account_files.put(ref_file_id, {});
+                            try shrink_account_files.put(ref_file_id, {});
                         }
                     }
                 }
@@ -1358,14 +1371,16 @@ pub const AccountsDB = struct {
 
     /// should only be called when all the accounts are dead (ie, no longer
     /// exist in the index).
-    pub fn deleteAccountFiles(self: *Self) void {
-        defer self.delete_account_files.clearRetainingCapacity();
+    pub fn deleteAccountFiles(
+        self: *Self,
+        delete_account_files: *const std.AutoArrayHashMap(FileId, void),
+    ) void {
         defer {
-            const number_of_files = self.delete_account_files.count();
+            const number_of_files = delete_account_files.count();
             self.stats.number_files_deleted.add(number_of_files);
         }
 
-        for (self.delete_account_files.keys()) |file_id| {
+        for (delete_account_files.keys()) |file_id| {
             const slot = blk: {
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
@@ -1436,15 +1451,17 @@ pub const AccountsDB = struct {
     }
 
     /// resizes account files to reduce disk usage and remove dead accounts.
-    pub fn shrinkAccountFiles(self: *Self) !struct { num_accounts_deleted: usize } {
-        defer self.shrink_account_files.clearRetainingCapacity();
+    pub fn shrinkAccountFiles(
+        self: *Self,
+        shrink_account_files: *const std.AutoArrayHashMap(FileId, void),
+    ) !struct { num_accounts_deleted: usize } {
         defer {
-            const number_of_files = self.shrink_account_files.count();
+            const number_of_files = shrink_account_files.count();
             self.stats.number_files_shrunk.add(number_of_files);
         }
 
         var total_accounts_deleted: u64 = 0;
-        for (self.shrink_account_files.keys()) |shrink_file_id| {
+        for (shrink_account_files.keys()) |shrink_file_id| {
             var shrink_account_file_rw = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
@@ -2232,7 +2249,9 @@ test "flushing slots works" {
     );
 
     // this writes to disk
-    try accounts_db.flushSlot(slot);
+    var unclean_account_files = ArrayList(FileId).init(std.testing.allocator);
+    defer unclean_account_files.deinit();
+    try accounts_db.flushSlot(slot, &unclean_account_files);
 
     // try the validation
     const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
@@ -2248,8 +2267,8 @@ test "flushing slots works" {
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
 
-    try std.testing.expect(accounts_db.unclean_account_files.items.len == 1);
-    try std.testing.expect(accounts_db.unclean_account_files.items[0] == file_id);
+    try std.testing.expect(unclean_account_files.items.len == 1);
+    try std.testing.expect(unclean_account_files.items[0] == file_id);
 }
 
 test "purge accounts in cache works" {
@@ -2351,7 +2370,11 @@ test "clean to shrink account file works with zero-lamports" {
         accounts2[i] = try Account.random(allocator, rng, i % 1_000);
         accounts2[i].lamports = 0; // !
     }
-    try accounts_db.flushSlot(slot);
+
+    var unclean_account_files = ArrayList(FileId).init(allocator);
+    defer unclean_account_files.deinit();
+
+    try accounts_db.flushSlot(slot, &unclean_account_files);
 
     // write new state
     const new_slot = @as(u64, @intCast(500));
@@ -2360,15 +2383,26 @@ test "clean to shrink account file works with zero-lamports" {
         pubkeys2,
         new_slot,
     );
-    try accounts_db.flushSlot(new_slot);
+    try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
-    const r = try accounts_db.cleanAccountFiles(new_slot + 100);
+    var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer shrink_account_files.deinit();
+
+    var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer delete_account_files.deinit();
+
+    const r = try accounts_db.cleanAccountFiles(
+        new_slot + 100,
+        &unclean_account_files,
+        &shrink_account_files,
+        &delete_account_files,
+    );
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == new_len);
     // shrink
-    try std.testing.expectEqual(1, accounts_db.shrink_account_files.count());
+    try std.testing.expectEqual(1, shrink_account_files.count());
     // slot 500 will be fully dead because its all zero lamports
-    try std.testing.expectEqual(1, accounts_db.delete_account_files.count());
+    try std.testing.expectEqual(1, delete_account_files.count());
 
     var account = try accounts_db.getAccount(&pubkey_remain);
     defer account.deinit(allocator);
@@ -2409,7 +2443,17 @@ test "clean to shrink account file works" {
     for (0..new_len) |i| {
         accounts2[i] = try Account.random(allocator, rng, i % 1_000);
     }
-    try accounts_db.flushSlot(slot);
+
+    var unclean_account_files = ArrayList(FileId).init(allocator);
+    defer unclean_account_files.deinit();
+
+    var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer shrink_account_files.deinit();
+
+    var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer delete_account_files.deinit();
+
+    try accounts_db.flushSlot(slot, &unclean_account_files);
 
     // write new state
     const new_slot = @as(u64, @intCast(500));
@@ -2418,14 +2462,19 @@ test "clean to shrink account file works" {
         pubkeys2,
         new_slot,
     );
-    try accounts_db.flushSlot(new_slot);
+    try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
-    const r = try accounts_db.cleanAccountFiles(new_slot + 100);
+    const r = try accounts_db.cleanAccountFiles(
+        new_slot + 100,
+        &unclean_account_files,
+        &shrink_account_files,
+        &delete_account_files,
+    );
     try std.testing.expect(r.num_old_states == new_len);
     try std.testing.expect(r.num_zero_lamports == 0);
     // shrink
-    try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
-    try std.testing.expect(accounts_db.delete_account_files.count() == 0);
+    try std.testing.expect(shrink_account_files.count() == 1);
+    try std.testing.expect(delete_account_files.count() == 0);
 }
 
 test "full clean account file works" {
@@ -2463,13 +2512,22 @@ test "full clean account file works" {
         accounts2[i] = try Account.random(allocator, rng, i % 1_000);
     }
 
-    try accounts_db.flushSlot(slot);
+    var unclean_account_files = ArrayList(FileId).init(allocator);
+    defer unclean_account_files.deinit();
 
-    var r = try accounts_db.cleanAccountFiles(0); // zero is rooted so no files should be cleaned
+    var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer shrink_account_files.deinit();
+
+    var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer delete_account_files.deinit();
+
+    try accounts_db.flushSlot(slot, &unclean_account_files);
+
+    var r = try accounts_db.cleanAccountFiles(0, &unclean_account_files, &shrink_account_files, &delete_account_files); // zero is rooted so no files should be cleaned
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
 
-    r = try accounts_db.cleanAccountFiles(1); // zero has no old state so no files should be cleaned
+    r = try accounts_db.cleanAccountFiles(1, &unclean_account_files, &shrink_account_files, &delete_account_files); // zero has no old state so no files should be cleaned
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
 
@@ -2480,14 +2538,14 @@ test "full clean account file works" {
         pubkeys2,
         new_slot,
     );
-    try accounts_db.flushSlot(new_slot);
+    try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
-    r = try accounts_db.cleanAccountFiles(new_slot + 100);
+    r = try accounts_db.cleanAccountFiles(new_slot + 100, &unclean_account_files, &shrink_account_files, &delete_account_files);
     try std.testing.expect(r.num_old_states == n_accounts);
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
-    try std.testing.expect(accounts_db.delete_account_files.count() == 1);
-    const delete_file_id = accounts_db.delete_account_files.keys()[0];
+    try std.testing.expect(delete_account_files.count() == 1);
+    const delete_file_id = delete_account_files.keys()[0];
 
     // test delete
     {
@@ -2496,7 +2554,7 @@ test "full clean account file works" {
         try std.testing.expect(file_map.get(delete_file_id) != null);
     }
 
-    accounts_db.deleteAccountFiles();
+    accounts_db.deleteAccountFiles(&delete_account_files);
 
     {
         const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
@@ -2544,7 +2602,15 @@ test "shrink account file works" {
     for (0..new_len) |i| {
         accounts2[i] = try Account.random(allocator, rng, i % 1_000);
     }
-    try accounts_db.flushSlot(slot);
+
+    var unclean_account_files = ArrayList(FileId).init(allocator);
+    defer unclean_account_files.deinit();
+    var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer shrink_account_files.deinit();
+    var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
+    defer delete_account_files.deinit();
+
+    try accounts_db.flushSlot(slot, &unclean_account_files);
 
     // write new state
     const new_slot = @as(u64, @intCast(500));
@@ -2553,11 +2619,16 @@ test "shrink account file works" {
         pubkeys2,
         new_slot,
     );
-    try accounts_db.flushSlot(new_slot);
+    try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
     // clean the account files - slot is queued for shrink
-    const clean_result = try accounts_db.cleanAccountFiles(new_slot + 100);
-    try std.testing.expect(accounts_db.shrink_account_files.count() == 1);
+    const clean_result = try accounts_db.cleanAccountFiles(
+        new_slot + 100,
+        &unclean_account_files,
+        &shrink_account_files,
+        &delete_account_files,
+    );
+    try std.testing.expect(shrink_account_files.count() == 1);
     try std.testing.expectEqual(9, clean_result.num_old_states);
 
     const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
@@ -2581,8 +2652,7 @@ test "shrink account file works" {
     }
 
     // test: files were shrunk
-    const r = try accounts_db.shrinkAccountFiles();
-    try std.testing.expect(accounts_db.shrink_account_files.count() == 0);
+    const r = try accounts_db.shrinkAccountFiles(&shrink_account_files);
     try std.testing.expectEqual(9, r.num_accounts_deleted);
 
     // test: new account file is shrunk
