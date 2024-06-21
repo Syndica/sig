@@ -1,11 +1,21 @@
 const std = @import("std");
+const lib = @import("../lib.zig");
+
 const ArrayList = std.ArrayList;
-const Account = @import("../core/account.zig").Account;
-const Hash = @import("../core/hash.zig").Hash;
-const Slot = @import("../core/time.zig").Slot;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const AccountFile = @import("accounts_file.zig").AccountFile;
-const FileId = @import("accounts_file.zig").FileId;
+const Account = lib.core.account.Account;
+const Hash = lib.core.hash.Hash;
+const Slot = lib.core.time.Slot;
+const Pubkey = lib.core.pubkey.Pubkey;
+const AccountFile = lib.accounts_db.accounts_file.AccountFile;
+const FileId = lib.accounts_db.accounts_file.FileId;
+const RwMux = lib.sync.RwMux;
+
+// RwMux(Vec<>)
+
+// for sync reasons we need a stable head with a lock
+pub const AccountReferenceHead = RwMux(struct {
+    ref_ptr: *AccountRef,
+});
 
 /// reference to an account (either in a file or cache)
 pub const AccountRef = struct {
@@ -35,15 +45,17 @@ pub const AccountRef = struct {
     }
 };
 
+const ReferenceMemory = std.AutoHashMap(Slot, ArrayList(AccountRef));
+
 /// stores the mapping from Pubkey to the account location (AccountRef)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
     reference_allocator: std.mem.Allocator,
-    reference_memory: std.AutoHashMap(Slot, ArrayList(AccountRef)),
-    bins: []RefMap,
+    reference_memory: RwMux(ReferenceMemory),
+    bins: []RwMux(RefMap),
     calculator: PubkeyBinCalculator,
 
-    pub const RefMap = SwissMap(Pubkey, *AccountRef, pubkey_hash, pubkey_eql);
+    pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
 
     const Self = @This();
 
@@ -55,9 +67,9 @@ pub const AccountIndex = struct {
         // number of bins to shard across
         number_of_bins: usize,
     ) !Self {
-        const bins = try allocator.alloc(RefMap, number_of_bins);
+        const bins = try allocator.alloc(RwMux(RefMap), number_of_bins);
         for (bins) |*bin| {
-            bin.* = RefMap.init(allocator);
+            bin.* = RwMux(RefMap).init(RefMap.init(allocator));
         }
         const calculator = PubkeyBinCalculator.init(number_of_bins);
 
@@ -66,102 +78,95 @@ pub const AccountIndex = struct {
             .reference_allocator = reference_allocator,
             .bins = bins,
             .calculator = calculator,
-            .reference_memory = std.AutoHashMap(Slot, ArrayList(AccountRef)).init(allocator),
+            .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
         };
     }
 
     pub fn deinit(self: *Self, free_memory: bool) void {
-        for (self.bins) |*bin| {
+        for (self.bins) |*bin_rw| {
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
             bin.deinit();
         }
         self.allocator.free(self.bins);
 
-        if (free_memory) {
-            var iter = self.reference_memory.iterator();
-            while (iter.next()) |entry| {
-                entry.value_ptr.deinit();
+        {
+            var reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
+            defer reference_memory_lg.unlock();
+
+            if (free_memory) {
+                var iter = reference_memory.iterator();
+                while (iter.next()) |entry| {
+                    entry.value_ptr.deinit();
+                }
             }
+            reference_memory.deinit();
         }
-        self.reference_memory.deinit();
     }
 
-    pub fn allocReferenceBlock(self: *Self, slot: Slot, capacity: usize) !*ArrayList(AccountRef) {
-        const references = try ArrayList(AccountRef).initCapacity(
-            self.reference_allocator,
-            capacity,
-        );
-        try self.reference_memory.putNoClobber(slot, references);
-        return self.reference_memory.getEntry(slot).?.value_ptr;
+    pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
+        for (self.bins) |*bin_rw| {
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
+
+            try bin.ensureTotalCapacity(size);
+        }
+    }
+
+    pub fn putReferenceBlock(self: *Self, slot: Slot, references: ArrayList(AccountRef)) !void {
+        var reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
+        defer reference_memory_lg.unlock();
+        try reference_memory.putNoClobber(slot, references);
     }
 
     pub fn freeReferenceBlock(self: *Self, slot: Slot) error{MemoryNotFound}!void {
-        if (!self.reference_memory.remove(slot)) {
+        var reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
+        defer reference_memory_lg.unlock();
+
+        if (!reference_memory.remove(slot)) {
             return error.MemoryNotFound;
         }
     }
 
-    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
-        var current_reference = self.getReference(pubkey) orelse return error.PubkeyNotFound;
-        const previous_reference: ?AccountRef = null;
+    pub fn getReference(self: *Self, pubkey: *const Pubkey) ?AccountReferenceHead {
+        const bin_rw = self.getBinFromPubkey(pubkey);
+        const bin, var bin_lg = bin_rw.readWithLock();
+        defer bin_lg.unlock();
 
-        while (true) {
-            // found the slot
-            if (current_reference.slot == slot) {
-                // remove it from the index (eg, remove [b])
-                const b = current_reference;
-                if (previous_reference) |a| {
-                    // .. -> a -> [b] -> c  => ... -> a -> c
-                    const c = b.next_ptr;
-                    a.next_ptr = c;
-                } else {
-                    if (b.next_ptr) |a| {
-                        // head: [b] -> a => a
-                        b.* = a.*;
-                    } else {
-                        // head: [b] => { remove entry from hashmap }
-                        var bin = self.getBinFromPubkey(pubkey);
-                        bin.remove(pubkey.*) catch unreachable;
-                    }
-                }
-                return;
-            } else {
-                // keep traversing
-                if (current_reference.next_ptr) |next_ptr| {
-                    current_reference = next_ptr;
-                } else {
-                    return error.SlotNotFound;
-                }
-            }
-        }
+        const ref_head_rw = bin.get(pubkey.*);
+        return ref_head_rw;
     }
 
-    pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
-        return self.calculator.binIndex(pubkey);
+    pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {
+        var head_reference_rw = self.getReference(pubkey) orelse return false;
+        const head_ref, var head_reference_lg = head_reference_rw.readWithLock();
+        defer head_reference_lg.unlock();
+
+        // find the slot in the reference list
+        var curr_ref: ?*AccountRef = head_ref.ref_ptr;
+        const does_exists = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+            if (ref.slot == slot) break true;
+        } else false;
+
+        return does_exists;
     }
 
-    pub inline fn getBin(self: *const Self, index: usize) *RefMap {
-        return &self.bins[index];
-    }
-
-    pub inline fn getBinFromPubkey(
-        self: *const Self,
-        pubkey: *const Pubkey,
-    ) *RefMap {
-        const bin_index = self.calculator.binIndex(pubkey);
-        return &self.bins[bin_index];
-    }
-
-    pub inline fn numberOfBins(self: *const Self) usize {
-        return self.bins.len;
-    }
-
-    /// adds the reference to the index if there is not a duplicate (ie, the same slot)
+    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
+    /// returns if the reference was inserted.
     pub fn indexRefIfNotDuplicateSlot(self: *Self, account_ref: *AccountRef) bool {
-        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
+
+        const bin, var bin_lg = bin_rw.writeWithLock();
         const result = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+        bin_lg.unlock();
+
         if (result.found_existing) {
             // traverse until you find the end
-            var curr: *AccountRef = result.value_ptr.*;
+            var head_ref_rw: AccountReferenceHead = result.value_ptr.*;
+            const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
+            defer head_ref_lg.unlock();
+
+            var curr = head_ref.ref_ptr;
             while (true) {
                 if (curr.slot == account_ref.slot) {
                     // found a duplicate => dont do the insertion
@@ -176,18 +181,28 @@ pub const AccountIndex = struct {
                 }
             }
         } else {
-            result.value_ptr.* = account_ref;
+            result.value_ptr.* = AccountReferenceHead.init(.{ .ref_ptr = account_ref });
             return true;
         }
     }
 
     /// adds a reference to the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
-        const bin = self.getBinFromPubkey(&account_ref.pubkey);
+        const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
+
+        const bin, var bin_lg = bin_rw.writeWithLock();
         const result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+
         if (result.found_existing) {
+            // we can release the lock now
+            bin_lg.unlock();
+
             // traverse until you find the end
-            var curr: *AccountRef = result.value_ptr.*;
+            var head_ref_rw: AccountReferenceHead = result.value_ptr.*;
+            const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
+            defer head_ref_lg.unlock();
+
+            var curr = head_ref.ref_ptr;
             while (true) {
                 if (curr.next_ptr == null) { // 2)
                     curr.next_ptr = account_ref;
@@ -197,22 +212,114 @@ pub const AccountIndex = struct {
                 }
             }
         } else {
-            result.value_ptr.* = account_ref;
+            result.value_ptr.* = AccountReferenceHead.init(.{ .ref_ptr = account_ref });
+            bin_lg.unlock();
         }
     }
 
-    pub fn getReference(self: *Self, pubkey: *const Pubkey) ?*AccountRef {
-        const bin = self.getBinFromPubkey(pubkey);
-        return bin.get(pubkey.*);
+    pub fn updateReference(self: *Self, pubkey: *const Pubkey, slot: Slot, new_ref: *AccountRef) !void {
+        var head_ref_rw = self.getReference(pubkey) orelse unreachable;
+        const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
+        var curr_ref = head_ref.ref_ptr;
+
+        // 1) it relates to the head (we get a ptr and update directly)
+        if (curr_ref.slot == slot) {
+            const bin_rw = self.getBinFromPubkey(pubkey);
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
+
+            // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
+            // so we release the head_lock so we can get a pointer -- because we need a pointer,
+            // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
+            head_ref_lg.unlock();
+
+            // NOTE: `getPtr` is important here vs `get` used above
+            var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;
+            var head_ref_ptr, var head_ref_ptr_lg = head_reference_ptr_rw.writeWithLock();
+            defer head_ref_ptr_lg.unlock();
+
+            const head_next_ptr = head_ref_ptr.ref_ptr.next_ptr;
+            // insert into linked list
+            head_ref_ptr.ref_ptr = new_ref;
+            new_ref.next_ptr = head_next_ptr;
+        } else {
+            defer head_ref_lg.unlock();
+
+            // 2) it relates to a normal linked-list
+            var prev_ref = curr_ref;
+            curr_ref = curr_ref.next_ptr orelse return error.SlotNotFound;
+            blk: while (true) {
+                if (curr_ref.slot == slot) {
+                    // update prev -> curr -> next
+                    //    ==> prev -> new -> next
+                    prev_ref.next_ptr = new_ref;
+                    new_ref.next_ptr = curr_ref.next_ptr;
+                    break :blk;
+                } else {
+                    // keep traversing
+                    prev_ref = curr_ref;
+                    curr_ref = curr_ref.next_ptr orelse return error.SlotNotFound;
+                }
+            }
+        }
     }
 
-    pub fn getSlotReference(self: *Self, pubkey: *const Pubkey, slot: Slot) ?*AccountRef {
-        const bin = self.getBinFromPubkey(pubkey);
-        var curr_ref = bin.get(pubkey.*);
-        while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
-            if (ref.slot == slot) return ref;
+    pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
+        // need to hold bin lock to update the head ptr value (need to hold a reference to it)
+
+        const head_ref, var head_reference_lg = blk: {
+            const bin_rw = self.getBinFromPubkey(pubkey);
+            // NOTE: we only get a read since most of the time it will update the linked-list and not the head
+            const bin, var bin_lg = bin_rw.readWithLock();
+            defer bin_lg.unlock();
+
+            var head_reference_rw = bin.get(pubkey.*) orelse return error.PubkeyNotFound;
+            break :blk head_reference_rw.readWithLock();
+        };
+        var curr_reference = head_ref.ref_ptr;
+
+        // structure will always be: head -> [a] -> [b] -> [c]
+        // 1) handle base case with head: head -> [a] -> [b] => head -> [b]
+        // 2) handle normal linked-list case: [a] -> [b] -> [c]
+
+        // 1) it relates to the head
+        if (curr_reference.slot == slot) {
+            const bin_rw = self.getBinFromPubkey(pubkey);
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
+
+            if (curr_reference.next_ptr) |next_ptr| {
+                // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
+                // so we release the head_lock so we can get a pointer -- because we need a pointer,
+                // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
+                head_reference_lg.unlock();
+                // NOTE: `getPtr` is important here vs `get` used above
+                var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;
+                var head_ref_ptr, var head_ref_ptr_lg = head_reference_ptr_rw.writeWithLock();
+                defer head_ref_ptr_lg.unlock();
+
+                head_ref_ptr.ref_ptr = next_ptr;
+            } else {
+                // head -> [a] => remove from hashmap
+                bin.remove(pubkey.*) catch unreachable;
+                head_reference_lg.unlock();
+            }
+        } else {
+            defer head_reference_lg.unlock();
+
+            // 2) it relates to a normal linked-list
+            var previous_reference = curr_reference;
+            curr_reference = curr_reference.next_ptr orelse return error.SlotNotFound;
+            while (true) {
+                if (curr_reference.slot == slot) {
+                    previous_reference.next_ptr = curr_reference.next_ptr;
+                    return;
+                } else {
+                    previous_reference = curr_reference;
+                    curr_reference = curr_reference.next_ptr orelse return error.SlotNotFound;
+                }
+            }
         }
-        return null;
     }
 
     pub fn validateAccountFile(
@@ -258,6 +365,26 @@ pub const AccountIndex = struct {
         }
 
         accounts_file.number_of_accounts = number_of_accounts;
+    }
+
+    pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
+        return self.calculator.binIndex(pubkey);
+    }
+
+    pub inline fn getBin(self: *const Self, index: usize) *RwMux(RefMap) {
+        return &self.bins[index];
+    }
+
+    pub inline fn getBinFromPubkey(
+        self: *const Self,
+        pubkey: *const Pubkey,
+    ) *RwMux(RefMap) {
+        const bin_index = self.calculator.binIndex(pubkey);
+        return self.getBin(bin_index);
+    }
+
+    pub inline fn numberOfBins(self: *const Self) usize {
+        return self.bins.len;
     }
 };
 
@@ -888,7 +1015,7 @@ pub const DiskMemoryAllocator = struct {
     }
 };
 
-test "accounts_db.index: tests disk allocator on hashmaps" {
+test "tests disk allocator on hashmaps" {
     var allocator = try DiskMemoryAllocator.init("test_data/tmp");
     defer allocator.deinit(null);
 
@@ -905,7 +1032,7 @@ test "accounts_db.index: tests disk allocator on hashmaps" {
     try std.testing.expect(std.meta.eql(r, ref));
 }
 
-test "accounts_db.index: tests disk allocator" {
+test "tests disk allocator" {
     var allocator = try DiskMemoryAllocator.init("test_data/tmp");
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
@@ -950,7 +1077,7 @@ test "accounts_db.index: tests disk allocator" {
     try std.testing.expect(did_error);
 }
 
-test "accounts_db.index: tests swissmap read/write/delete" {
+test "tests swissmap read/write/delete" {
     const allocator = std.testing.allocator;
 
     const n_accounts = 10_000;
@@ -1001,7 +1128,7 @@ test "accounts_db.index: tests swissmap read/write/delete" {
     }
 }
 
-test "accounts_db.index: tests swissmap read/write" {
+test "tests swissmap read/write" {
     const allocator = std.testing.allocator;
 
     const n_accounts = 10_000;

@@ -85,6 +85,7 @@ pub const AccountInFile = struct {
             offset += writeIntLittleMem(self.rent_epoch, buf[offset..]);
             @memcpy(buf[offset..(offset + 32)], &self.owner.data);
             offset += 32;
+
             offset += writeIntLittleMem(
                 @as(u8, @intFromBool(self.executable)),
                 buf[offset..],
@@ -111,6 +112,14 @@ pub const AccountInFile = struct {
 
     pub const Self = @This();
 
+    pub fn getSizeInFile(self: *const Self) u64 {
+        return std.mem.alignForward(
+            usize,
+            AccountInFile.STATIC_SIZE + self.data.len,
+            @sizeOf(u64),
+        );
+    }
+
     pub fn validate(self: *const Self) !void {
         // make sure upper bits are zero
         const exec_byte = @as(*u8, @ptrCast(self.executable()));
@@ -128,6 +137,16 @@ pub const AccountInFile = struct {
         if (!valid_lamports) {
             return error.InvalidLamports;
         }
+    }
+
+    pub fn toAccount(self: *const Self) Account {
+        return .{
+            .data = self.data,
+            .executable = self.executable().*,
+            .lamports = self.lamports().*,
+            .owner = self.owner().*,
+            .rent_epoch = self.rent_epoch().*,
+        };
     }
 
     pub inline fn pubkey(self: *const Self) *Pubkey {
@@ -186,11 +205,8 @@ pub const AccountFile = struct {
 
     // number of accounts stored in the file
     number_of_accounts: usize = 0,
-    // size of accounts which are either old-state or zero-lamport
-    dead_bytes: usize = 0,
-    // is populated when file is read
-    // note: need a separate counter vs mmap.len because of padding
-    account_bytes: usize = 0,
+    // when shrinking or deleting, this is set to true
+    deinit_was_called: bool = false,
 
     const Self = @This();
 
@@ -222,6 +238,7 @@ pub const AccountFile = struct {
     pub fn deinit(self: *Self) void {
         std.posix.munmap(self.memory);
         self.file.close();
+        self.deinit_was_called = true;
     }
 
     pub fn validate(self: *Self) !void {
@@ -242,23 +259,6 @@ pub const AccountFile = struct {
         }
 
         self.number_of_accounts = number_of_accounts;
-        self.account_bytes = account_bytes;
-    }
-
-    pub fn populateMetadata(self: *Self) void {
-        var offset: usize = 0;
-        var number_of_accounts: usize = 0;
-        var account_bytes: usize = 0;
-
-        while (true) {
-            const account = self.readAccount(offset) catch break;
-            offset = offset + account.len;
-            number_of_accounts += 1;
-            account_bytes += account.len;
-        }
-
-        self.number_of_accounts = number_of_accounts;
-        self.account_bytes = account_bytes;
     }
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)

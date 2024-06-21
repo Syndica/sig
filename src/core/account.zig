@@ -9,6 +9,11 @@ pub const Account = struct {
     executable: bool,
     rent_epoch: Epoch,
 
+    pub fn deinit(self: *Account, allocator: std.mem.Allocator) void {
+        allocator.free(self.data);
+        self.* = undefined;
+    }
+
     pub fn random(allocator: std.mem.Allocator, rng: std.rand.Random, data_len: usize) !Account {
         const data = try allocator.alloc(u8, data_len);
         rng.bytes(data);
@@ -20,6 +25,26 @@ pub const Account = struct {
             .executable = rng.boolean(),
             .rent_epoch = rng.int(Epoch),
         };
+    }
+
+    // creates a copy of the account. most important is the copy of the data slice.
+    pub fn clone(self: *const Account, allocator: std.mem.Allocator) !Account {
+        const data = try allocator.dupe(u8, self.data);
+        return .{
+            .lamports = self.lamports,
+            .data = data,
+            .owner = self.owner,
+            .executable = self.executable,
+            .rent_epoch = self.rent_epoch,
+        };
+    }
+
+    pub fn equals(self: *const Account, other: *const Account) bool {
+        return std.mem.eql(u8, self.data, other.data) and
+            self.lamports == other.lamports and
+            self.owner.equals(&other.owner) and
+            self.executable == other.executable and
+            self.rent_epoch == other.rent_epoch;
     }
 
     /// gets the snapshot size of the account (when serialized)

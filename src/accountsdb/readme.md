@@ -237,7 +237,7 @@ after validating accounts-db data, we also validate a few key structs:
 `BenchArgs` contains all the configuration of a benchmark (comments describe each parameter) 
 - found at the bottom of `db.zig`
 
-writing accounts uses `putAccountBatch` which takes a slice of accounts 
+writing accounts uses `putAccountSlice` which takes a slice of accounts 
 and `putAccountFile` which takes an account file 
 reading accounts uses `accounts_db.getAccount(pubkey);`.
 
