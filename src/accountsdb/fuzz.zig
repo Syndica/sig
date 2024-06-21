@@ -1,35 +1,11 @@
 const std = @import("std");
-
 const sig = @import("../lib.zig");
-
-const ArrayList = std.ArrayList;
-const ArrayListUnmanaged = std.ArrayListUnmanaged;
-const Blake3 = std.crypto.hash.Blake3;
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
-const Hash = sig.core.hash.Hash;
 const Slot = sig.core.time.Slot;
-const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
-
-const sysvars = sig.accounts_db.sysvars;
-const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
-const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
-const AccountFile = sig.accounts_db.accounts_file.AccountFile;
-const FileId = sig.accounts_db.accounts_file.FileId;
-const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
-const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
-const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
-const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
-const SnapshotFieldsAndPaths = sig.accounts_db.snapshots.SnapshotFieldsAndPaths;
-const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
-const Bank = sig.accounts_db.bank.Bank;
-const AccountIndex = sig.accounts_db.index.AccountIndex;
-const AccountRef = sig.accounts_db.index.AccountRef;
-const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
-const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 
 const MAX_FUZZ_TIME = std.time.ns_per_s * 100_000;
 

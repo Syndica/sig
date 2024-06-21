@@ -10,7 +10,6 @@ const Blake3 = std.crypto.hash.Blake3;
 const Account = sig.core.Account;
 const Hash = sig.core.hash.Hash;
 const Slot = sig.core.time.Slot;
-const Epoch = sig.core.time.Epoch;
 const Pubkey = sig.core.pubkey.Pubkey;
 
 const sysvars = sig.accounts_db.sysvars;
@@ -24,19 +23,19 @@ const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncreme
 const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFieldsAndPaths = sig.accounts_db.snapshots.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
-const Bank = sig.accounts_db.bank.Bank;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
-
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const readDirectory = sig.utils.directory.readDirectory;
-const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
+const globalRegistry = sig.prometheus.registry.globalRegistry;
+const GetMetricError = sig.prometheus.registry.GetMetricError;
+const Counter = sig.prometheus.counter.Counter;
 
 const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
@@ -54,11 +53,6 @@ const PubkeysAndAccounts = struct { []Pubkey, []Account };
 const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
 const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
 const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
-
-const Registry = sig.prometheus.registry.Registry;
-const globalRegistry = sig.prometheus.registry.globalRegistry;
-const GetMetricError = sig.prometheus.registry.GetMetricError;
-const Counter = sig.prometheus.counter.Counter;
 
 pub const AccountsDBStats = struct {
     number_files_flushed: *Counter,
@@ -1395,8 +1389,8 @@ pub const AccountsDB = struct {
                 const did_remove = file_map.swapRemove(file_id);
                 std.debug.assert(did_remove);
 
-                // delete account
                 account_file.deinit();
+                // delete account
 
                 break :blk slot;
             };

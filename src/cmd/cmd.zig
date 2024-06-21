@@ -8,9 +8,7 @@ const config = @import("config.zig");
 
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
 const AccountsDB = sig.accounts_db.AccountsDB;
-const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
 const ContactInfo = sig.gossip.ContactInfo;

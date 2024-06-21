@@ -2,15 +2,11 @@ const std = @import("std");
 const lib = @import("../lib.zig");
 
 const ArrayList = std.ArrayList;
-const Account = lib.core.account.Account;
-const Hash = lib.core.hash.Hash;
 const Slot = lib.core.time.Slot;
 const Pubkey = lib.core.pubkey.Pubkey;
 const AccountFile = lib.accounts_db.accounts_file.AccountFile;
 const FileId = lib.accounts_db.accounts_file.FileId;
 const RwMux = lib.sync.RwMux;
-
-// RwMux(Vec<>)
 
 // for sync reasons we need a stable head with a lock
 pub const AccountReferenceHead = RwMux(struct {
