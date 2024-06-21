@@ -1044,17 +1044,17 @@ pub const AccountsDB = struct {
 
     /// periodically runs flush/clean/shrink
     pub fn runManagerLoop(self: *Self, exit: *std.atomic.Value(bool)) !void {
+        var timer = try std.time.Timer.start();
         var flush_slots = ArrayList(Slot).init(self.allocator);
 
         while (!exit.load(.unordered)) {
-            var timer = try std.time.Timer.start();
             defer {
                 const elapsed = timer.read();
                 if (elapsed < DB_MANAGER_UPDATE_NS) {
                     const delay = DB_MANAGER_UPDATE_NS - elapsed;
                     std.time.sleep(delay);
+                    timer.reset();
                 }
-                timer.reset();
             }
 
             const root_slot = self.largest_root_slot.load(.unordered);
