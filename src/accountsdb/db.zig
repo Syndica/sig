@@ -1372,43 +1372,48 @@ pub const AccountsDB = struct {
         }
 
         for (self.delete_account_files.keys()) |file_id| {
-            var account_file_rw: RwMux(AccountFile) = blk: {
+            const slot = blk: {
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
 
                 // remove file from map
-                const account_file = file_map.get(file_id).?;
+                var account_file_rw = file_map.get(file_id).?;
+                const account_file, var account_file_lg = account_file_rw.writeWithLock();
+                defer account_file_lg.unlock();
+                const slot = account_file.slot;
+
+                self.logger.infof("deleting slot: {}...", .{slot});
+
+                // sanity check
+                {
+                    const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.readWithLock();
+                    defer dead_accounts_counter_lg.unlock();
+                    const number_of_dead_accounts = dead_accounts_counter.get(account_file.slot).?;
+                    std.debug.assert(account_file.number_of_accounts == number_of_dead_accounts);
+                }
+
                 const did_remove = file_map.swapRemove(file_id);
                 std.debug.assert(did_remove);
 
-                // return slot
-                break :blk account_file;
-            };
+                // delete account
+                account_file.deinit();
 
-            const account_file, var account_file_lg = account_file_rw.writeWithLock();
-            // sanity check
-            {
-                const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.readWithLock();
-                defer dead_accounts_counter_lg.unlock();
-                const number_of_dead_accounts = dead_accounts_counter.get(account_file.slot).?;
-                std.debug.assert(account_file.number_of_accounts == number_of_dead_accounts);
-            }
-            account_file.deinit();
-            account_file_lg.unlock();
+                break :blk slot;
+            };
 
             // NOTE: this should always succeed or something is wrong
             // remove from map - delete file from disk
-            self.deleteAccountFile(account_file.slot, file_id) catch |err| {
+            self.deleteAccountFile(slot, file_id) catch |err| {
                 self.logger.errf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
-                    .{ account_file.slot, file_id.toInt(), @errorName(err) },
+                    .{ slot, file_id.toInt(), @errorName(err) },
                 );
             };
 
             {
                 const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                 defer dead_accounts_counter_lg.unlock();
-                const did_remove = dead_accounts_counter.swapRemove(account_file.slot);
+                const did_remove = dead_accounts_counter.swapRemove(slot);
                 std.debug.assert(did_remove);
             }
         }
