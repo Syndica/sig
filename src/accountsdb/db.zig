@@ -2246,7 +2246,8 @@ test "flushing slots works" {
 
     var account_file, var account_file_lg = account_file_rw.writeWithLock();
     defer account_file_lg.unlock();
-    try account_file.validate();
+    const n = try account_file.validate();
+    account_file.number_of_accounts = n;
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
 

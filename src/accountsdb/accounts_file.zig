@@ -241,7 +241,7 @@ pub const AccountFile = struct {
         self.deinit_was_called = true;
     }
 
-    pub fn validate(self: *Self) !void {
+    pub fn validate(self: *Self) !usize {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
         var account_bytes: usize = 0;
@@ -258,7 +258,7 @@ pub const AccountFile = struct {
             return error.InvalidAccountFileLength;
         }
 
-        self.number_of_accounts = number_of_accounts;
+        return number_of_accounts;
     }
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)
@@ -377,7 +377,7 @@ test "core.accounts_file: verify accounts file" {
     var accounts_file = try AccountFile.init(file, file_info, 10);
     defer accounts_file.deinit();
 
-    try accounts_file.validate();
+    _ = try accounts_file.validate();
 
     const account = try accounts_file.readAccount(0);
     const hash_and_lamports = try accounts_file.getAccountHashAndLamports(0);
