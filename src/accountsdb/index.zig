@@ -217,6 +217,53 @@ pub const AccountIndex = struct {
         }
     }
 
+    pub fn updateReference(self: *Self, pubkey: *const Pubkey, slot: Slot, new_ref: *AccountRef) !void {
+        var head_ref_rw = self.getReference(pubkey) orelse unreachable;
+        const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
+        var curr_ref = head_ref.ref_ptr;
+
+        // 1) it relates to the head (we get a ptr and update directly)
+        if (curr_ref.slot == slot) {
+            const bin_rw = self.getBinFromPubkey(pubkey);
+            const bin, var bin_lg = bin_rw.writeWithLock();
+            defer bin_lg.unlock();
+
+            // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
+            // so we release the head_lock so we can get a pointer -- because we need a pointer,
+            // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
+            head_ref_lg.unlock();
+
+            // NOTE: `getPtr` is important here vs `get` used above
+            var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;
+            var head_ref_ptr, var head_ref_ptr_lg = head_reference_ptr_rw.writeWithLock();
+            defer head_ref_ptr_lg.unlock();
+
+            const head_next_ptr = head_ref_ptr.ref_ptr.next_ptr;
+            // insert into linked list
+            head_ref_ptr.ref_ptr = new_ref;
+            new_ref.next_ptr = head_next_ptr;
+        } else {
+            defer head_ref_lg.unlock();
+
+            // 2) it relates to a normal linked-list
+            var prev_ref = curr_ref;
+            curr_ref = curr_ref.next_ptr orelse return error.SlotNotFound;
+            blk: while (true) {
+                if (curr_ref.slot == slot) {
+                    // update prev -> curr -> next
+                    //    ==> prev -> new -> next
+                    prev_ref.next_ptr = new_ref;
+                    new_ref.next_ptr = curr_ref.next_ptr;
+                    break :blk;
+                } else {
+                    // keep traversing
+                    prev_ref = curr_ref;
+                    curr_ref = curr_ref.next_ptr orelse return error.SlotNotFound;
+                }
+            }
+        }
+    }
+
     pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
         // need to hold bin lock to update the head ptr value (need to hold a reference to it)
 

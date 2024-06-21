@@ -1452,6 +1452,7 @@ pub const AccountsDB = struct {
             errdefer shrink_account_file_lg.unlock();
 
             const slot = shrink_account_file.slot;
+            self.logger.infof("shrinking slot: {}...", .{slot});
 
             // compute size of alive accounts (read)
             var is_alive_flags = try std.ArrayList(bool).initCapacity(self.allocator, shrink_account_file.number_of_accounts);
@@ -1547,12 +1548,7 @@ pub const AccountsDB = struct {
 
                     // remove + re-add new reference
                     head_ref_lg.unlock();
-                    {
-                        // TODO: to not run into memory issues, need to ensure we
-                        // remove + insert in one bin lock
-                        try self.account_index.removeReference(pubkey, slot);
-                        self.account_index.indexRef(new_ref_ptr);
-                    }
+                    try self.account_index.updateReference(pubkey, slot, new_ref_ptr);
                 }
             }
 
