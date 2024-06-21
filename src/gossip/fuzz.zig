@@ -14,7 +14,6 @@ const _gossip_data = @import("data.zig");
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const SignedGossipData = _gossip_data.SignedGossipData;
 const ContactInfo = _gossip_data.ContactInfo;
-const socket_tag = _gossip_data.socket_tag;
 const AtomicBool = std.atomic.Value(bool);
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -286,7 +285,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
     const fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
-    try fuzz_contact_info.setSocket(socket_tag.GOSSIP, fuzz_address);
+    try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(

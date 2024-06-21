@@ -6,7 +6,6 @@ const _gossip_data = @import("../gossip/data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
 const getWallclockMs = _gossip_data.getWallclockMs;
 const ContactInfo = _gossip_data.ContactInfo;
-const socket_tag = _gossip_data.socket_tag;
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -106,7 +105,7 @@ pub const ActiveSet = struct {
         while (iter.next()) |entry| {
             // lookup peer contact info
             const peer_info = table.getContactInfo(entry.key_ptr.*) orelse continue;
-            const peer_gossip_addr = peer_info.getSocket(socket_tag.GOSSIP) orelse continue;
+            const peer_gossip_addr = peer_info.getSocket(.gossip) orelse continue;
 
             peer_gossip_addr.sanitize() catch continue;
 

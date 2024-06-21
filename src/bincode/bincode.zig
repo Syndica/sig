@@ -419,13 +419,17 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
         .Bool => return writer.writeByte(@intFromBool(data)),
         .Enum => |_| {
+            comptime var SerializedSize = u32;
+            comptime if (@hasDecl(T, "BincodeSize")) {
+                SerializedSize = T.BincodeSize;
+            };
             if (getConfig(T)) |type_config| {
                 if (type_config.serializer) |serialize_fcn| {
                     return serialize_fcn(writer, data, params);
                 }
             }
 
-            return bincode.write(writer, @as(u32, @intFromEnum(data)), params);
+            return bincode.write(writer, @as(SerializedSize, @intFromEnum(data)), params);
         },
         .Union => |info| {
             try bincode.write(writer, @as(u32, @intFromEnum(data)), params);

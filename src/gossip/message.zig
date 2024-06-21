@@ -22,7 +22,7 @@ const Pong = @import("ping_pong.zig").Pong;
 
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
-// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268
+/// Analogous to [Protocol](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268)
 pub const GossipMessage = union(enum(u32)) {
     PullRequest: struct { GossipPullFilter, SignedGossipData },
     PullResponse: struct { Pubkey, []SignedGossipData },
