@@ -424,9 +424,14 @@ pub fn SwissMap(
             .state = .empty_or_deleted,
             .control_bytes = 0b1111111,
         };
+        pub const OCCUPIED_STATE = State{
+            .state = .occupied,
+            .control_bytes = 0,
+        };
 
         const EMPTY_STATE_VEC: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(EMPTY_STATE));
         const DELETED_STATE_VEC: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(DELETED_STATE));
+        const OCCUPIED_STATE_VEC: @Vector(GROUP_SIZE, u8) = @splat(@bitCast(OCCUPIED_STATE));
 
         pub const KeyValue = struct {
             key: Key,
@@ -542,14 +547,11 @@ pub fn SwissMap(
 
                     const state_vec = self.states[it.group_index];
 
-                    const is_not_empty = EMPTY_STATE_VEC != state_vec;
-                    const is_not_deleted = DELETED_STATE_VEC != state_vec;
-                    const occupied_states = andSIMD(is_not_empty, is_not_deleted);
-
-                    if (@reduce(.Or, occupied_states)) {
+                    const occupied_states = state_vec & OCCUPIED_STATE_VEC;
+                    if (@reduce(.Or, occupied_states) != 0) {
                         for (it.position..GROUP_SIZE) |j| {
                             defer it.position += 1;
-                            if (occupied_states[j]) {
+                            if (occupied_states[j] != 0) {
                                 return .{
                                     .key_ptr = &self.groups[it.group_index][j].key,
                                     .value_ptr = &self.groups[it.group_index][j].value,
@@ -720,17 +722,14 @@ pub fn SwissMap(
                 // if theres an free then insert
                 // note: if theres atleast on empty state, then there wont be any deleted states
                 // due to how remove works, so we dont need to prioritize deleted over empty
-                const is_empty_vec = EMPTY_STATE_VEC == state_vec;
-                // note: duplicate keys may occur because we fill in deleted states
-                const is_deleted_vec = DELETED_STATE_VEC == state_vec;
-                const is_free_vec = orSIMD(is_deleted_vec, is_empty_vec);
-                if (@reduce(.Or, is_free_vec)) {
+                const is_free_vec = ~state_vec & OCCUPIED_STATE_VEC;
+                if (@reduce(.Or, is_free_vec) != 0) {
                     _ = self.fill(
                         key,
                         value,
                         key_state,
                         group_index,
-                        is_free_vec,
+                        is_free_vec == @as(@Vector(GROUP_SIZE, u8), @splat(1)),
                     );
                     return;
                 }
