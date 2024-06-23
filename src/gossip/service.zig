@@ -810,7 +810,10 @@ pub const GossipService = struct {
             if (top_of_loop_ts - last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer last_pull_req_ts = getWallclockMs();
                 // this also includes sending ping messages to other peers
+                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+                var prng = std.Random.Xoshiro256.init(prng_seed);
                 const packets = self.buildPullRequests(
+                    prng.random(),
                     pull_request.MAX_BLOOM_SIZE,
                 ) catch |e| {
                     self.logger.errf("failed to generate pull requests: {any}", .{e});
@@ -1044,6 +1047,7 @@ pub const GossipService = struct {
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
         self: *Self,
+        rand: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
     ) !ArrayList(Packet) {
@@ -1057,10 +1061,9 @@ pub const GossipService = struct {
         );
 
         // randomly include an entrypoint in the pull if we dont have their contact info
-        var rng = std.rand.DefaultPrng.init(now);
         var entrypoint_index: i16 = -1;
         if (self.entrypoints.items.len != 0) blk: {
-            const maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
+            const maybe_entrypoint_index = rand.intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
             if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
                 // early exit - we already have the peer in our contact info
                 break :blk;
@@ -1131,7 +1134,7 @@ pub const GossipService = struct {
         if (num_peers != 0) {
             for (filters.items) |filter_i| {
                 // TODO: incorperate stake weight in random sampling
-                const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
+                const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
                 if (peer_contact_info.getSocket(.gossip)) |gossip_addr| {
@@ -2572,7 +2575,12 @@ test "gossip.service: test build pull requests" {
     lg.unlock();
     ping_lock.unlock();
 
-    var packets = try gossip_service.buildPullRequests(2);
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    var packets = gossip_service.buildPullRequests(maybe_failing_prng.random(), 2) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
     defer packets.deinit();
 
     try std.testing.expect(packets.items.len > 1);
