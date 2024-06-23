@@ -48,6 +48,7 @@ pub const ActiveSet = struct {
 
     pub fn rotate(
         self: *Self,
+        rand: std.Random,
         peers: []ContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
@@ -61,8 +62,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        shuffleFirstN(rng.random(), ContactInfo, peers, size);
+        shuffleFirstN(rand, ContactInfo, peers, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
@@ -157,7 +157,12 @@ test "gossip.active_set: init/deinit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(gossip_peers.items);
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    active_set.rotate(maybe_failing_prng.random(), gossip_peers.items) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
@@ -194,5 +199,10 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(gossip_peers.items);
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    active_set.rotate(maybe_failing_prng.random(), gossip_peers.items) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
 }

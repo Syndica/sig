@@ -928,7 +928,9 @@ pub const GossipService = struct {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
         var active_set: *ActiveSet = active_set_lock.mut();
-        try active_set.rotate(valid_gossip_peers[0..valid_gossip_indexs.items.len]);
+        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var prng = std.Random.Xoshiro256.init(prng_seed);
+        try active_set.rotate(prng.random(), valid_gossip_peers[0..valid_gossip_indexs.items.len]);
     }
 
     /// logic for building new push messages which are sent to peers from the
@@ -2260,7 +2262,9 @@ test "gossip.service: tests handling prune messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(peers.items);
+        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var prng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(prng.random(), peers.items);
         as_lock.unlock();
     }
 
@@ -2633,7 +2637,9 @@ test "gossip.service: test build push messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(peers.items);
+        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var prng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
