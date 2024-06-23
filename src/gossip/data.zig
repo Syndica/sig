@@ -861,13 +861,12 @@ pub const NodeInstance = struct {
         };
     }
 
-    pub fn init(from: Pubkey, wallclock: u64) Self {
-        var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    pub fn init(rand: std.Random, from: Pubkey, wallclock: u64) Self {
         return Self{
             .from = from,
             .wallclock = wallclock,
             .timestamp = @intCast(std.time.microTimestamp()),
-            .token = rng.random().int(u64),
+            .token = rand.int(u64),
         };
     }
 
@@ -1018,7 +1017,9 @@ pub const ContactInfo = struct {
     const Self = @This();
 
     pub fn toNodeInstance(self: *Self) NodeInstance {
-        return NodeInstance.init(self.pubkey, @intCast(std.time.milliTimestamp()));
+        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var prng = std.Random.Xoshiro256.init(prng_seed);
+        return NodeInstance.init(prng.random(), self.pubkey, @intCast(std.time.milliTimestamp()));
     }
 
     pub fn deinit(self: Self) void {
