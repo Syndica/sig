@@ -206,7 +206,9 @@ pub fn randomPullRequestWithContactInfo(
             filter_set.add(&value_hash);
         }
 
-        var filters = try filter_set.consumeForGossipPullFilters(allocator, 1);
+        const filters_prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var filters_prng = std.Random.Xoshiro256.init(filters_prng_seed);
+        var filters = try filter_set.consumeForGossipPullFilters(allocator, filters_prng.random(), 1);
         filter.filter = filters.items[0].filter;
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;

@@ -58,7 +58,9 @@ pub fn buildGossipPullFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForGossipPullFilters(alloc, max_n_filters);
+    const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+    var prng = std.Random.Xoshiro256.init(prng_seed);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, prng.random(), max_n_filters);
     return filters;
 }
 
@@ -161,7 +163,7 @@ pub const GossipPullFilterSet = struct {
     }
 
     /// returns a list of GossipPullFilters and consumes Self by calling deinit.
-    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
+    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, rand: std.Random, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -176,8 +178,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(getWallclockMs());
-            shuffleFirstN(rng.random(), usize, indexs.items, n_filters);
+            shuffleFirstN(rand, usize, indexs.items, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {
@@ -329,7 +330,12 @@ test "gossip.pull_request: filter set deinits correct" {
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, 10);
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    var f = filter_set.consumeForGossipPullFilters(std.testing.allocator, maybe_failing_prng.random(), 10) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
     defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
