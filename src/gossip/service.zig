@@ -2404,7 +2404,12 @@ test "gossip.service: tests handle pull request" {
 
     const Bloom = @import("../bloom/bloom.zig").Bloom;
     // only consider the first bit so we know well get matches
-    var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    var bloom = Bloom.random(allocator, maybe_failing_prng.random(), 100, 0.1, N_FILTER_BITS) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
     defer bloom.deinit();
 
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);

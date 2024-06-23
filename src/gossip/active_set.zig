@@ -69,8 +69,11 @@ pub const ActiveSet = struct {
             const entry = try self.pruned_peers.getOrPut(peers[i].pubkey);
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
+                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+                var prng = std.Random.Xoshiro256.init(prng_seed);
                 const bloom = try Bloom.random(
                     self.allocator,
+                    prng.random(),
                     bloom_num_items,
                     BLOOM_FALSE_RATE,
                     BLOOM_MAX_BITS,

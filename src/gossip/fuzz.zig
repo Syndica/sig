@@ -169,7 +169,9 @@ pub fn randomPullRequestWithContactInfo(
     const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
-    var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
+    const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+    var prng = std.Random.Xoshiro256.init(prng_seed);
+    var bloom = try Bloom.random(allocator, prng.random(), 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     var filter = GossipPullFilter{
