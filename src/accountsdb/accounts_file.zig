@@ -110,6 +110,11 @@ pub const AccountInFile = struct {
         break :blk size;
     };
 
+    pub const ValidateError = error{
+        InvalidExecutableFlag,
+        InvalidLamports,
+    };
+
     const Self = @This();
 
     pub fn getSizeInFile(self: *const Self) u64 {
@@ -120,7 +125,7 @@ pub const AccountInFile = struct {
         );
     }
 
-    pub fn validate(self: *const Self) !void {
+    pub fn validate(self: *const Self) ValidateError!void {
         // make sure upper bits are zero
         const exec_byte = @as(*u8, @ptrCast(self.executable()));
         const valid_exec = exec_byte.* & ~@as(u8, 1) == 0;

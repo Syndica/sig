@@ -7,6 +7,7 @@ const Pubkey = lib.core.pubkey.Pubkey;
 const AccountFile = lib.accounts_db.accounts_file.AccountFile;
 const FileId = lib.accounts_db.accounts_file.FileId;
 const RwMux = lib.sync.RwMux;
+const AccountInFile = lib.accounts_db.accounts_file.AccountInFile;
 
 // for sync reasons we need a stable head with a lock
 pub const AccountReferenceHead = RwMux(struct {
@@ -356,12 +357,18 @@ pub const AccountIndex = struct {
         }
     }
 
+    pub const ValidateAccountFileError = error{
+        BinCountMismatch,
+        InvalidAccountFileLength,
+        OutOfReferenceMemory,
+    } || AccountInFile.ValidateError;
+
     pub fn validateAccountFile(
         self: *Self,
         accounts_file: *AccountFile,
         bin_counts: []usize,
         account_refs: *ArrayList(AccountRef),
-    ) !void {
+    ) ValidateAccountFileError!void {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
 

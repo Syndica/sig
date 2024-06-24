@@ -478,14 +478,21 @@ pub const AccountsDB = struct {
 
             const reference_slice_start = references.items.len;
             self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
-                if (err == error.OutOfReferenceMemory) {
-                    // TODO: support retry - error for now
-                    self.logger.errf(
-                        "out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n",
-                        .{},
-                    );
-                } else {
-                    self.logger.errf("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{ accounts_file.slot, accounts_file.id, @errorName(err) });
+                switch (err) {
+                    .OutOfReferenceMemory => {
+                        // TODO: support retry - error for now
+                        self.logger.errf(
+                            "out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n",
+                            .{},
+                        );
+                    },
+                    else => {
+                        self.logger.errf("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{
+                            accounts_file.slot,
+                            accounts_file.id,
+                            @errorName(err),
+                        });
+                    },
                 }
                 return err;
             };
