@@ -283,7 +283,7 @@ pub const BankHashStats = struct {
 pub const SlotAndHash = struct { slot: Slot, hash: Hash };
 
 pub const AccountsDbFields = struct {
-    file_map: std.AutoArrayHashMap(Slot, ArrayList(AccountFileInfo)),
+    file_map: std.AutoArrayHashMap(Slot, []const AccountFileInfo),
     stored_meta_write_version: u64,
     slot: Slot,
     bank_hash_info: BankHashInfo,
@@ -962,7 +962,7 @@ pub const AllSnapshotFields = struct {
         const full_slot = self.full.bank_fields.slot;
 
         // collapse accounts-db fields
-        var storages_map = &self.incremental.?.accounts_db_fields.file_map;
+        const storages_map = &self.incremental.?.accounts_db_fields.file_map;
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
         while (storages_entry_iter.next()) |*incremental_entry| {
@@ -970,7 +970,7 @@ pub const AllSnapshotFields = struct {
 
             // only keep slots > full snapshot slot
             if (!(slot > full_slot)) {
-                incremental_entry.value_ptr.deinit();
+                storages_map.allocator.free(incremental_entry.value_ptr.*);
                 _ = storages_map.swapRemove(slot);
                 continue;
             }
