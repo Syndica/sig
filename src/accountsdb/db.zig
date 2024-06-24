@@ -957,7 +957,7 @@ pub const AccountsDB = struct {
                     .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, null, full_config.max_slot),
                     .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, null),
                 } orelse continue;
-                const result = try self.getAccountHashAndLamportsFromRef(max_slot_ref);
+                const result = try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
 
                 const lamports = result.lamports;
                 var account_hash = result.hash;
@@ -1292,7 +1292,7 @@ pub const AccountsDB = struct {
                     var is_largest_root_zero_lamports = false;
                     if (ref.slot == ref_slot_max) {
                         // check if account is zero-lamports
-                        const ref_info = try self.getAccountHashAndLamportsFromRef(ref);
+                        const ref_info = try self.getAccountHashAndLamportsFromRef(ref.location);
                         is_largest_root_zero_lamports = ref_info.lamports == 0;
                     }
 
@@ -1727,9 +1727,9 @@ pub const AccountsDB = struct {
 
     pub fn getAccountHashAndLamportsFromRef(
         self: *Self,
-        account_ref: *const AccountRef,
+        location: AccountRef.AccountLocation,
     ) !struct { hash: Hash, lamports: u64 } {
-        switch (account_ref.location) {
+        switch (location) {
             .File => |ref_info| {
                 var account_file_rw = blk: {
                     const file_map, var file_map_lg = self.file_map.readWithLock();
