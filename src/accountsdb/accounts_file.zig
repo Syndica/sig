@@ -110,7 +110,7 @@ pub const AccountInFile = struct {
         break :blk size;
     };
 
-    pub const Self = @This();
+    const Self = @This();
 
     pub fn getSizeInFile(self: *const Self) u64 {
         return std.mem.alignForward(
