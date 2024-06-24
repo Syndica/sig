@@ -24,6 +24,7 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFieldsAndPaths = sig.accounts_db.snapshots.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
+const ValidateAccountFileError = AccountIndex.ValidateAccountFileError;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
@@ -476,10 +477,9 @@ pub const AccountsDB = struct {
                 return err;
             };
 
-            const reference_slice_start = references.items.len;
             self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
                 switch (err) {
-                    .OutOfReferenceMemory => {
+                    ValidateAccountFileError.OutOfReferenceMemory => {
                         // TODO: support retry - error for now
                         self.logger.errf(
                             "out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n",
@@ -497,9 +497,11 @@ pub const AccountsDB = struct {
                 return err;
             };
 
-            const reference_slice_end = references.items.len;
-            if (reference_slice_end > reference_slice_start) {
-                const ref_slice = references.items[reference_slice_start..reference_slice_end];
+            if (accounts_file.number_of_accounts > 0) {
+                // the last `number_of_accounts` is associated with this file
+                const start_index = references.items.len - accounts_file.number_of_accounts;
+                const end_index = references.items.len;
+                const ref_slice = references.items[start_index..end_index];
                 const ref_list = ArrayList(AccountRef).fromOwnedSlice(
                     // deinit allocator uses the counting allocator
                     counting_alloc_ptr.allocator(),
