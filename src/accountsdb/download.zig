@@ -1,3 +1,5 @@
+//! logic for downloading a snapshot
+
 const std = @import("std");
 const curl = @import("curl");
 const Pubkey = @import("../core/pubkey.zig").Pubkey;
@@ -11,6 +13,7 @@ const Hash = @import("../core/hash.zig").Hash;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 
+/// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
 const PeerSnapshotHash = struct {
     contact_info: ContactInfo,
     full_snapshot: SlotAndHash,
