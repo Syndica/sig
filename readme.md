@@ -5,7 +5,7 @@
     <br/>
 <div align="center">
   <a href="https://github.com/syndica/sig/releases/latest"><img alt="Version" src="https://img.shields.io/github/v/release/syndica/sig?include_prereleases&label=version"></a>
-  <a href="https://github.com/syndica/sig/actions/workflows/test.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/syndica/sig/test.yml?branch=main" /></a>
+  <a href="https://github.com/syndica/sig/actions/workflows/check.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/syndica/sig/check.yml?branch=main" /></a>
   <a href="https://ziglang.org/download"><img alt="Zig" src="https://img.shields.io/badge/zig-0.12.0-green.svg"></a>
   <a href="https://github.com/syndica/sig/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPLv3-blue"></a>
   </div>
