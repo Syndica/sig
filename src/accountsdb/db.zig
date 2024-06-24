@@ -457,7 +457,7 @@ pub const AccountsDB = struct {
             const file_id_usize = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
-            const file_infos: ArrayList(AccountFileInfo) = self.fields.?.file_map.get(slot) orelse {
+            const file_infos: []const AccountFileInfo = self.fields.?.file_map.get(slot) orelse {
                 // dont read account files which are not in the file_map
                 // note: this can happen when we load from a snapshot and there are extra account files
                 // in the directory which dont correspond to the snapshot were loading
@@ -465,11 +465,11 @@ pub const AccountsDB = struct {
                 continue;
             };
             // if this is hit, its likely an old snapshot
-            if (file_infos.items.len != 1) {
+            if (file_infos.len != 1) {
                 self.logger.errf("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
                 return error.InvalidSnapshot;
             }
-            const file_info = file_infos.items[0];
+            const file_info = file_infos[0];
             if (file_info.id != file_id_usize) {
                 self.logger.errf("file_id from metadata for slot {d} doesnt match file_id from filename: {d} vs {d}\n", .{ slot, file_info.id, file_id_usize });
                 return error.InvalidSnapshotFormat;
