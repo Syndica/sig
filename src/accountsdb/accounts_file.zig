@@ -238,7 +238,7 @@ pub const AccountFile = struct {
         self.file.close();
     }
 
-    pub fn validate(self: *Self) !usize {
+    pub fn validate(self: *const Self) !usize {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
         var account_bytes: usize = 0;
