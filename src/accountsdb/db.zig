@@ -1061,11 +1061,10 @@ pub const AccountsDB = struct {
 
         while (!exit.load(.unordered)) {
             defer {
-                const elapsed = timer.read();
+                const elapsed = timer.lap();
                 if (elapsed < DB_MANAGER_UPDATE_NS) {
                     const delay = DB_MANAGER_UPDATE_NS - elapsed;
                     std.time.sleep(delay);
-                    timer.reset();
                 }
             }
 
