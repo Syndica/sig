@@ -270,6 +270,20 @@ pub fn RwMux(comptime T: type) type {
             self.private.r.unlockShared();
             return value;
         }
+
+        // directly unlocks the lock guard. note: 99% of the time you should
+        // not use this method except in cases where you need to pass around
+        // rw_lock guards and unlock them later.
+        pub fn unlock(self: *Self) void {
+            self.private.r.unlock();
+        }
+
+        // directly unlocks the shared lock guard. note: 99% of the time you should
+        // not use this method except in cases where you need to pass around
+        // rw_lock guards and unlock them later.
+        pub fn unlockShared(self: *Self) void {
+            self.private.r.unlockShared();
+        }
     };
 }
 

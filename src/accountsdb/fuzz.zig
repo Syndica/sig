@@ -40,12 +40,7 @@ pub const TrackedAccount = struct {
 pub fn run(args: *std.process.ArgIterator) !void {
     _ = args;
 
-    // const seed = std.crypto.random.int(u64);
-    const seed: u64 = 6461539248993497688;
-    std.debug.print("seed: {}\n", .{seed});
-
-    var prng = std.rand.DefaultPrng.init(seed);
-    const rand = prng.random();
+    const seed = std.crypto.random.int(u64);
 
     var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa_allocator.allocator();
@@ -53,6 +48,32 @@ pub fn run(args: *std.process.ArgIterator) !void {
     const logger = Logger.init(allocator, .debug);
     defer logger.deinit();
     logger.spawn();
+
+    // open and append seed
+    const SEED_FILE_PATH = "test_data/fuzz_seeds.txt";
+    {
+        std.fs.cwd().access(SEED_FILE_PATH, .{}) catch |err| {
+            switch (err) {
+                std.fs.Dir.AccessError.FileNotFound => {
+                    var file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{});
+                    file.close();
+                },
+                else => {
+                    std.debug.print("failed to access seed file: {}\n", .{err});
+                    return;
+                },
+            }
+        };
+        const seed_file = try std.fs.cwd().openFile(SEED_FILE_PATH, .{ .mode = .write_only });
+        defer seed_file.close();
+        var buf: [32]u8 = undefined;
+        const seed_slice = try std.fmt.bufPrint(&buf, "{d}\n", .{seed});
+        try seed_file.writeAll(seed_slice);
+    }
+    std.debug.print("seed: {}\n", .{seed});
+
+    var prng = std.rand.DefaultPrng.init(seed);
+    const rand = prng.random();
 
     const use_disk = rand.boolean();
     const snapshot_dir = "test_data/accountsdb_fuzz";

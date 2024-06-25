@@ -155,6 +155,16 @@ pub const AccountInFile = struct {
         };
     }
 
+    pub fn toAccount(self: *const Self) !Account {
+        return .{
+            .data = self.data,
+            .executable = self.executable().*,
+            .lamports = self.lamports().*,
+            .owner = self.owner().*,
+            .rent_epoch = self.rent_epoch().*,
+        };
+    }
+
     pub inline fn pubkey(self: *const Self) *Pubkey {
         return &self.store_info.pubkey;
     }

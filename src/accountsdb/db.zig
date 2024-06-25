@@ -971,7 +971,9 @@ pub const AccountsDB = struct {
                 } else {
                     // hashes arent always stored correctly in snapshots
                     if (account_hash.order(&Hash.default()) == .eq) {
-                        const account = try self.getAccountFromRef(max_slot_ref);
+                        const account, var shared_lock = try self.getAccountFromRefWithLock(max_slot_ref);
+                        defer shared_lock.unlockShared();
+
                         account_hash = account.hash(&key);
                     }
                 }
@@ -1455,6 +1457,9 @@ pub const AccountsDB = struct {
             self.stats.number_files_shrunk.add(number_of_files);
         }
 
+        var alive_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
+        defer alive_pubkeys.deinit();
+
         var total_accounts_deleted: u64 = 0;
         for (shrink_account_files.keys()) |shrink_file_id| {
             var shrink_account_file_rw = blk: {
@@ -1479,17 +1484,23 @@ pub const AccountsDB = struct {
             var accounts_dead_count: u64 = 0;
             var accounts_alive_count: u64 = 0;
 
+            alive_pubkeys.clearRetainingCapacity();
+            try alive_pubkeys.ensureTotalCapacity(shrink_account_file.number_of_accounts);
+
             var accounts_alive_size: u64 = 0;
             var account_iter = shrink_account_file.iterator();
             while (account_iter.next()) |*account_in_file| {
                 const pubkey = account_in_file.pubkey();
                 // account is dead if it is not in the index; dead accounts
                 // are removed from the index during cleaning
-                const is_account_alive = self.account_index.exists(pubkey, shrink_account_file.slot);
-                if (is_account_alive) {
+                const is_alive = self.account_index.exists(pubkey, shrink_account_file.slot);
+                // NOTE: there may be duplicate state in account files which we must account for
+                const is_not_duplicate = !alive_pubkeys.contains(pubkey.*);
+                if (is_alive and is_not_duplicate) {
                     accounts_alive_size += account_in_file.getSizeInFile();
                     accounts_alive_count += 1;
                     is_alive_flags.appendAssumeCapacity(true);
+                    alive_pubkeys.putAssumeCapacity(pubkey.*, {});
                 } else {
                     accounts_dead_count += 1;
                     is_alive_flags.appendAssumeCapacity(false);
@@ -1564,6 +1575,10 @@ pub const AccountsDB = struct {
 
                     // remove + re-add new reference
                     try self.account_index.updateReference(pubkey, slot, new_ref_ptr);
+
+                    if (builtin.mode == .Debug) {
+                        std.debug.assert(self.account_index.exists(pubkey, slot));
+                    }
                 }
             }
 
@@ -1685,7 +1700,6 @@ pub const AccountsDB = struct {
                     ref_info.file_id,
                     ref_info.offset,
                 );
-
                 return account;
             },
             .Cache => |ref_info| {
@@ -1696,6 +1710,25 @@ pub const AccountsDB = struct {
                 const account = accounts[ref_info.index];
 
                 return account.clone(self.allocator);
+            },
+        }
+    }
+
+    pub fn getAccountFromRefWithLock(self: *Self, account_ref: *const AccountRef) !struct { Account, std.Thread.RwLock.DefaultRwLock } {
+        switch (account_ref.location) {
+            .File => |ref_info| {
+                return try self.getAccountInFileWithLock(
+                    ref_info.file_id,
+                    ref_info.offset,
+                );
+            },
+            .Cache => |ref_info| {
+                const account_cache, _ = self.account_cache.readWithLock();
+
+                _, const accounts = account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
+                const account = accounts[ref_info.index];
+
+                return .{ account, self.account_cache.private.r };
             },
         }
     }
@@ -1723,6 +1756,30 @@ pub const AccountsDB = struct {
         };
         const account = try account_in_file.toOwnedAccount(self.allocator);
         return account;
+    }
+
+    /// gets an account given an file_id and offset value
+    pub fn getAccountInFileWithLock(
+        self: *Self,
+        file_id: FileId,
+        offset: usize,
+    ) !struct { Account, std.Thread.RwLock.DefaultRwLock } {
+        var account_file_rw: RwMux(AccountFile) = blk: {
+            const file_map, var file_map_lg = self.file_map.readWithLock();
+            defer file_map_lg.unlock();
+
+            break :blk file_map.get(file_id) orelse {
+                return error.FileIdNotFound;
+            };
+        };
+
+        const account_file, _ = account_file_rw.readWithLock();
+        const account_in_file = account_file.readAccount(offset) catch {
+            return error.InvalidOffset;
+        };
+        const account = try account_in_file.toAccount();
+
+        return .{ account, account_file_rw.private.r };
     }
 
     pub fn getAccountHashAndLamportsFromRef(
@@ -1773,9 +1830,21 @@ pub const AccountsDB = struct {
         return account;
     }
 
+    pub fn getAccountWithLock(self: *Self, pubkey: *const Pubkey) !struct { Account, std.Thread.RwLock.DefaultRwLock } {
+        var head_ref_rw = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
+
+        const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+        defer head_ref_lg.unlock();
+
+        // NOTE: this will always be a safe unwrap since both bounds are null
+        const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
+        return try self.getAccountFromRefWithLock(max_ref);
+    }
+
     pub fn getTypeFromAccount(self: *Self, comptime T: type, pubkey: *const Pubkey) !T {
-        var account = try self.getAccount(pubkey);
-        defer account.deinit(self.allocator);
+        const account, var shared_lock = try self.getAccountWithLock(pubkey);
+        // NOTE: bincode will copy heap memory so its safe to unlock at the end of the function
+        defer shared_lock.unlockShared();
 
         const t = bincode.readFromSlice(self.allocator, T, account.data, .{}) catch {
             return error.DeserializationError;
@@ -1913,6 +1982,7 @@ pub const AccountsDB = struct {
                 );
                 accounts_dead_count += 1;
             }
+
             std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
         }
 
