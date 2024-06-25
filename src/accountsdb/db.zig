@@ -1721,7 +1721,7 @@ pub const AccountsDB = struct {
         const account_in_file = account_file.readAccount(offset) catch {
             return error.InvalidOffset;
         };
-        const account = account_in_file.toAccount().clone(self.allocator);
+        const account = try account_in_file.toOwnedAccount(self.allocator);
         return account;
     }
 

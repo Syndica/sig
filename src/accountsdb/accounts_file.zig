@@ -144,9 +144,10 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub fn toAccount(self: *const Self) Account {
+    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) !Account {
+        const owned_data = try allocator.dupe(u8, self.data);
         return .{
-            .data = self.data,
+            .data = owned_data,
             .executable = self.executable().*,
             .lamports = self.lamports().*,
             .owner = self.owner().*,
