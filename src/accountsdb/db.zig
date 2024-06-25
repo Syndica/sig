@@ -1754,7 +1754,7 @@ pub const AccountsDB = struct {
             },
             .Cache => |_| {
                 // we dont use this method for cache
-                return error.NotImplemented;
+                @panic("getAccountHashAndLamportsFromRef is not implemented on cache references");
             },
         }
     }
