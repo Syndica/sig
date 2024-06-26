@@ -971,8 +971,8 @@ pub const AccountsDB = struct {
                 } else {
                     // hashes arent always stored correctly in snapshots
                     if (account_hash.order(&Hash.default()) == .eq) {
-                        const account, var shared_lock = try self.getAccountFromRefWithLock(max_slot_ref);
-                        defer shared_lock.unlockShared();
+                        const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
+                        defer lock_guard.unlock();
 
                         account_hash = account.hash(&key);
                     }
@@ -1712,21 +1712,35 @@ pub const AccountsDB = struct {
         }
     }
 
-    pub fn getAccountFromRefWithLock(self: *Self, account_ref: *const AccountRef) !struct { Account, std.Thread.RwLock.DefaultRwLock } {
+    pub const AccountReadLock = union(enum) {
+        File: RwMux(AccountFile).RLockGuard,
+        Cache: RwMux(AccountCache).RLockGuard,
+
+        pub fn unlock(self: *AccountReadLock) void {
+            switch (self.*) {
+                .File => self.File.unlock(),
+                .Cache => self.Cache.unlock(),
+            }
+        }
+    };
+
+    pub fn getAccountFromRefWithReadLock(self: *Self, account_ref: *const AccountRef) !struct { Account, AccountReadLock } {
         switch (account_ref.location) {
             .File => |ref_info| {
-                return try self.getAccountInFileWithLock(
+                const account, const account_file_lg = try self.getAccountInFileWithLock(
                     ref_info.file_id,
                     ref_info.offset,
                 );
+
+                return .{ account, .{ .File = account_file_lg } };
             },
             .Cache => |ref_info| {
-                const account_cache, _ = self.account_cache.readWithLock();
+                const account_cache, const account_cache_lg = self.account_cache.readWithLock();
 
                 _, const accounts = account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
                 const account = accounts[ref_info.index];
 
-                return .{ account, self.account_cache.private.r };
+                return .{ account, .{ .Cache = account_cache_lg } };
             },
         }
     }
@@ -1761,7 +1775,7 @@ pub const AccountsDB = struct {
         self: *Self,
         file_id: FileId,
         offset: usize,
-    ) !struct { Account, std.Thread.RwLock.DefaultRwLock } {
+    ) !struct { Account, RwMux(AccountFile).RLockGuard } {
         var account_file_rw: RwMux(AccountFile) = blk: {
             const file_map, var file_map_lg = self.file_map.readWithLock();
             defer file_map_lg.unlock();
@@ -1771,13 +1785,13 @@ pub const AccountsDB = struct {
             };
         };
 
-        const account_file, _ = account_file_rw.readWithLock();
+        const account_file, const account_file_lg = account_file_rw.readWithLock();
         const account_in_file = account_file.readAccount(offset) catch {
             return error.InvalidOffset;
         };
         const account = try account_in_file.toAccount();
 
-        return .{ account, account_file_rw.private.r };
+        return .{ account, account_file_lg };
     }
 
     pub fn getAccountHashAndLamportsFromRef(
@@ -1828,7 +1842,7 @@ pub const AccountsDB = struct {
         return account;
     }
 
-    pub fn getAccountWithLock(self: *Self, pubkey: *const Pubkey) !struct { Account, std.Thread.RwLock.DefaultRwLock } {
+    pub fn getAccountWithReadLock(self: *Self, pubkey: *const Pubkey) !struct { Account, AccountReadLock } {
         var head_ref_rw = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
 
         const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
@@ -1836,13 +1850,13 @@ pub const AccountsDB = struct {
 
         // NOTE: this will always be a safe unwrap since both bounds are null
         const max_ref = slotListMaxWithinBounds(head_ref.ref_ptr, null, null).?;
-        return try self.getAccountFromRefWithLock(max_ref);
+        return try self.getAccountFromRefWithReadLock(max_ref);
     }
 
     pub fn getTypeFromAccount(self: *Self, comptime T: type, pubkey: *const Pubkey) !T {
-        const account, var shared_lock = try self.getAccountWithLock(pubkey);
+        const account, var lock_guard = try self.getAccountWithReadLock(pubkey);
         // NOTE: bincode will copy heap memory so its safe to unlock at the end of the function
-        defer shared_lock.unlockShared();
+        defer lock_guard.unlock();
 
         const t = bincode.readFromSlice(self.allocator, T, account.data, .{}) catch {
             return error.DeserializationError;
