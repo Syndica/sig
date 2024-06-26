@@ -1099,7 +1099,7 @@ pub const AccountsDB = struct {
                 for (flush_slots.items) |flush_slot| {
                     self.flushSlot(flush_slot, &unclean_account_files) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
-                        std.debug.print("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
+                        self.logger.errf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
                     };
                 }
 
