@@ -1154,7 +1154,6 @@ pub const AccountsDB = struct {
             // write the account to the file
             offset += accounts[i].writeToBuf(&pubkeys[i], memory[offset..]);
         }
-        try file.sync();
 
         var account_file = try AccountFile.init(file, .{
             .id = @intCast(file_id.toInt()),
