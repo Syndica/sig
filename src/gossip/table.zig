@@ -771,19 +771,11 @@ pub const GossipTable = struct {
 
             // if contact info is up to date then we dont need to check the values
             const pubkey = entry.key_ptr;
-            const labels = .{
-                GossipKey{ .LegacyContactInfo = pubkey.* },
-                GossipKey{ .ContactInfo = pubkey.* },
-            };
-            inline for (labels) |label| {
-                if (self.table.get(label)) |*contact_info| {
-                    const value_timestamp = @min(
-                        contact_info.value.wallclock(),
-                        contact_info.timestamp_on_insertion,
-                    );
-                    if (value_timestamp > self.cutoff_timestamp) {
-                        return;
-                    }
+            const label = GossipKey{ .LegacyContactInfo = pubkey.* };
+            if (self.table.get(label)) |*contact_info| {
+                const value_timestamp = @min(contact_info.value.wallclock(), contact_info.timestamp_on_insertion);
+                if (value_timestamp > self.cutoff_timestamp) {
+                    return;
                 }
             }
 
