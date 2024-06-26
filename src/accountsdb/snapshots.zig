@@ -61,7 +61,12 @@ pub const VoteAccounts = struct {
 
     pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?HashMap(Pubkey, u64)){ .skip = true };
 
-    pub fn stakedNodes(self: *@This(), allocator: std.mem.Allocator) !*const HashMap(Pubkey, u64) {
+    const Self = @This();
+
+    pub fn stakedNodes(self: *Self, allocator: std.mem.Allocator) !*const HashMap(Pubkey, u64) {
+        if (self.staked_nodes) |*staked_nodes| {
+            return staked_nodes;
+        }
         const vote_accounts = self.vote_accounts;
         var staked_nodes = HashMap(Pubkey, u64).init(allocator);
         var iter = vote_accounts.iterator();
