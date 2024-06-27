@@ -863,7 +863,9 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
-                try self.rotateActiveSet();
+                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+                var prng = std.Random.Xoshiro256.init(prng_seed);
+                try self.rotateActiveSet(prng.random());
                 last_push_ts = getWallclockMs();
             }
 
@@ -897,7 +899,7 @@ pub const GossipService = struct {
         self.stats.table_n_pubkeys.add(n_pubkeys);
     }
 
-    pub fn rotateActiveSet(self: *Self) !void {
+    pub fn rotateActiveSet(self: *Self, rand: std.Random) !void {
         const now = getWallclockMs();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
         const gossip_peers = try self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
@@ -928,9 +930,7 @@ pub const GossipService = struct {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
         var active_set: *ActiveSet = active_set_lock.mut();
-        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var prng = std.Random.Xoshiro256.init(prng_seed);
-        try active_set.rotate(prng.random(), valid_gossip_peers[0..valid_gossip_indexs.items.len]);
+        try active_set.rotate(rand, valid_gossip_peers[0..valid_gossip_indexs.items.len]);
     }
 
     /// logic for building new push messages which are sent to peers from the
