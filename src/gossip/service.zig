@@ -231,6 +231,7 @@ pub const GossipService = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.exit.store(true, .monotonic);
         self.my_contact_info.deinit();
         self.echo_server.deinit();
         self.gossip_socket.close();
