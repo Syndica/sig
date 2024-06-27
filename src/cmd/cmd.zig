@@ -408,7 +408,7 @@ fn validator() !void {
     const gossip_handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
 
     // shred collector
-    var shred_collector = try sig.shred_collector.start(
+    var shred_collector_manager = try sig.shred_collector.start(
         config.current.shred_collector,
         ShredCollectorDependencies{
             .allocator = gpa_allocator,
@@ -420,7 +420,7 @@ fn validator() !void {
             .my_shred_version = &gossip_service.my_shred_version,
         },
     );
-    defer shred_collector.deinit();
+    defer shred_collector_manager.deinit();
 
     // accounts db
     var snapshots = try getOrDownloadSnapshots(
@@ -489,7 +489,7 @@ fn validator() !void {
     logger.infof("accounts-db setup done...", .{});
 
     gossip_handle.join();
-    shred_collector.join();
+    shred_collector_manager.join();
 }
 
 /// Initialize an instance of GossipService and configure with CLI arguments
