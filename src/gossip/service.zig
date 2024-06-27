@@ -1111,6 +1111,7 @@ pub const GossipService = struct {
         // build gossip filters
         var filters = try pull_request.buildGossipPullFilters(
             self.allocator,
+            rand,
             &self.gossip_table_rw,
             &failed_pull_hashes_array,
             bloom_size,

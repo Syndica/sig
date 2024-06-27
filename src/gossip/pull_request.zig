@@ -22,6 +22,7 @@ pub const KEYS: f64 = 8;
 /// corresponding filters. Note: make sure to call deinit_gossip_filters.
 pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
+    rand: std.Random,
     gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
@@ -58,9 +59,7 @@ pub fn buildGossipPullFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-    var prng = std.Random.Xoshiro256.init(prng_seed);
-    const filters = try filter_set.consumeForGossipPullFilters(alloc, prng.random(), max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, rand, max_n_filters);
     return filters;
 }
 
@@ -292,6 +291,7 @@ test "gossip.pull_request: test building filters" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
+        rng,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
