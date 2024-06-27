@@ -698,11 +698,10 @@ pub const GossipTable = struct {
         bincode.free(self.allocator, versioned_value.value.data);
     }
 
+    /// Trim when over 90% of max capacity
     pub fn shouldTrim(self: *const Self, max_pubkey_capacity: usize) bool {
         const n_pubkeys = self.pubkey_to_values.count();
-        // 90% close to capacity
-        const should_trim = 10 * n_pubkeys > 11 * max_pubkey_capacity;
-        return should_trim;
+        return (10 * n_pubkeys > 9 * max_pubkey_capacity);
     }
 
     pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
