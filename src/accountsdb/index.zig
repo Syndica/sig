@@ -309,8 +309,10 @@ pub const AccountIndex = struct {
             defer bin_lg.unlock();
 
             var head_reference_rw = bin.get(pubkey.*) orelse return error.PubkeyNotFound;
-            break :blk head_reference_rw.readWithLock();
+            break :blk head_reference_rw.writeWithLock();
         };
+        defer head_reference_lg.unlock();
+
         var curr_reference = head_ref.ref_ptr;
 
         // structure will always be: head -> [a] -> [b] -> [c]
@@ -327,21 +329,16 @@ pub const AccountIndex = struct {
                 // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
                 // so we release the head_lock so we can get a pointer -- because we need a pointer,
                 // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
-                head_reference_lg.unlock();
                 // NOTE: `getPtr` is important here vs `get` used above
                 var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;
-                var head_ref_ptr, var head_ref_ptr_lg = head_reference_ptr_rw.writeWithLock();
-                defer head_ref_ptr_lg.unlock();
-
-                head_ref_ptr.ref_ptr = next_ptr;
+                // SAFE: we have a write lock on the bin
+                // and the head reference already, we just need to access the ptr
+                head_reference_ptr_rw.private.v.ref_ptr = next_ptr;
             } else {
                 // head -> [a] => remove from hashmap
                 bin.remove(pubkey.*) catch unreachable;
-                head_reference_lg.unlock();
             }
         } else {
-            defer head_reference_lg.unlock();
-
             // 2) it relates to a normal linked-list
             var previous_reference = curr_reference;
             curr_reference = curr_reference.next_ptr orelse return error.SlotNotFound;
