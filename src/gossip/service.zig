@@ -2264,7 +2264,7 @@ test "gossip.service: tests handling prune messages" {
     var as_lock = gossip_service.active_set_rw.read();
     var as: *const ActiveSet = as_lock.get();
     try std.testing.expect(as.len() > 0); // FIX
-    var iter = as.pruned_peers.keyIterator();
+    var iter = as.peers.keyIterator();
     const peer0 = iter.next().?.*;
     as_lock.unlock();
 
@@ -2286,7 +2286,7 @@ test "gossip.service: tests handling prune messages" {
 
     var as_lock2 = gossip_service.active_set_rw.read();
     var as2: *const ActiveSet = as_lock2.get();
-    try std.testing.expect(as2.pruned_peers.get(peer0).?.contains(&prunes[0].data));
+    try std.testing.expect(as2.peers.get(peer0).?.contains(&prunes[0].data));
     as_lock2.unlock();
 }
 
