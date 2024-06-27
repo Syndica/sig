@@ -35,7 +35,7 @@ pub fn buildGossipPullFilters(
 
         const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try GossipPullFilterSet.init(alloc, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, rand, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all gossip values
@@ -88,6 +88,7 @@ pub const GossipPullFilterSet = struct {
 
     pub fn init(
         alloc: std.mem.Allocator,
+        rand: std.Random,
         num_items: usize,
         bloom_size_bytes: usize,
     ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
@@ -100,11 +101,9 @@ pub const GossipPullFilterSet = struct {
         const max_items = GossipPullFilter.computeMaxItems(bloom_size_bits, FALSE_RATE, KEYS);
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-            var prng = std.Random.Xoshiro256.init(prng_seed);
             const filter = try Bloom.random(
                 alloc,
-                prng.random(),
+                rand,
                 @intFromFloat(max_items),
                 FALSE_RATE,
                 @intFromFloat(bloom_size_bits),
@@ -314,10 +313,10 @@ test "gossip.pull_request: test building filters" {
 }
 
 test "gossip.pull_request: filter set deinits correct" {
-    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, 10000, 200);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    const rand = prng.random();
 
-    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
-    const rand = default_prng.random();
+    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, rand, 10000, 200);
 
     const hash = Hash.random(rand);
     filter_set.add(&hash);
@@ -328,8 +327,7 @@ test "gossip.pull_request: filter set deinits correct" {
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, prng.random(), 10);
+    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, rand, 10);
     defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
