@@ -328,8 +328,7 @@ test "gossip.pull_request: filter set deinits correct" {
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
-    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    var maybe_failing_prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
     var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, maybe_failing_prng.random(), 10);
     defer deinitGossipPullFilters(&f);
 

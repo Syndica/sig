@@ -2411,8 +2411,7 @@ test "gossip.service: tests handle pull request" {
 
     const Bloom = @import("../bloom/bloom.zig").Bloom;
     // only consider the first bit so we know well get matches
-    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
-    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    var maybe_failing_prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
     var bloom = try Bloom.random(allocator, maybe_failing_prng.random(), 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
