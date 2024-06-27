@@ -1,5 +1,7 @@
 const std = @import("std");
-const bincode = @import("../bincode/bincode.zig");
+const sig = @import("../lib.zig");
+
+const bincode = sig.bincode;
 
 pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
     const S = struct {

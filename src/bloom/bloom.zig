@@ -1,16 +1,17 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const DynamicArrayBitSet = @import("bit_set.zig").DynamicArrayBitSet;
-const BitVec = @import("bit_vec.zig").BitVec;
-const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
+const sig = @import("../lib.zig");
 
-const bincode = @import("../bincode/bincode.zig");
-const BitVecConfig = @import("bit_vec.zig").BitVecConfig;
-
-const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
+const bincode = sig.bincode;
 
 const RndGen = std.rand.DefaultPrng;
+const ArrayList = std.ArrayList;
+
+const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
+const BitVec = sig.bloom.bit_vec.BitVec;
+const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
+const ArrayListConfig = bincode.arraylist.ArrayListConfig;
+const FnvHasher = @import("../crypto/fnv.zig").FnvHasher; // SHOULD CRYPTO BE ADDED TO LIB
 
 /// A bloom filter whose bitset is made up of u64 blocks
 pub const Bloom = struct {

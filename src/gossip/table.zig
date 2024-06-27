@@ -1,29 +1,31 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
+
+const bincode = sig.bincode;
+
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AutoHashMap = std.AutoHashMap;
-const bincode = @import("../bincode/bincode.zig");
-const Hash = @import("../core/hash.zig").Hash;
-const GossipTableShards = @import("./shards.zig").GossipTableShards;
-const _gossip_data = @import("data.zig");
-const SignedGossipData = _gossip_data.SignedGossipData;
-const GossipData = _gossip_data.GossipData;
-const GossipVersionedData = _gossip_data.GossipVersionedData;
-const GossipKey = _gossip_data.GossipKey;
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
-const ContactInfo = _gossip_data.ContactInfo;
-const getWallclockMs = _gossip_data.getWallclockMs;
-const Vote = _gossip_data.Vote;
-
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const Task = ThreadPool.Task;
-const Batch = ThreadPool.Batch;
-
-const Transaction = @import("../core/transaction.zig").Transaction;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const SocketAddr = @import("../net/net.zig").SocketAddr;
 
-const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
+const GossipTableShards = sig.gossip.shards.GossipTableShards;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const GossipData = sig.gossip.data.GossipData;
+const GossipVersionedData = sig.gossip.data.GossipVersionedData;
+const GossipKey = sig.gossip.data.GossipKey;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const ContactInfo = sig.gossip.data.ContactInfo;
+const Vote = sig.gossip.data.Vote;
+const ThreadPool = sig.sync.ThreadPool;
+const Task = sig.sync.ThreadPool.Task;
+const Batch = sig.sync.ThreadPool.Batch;
+const Hash = sig.core.hash.Hash;
+const Transaction = sig.core.transaction.Transaction;
+const Pubkey = sig.core.Pubkey;
+const SocketAddr = sig.net.SocketAddr;
+
+const getWallclockMs = sig.gossip.data.getWallclockMs;
+
+const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8192;
 pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this

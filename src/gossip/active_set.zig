@@ -1,17 +1,19 @@
 const std = @import("std");
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const network = @import("zig-network");
-const EndPoint = network.EndPoint;
-const _gossip_data = @import("../gossip/data.zig");
-const SignedGossipData = _gossip_data.SignedGossipData;
-const getWallclockMs = _gossip_data.getWallclockMs;
-const ContactInfo = _gossip_data.ContactInfo;
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const sig = @import("../lib.zig");
 
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const GossipTable = @import("../gossip/table.zig").GossipTable;
-const shuffleFirstN = @import("../gossip/pull_request.zig").shuffleFirstN;
-const Bloom = @import("../bloom/bloom.zig").Bloom;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const EndPoint = network.EndPoint;
+
+const Pubkey = sig.core.Pubkey;
+const Bloom = sig.bloom.Bloom;
+const ContactInfo = sig.gossip.data.ContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const GossipTable = sig.gossip.table.GossipTable;
+
+const getWallclockMs = sig.gossip.getWallclockMs;
+const shuffleFirstN = sig.gossip.pull_request.shuffleFirstN;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const GOSSIP_PUSH_FANOUT: usize = 6;
