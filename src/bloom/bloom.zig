@@ -131,10 +131,7 @@ test "bloom.bloom: helper fcns match rust" {
 
     const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
     var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
-    var bloom = Bloom.random(std.testing.allocator, maybe_failing_prng.random(), 100, 0.1, 10000) catch |err| {
-        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
-        return err;
-    };
+    var bloom = try Bloom.random(std.testing.allocator, maybe_failing_prng.random(), 100, 0.1, 10000);
     defer bloom.deinit();
 }
 

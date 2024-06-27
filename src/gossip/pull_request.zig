@@ -332,10 +332,7 @@ test "gossip.pull_request: filter set deinits correct" {
 
     const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
     var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
-    var f = filter_set.consumeForGossipPullFilters(std.testing.allocator, maybe_failing_prng.random(), 10) catch |err| {
-        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
-        return err;
-    };
+    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, maybe_failing_prng.random(), 10);
     defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());

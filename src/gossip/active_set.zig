@@ -159,10 +159,7 @@ test "gossip.active_set: init/deinit" {
     defer active_set.deinit();
     const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
     var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
-    active_set.rotate(maybe_failing_prng.random(), gossip_peers.items) catch |err| {
-        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
-        return err;
-    };
+    try active_set.rotate(maybe_failing_prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
@@ -201,8 +198,5 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     defer active_set.deinit();
     const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
     var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
-    active_set.rotate(maybe_failing_prng.random(), gossip_peers.items) catch |err| {
-        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
-        return err;
-    };
+    try active_set.rotate(maybe_failing_prng.random(), gossip_peers.items);
 }
