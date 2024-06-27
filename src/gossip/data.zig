@@ -1016,10 +1016,8 @@ pub const ContactInfo = struct {
 
     const Self = @This();
 
-    pub fn toNodeInstance(self: *Self) NodeInstance {
-        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var prng = std.Random.Xoshiro256.init(prng_seed);
-        return NodeInstance.init(prng.random(), self.pubkey, @intCast(std.time.milliTimestamp()));
+    pub fn toNodeInstance(self: *Self, rand: std.Random) NodeInstance {
+        return NodeInstance.init(rand, self.pubkey, @intCast(std.time.milliTimestamp()));
     }
 
     pub fn deinit(self: Self) void {
