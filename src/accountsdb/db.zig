@@ -102,7 +102,6 @@ pub const AccountsDB = struct {
     stats: AccountsDBStats,
     logger: Logger,
     config: AccountsDBConfig,
-    fields: ?AccountsDbFields = null,
 
     const Self = @This();
 
@@ -227,6 +226,7 @@ pub const AccountsDB = struct {
                 snapshot_fields.bank_fields_inc.snapshot_persistence,
                 full_snapshot.bank_fields.slot,
                 full_snapshot.bank_fields.capitalization,
+                snapshot_fields.accounts_db_fields,
             );
             self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
         }
@@ -244,8 +244,6 @@ pub const AccountsDB = struct {
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
     ) !void {
-        self.fields = fields;
-
         // used to read account files
         const n_parse_threads = n_threads;
         // used to merge thread results
@@ -291,6 +289,7 @@ pub const AccountsDB = struct {
                 accounts_path,
                 filenames.items,
                 ACCOUNTS_PER_FILE_EST,
+                fields,
                 true,
             );
             return;
@@ -308,7 +307,6 @@ pub const AccountsDB = struct {
                 .{ .number_of_index_bins = self.config.number_of_index_bins },
             );
 
-            thread_db.fields = self.fields;
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
                 thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
@@ -352,6 +350,7 @@ pub const AccountsDB = struct {
                     loading_threads.items,
                     filenames.items,
                     accounts_path,
+                    fields,
                 },
                 filenames.items.len,
                 n_parse_threads,
@@ -373,6 +372,7 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
         filenames: [][]const u8,
         accounts_dir_path: []const u8,
+        fields: AccountsDbFields,
         // task specific
         start_index: usize,
         end_index: usize,
@@ -385,6 +385,7 @@ pub const AccountsDB = struct {
             accounts_dir_path,
             thread_filenames,
             ACCOUNTS_PER_FILE_EST,
+            fields,
             thread_id == 0,
         );
     }
@@ -397,11 +398,10 @@ pub const AccountsDB = struct {
         accounts_dir_path: []const u8,
         file_names: [][]const u8,
         accounts_per_file_est: usize,
+        fields: AccountsDbFields,
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        std.debug.assert(self.fields != null);
-
         // NOTE: we can hold this lock for the entire function
         // because nothing else should be access the filemap
         // while loading from a snapshot
@@ -453,7 +453,7 @@ pub const AccountsDB = struct {
             const file_id_usize = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
-            const file_infos: []const AccountFileInfo = self.fields.?.file_map.get(slot) orelse {
+            const file_infos: []const AccountFileInfo = fields.file_map.get(slot) orelse {
                 // dont read account files which are not in the file_map
                 // note: this can happen when we load from a snapshot and there are extra account files
                 // in the directory which dont correspond to the snapshot were loading
@@ -800,8 +800,9 @@ pub const AccountsDB = struct {
         // used to verify the full snapshot
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
+        fields: AccountsDbFields,
     ) !void {
-        const expected_accounts_hash = self.fields.?.bank_hash_info.accounts_hash;
+        const expected_accounts_hash = fields.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
@@ -2369,6 +2370,7 @@ test "load and validate from test snapshot using disk index" {
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
+        snapshots.full.accounts_db_fields,
     );
 }
 
@@ -2385,6 +2387,7 @@ test "load and validate from test snapshot" {
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
+        snapshots.full.accounts_db_fields,
     );
 }
 
