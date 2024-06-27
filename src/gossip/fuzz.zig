@@ -169,9 +169,7 @@ pub fn randomPullRequestWithContactInfo(
     const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
-    const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-    var prng = std.Random.Xoshiro256.init(prng_seed);
-    var bloom = try Bloom.random(allocator, prng.random(), 100, 0.1, N_FILTER_BITS);
+    var bloom = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     var filter = GossipPullFilter{
@@ -196,9 +194,7 @@ pub fn randomPullRequestWithContactInfo(
         }
     } else {
         // add some valid hashes
-        const filter_set_prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var filter_set_prng = std.Random.Xoshiro256.init(filter_set_prng_seed);
-        var filter_set = try GossipPullFilterSet.initTest(allocator, filter_set_prng.random(), filter.mask_bits);
+        var filter_set = try GossipPullFilterSet.initTest(allocator, rng, filter.mask_bits);
 
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(rng, true);
@@ -208,9 +204,7 @@ pub fn randomPullRequestWithContactInfo(
             filter_set.add(&value_hash);
         }
 
-        const filters_prng_seed: u64 = @intCast(std.time.milliTimestamp());
-        var filters_prng = std.Random.Xoshiro256.init(filters_prng_seed);
-        var filters = try filter_set.consumeForGossipPullFilters(allocator, filters_prng.random(), 1);
+        var filters = try filter_set.consumeForGossipPullFilters(allocator, rng, 1);
         filter.filter = filters.items[0].filter;
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
