@@ -196,7 +196,9 @@ pub fn randomPullRequestWithContactInfo(
         }
     } else {
         // add some valid hashes
-        var filter_set = try GossipPullFilterSet.initTest(allocator, filter.mask_bits);
+        const filter_set_prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var filter_set_prng = std.Random.Xoshiro256.init(filter_set_prng_seed);
+        var filter_set = try GossipPullFilterSet.initTest(allocator, filter_set_prng.random(), filter.mask_bits);
 
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(rng, true);

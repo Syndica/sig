@@ -119,14 +119,12 @@ pub const GossipPullFilterSet = struct {
         };
     }
 
-    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, rand: std.Random, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-            var prng = std.Random.Xoshiro256.init(prng_seed);
-            const filter = try Bloom.random(alloc, prng.random(), 1000, FALSE_RATE, MAX_BLOOM_SIZE);
+            const filter = try Bloom.random(alloc, rand, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
             filters.appendAssumeCapacity(filter);
         }
         return Self{
