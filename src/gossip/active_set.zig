@@ -48,6 +48,7 @@ pub const ActiveSet = struct {
 
     pub fn rotate(
         self: *Self,
+        rand: std.Random,
         peers: []ContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
@@ -61,8 +62,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        shuffleFirstN(rng.random(), ContactInfo, peers, size);
+        shuffleFirstN(rand, ContactInfo, peers, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
@@ -71,6 +71,7 @@ pub const ActiveSet = struct {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
                 const bloom = try Bloom.random(
                     self.allocator,
+                    rand,
                     bloom_num_items,
                     BLOOM_FALSE_RATE,
                     BLOOM_MAX_BITS,
@@ -154,7 +155,8 @@ test "gossip.active_set: init/deinit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(gossip_peers.items);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
@@ -191,5 +193,6 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(gossip_peers.items);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(prng.random(), gossip_peers.items);
 }

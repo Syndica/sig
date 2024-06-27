@@ -810,7 +810,10 @@ pub const GossipService = struct {
             if (top_of_loop_ts - last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer last_pull_req_ts = getWallclockMs();
                 // this also includes sending ping messages to other peers
+                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+                var prng = std.Random.Xoshiro256.init(prng_seed);
                 const packets = self.buildPullRequests(
+                    prng.random(),
                     pull_request.MAX_BLOOM_SIZE,
                 ) catch |e| {
                     self.logger.errf("failed to generate pull requests: {any}", .{e});
@@ -860,7 +863,9 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
-                try self.rotateActiveSet();
+                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+                var prng = std.Random.Xoshiro256.init(prng_seed);
+                try self.rotateActiveSet(prng.random());
                 last_push_ts = getWallclockMs();
             }
 
@@ -894,7 +899,7 @@ pub const GossipService = struct {
         self.stats.table_n_pubkeys.add(n_pubkeys);
     }
 
-    pub fn rotateActiveSet(self: *Self) !void {
+    pub fn rotateActiveSet(self: *Self, rand: std.Random) !void {
         const now = getWallclockMs();
         var buf: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
         const gossip_peers = try self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
@@ -925,7 +930,7 @@ pub const GossipService = struct {
         var active_set_lock = self.active_set_rw.write();
         defer active_set_lock.unlock();
         var active_set: *ActiveSet = active_set_lock.mut();
-        try active_set.rotate(valid_gossip_peers[0..valid_gossip_indexs.items.len]);
+        try active_set.rotate(rand, valid_gossip_peers[0..valid_gossip_indexs.items.len]);
     }
 
     /// logic for building new push messages which are sent to peers from the
@@ -1044,6 +1049,7 @@ pub const GossipService = struct {
     /// to be sent to a random set of gossip nodes.
     fn buildPullRequests(
         self: *Self,
+        rand: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
     ) !ArrayList(Packet) {
@@ -1057,10 +1063,9 @@ pub const GossipService = struct {
         );
 
         // randomly include an entrypoint in the pull if we dont have their contact info
-        var rng = std.rand.DefaultPrng.init(now);
         var entrypoint_index: i16 = -1;
         if (self.entrypoints.items.len != 0) blk: {
-            const maybe_entrypoint_index = rng.random().intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
+            const maybe_entrypoint_index = rand.intRangeAtMost(usize, 0, self.entrypoints.items.len - 1);
             if (self.entrypoints.items[maybe_entrypoint_index].info) |_| {
                 // early exit - we already have the peer in our contact info
                 break :blk;
@@ -1106,6 +1111,7 @@ pub const GossipService = struct {
         // build gossip filters
         var filters = try pull_request.buildGossipPullFilters(
             self.allocator,
+            rand,
             &self.gossip_table_rw,
             &failed_pull_hashes_array,
             bloom_size,
@@ -1131,7 +1137,7 @@ pub const GossipService = struct {
         if (num_peers != 0) {
             for (filters.items) |filter_i| {
                 // TODO: incorperate stake weight in random sampling
-                const peer_index = rng.random().intRangeAtMost(usize, 0, num_peers - 1);
+                const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
                 if (peer_contact_info.getSocket(.gossip)) |gossip_addr| {
@@ -2257,7 +2263,9 @@ test "gossip.service: tests handling prune messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(peers.items);
+        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var prng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(prng.random(), peers.items);
         as_lock.unlock();
     }
 
@@ -2404,7 +2412,8 @@ test "gossip.service: tests handle pull request" {
 
     const Bloom = @import("../bloom/bloom.zig").Bloom;
     // only consider the first bit so we know well get matches
-    var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    var bloom = try Bloom.random(allocator, prng.random(), 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
@@ -2567,7 +2576,12 @@ test "gossip.service: test build pull requests" {
     lg.unlock();
     ping_lock.unlock();
 
-    var packets = try gossip_service.buildPullRequests(2);
+    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
+    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
+    var packets = gossip_service.buildPullRequests(maybe_failing_prng.random(), 2) catch |err| {
+        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+        return err;
+    };
     defer packets.deinit();
 
     try std.testing.expect(packets.items.len > 1);
@@ -2620,7 +2634,9 @@ test "gossip.service: test build push messages" {
     {
         var as_lock = gossip_service.active_set_rw.write();
         var as: *ActiveSet = as_lock.mut();
-        try as.rotate(peers.items);
+        const prng_seed: u64 = @intCast(std.time.milliTimestamp());
+        var prng = std.Random.Xoshiro256.init(prng_seed);
+        try as.rotate(prng.random(), peers.items);
         as_lock.unlock();
         try std.testing.expect(as.len() > 0);
     }
