@@ -155,8 +155,8 @@ test "gossip.active_set: init/deinit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var maybe_failing_prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    try active_set.rotate(maybe_failing_prng.random(), gossip_peers.items);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
@@ -193,6 +193,6 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var maybe_failing_prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
-    try active_set.rotate(maybe_failing_prng.random(), gossip_peers.items);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(prng.random(), gossip_peers.items);
 }
