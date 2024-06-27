@@ -236,18 +236,15 @@ pub fn waitForExit(exit: *AtomicBool) void {
     exit.store(true, .unordered);
 }
 
-pub fn run() !void {
+pub fn run(args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
     // parse cli args to define where to send packets
-    var cli_args = try std.process.argsWithAllocator(allocator);
-    defer cli_args.deinit();
-    _ = cli_args.skip();
     // zig build fuzz -- <entrypoint> <seed> <max_messages>
-    const maybe_entrypoint = cli_args.next();
-    const maybe_seed = cli_args.next();
-    const maybe_max_messages_string = cli_args.next();
+    const maybe_entrypoint = args.next();
+    const maybe_seed = args.next();
+    const maybe_max_messages_string = args.next();
 
     const entrypoint = blk: {
         if (maybe_entrypoint) |entrypoint| {
