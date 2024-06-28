@@ -4,7 +4,6 @@ const sig = @import("../lib.zig");
 const shred_collector = @import("lib.zig");
 
 const bincode = sig.bincode;
-const socket_tag = sig.gossip.socket_tag;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -399,11 +398,11 @@ pub const RepairPeerProvider = struct {
         var compatible_peers: usize = 0; // number of peers who can handle this slot.
         var infos = gossip_table.contactInfoIterator(0);
         while (infos.next()) |info| {
-            const serve_repair_socket = info.getSocket(socket_tag.SERVE_REPAIR);
+            const serve_repair_socket = info.getSocket(.serve_repair);
             if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
                 info.shred_version == self.my_shred_version.load(.monotonic) and // need compatible shreds
                 serve_repair_socket != null and // node must be able to receive repair requests
-                info.getSocket(socket_tag.TURBINE_RECV) != null) // node needs access to shreds
+                info.getSocket(.turbine_recv) != null) // node needs access to shreds
             {
                 potential_peers += 1;
                 // exclude nodes that are known to be missing this slot
@@ -459,8 +458,8 @@ test "RepairService sends repair request to gossip peer" {
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
     var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
-    try peer_contact_info.setSocket(socket_tag.SERVE_REPAIR, SocketAddr.fromEndpoint(&peer_endpoint));
-    try peer_contact_info.setSocket(socket_tag.TURBINE_RECV, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
+    try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
     try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
 
     // init service
@@ -601,10 +600,10 @@ const TestPeerGenerator = struct {
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
-            try contact_info.setSocket(socket_tag.SERVE_REPAIR, serve_repair_addr);
+            try contact_info.setSocket(.serve_repair, serve_repair_addr);
         }
         if (peer_type != .MissingTvuPort) {
-            try contact_info.setSocket(socket_tag.TURBINE_RECV, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
+            try contact_info.setSocket(.turbine_recv, SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004));
         }
         try self.gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = contact_info }, &keypair), wallclock);
         switch (peer_type) {

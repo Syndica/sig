@@ -9,9 +9,7 @@ const config = @import("config.zig");
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
 const AccountsDB = sig.accounts_db.AccountsDB;
-const AccountsDBConfig = sig.accounts_db.AccountsDBConfig;
 const AllSnapshotFields = sig.accounts_db.AllSnapshotFields;
 const Bank = sig.accounts_db.Bank;
 const ContactInfo = sig.gossip.ContactInfo;
@@ -40,7 +38,7 @@ const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
-const socket_tag = sig.gossip.socket_tag;
+const SocketTag = sig.gossip.SocketTag;
 
 // TODO: use better allocator, unless GPA becomes more performant.
 
@@ -186,15 +184,6 @@ var n_threads_snapshot_unpack_option = cli.Option{
     .value_name = "n_threads_snapshot_unpack",
 };
 
-var disk_index_path_option = cli.Option{
-    .long_name = "disk-index-path",
-    .help = "path to disk index - default: no disk index, index will use ram",
-    .short_alias = 'd',
-    .value_ref = cli.mkRef(&config.current.accounts_db.disk_index_path),
-    .required = false,
-    .value_name = "disk_index_path",
-};
-
 var force_unpack_snapshot_option = cli.Option{
     .long_name = "force-unpack-snapshot",
     .help = "force unpack snapshot even if it exists",
@@ -202,6 +191,14 @@ var force_unpack_snapshot_option = cli.Option{
     .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
     .required = false,
     .value_name = "force_unpack_snapshot",
+};
+
+var use_disk_index_option = cli.Option{
+    .long_name = "use-disk-index",
+    .help = "use disk based index for accounts index",
+    .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
+    .required = false,
+    .value_name = "use_disk_index",
 };
 
 var force_new_snapshot_download_option = cli.Option{
@@ -229,18 +226,10 @@ var min_snapshot_download_speed_mb_option = cli.Option{
     .value_name = "min_snapshot_download_speed_mb",
 };
 
-var storage_cache_size_option = cli.Option{
-    .long_name = "storage-cache-size",
-    .help = "number of accounts preallocate for the storage cache for accounts-db (used when writing accounts whose slot has not been rooted) - default: 10k",
-    .value_ref = cli.mkRef(&config.current.accounts_db.storage_cache_size),
-    .required = false,
-    .value_name = "storage_cache_size",
-};
-
 var number_of_index_bins_option = cli.Option{
     .long_name = "number-of-index-bins",
     .help = "number of bins to shard the index pubkeys across",
-    .value_ref = cli.mkRef(&config.current.accounts_db.num_account_index_bins),
+    .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
     .required = false,
     .value_name = "number_of_index_bins",
 };
@@ -315,9 +304,9 @@ var app = &cli.App{
                         &test_repair_option,
                         // accounts-db
                         &snapshot_dir_option,
+                        &use_disk_index_option,
                         &n_threads_snapshot_load_option,
                         &n_threads_snapshot_unpack_option,
-                        &disk_index_path_option,
                         &force_unpack_snapshot_option,
                         &min_snapshot_download_speed_mb_option,
                         &force_new_snapshot_download_option,
@@ -378,9 +367,9 @@ var app = &cli.App{
                         &gossip_dump_option,
                         // accounts-db
                         &snapshot_dir_option,
+                        &use_disk_index_option,
                         &n_threads_snapshot_load_option,
                         &n_threads_snapshot_unpack_option,
-                        &disk_index_path_option,
                         &force_unpack_snapshot_option,
                         &min_snapshot_download_speed_mb_option,
                         &force_new_snapshot_download_option,
@@ -431,8 +420,8 @@ fn validator() !void {
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
 
     var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
-        .{ .tag = socket_tag.REPAIR, .port = repair_port },
-        .{ .tag = socket_tag.TURBINE_RECV, .port = turbine_recv_port },
+        .{ .tag = .repair, .port = repair_port },
+        .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
     defer gossip_service.deinit();
     defer gossip_manager.deinit();
@@ -542,7 +531,7 @@ fn initGossip(
     entrypoints: []const SocketAddr,
     shred_version: u16,
     gossip_host_ip: IpAddr,
-    sockets: []const struct { tag: u8, port: u16 },
+    sockets: []const struct { tag: SocketTag, port: u16 },
 ) !GossipService {
     const gossip_port: u16 = config.current.gossip.port;
     logger.infof("gossip host: {any}", .{gossip_host_ip});
@@ -551,7 +540,7 @@ fn initGossip(
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.init(gossip_host_ip, gossip_port));
+    try contact_info.setSocket(.gossip, SocketAddr.init(gossip_host_ip, gossip_port));
     for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
     contact_info.shred_version = shred_version;
 
@@ -570,7 +559,7 @@ fn startGossip(
     allocator: Allocator,
     app_base: *AppBase,
     /// Extra sockets to publish in gossip, other than the gossip socket
-    extra_sockets: []const struct { tag: u8, port: u16 },
+    extra_sockets: []const struct { tag: SocketTag, port: u16 },
 ) !struct { *GossipService, sig.utils.service_manager.ServiceManager } {
     const gossip_port = config.current.gossip.port;
     app_base.logger.infof("gossip host: {any}", .{app_base.my_ip});
@@ -579,7 +568,7 @@ fn startGossip(
     // setup contact info
     const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
-    try contact_info.setSocket(socket_tag.GOSSIP, SocketAddr.init(app_base.my_ip, gossip_port));
+    try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, gossip_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));
     contact_info.shred_version = app_base.shred_version;
 
@@ -736,6 +725,7 @@ const LoadedSnapshot = struct {
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit();
         self.snapshots.deinit(self.allocator);
+        self.accounts_db.deinit(false); // keep index files on disk
         self.allocator.destroy(self);
     }
 };
@@ -769,11 +759,7 @@ fn loadSnapshot(
     output.accounts_db = try AccountsDB.init(
         allocator,
         logger,
-        AccountsDBConfig{
-            .disk_index_path = config.current.accounts_db.disk_index_path,
-            .storage_cache_size = @intCast(config.current.accounts_db.storage_cache_size),
-            .number_of_index_bins = @intCast(config.current.accounts_db.num_account_index_bins),
-        },
+        config.current.accounts_db,
     );
 
     output.snapshot_fields = try output.accounts_db.loadWithDefaults(

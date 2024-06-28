@@ -14,7 +14,6 @@ const _gossip_data = @import("data.zig");
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const SignedGossipData = _gossip_data.SignedGossipData;
 const ContactInfo = _gossip_data.ContactInfo;
-const socket_tag = _gossip_data.socket_tag;
 const AtomicBool = std.atomic.Value(bool);
 
 const SocketAddr = @import("../net/net.zig").SocketAddr;
@@ -237,18 +236,15 @@ pub fn waitForExit(exit: *AtomicBool) void {
     exit.store(true, .unordered);
 }
 
-pub fn run() !void {
+pub fn run(args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
     // parse cli args to define where to send packets
-    var cli_args = try std.process.argsWithAllocator(allocator);
-    defer cli_args.deinit();
-    _ = cli_args.skip();
     // zig build fuzz -- <entrypoint> <seed> <max_messages>
-    const maybe_entrypoint = cli_args.next();
-    const maybe_seed = cli_args.next();
-    const maybe_max_messages_string = cli_args.next();
+    const maybe_entrypoint = args.next();
+    const maybe_seed = args.next();
+    const maybe_max_messages_string = args.next();
 
     const entrypoint = blk: {
         if (maybe_entrypoint) |entrypoint| {
@@ -289,7 +285,7 @@ pub fn run() !void {
 
     const fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
-    try fuzz_contact_info.setSocket(socket_tag.GOSSIP, fuzz_address);
+    try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
     var fuzz_exit = AtomicBool.init(false);
     var gossip_service_fuzzer = try GossipService.init(

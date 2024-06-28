@@ -11,7 +11,6 @@ const GossipVersionedData = _gossip_data.GossipVersionedData;
 const GossipKey = _gossip_data.GossipKey;
 const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 const ContactInfo = _gossip_data.ContactInfo;
-const socket_tag = _gossip_data.socket_tag;
 const getWallclockMs = _gossip_data.getWallclockMs;
 const Vote = _gossip_data.Vote;
 
@@ -59,7 +58,6 @@ pub const InsertResults = struct {
     }
 };
 
-/// https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68
 /// Cluster Replicated Data Store: stores gossip data
 /// the self.store uses an AutoArrayHashMap which is a HashMap that also allows for
 /// indexing values (value = arrayhashmap[0]). This allows us to insert data
@@ -72,6 +70,8 @@ pub const InsertResults = struct {
 /// retrieve new values inserted in the store.
 /// insertion of values is all based on the GossipData type -- when duplicates
 /// are found, the entry with the largest wallclock time (newest) is stored.
+///
+/// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68)
 pub const GossipTable = struct {
     store: AutoArrayHashMap(GossipKey, GossipVersionedData),
 
@@ -857,7 +857,7 @@ pub const GossipTable = struct {
         for (contact_indexs) |index| {
             const entry: GossipVersionedData = self.store.values()[index];
             switch (entry.value.data) {
-                .ContactInfo => |ci| if (ci.getSocket(socket_tag.GOSSIP)) |addr| {
+                .ContactInfo => |ci| if (ci.getSocket(.gossip)) |addr| {
                     if (addr.eql(&gossip_addr)) return try ci.clone();
                 },
                 .LegacyContactInfo => |lci| if (lci.gossip.eql(&gossip_addr)) {

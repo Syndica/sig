@@ -369,7 +369,12 @@ pub const SnapshotFields = struct {
     pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
-        var file = try std.fs.cwd().openFile(path, .{});
+        var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+            switch (err) {
+                error.FileNotFound => return error.SnapshotFieldsNotFound,
+                else => return err,
+            }
+        };
         defer file.close();
 
         const size = (try file.stat()).size;

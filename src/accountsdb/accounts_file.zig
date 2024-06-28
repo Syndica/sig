@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Account = @import("../core/account.zig").Account;
+const writeIntLittleMem = @import("../core/account.zig").writeIntLittleMem;
 const Hash = @import("../core/hash.zig").Hash;
 const Slot = @import("../core/time.zig").Slot;
 const Epoch = @import("../core/time.zig").Epoch;
@@ -18,6 +19,14 @@ pub const FileId = enum(u32) {
 
     pub inline fn toInt(file_id: FileId) u32 {
         return @intFromEnum(file_id);
+    }
+
+    pub inline fn increment(file_id: FileId) FileId {
+        return FileId.fromInt(file_id.toInt() + 1);
+    }
+
+    pub inline fn max(a: FileId, b: FileId) FileId {
+        return FileId.fromInt(@max(a.toInt(), b.toInt()));
     }
 
     pub fn format(
@@ -47,6 +56,18 @@ pub const AccountInFile = struct {
         write_version_obsolete: u64,
         data_len: u64,
         pubkey: Pubkey,
+
+        pub fn writeToBuf(self: *const StorageInfo, buf: []u8) usize {
+            std.debug.assert(buf.len >= @sizeOf(StorageInfo));
+
+            var offset: usize = 0;
+            offset += writeIntLittleMem(self.write_version_obsolete, buf[offset..]);
+            offset += writeIntLittleMem(self.data_len, buf[offset..]);
+            @memcpy(buf[offset..(offset + 32)], &self.pubkey.data);
+            offset += 32;
+            offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+            return offset;
+        }
     };
 
     /// on-chain account info about the account
@@ -55,6 +76,23 @@ pub const AccountInFile = struct {
         rent_epoch: Epoch,
         owner: Pubkey,
         executable: bool,
+
+        pub fn writeToBuf(self: *const AccountInfo, buf: []u8) usize {
+            std.debug.assert(buf.len >= @sizeOf(AccountInfo));
+
+            var offset: usize = 0;
+            offset += writeIntLittleMem(self.lamports, buf[offset..]);
+            offset += writeIntLittleMem(self.rent_epoch, buf[offset..]);
+            @memcpy(buf[offset..(offset + 32)], &self.owner.data);
+            offset += 32;
+
+            offset += writeIntLittleMem(
+                @as(u8, @intFromBool(self.executable)),
+                buf[offset..],
+            );
+            offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+            return offset;
+        }
     };
 
     pub const STATIC_SIZE: usize = blk: {
@@ -72,9 +110,22 @@ pub const AccountInFile = struct {
         break :blk size;
     };
 
-    pub const Self = @This();
+    pub const ValidateError = error{
+        InvalidExecutableFlag,
+        InvalidLamports,
+    };
 
-    pub fn validate(self: *const Self) !void {
+    const Self = @This();
+
+    pub fn getSizeInFile(self: *const Self) u64 {
+        return std.mem.alignForward(
+            usize,
+            AccountInFile.STATIC_SIZE + self.data.len,
+            @sizeOf(u64),
+        );
+    }
+
+    pub fn validate(self: *const Self) ValidateError!void {
         // make sure upper bits are zero
         const exec_byte = @as(*u8, @ptrCast(self.executable()));
         const valid_exec = exec_byte.* & ~@as(u8, 1) == 0;
@@ -91,6 +142,27 @@ pub const AccountInFile = struct {
         if (!valid_lamports) {
             return error.InvalidLamports;
         }
+    }
+
+    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) !Account {
+        const owned_data = try allocator.dupe(u8, self.data);
+        return .{
+            .data = owned_data,
+            .executable = self.executable().*,
+            .lamports = self.lamports().*,
+            .owner = self.owner().*,
+            .rent_epoch = self.rent_epoch().*,
+        };
+    }
+
+    pub fn toAccount(self: *const Self) !Account {
+        return .{
+            .data = self.data,
+            .executable = self.executable().*,
+            .lamports = self.lamports().*,
+            .owner = self.owner().*,
+            .rent_epoch = self.rent_epoch().*,
+        };
     }
 
     pub inline fn pubkey(self: *const Self) *Pubkey {
@@ -115,6 +187,24 @@ pub const AccountInFile = struct {
 
     pub inline fn hash(self: *const Self) *Hash {
         return self.hash_ptr;
+    }
+
+    pub fn writeToBuf(self: *const Self, buf: []u8) usize {
+        std.debug.assert(buf.len >= STATIC_SIZE + self.data.len);
+
+        var offset: usize = 0;
+        offset += self.store_info.writeToBuf(buf[offset..]);
+        offset += self.account_info.writeToBuf(buf[offset..]);
+
+        @memcpy(buf[offset..(offset + 32)], &self.hash().data);
+        offset += 32;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        @memcpy(buf[offset..(offset + self.data.len)], self.data);
+        offset += self.data.len;
+        offset = std.mem.alignForward(usize, offset, @sizeOf(u64));
+
+        return offset;
     }
 };
 
@@ -164,22 +254,24 @@ pub const AccountFile = struct {
         self.file.close();
     }
 
-    pub fn validate(self: *Self) !void {
+    pub fn validate(self: *const Self) !usize {
         var offset: usize = 0;
         var number_of_accounts: usize = 0;
+        var account_bytes: usize = 0;
 
         while (true) {
             const account = self.readAccount(offset) catch break;
             try account.validate();
             offset = offset + account.len;
             number_of_accounts += 1;
+            account_bytes += account.len;
         }
 
         if (offset != std.mem.alignForward(usize, self.length, @sizeOf(u64))) {
             return error.InvalidAccountFileLength;
         }
 
-        self.number_of_accounts = number_of_accounts;
+        return number_of_accounts;
     }
 
     /// get account without reading data (a lot faster if the data field isnt used anyway)
@@ -264,6 +356,28 @@ pub const AccountFile = struct {
         const length = @sizeOf(T);
         return @alignCast(@ptrCast(try self.getSlice(start_index_ptr, length)));
     }
+
+    pub const Iterator = struct {
+        accounts_file: *const AccountFile,
+        offset: usize = 0,
+
+        pub fn next(self: *Iterator) ?AccountInFile {
+            while (true) {
+                const account = self.accounts_file.readAccount(self.offset) catch break;
+                self.offset = self.offset + account.len;
+                return account;
+            }
+            return null;
+        }
+
+        pub fn reset(self: *Iterator) void {
+            self.offset = 0;
+        }
+    };
+
+    pub fn iterator(self: *const Self) Iterator {
+        return .{ .accounts_file = self };
+    }
 };
 
 test "core.accounts_file: verify accounts file" {
@@ -276,7 +390,7 @@ test "core.accounts_file: verify accounts file" {
     var accounts_file = try AccountFile.init(file, file_info, 10);
     defer accounts_file.deinit();
 
-    try accounts_file.validate();
+    _ = try accounts_file.validate();
 
     const account = try accounts_file.readAccount(0);
     const hash_and_lamports = try accounts_file.getAccountHashAndLamports(0);
