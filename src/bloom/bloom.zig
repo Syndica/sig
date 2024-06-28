@@ -11,7 +11,7 @@ const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const BitVec = sig.bloom.bit_vec.BitVec;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const ArrayListConfig = bincode.arraylist.ArrayListConfig;
-const FnvHasher = @import("../crypto/fnv.zig").FnvHasher; // SHOULD CRYPTO BE ADDED TO LIB
+const FnvHasher = sig.crypto.FnvHasher;
 
 /// A bloom filter whose bitset is made up of u64 blocks
 pub const Bloom = struct {
