@@ -462,6 +462,7 @@ fn printLeaderSchedule() !void {
     var app_base = try AppBase.init(allocator);
 
     const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
+        app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
         var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
         defer gossip_service.deinit();
         defer gossip_manager.deinit();
