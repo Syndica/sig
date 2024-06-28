@@ -85,18 +85,15 @@ pub const Bloom = struct {
         return hasher.final();
     }
 
-    pub fn random(alloc: std.mem.Allocator, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
+    pub fn random(alloc: std.mem.Allocator, rand: std.Random, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
         const n_items_f: f64 = @floatFromInt(num_items);
         const m = Bloom.numBits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
         const n_keys = Bloom.numKeys(@floatFromInt(n_bits), n_items_f);
 
-        const seed = @as(u64, @intCast(std.time.milliTimestamp()));
-        var rnd = RndGen.init(seed);
-
         var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
         for (0..n_keys) |_| {
-            const v = rnd.random().int(u64);
+            const v = rand.int(u64);
             keys.appendAssumeCapacity(v);
         }
 
@@ -132,7 +129,8 @@ test "bloom.bloom: helper fcns match rust" {
     const n_keys = Bloom.numKeys(100.2, 10);
     try testing.expectEqual(@as(usize, 7), n_keys);
 
-    var bloom = try Bloom.random(std.testing.allocator, 100, 0.1, 10000);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    var bloom = try Bloom.random(std.testing.allocator, prng.random(), 100, 0.1, 10000);
     defer bloom.deinit();
 }
 

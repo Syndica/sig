@@ -25,6 +25,7 @@ pub fn runShredVerifier(
     while (true) {
         try unverified_shred_receiver.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
+            if (exit.load(.monotonic)) return;
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;
         }

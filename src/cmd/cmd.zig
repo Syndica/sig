@@ -437,7 +437,7 @@ fn validator() !void {
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
-    var shred_collector = try sig.shred_collector.start(
+    var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,
         ShredCollectorDependencies{
             .allocator = allocator,
@@ -450,10 +450,10 @@ fn validator() !void {
             .leader_schedule = leader_provider,
         },
     );
-    defer shred_collector.deinit();
+    defer shred_collector_manager.deinit();
 
     gossip_manager.join();
-    shred_collector.join();
+    shred_collector_manager.join();
 }
 
 /// entrypoint to print the leader schedule and then exit

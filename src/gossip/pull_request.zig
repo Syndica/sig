@@ -22,6 +22,7 @@ pub const KEYS: f64 = 8;
 /// corresponding filters. Note: make sure to call deinit_gossip_filters.
 pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
+    rand: std.Random,
     gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
@@ -34,7 +35,7 @@ pub fn buildGossipPullFilters(
 
         const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try GossipPullFilterSet.init(alloc, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, rand, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all gossip values
@@ -58,7 +59,7 @@ pub fn buildGossipPullFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForGossipPullFilters(alloc, max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, rand, max_n_filters);
     return filters;
 }
 
@@ -87,6 +88,7 @@ pub const GossipPullFilterSet = struct {
 
     pub fn init(
         alloc: std.mem.Allocator,
+        rand: std.Random,
         num_items: usize,
         bloom_size_bytes: usize,
     ) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
@@ -101,6 +103,7 @@ pub const GossipPullFilterSet = struct {
         for (0..n_filters) |_| {
             const filter = try Bloom.random(
                 alloc,
+                rand,
                 @intFromFloat(max_items),
                 FALSE_RATE,
                 @intFromFloat(bloom_size_bits),
@@ -114,12 +117,12 @@ pub const GossipPullFilterSet = struct {
         };
     }
 
-    pub fn initTest(alloc: std.mem.Allocator, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
+    pub fn initTest(alloc: std.mem.Allocator, rand: std.Random, mask_bits: u32) error{ NotEnoughSignedGossipDatas, OutOfMemory }!Self {
         const n_filters: usize = @intCast(@as(u64, 1) << @as(u6, @intCast(mask_bits)));
 
         var filters = try ArrayList(Bloom).initCapacity(alloc, n_filters);
         for (0..n_filters) |_| {
-            const filter = try Bloom.random(alloc, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
+            const filter = try Bloom.random(alloc, rand, 1000, FALSE_RATE, MAX_BLOOM_SIZE);
             filters.appendAssumeCapacity(filter);
         }
         return Self{
@@ -156,7 +159,7 @@ pub const GossipPullFilterSet = struct {
     }
 
     /// returns a list of GossipPullFilters and consumes Self by calling deinit.
-    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
+    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, rand: std.Random, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -171,8 +174,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            var rng = std.rand.DefaultPrng.init(getWallclockMs());
-            shuffleFirstN(rng.random(), usize, indexs.items, n_filters);
+            shuffleFirstN(rand, usize, indexs.items, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {
@@ -288,6 +290,7 @@ test "gossip.pull_request: test building filters" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
+        rng,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,
@@ -310,10 +313,10 @@ test "gossip.pull_request: test building filters" {
 }
 
 test "gossip.pull_request: filter set deinits correct" {
-    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, 10000, 200);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    const rand = prng.random();
 
-    var default_prng = std.rand.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
-    const rand = default_prng.random();
+    var filter_set = try GossipPullFilterSet.init(std.testing.allocator, rand, 10000, 200);
 
     const hash = Hash.random(rand);
     filter_set.add(&hash);
@@ -324,7 +327,7 @@ test "gossip.pull_request: filter set deinits correct" {
     const v = bloom.contains(&hash.data);
     try std.testing.expect(v);
 
-    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, 10);
+    var f = try filter_set.consumeForGossipPullFilters(std.testing.allocator, rand, 10);
     defer deinitGossipPullFilters(&f);
 
     try std.testing.expect(f.capacity == filter_set.len());
