@@ -1,5 +1,7 @@
-const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
-const ShredCollectorConfig = @import("../shred_collector/service.zig").ShredCollectorConfig;
+const sig = @import("../lib.zig");
+const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
+const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
+const LogLevel = sig.trace.Level;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
@@ -7,7 +9,7 @@ pub const Config = struct {
     shred_collector: ShredCollectorConfig = shred_collector_defaults,
     accounts_db: AccountsDBConfig = .{},
     // general config
-    log_level: []const u8 = "debug",
+    log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
 };
 

@@ -37,6 +37,8 @@ const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
+const ClientVersion = sig.version.ClientVersion;
+const StatusCache = sig.accounts_db.StatusCache;
 
 const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
@@ -100,7 +102,6 @@ pub const AccountsDB = struct {
     stats: AccountsDBStats,
     logger: Logger,
     config: AccountsDBConfig,
-    fields: ?AccountsDbFields = null,
 
     const Self = @This();
 
@@ -222,9 +223,10 @@ pub const AccountsDB = struct {
             timer.reset();
             const full_snapshot = snapshot_fields_and_paths.all_fields.full;
             try self.validateLoadFromSnapshot(
-                snapshot_fields.bank_fields.incremental_snapshot_persistence,
+                snapshot_fields.bank_fields_inc.snapshot_persistence,
                 full_snapshot.bank_fields.slot,
                 full_snapshot.bank_fields.capitalization,
+                snapshot_fields.accounts_db_fields,
             );
             self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
         }
@@ -242,8 +244,6 @@ pub const AccountsDB = struct {
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
     ) !void {
-        self.fields = fields;
-
         // used to read account files
         const n_parse_threads = n_threads;
         // used to merge thread results
@@ -289,6 +289,7 @@ pub const AccountsDB = struct {
                 accounts_path,
                 filenames.items,
                 ACCOUNTS_PER_FILE_EST,
+                fields,
                 true,
             );
             return;
@@ -306,7 +307,6 @@ pub const AccountsDB = struct {
                 .{ .number_of_index_bins = self.config.number_of_index_bins },
             );
 
-            thread_db.fields = self.fields;
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
                 thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
@@ -350,6 +350,7 @@ pub const AccountsDB = struct {
                     loading_threads.items,
                     filenames.items,
                     accounts_path,
+                    fields,
                 },
                 filenames.items.len,
                 n_parse_threads,
@@ -371,6 +372,7 @@ pub const AccountsDB = struct {
         loading_threads: []AccountsDB,
         filenames: [][]const u8,
         accounts_dir_path: []const u8,
+        fields: AccountsDbFields,
         // task specific
         start_index: usize,
         end_index: usize,
@@ -383,6 +385,7 @@ pub const AccountsDB = struct {
             accounts_dir_path,
             thread_filenames,
             ACCOUNTS_PER_FILE_EST,
+            fields,
             thread_id == 0,
         );
     }
@@ -395,11 +398,10 @@ pub const AccountsDB = struct {
         accounts_dir_path: []const u8,
         file_names: [][]const u8,
         accounts_per_file_est: usize,
+        fields: AccountsDbFields,
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
-        std.debug.assert(self.fields != null);
-
         // NOTE: we can hold this lock for the entire function
         // because nothing else should be access the filemap
         // while loading from a snapshot
@@ -451,7 +453,7 @@ pub const AccountsDB = struct {
             const file_id_usize = try std.fmt.parseInt(usize, fiter.next().?, 10);
 
             // read metadata
-            const file_infos: ArrayList(AccountFileInfo) = self.fields.?.file_map.get(slot) orelse {
+            const file_infos: []const AccountFileInfo = fields.file_map.get(slot) orelse {
                 // dont read account files which are not in the file_map
                 // note: this can happen when we load from a snapshot and there are extra account files
                 // in the directory which dont correspond to the snapshot were loading
@@ -459,11 +461,11 @@ pub const AccountsDB = struct {
                 continue;
             };
             // if this is hit, its likely an old snapshot
-            if (file_infos.items.len != 1) {
+            if (file_infos.len != 1) {
                 self.logger.errf("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
                 return error.InvalidSnapshot;
             }
-            const file_info = file_infos.items[0];
+            const file_info = file_infos[0];
             if (file_info.id != file_id_usize) {
                 self.logger.errf("file_id from metadata for slot {d} doesnt match file_id from filename: {d} vs {d}\n", .{ slot, file_info.id, file_id_usize });
                 return error.InvalidSnapshotFormat;
@@ -798,8 +800,9 @@ pub const AccountsDB = struct {
         // used to verify the full snapshot
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
+        fields: AccountsDbFields,
     ) !void {
-        const expected_accounts_hash = self.fields.?.bank_hash_info.accounts_hash;
+        const expected_accounts_hash = fields.bank_hash_info.accounts_hash;
 
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
@@ -2128,7 +2131,140 @@ const CountingAllocator = struct {
     }
 };
 
+pub fn writeSnapshotTar(
+    archive_writer: anytype,
+    version: ClientVersion,
+    status_cache: StatusCache,
+    snapshot_fields: SnapshotFields,
+    storage: AccountStorage,
+) !void {
+    const slot: Slot = snapshot_fields.bank_fields.slot;
+
+    var counting_writer_state = std.io.countingWriter(archive_writer);
+    const writer = counting_writer_state.writer();
+
+    { // write the version file
+        var version_str_buf: [5]u8 = undefined;
+        const version_str = try std.fmt.bufPrint(&version_str_buf, "{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+        try writeTarHeader(writer, .regular, "version", version_str.len);
+        try writer.writeAll(version_str);
+        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+    }
+
+    // create the snapshots dir
+    try writeTarHeader(writer, .directory, "snapshots/", 0);
+
+    // write the status cache
+    try writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+    try bincode.write(writer, status_cache, .{});
+    try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+
+    { // write the manifest
+        const manifest = snapshot_fields;
+        const manifest_encoded_size = bincode.sizeOf(manifest, .{});
+
+        var str_buf: [std.fmt.count("snapshots/{0d}/{0d}", .{std.math.maxInt(Slot)})]u8 = undefined;
+        try writeTarHeader(writer, .directory, std.fmt.bufPrint(&str_buf, "snapshots/{d}/", .{slot}) catch unreachable, 0);
+        try writeTarHeader(writer, .regular, std.fmt.bufPrint(&str_buf, "snapshots/{0d}/{0d}", .{slot}) catch unreachable, manifest_encoded_size);
+        try bincode.write(writer, manifest, .{});
+        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+    }
+
+    // create the accounts dir
+    try writeTarHeader(writer, .directory, "accounts/", 0);
+
+    for (storage.file_map.keys(), storage.file_map.values()) |file_id, acc_file| {
+        if (acc_file.slot < slot) continue;
+        var name_buf: [std.fmt.count("accounts/{d}.{d}", .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) })]u8 = undefined;
+        try writeTarHeader(writer, .regular, std.fmt.bufPrint(&name_buf, "accounts/{d}.{d}", .{ slot, file_id.toInt() }) catch unreachable, acc_file.memory.len);
+        try writer.writeAll(acc_file.memory);
+        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+        counting_writer_state.bytes_written %= 512;
+        std.debug.assert(counting_writer_state.bytes_written == 0);
+    }
+
+    // write the sentinel blocks
+    try writer.writeByteNTimes(0, 512 * 2);
+}
+
+const TarOutputHeader = std.tar.output.Header;
+fn writeTarHeader(writer: anytype, typeflag: TarOutputHeader.FileType, path: []const u8, size: u64) !void {
+    var header = TarOutputHeader.init();
+    _ = try std.fmt.bufPrint(&header.name, "{s}", .{path});
+    try header.setSize(size);
+    header.typeflag = typeflag;
+
+    const mode: u21 = switch (typeflag) {
+        // allow read & write, but not execution by anyone
+        .regular => 0o666,
+
+        // allow read, write, and traversal by anyone
+        .directory => 0o777,
+
+        // we don't really use anything else, so just set no permissions so that it's obvious something is wrong if this somehow occurs
+        else => 0,
+    };
+    _ = std.fmt.bufPrint(&header.mode, "{o:0>7}", .{mode}) catch unreachable;
+
+    try header.updateChecksum();
+    try writer.writeAll(std.mem.asBytes(&header));
+}
+
+/// Returns the number of padding bytes that must be written in order to have a round 512 byte block.
+/// The result is 0 if the number of bytes written already form a round 512 byte block, or if there
+/// are 0 bytes written.
+fn paddingBytes(
+    /// The actual number of bytes written, or the number of bytes written modulo 512.
+    bytes_written_maybe_modulo: u64,
+) std.math.IntFittingRange(0, 512 - 1) {
+    const modulo = bytes_written_maybe_modulo % 512;
+    if (modulo == 0) return 0; // we don't want any padding if it's already a round 512 block
+    return @intCast(512 - modulo);
+}
+
+/// where accounts are stored
+pub const AccountStorage = struct {
+    file_map: std.AutoArrayHashMap(FileId, AccountFile),
+    cache: std.ArrayList(Account),
+
+    pub fn init(allocator: std.mem.Allocator, cache_size: usize) !AccountStorage {
+        return AccountStorage{
+            .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
+            .cache = try std.ArrayList(Account).initCapacity(allocator, cache_size),
+        };
+    }
+
+    pub fn deinit(self: *AccountStorage) void {
+        for (self.file_map.values()) |*af| {
+            af.deinit();
+        }
+        self.file_map.deinit();
+        self.cache.deinit();
+    }
+
+    pub fn getAccountFile(self: *const AccountStorage, file_id: FileId) ?AccountFile {
+        return self.file_map.get(file_id);
+    }
+
+    /// gets an account given an file_id and offset value
+    pub fn getAccountInFile(
+        self: *const AccountStorage,
+        file_id: FileId,
+        offset: usize,
+    ) !AccountInFile {
+        const accounts_file: AccountFile = self.getAccountFile(file_id) orelse {
+            return error.FileIdNotFound;
+        };
+        const account = accounts_file.readAccount(offset) catch {
+            return error.InvalidOffset;
+        };
+        return account;
+    }
+};
+
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
+    std.debug.assert(builtin.is_test); // should only be used in tests
+
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
@@ -2231,9 +2367,10 @@ test "load and validate from test snapshot using disk index" {
     }
 
     try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields.incremental_snapshot_persistence,
+        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
+        snapshots.full.accounts_db_fields,
     );
 }
 
@@ -2247,9 +2384,10 @@ test "load and validate from test snapshot" {
     }
 
     try accounts_db.validateLoadFromSnapshot(
-        snapshots.incremental.?.bank_fields.incremental_snapshot_persistence,
+        snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
+        snapshots.full.accounts_db_fields,
     );
 }
 

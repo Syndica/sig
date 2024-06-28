@@ -25,7 +25,6 @@ const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
-const enumFromName = sig.utils.types.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
@@ -337,7 +336,7 @@ var app = &cli.App{
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
+    var logger = Logger.init(gpa_allocator, config.current.log_level);
     defer logger.deinit();
     logger.spawn();
 
@@ -481,7 +480,7 @@ fn validator() !void {
         }
         return err;
     };
-    defer status_cache.deinit();
+    defer status_cache.deinit(gpa_allocator);
 
     var slot_history = try accounts_db.getSlotHistory();
     defer slot_history.deinit(accounts_db.allocator);
@@ -631,7 +630,7 @@ fn spawnMetrics(logger: Logger) !std.Thread {
 }
 
 fn spawnLogger() !Logger {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
+    var logger = Logger.init(gpa_allocator, config.current.log_level);
     logger.spawn();
     return logger;
 }
@@ -671,8 +670,7 @@ fn readStatusCache(
         return error.StatusCacheNotFound;
     };
 
-    const status_cache = try StatusCache.init(allocator, status_cache_path);
-    return status_cache;
+    return try StatusCache.initFromPath(allocator, status_cache_path);
 }
 
 /// entrypoint to download snapshot
