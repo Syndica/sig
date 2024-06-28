@@ -1,8 +1,10 @@
 const std = @import("std");
-const ShortVecConfig = @import("../utils/shortvec.zig").ShortVecConfig;
-const Signature = @import("signature.zig").Signature;
-const Pubkey = @import("pubkey.zig").Pubkey;
-const Hash = @import("hash.zig").Hash;
+const sig = @import("../lib.zig");
+
+const Signature = sig.core.Signature;
+const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.Hash;
+const ShortVecConfig = sig.bincode.shortvec.ShortVecConfig;
 
 pub const Transaction = struct {
     signatures: []Signature,
