@@ -714,7 +714,6 @@ fn spawnLogger() !Logger {
 const LoadedSnapshot = struct {
     allocator: Allocator,
     accounts_db: AccountsDB,
-    snapshots: SnapshotFieldsAndPaths,
     snapshot_fields: sig.accounts_db.SnapshotFields,
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
@@ -723,8 +722,6 @@ const LoadedSnapshot = struct {
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
         self.snapshot_fields.deinit(self.allocator);
-        self.accounts_db.deinit();
-        self.snapshots.deinit(self.allocator);
         self.accounts_db.deinit(false); // keep index files on disk
         self.allocator.destroy(self);
     }
@@ -737,11 +734,13 @@ fn loadSnapshot(
     validate_genesis: bool,
 ) !*LoadedSnapshot {
     const output = try allocator.create(LoadedSnapshot);
+    errdefer allocator.destroy(output);
     var snapshots = try getOrDownloadSnapshots(
         allocator,
         logger,
         gossip_service,
     );
+    defer snapshots.deinit(allocator);
 
     logger.infof("full snapshot: {s}", .{snapshots.full_path});
     if (snapshots.incremental_path) |inc_path| {
@@ -761,6 +760,7 @@ fn loadSnapshot(
         logger,
         config.current.accounts_db,
     );
+    errdefer output.accounts_db.deinit(false);
 
     output.snapshot_fields = try output.accounts_db.loadWithDefaults(
         &snapshots,
@@ -768,6 +768,7 @@ fn loadSnapshot(
         n_threads_snapshot_load,
         true, // validate too
     );
+    errdefer output.snapshot_fields.deinit(allocator);
 
     const bank_fields = &output.snapshot_fields.bank_fields;
 
@@ -779,6 +780,7 @@ fn loadSnapshot(
         }
         return err;
     };
+    errdefer output.genesis_config.deinit(allocator);
 
     logger.infof("validating bank...", .{});
     output.bank = Bank.init(&output.accounts_db, bank_fields);
