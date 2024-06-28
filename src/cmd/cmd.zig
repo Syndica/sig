@@ -198,7 +198,7 @@ var force_new_snapshot_download_option = cli.Option{
 
 var snapshot_dir_option = cli.Option{
     .long_name = "snapshot-dir",
-    .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/",
+    .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: ledger/accounts_db",
     .short_alias = 's',
     .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
     .required = false,
@@ -390,6 +390,9 @@ fn validator() !void {
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+
+    try std.fs.cwd().makePath(snapshot_dir_str);
 
     // gossip
     var gossip_service = try initGossip(
@@ -435,13 +438,11 @@ fn validator() !void {
         logger.infof("incremental snapshot: {s}", .{inc_path});
     }
 
-    // cli parsing
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_load: u32 = @intCast(config.current.accounts_db.num_threads_snapshot_load);
-    if (n_threads_snapshot_load == 0) {
-        n_threads_snapshot_load = n_cpus;
-    }
+    const n_threads_snapshot_load: u32 = blk: {
+        const n_threads_snapshot_load: u32 = config.current.accounts_db.num_threads_snapshot_load;
+        if (n_threads_snapshot_load == 0) break :blk @truncate(try std.Thread.getCpuCount());
+        break :blk n_threads_snapshot_load;
+    };
 
     var accounts_db = try AccountsDB.init(
         gpa_allocator,

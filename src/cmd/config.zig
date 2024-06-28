@@ -35,7 +35,7 @@ pub const AccountsDBConfig = struct {
     // where to load/save snapshots from - also where disk indexes and account files are stored
     snapshot_dir: []const u8 = "ledger/accounts_db",
     // number of threads to load snapshot
-    num_threads_snapshot_load: u16 = 0,
+    num_threads_snapshot_load: u32 = 0,
     // number of threads to unpack snapshot from .tar.zstd
     num_threads_snapshot_unpack: u16 = 0,
     // number of shards to use across the index
