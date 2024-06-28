@@ -426,7 +426,7 @@ fn validator() !void {
     defer gossip_service.deinit();
     defer gossip_manager.deinit();
 
-    const snapshot = try loadSnapshot(allocator, app_base.logger, gossip_service, false);
+    const snapshot = try loadFromSnapshot(allocator, app_base.logger, gossip_service, false);
 
     // leader schedule
     var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse
@@ -465,7 +465,7 @@ fn printLeaderSchedule() !void {
         var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
         defer gossip_service.deinit();
         defer gossip_manager.deinit();
-        const snapshot = try loadSnapshot(allocator, app_base.logger, gossip_service, false);
+        const snapshot = try loadFromSnapshot(allocator, app_base.logger, gossip_service, false);
         break :b try leaderScheduleFromBank(allocator, &snapshot.bank);
     };
 
@@ -727,7 +727,7 @@ const LoadedSnapshot = struct {
     }
 };
 
-fn loadSnapshot(
+fn loadFromSnapshot(
     allocator: Allocator,
     logger: Logger,
     gossip_service: *GossipService,
