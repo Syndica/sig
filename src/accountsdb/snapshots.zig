@@ -1,25 +1,28 @@
 const std = @import("std");
+const zstd = @import("zstd");
+const sig = @import("../lib.zig");
+
+const bincode = sig.bincode;
+
 const ArrayList = std.ArrayList;
 const HashMap = std.AutoHashMap;
+const ZstdReader = zstd.Reader;
 
-const _genesis_config = @import("genesis_config.zig");
-const UnixTimestamp = _genesis_config.UnixTimestamp;
-const FeeRateGovernor = _genesis_config.FeeRateGovernor;
-const EpochSchedule = _genesis_config.EpochSchedule;
-const Rent = _genesis_config.Rent;
-const Inflation = _genesis_config.Inflation;
+const Account = sig.core.account.Account;
+const Hash = sig.core.hash.Hash;
+const Slot = sig.core.time.Slot;
+const Epoch = sig.core.time.Epoch;
+const Pubkey = sig.core.pubkey.Pubkey;
+const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
+const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
+const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
+const Rent = sig.accounts_db.genesis_config.Rent;
+const Inflation = sig.accounts_db.genesis_config.Inflation;
+const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
-const Account = @import("../core/account.zig").Account;
-const Hash = @import("../core/hash.zig").Hash;
-const Slot = @import("../core/time.zig").Slot;
-const Epoch = @import("../core/time.zig").Epoch;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const bincode = @import("../bincode/bincode.zig");
-const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
-const readDirectory = @import("../utils/directory.zig").readDirectory;
-pub const sysvars = @import("sysvars.zig");
-const ZstdReader = @import("zstd").Reader;
-const parallelUntarToFileSystem = @import("../utils/tar.zig").parallelUntarToFileSystem;
+const defaultArrayListOnEOFConfig = bincode.arraylist.defaultArrayListOnEOFConfig;
+const readDirectory = sig.utils.directory.readDirectory;
+const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
 
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
@@ -739,7 +742,7 @@ pub const StatusCache = struct {
         self: *const StatusCache,
         allocator: std.mem.Allocator,
         bank_slot: Slot,
-        slot_history: *const sysvars.SlotHistory,
+        slot_history: *const SlotHistory,
     ) !void {
         // status cache validation
         const len = self.bank_slot_deltas.items.len;

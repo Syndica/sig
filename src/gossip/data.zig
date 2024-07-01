@@ -1,34 +1,32 @@
 const std = @import("std");
-const SocketAddr = @import("../net/net.zig").SocketAddr;
-const Hash = @import("../core/hash.zig").Hash;
-const Signature = @import("../core/signature.zig").Signature;
-const Transaction = @import("../core/transaction.zig").Transaction;
-const Slot = @import("../core/time.zig").Slot;
-const bincode = @import("../bincode/bincode.zig");
+const network = @import("zig-network");
+const sig = @import("../lib.zig");
+
+const testing = std.testing;
+const bincode = sig.bincode;
+
 const ArrayList = std.ArrayList;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const sanitizeWallclock = @import("./message.zig").sanitizeWallclock;
-const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
-
-const network = @import("zig-network");
-const var_int = @import("../utils/varint.zig");
-const var_int_config_u16 = var_int.var_int_config_u16;
-const var_int_config_u64 = var_int.var_int_config_u64;
-
-const ShortVecArrayListConfig = @import("../utils/shortvec.zig").ShortVecArrayListConfig;
-const IpAddr = @import("../net/net.zig").IpAddr;
-const gossip = @import("sig").gossip;
-const testing = std.testing;
-
-const ClientVersion = @import("../version/version.zig").ClientVersion;
-
 const UdpSocket = network.Socket;
 const TcpListener = network.Socket;
-const net = std.net;
 
-const DynamicArrayBitSet = @import("../bloom/bit_set.zig").DynamicArrayBitSet;
-const BitVecConfig = @import("../bloom/bit_vec.zig").BitVecConfig;
+const SocketAddr = sig.net.SocketAddr;
+const Hash = sig.core.Hash;
+const Signature = sig.core.Signature;
+const Transaction = sig.core.Transaction;
+const Slot = sig.core.Slot;
+const Pubkey = sig.core.Pubkey;
+const IpAddr = sig.net.IpAddr;
+const ClientVersion = sig.version.ClientVersion;
+const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
+const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
+const ShortVecArrayListConfig = sig.bincode.shortvec.ShortVecArrayListConfig;
+
+const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;
+
+const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
+const var_int_config_u64 = sig.bincode.varint.var_int_config_u64;
 
 /// returns current timestamp in milliseconds
 pub fn getWallclockMs() u64 {
@@ -103,8 +101,8 @@ pub const SignedGossipData = struct {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const bytes = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
-        var sig = try keypair.sign(bytes, null);
-        self.signature.data = sig.toBytes();
+        var signature = try keypair.sign(bytes, null);
+        self.signature.data = signature.toBytes();
     }
 
     pub fn verify(self: *Self, pubkey: Pubkey) !bool {

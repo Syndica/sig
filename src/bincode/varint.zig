@@ -1,5 +1,7 @@
 const std = @import("std");
-const bincode = @import("../bincode/bincode.zig");
+const sig = @import("../lib.zig");
+
+const bincode = sig.bincode;
 
 pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
     const S = struct {
