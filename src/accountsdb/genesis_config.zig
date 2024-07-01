@@ -108,10 +108,10 @@ pub const EpochSchedule = extern struct {
     first_normal_slot: Slot,
 
     pub fn getEpoch(self: *const EpochSchedule, slot: Slot) Epoch {
-        return self.getEpochAndSlotIndex(slot).epoch;
+        return self.getEpochAndSlotIndex(slot)[0];
     }
 
-    pub fn getEpochAndSlotIndex(self: *const EpochSchedule, slot: Slot) struct { epoch: Epoch, slot_index: Slot } {
+    pub fn getEpochAndSlotIndex(self: *const EpochSchedule, slot: Slot) struct { Epoch, Slot } {
         if (slot < self.first_normal_slot) {
             var epoch = slot +| MINIMUM_SLOTS_PER_EPOCH +| 1;
             epoch = @ctz(std.math.ceilPowerOfTwo(u64, epoch) catch {
@@ -123,10 +123,7 @@ pub const EpochSchedule = extern struct {
 
             const slot_index = slot -| (epoch_len -| MINIMUM_SLOTS_PER_EPOCH);
 
-            return .{
-                .epoch = epoch,
-                .slot_index = slot_index,
-            };
+            return .{ epoch, slot_index };
         } else {
             const normal_slot_index = slot -| self.first_normal_slot;
             const normal_epoch_index = std.math.divTrunc(u64, normal_slot_index, self.slots_per_epoch) catch 0;
@@ -134,11 +131,17 @@ pub const EpochSchedule = extern struct {
             const epoch = self.first_normal_epoch +| normal_epoch_index;
             const slot_index = std.math.rem(u64, normal_slot_index, self.slots_per_epoch) catch 0;
 
-            return .{
-                .epoch = epoch,
-                .slot_index = slot_index,
-            };
+            return .{ epoch, slot_index };
         }
+    }
+
+    /// get the length of the given epoch (in slots)
+    pub fn getSlotsInEpoch(self: *const EpochSchedule, epoch: Epoch) Slot {
+        comptime std.debug.assert(std.math.isPowerOfTwo(MINIMUM_SLOTS_PER_EPOCH));
+        return if (epoch < self.first_normal_epoch)
+            @as(Slot, 1) <<| epoch +| @ctz(MINIMUM_SLOTS_PER_EPOCH)
+        else
+            self.slots_per_epoch;
     }
 };
 

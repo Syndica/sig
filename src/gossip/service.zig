@@ -48,6 +48,7 @@ const Ping = sig.gossip.ping_pong.Ping;
 const Pong = sig.gossip.ping_pong.Pong;
 const PingCache = sig.gossip.ping_pong.PingCache;
 const PingAndSocketAddr = sig.gossip.ping_pong.PingAndSocketAddr;
+const ServiceManager = sig.utils.service_manager.ServiceManager;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
@@ -272,36 +273,20 @@ pub const GossipService = struct {
         deinitMux(&self.failed_pull_hashes_mux);
     }
 
-    pub const RunHandles = struct {
-        exit: *AtomicBool,
-        receiver_thread: std.Thread,
-        packet_verifier_thread: std.Thread,
-        message_processor_thread: std.Thread,
-        message_builder_thread: ?std.Thread,
-        responder_thread: std.Thread,
-        dumper_thread: ?std.Thread,
-
-        /// If any of the threads join, all other threads will be signalled to join.
-        pub fn joinAndExit(handles: RunHandles) void {
-            inline for (@typeInfo(RunHandles).Struct.fields, 0..) |field, i| cont: {
-                comptime if (@field(std.meta.FieldEnum(RunHandles), field.name) == .exit) {
-                    std.debug.assert(field.type == *AtomicBool);
-                    continue;
-                };
-                const maybe_thread: ?std.Thread = @field(handles, field.name);
-                const thread = maybe_thread orelse break :cont;
-                thread.join(); // if we end up joining, something's gone wrong, so signal exit
-                if (i == 0) handles.exit.store(true, .unordered);
-            }
-        }
-    };
-
     pub const RunThreadsParams = struct {
         spy_node: bool,
         dump: bool,
     };
 
-    /// spawns required threads for the gossip serivce.
+    /// starts gossip and blocks until it exits
+    pub fn run(self: *Self, params: RunThreadsParams) !void {
+        var manager = ServiceManager.init(self.allocator, self.logger, self.exit, "gossip", .{}, .{});
+        try self.start(params, &manager);
+        manager.join();
+        manager.deinit();
+    }
+
+    /// spawns required threads for the gossip service and returns immediately
     /// including:
     ///     1) socket reciever
     ///     2) packet verifier
@@ -309,78 +294,42 @@ pub const GossipService = struct {
     ///     4) build message loop (to send outgoing message) (only active if not a spy node)
     ///     5) a socket responder (to send outgoing packets)
     ///     6) echo server
-    pub fn runThreads(
+    pub fn start(
         self: *Self,
         params: RunThreadsParams,
-    ) std.Thread.SpawnError!RunHandles {
-        const spy_node = params.spy_node;
-        const dump = params.dump;
-
+        manager: *ServiceManager,
+    ) (std.mem.Allocator.Error || std.Thread.SpawnError)!void {
         // TODO(Ahmad): need new server impl, for now we don't join server thread
         // because http.zig's server doesn't stop when you call server.stop() - it's broken
         // const echo_server_thread = try self.echo_server.listenAndServe();
         // _ = echo_server_thread;
+        errdefer manager.deinit();
 
-        const exitAndJoin = struct {
-            inline fn exitAndJoin(exit: *AtomicBool, thread: std.Thread) void {
-                exit.store(true, .unordered);
-                thread.join();
-            }
-        }.exitAndJoin;
-
-        const receiver_thread = try Thread.spawn(.{}, socket_utils.readSocket, .{
+        try manager.spawn("gossip readSocket", socket_utils.readSocket, .{
             self.allocator,
             self.gossip_socket,
             self.packet_incoming_channel,
             self.exit,
             self.logger,
         });
-        errdefer exitAndJoin(self.exit, receiver_thread);
+        try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
+        try manager.spawn("gossip processMessages", processMessages, .{ self, self.gossip_value_allocator });
 
-        const packet_verifier_thread = try Thread.spawn(.{}, verifyPackets, .{self});
-        errdefer exitAndJoin(self.exit, packet_verifier_thread);
+        if (!params.spy_node) try manager.spawn("gossip buildMessages", buildMessages, .{self});
 
-        const message_processor_thread = try Thread.spawn(.{}, processMessages, .{ self, self.gossip_value_allocator });
-        errdefer exitAndJoin(self.exit, message_processor_thread);
-
-        const maybe_message_builder_thread: ?std.Thread = if (!spy_node) try Thread.spawn(.{}, buildMessages, .{self}) else null;
-        errdefer if (maybe_message_builder_thread) |thread| {
-            exitAndJoin(self.exit, thread);
-        };
-
-        const responder_thread = try Thread.spawn(.{}, socket_utils.sendSocket, .{
+        try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
             self.gossip_socket,
             self.packet_outgoing_channel,
             self.exit,
             self.logger,
         });
-        errdefer exitAndJoin(self.exit, responder_thread);
 
-        const maybe_dumper_thread: ?std.Thread = if (dump) try Thread.spawn(.{}, GossipDumpService.run, .{.{
+        if (params.dump) try manager.spawn("GossipDumpService", GossipDumpService.run, .{.{
             .allocator = self.allocator,
             .logger = self.logger,
             .gossip_table_rw = &self.gossip_table_rw,
             .exit = self.exit,
-        }}) else null;
-        errdefer if (maybe_dumper_thread) |thread| {
-            exitAndJoin(self.exit, thread);
-        };
-
-        return .{
-            .exit = self.exit,
-
-            .receiver_thread = receiver_thread,
-            .packet_verifier_thread = packet_verifier_thread,
-            .message_processor_thread = message_processor_thread,
-            .message_builder_thread = maybe_message_builder_thread,
-            .responder_thread = responder_thread,
-            .dumper_thread = maybe_dumper_thread,
-        };
-    }
-
-    pub fn run(self: *Self, params: RunThreadsParams) !void {
-        const run_handles = try self.runThreads(params);
-        defer run_handles.joinAndExit();
+        }});
     }
 
     const VerifyMessageTask = ThreadPoolTask(VerifyMessageEntry);

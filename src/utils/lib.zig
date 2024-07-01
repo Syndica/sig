@@ -1,4 +1,5 @@
 pub const collections = @import("collections.zig");
+pub const closure = @import("closure.zig");
 pub const bitflags = @import("bitflags.zig");
 pub const directory = @import("directory.zig");
 pub const lazy = @import("lazy.zig");

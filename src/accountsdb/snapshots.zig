@@ -55,7 +55,7 @@ pub const Stakes = struct {
 };
 
 pub const VoteAccounts = struct {
-    vote_accounts: HashMap(Pubkey, struct { u64, Account }),
+    vote_accounts: HashMap(Pubkey, struct { u64, VoteAccount }),
 
     staked_nodes: ?HashMap(
         Pubkey, // VoteAccount.vote_state.node_pubkey.
@@ -63,7 +63,60 @@ pub const VoteAccounts = struct {
     ) = null,
 
     pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?HashMap(Pubkey, u64)){ .skip = true };
+
+    const Self = @This();
+
+    pub fn stakedNodes(self: *Self, allocator: std.mem.Allocator) !*const HashMap(Pubkey, u64) {
+        if (self.staked_nodes) |*staked_nodes| {
+            return staked_nodes;
+        }
+        const vote_accounts = self.vote_accounts;
+        var staked_nodes = HashMap(Pubkey, u64).init(allocator);
+        var iter = vote_accounts.iterator();
+        while (iter.next()) |vote_entry| {
+            const vote_state = try vote_entry.value_ptr[1].voteState();
+            const node_entry = try staked_nodes.getOrPut(vote_state.node_pubkey);
+            if (!node_entry.found_existing) {
+                node_entry.value_ptr.* = 0;
+            }
+            node_entry.value_ptr.* += vote_entry.value_ptr[0];
+        }
+        self.staked_nodes = staked_nodes;
+        return &self.staked_nodes.?;
+    }
 };
+
+pub const VoteAccount = struct {
+    account: Account,
+    vote_state: ?anyerror!VoteState = null,
+
+    pub const @"!bincode-config:vote_state" = bincode.FieldConfig(?anyerror!VoteState){ .skip = true };
+
+    pub fn voteState(self: *@This()) !VoteState {
+        if (self.vote_state) |vs| {
+            return vs;
+        }
+        self.vote_state = bincode.readFromSlice(undefined, VoteState, self.account.data, .{});
+        return self.vote_state.?;
+    }
+};
+
+pub const VoteState = struct {
+    /// The variant of the rust enum
+    tag: u32, // TODO: consider varint bincode serialization (in rust this is enum)
+    /// the node that votes in this account
+    node_pubkey: Pubkey,
+};
+
+test "deserialize VoteState.node_pubkey" {
+    const bytes = .{
+        2,  0,   0,   0, 60,  155, 13,  144, 187, 252, 153, 72,  190, 35,  87,  94,  7,  178,
+        90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
+    } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
+    const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
+    const expected_pubkey = try Pubkey.fromString("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+    try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
+}
 
 pub const Delegation = struct {
     /// to whom the stake is delegated

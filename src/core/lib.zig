@@ -1,6 +1,7 @@
 pub const account = @import("account.zig");
 pub const hard_forks = @import("hard_forks.zig");
 pub const hash = @import("hash.zig");
+pub const leader_schedule = @import("leader_schedule.zig");
 pub const pubkey = @import("pubkey.zig");
 pub const shred = @import("shred.zig");
 pub const signature = @import("signature.zig");

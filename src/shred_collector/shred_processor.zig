@@ -25,10 +25,9 @@ pub fn runShredProcessor(
 ) !void {
     var buf = ArrayList(ArrayList(Packet)).init(allocator);
     var error_context = ErrorContext{};
-    while (true) {
+    while (!exit.load(.unordered)) {
         try verified_shred_receiver.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
-            if (exit.load(.monotonic)) return;
             std.time.sleep(10 * std.time.ns_per_ms);
             continue;
         }
@@ -43,7 +42,6 @@ pub fn runShredProcessor(
                 };
             };
         }
-        if (exit.load(.monotonic)) return;
     }
 }
 

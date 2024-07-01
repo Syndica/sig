@@ -1,14 +1,8 @@
 .zig-cache/
+zig-cache/
 zig-out/
 data/
 
-# unpacking test snapshots
-test_data/version
-test_data/accounts/
-test_data/snapshots/
-test_data/tmp/
-test_data/bench_snapshot/
-test_data/accountsdb_fuzz/
 index_storage/
 
 /gossip-dumps

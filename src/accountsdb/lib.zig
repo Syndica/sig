@@ -12,6 +12,7 @@ pub const AccountsDB = db.AccountsDB;
 pub const AllSnapshotFields = snapshots.AllSnapshotFields;
 pub const Bank = bank.Bank;
 pub const GenesisConfig = genesis_config.GenesisConfig;
+pub const SnapshotFields = snapshots.SnapshotFields;
 pub const SnapshotFieldsAndPaths = snapshots.SnapshotFieldsAndPaths;
 pub const SnapshotFiles = snapshots.SnapshotFiles;
 pub const StatusCache = snapshots.StatusCache;

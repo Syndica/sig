@@ -6,6 +6,7 @@ pub const Config = struct {
     gossip: GossipConfig = .{},
     shred_collector: ShredCollectorConfig = shred_collector_defaults,
     accounts_db: AccountsDBConfig = .{},
+    leader_schedule_path: ?[]const u8 = null,
     // general config
     log_level: []const u8 = "debug",
     metrics_port: u16 = 12345,
