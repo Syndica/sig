@@ -1,15 +1,12 @@
+pub const arraylist = @import("arraylist.zig");
+pub const shortvec = @import("shortvec.zig");
+pub const varint = @import("varint.zig");
+
 const std = @import("std");
 
 const testing = std.testing;
 
 const bincode = @This();
-
-pub const config = struct {
-    // TODO move these files to the bincode folder
-    pub const arraylist = @import("../utils/arraylist.zig");
-    pub const shortvec = @import("../utils/shortvec.zig");
-    pub const varint = @import("../utils/varint.zig");
-};
 
 pub const Params = struct {
     pub const legacy: Params = .{
@@ -706,7 +703,7 @@ test "bincode: custom enum" {
 }
 
 test "bincode: default on eof" {
-    const defaultArrayListOnEOFConfig = @import("../utils/arraylist.zig").defaultArrayListOnEOFConfig;
+    const defaultArrayListOnEOFConfig = @import("../lib.zig").bincode.arraylist.defaultArrayListOnEOFConfig;
     const Foo = struct {
         value: u8 = 0,
         accounts: std.ArrayList(u64),

@@ -32,8 +32,41 @@ pub const SocketAddr = union(enum(u8)) {
     }
 
     pub fn parse(bytes: []const u8) !Self {
-        // TODO: parse v6 if v4 fails
-        return parseIpv4(bytes);
+        const address = parseIpv4(bytes) catch blk: {
+            break :blk parseIpv6(bytes);
+        };
+
+        return address;
+    }
+
+    pub fn parseIpv6(bytes: []const u8) !Self {
+        // https://ratfactor.com/zig/stdlib-browseable2/net.zig.html
+        // ports with IPv6 are after square brackets, but stdlib has IPv6 parsing on only the address
+        // so exploit stdlib for that portion, and parse the port afterwards.
+
+        var maybe_address: ?std.net.Ip6Address = null;
+        var portt: u16 = 0;
+        const maybe_right_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{']'});
+        const maybe_left_bracket_index = std.mem.indexOf(u8, bytes, &[_]u8{'['});
+        // right_bracket_index + 2 should be less than the total length of bytes in order to proceed. Why?
+        // Because if the string is [2001::1]:8000, then right_bracket_index would be 8, and 10 would be the start of the port
+        //                          ~~~~~~~^++ <-- this is index + 2
+        if (maybe_right_bracket_index) |right_bracket_index| {
+            if (maybe_left_bracket_index) |left_bracket_index| {
+                var addr = std.net.Ip6Address.parse(bytes[left_bracket_index + 1 .. right_bracket_index], 0) catch return error.InvalidIpv6;
+                portt = std.fmt.parseUnsigned(u16, bytes[right_bracket_index + 2 ..], 10) catch return error.InvalidIpv6;
+                addr.setPort(portt);
+                maybe_address = addr;
+            }
+        } else {
+            maybe_address = std.net.Ip6Address.parse(bytes, 0) catch return error.InvalidIpv6;
+        }
+
+        if (maybe_address) |address| {
+            return Self{ .V6 = .{ .ip = Ipv6Addr.init(address.sa.addr), .port = address.getPort(), .scope_id = address.sa.scope_id, .flowinfo = address.sa.flowinfo } };
+        } else {
+            return error.InvalidIpv6;
+        }
     }
 
     pub fn parseIpv4(bytes: []const u8) !Self {
@@ -513,4 +546,35 @@ test "net.net: set port works" {
     var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
     sa1.setPort(1001);
     try std.testing.expectEqual(@as(u16, 1001), sa1.port());
+}
+
+test "net.net: parse IPv6 if IPv4 fails" {
+    try std.testing.expectError(error.InvalidIpv6, SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
+
+    try std.testing.expectError(error.InvalidIpv6, SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"));
+
+    {
+        const sa = try SocketAddr.parse("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000");
+        const expected = SocketAddr.initIpv6([16]u8{ '\xFE', '\x38', '\xDC', '\xE3', '\x12', '\x4C', '\xC1', '\xA2', '\xBA', '\x03', '\x67', '\x45', '\xEF', '\x1C', '\x68', '\x3D' }, @as(u16, 8000));
+
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+
+    {
+        const sa = try SocketAddr.parse("[::1]:1234");
+        const expected = SocketAddr.initIpv6([16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '\x01' }, @as(u16, 1234));
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+
+    {
+        const sa = try SocketAddr.parse("[2001:0df8:00f2::06ee:0:0f11]:6500");
+        const expected = SocketAddr.initIpv6([16]u8{ '\x20', '\x01', '\x0D', '\xF8', 0, '\xF2', 0, 0, 0, 0, '\x06', '\xEE', 0, 0, '\x0F', '\x11' }, @as(u16, 6500));
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
+
+    {
+        const sa = try SocketAddr.parse("2001:0df8:00f2::06ee:0:0f11");
+        const expected = SocketAddr.initIpv6([16]u8{ '\x20', '\x01', '\x0D', '\xF8', 0, '\xF2', 0, 0, 0, 0, '\x06', '\xEE', 0, 0, '\x0F', '\x11' }, @as(u16, 0));
+        try std.testing.expectEqual(sa.V6, expected.V6);
+    }
 }

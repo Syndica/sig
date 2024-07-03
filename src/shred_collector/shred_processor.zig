@@ -6,6 +6,7 @@ const layout = shred_collector.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const Atomic = std.atomic.Value;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
@@ -16,6 +17,7 @@ const Shred = shred_collector.shred.Shred;
 /// Analogous to [WindowService](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L395)
 pub fn runShredProcessor(
     allocator: Allocator,
+    exit: *Atomic(bool),
     logger: Logger,
     // shred verifier --> me
     verified_shred_receiver: *Channel(ArrayList(Packet)),
@@ -23,7 +25,7 @@ pub fn runShredProcessor(
 ) !void {
     var buf = ArrayList(ArrayList(Packet)).init(allocator);
     var error_context = ErrorContext{};
-    while (true) {
+    while (!exit.load(.unordered)) {
         try verified_shred_receiver.tryDrainRecycle(&buf);
         if (buf.items.len == 0) {
             std.time.sleep(10 * std.time.ns_per_ms);

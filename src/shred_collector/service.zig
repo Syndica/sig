@@ -18,6 +18,7 @@ const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
 const ServiceManager = sig.utils.service_manager.ServiceManager;
 const Slot = sig.core.Slot;
+const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 
 const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const RepairPeerProvider = shred_collector.repair_service.RepairPeerProvider;
@@ -47,6 +48,7 @@ pub const ShredCollectorDependencies = struct {
     gossip_table_rw: *RwMux(GossipTable),
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
+    leader_schedule: SlotLeaderProvider,
 };
 
 /// Start the Shred Collector.
@@ -62,7 +64,7 @@ pub fn start(
     conf: ShredCollectorConfig,
     deps: ShredCollectorDependencies,
 ) !ServiceManager {
-    var service_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit);
+    var service_manager = ServiceManager.init(deps.allocator, deps.logger, deps.exit, "shred collector", .{}, .{});
     var arena = service_manager.arena();
 
     const repair_socket = try bindUdpReusable(conf.repair_port);
@@ -82,14 +84,20 @@ pub fn start(
         .unverified_shred_sender = unverified_shred_channel,
         .shred_version = deps.my_shred_version,
         .metrics = try ShredReceiverMetrics.init(),
+        .root_slot = if (conf.start_slot) |s| s - 1 else 0,
     };
-    try service_manager.spawn(.{ .name = "Shred Receiver" }, ShredReceiver.run, .{shred_receiver});
+    try service_manager.spawn("Shred Receiver", ShredReceiver.run, .{shred_receiver});
 
     // verifier (thread)
     try service_manager.spawn(
-        .{ .name = "Shred Verifier" },
+        "Shred Verifier",
         shred_collector.shred_verifier.runShredVerifier,
-        .{ deps.exit, unverified_shred_channel, verified_shred_channel, .{} },
+        .{
+            deps.exit,
+            unverified_shred_channel,
+            verified_shred_channel,
+            deps.leader_schedule,
+        },
     );
 
     // tracker (shared state, internal to Shred Collector)
@@ -101,9 +109,9 @@ pub fn start(
 
     // processor (thread)
     try service_manager.spawn(
-        .{ .name = "Shred Processor" },
+        "Shred Processor",
         shred_collector.shred_processor.runShredProcessor,
-        .{ deps.allocator, deps.logger, verified_shred_channel, shred_tracker },
+        .{ deps.allocator, deps.exit, deps.logger, verified_shred_channel, shred_tracker },
     );
 
     // repair (thread)
@@ -132,11 +140,7 @@ pub fn start(
         repair_peer_provider,
         shred_tracker,
     );
-    try service_manager.spawn(
-        .{ .name = "Repair Service" },
-        RepairService.run,
-        .{repair_svc},
-    );
+    try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
 
     return service_manager;
 }

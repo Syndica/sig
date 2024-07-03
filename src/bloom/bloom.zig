@@ -1,16 +1,17 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
-const DynamicArrayBitSet = @import("bit_set.zig").DynamicArrayBitSet;
-const BitVec = @import("bit_vec.zig").BitVec;
-const ArrayListConfig = @import("../utils/arraylist.zig").ArrayListConfig;
+const sig = @import("../lib.zig");
 
-const bincode = @import("../bincode/bincode.zig");
-const BitVecConfig = @import("bit_vec.zig").BitVecConfig;
-
-const FnvHasher = @import("../crypto/fnv.zig").FnvHasher;
 const testing = std.testing;
+const bincode = sig.bincode;
 
 const RndGen = std.rand.DefaultPrng;
+const ArrayList = std.ArrayList;
+
+const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
+const BitVec = sig.bloom.bit_vec.BitVec;
+const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
+const ArrayListConfig = bincode.arraylist.ArrayListConfig;
+const FnvHasher = sig.crypto.FnvHasher;
 
 /// A bloom filter whose bitset is made up of u64 blocks
 pub const Bloom = struct {
@@ -85,18 +86,15 @@ pub const Bloom = struct {
         return hasher.final();
     }
 
-    pub fn random(alloc: std.mem.Allocator, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
+    pub fn random(alloc: std.mem.Allocator, rand: std.Random, num_items: usize, false_rate: f64, max_bits: usize) error{OutOfMemory}!Self {
         const n_items_f: f64 = @floatFromInt(num_items);
         const m = Bloom.numBits(n_items_f, false_rate);
         const n_bits = @max(1, @min(@as(usize, @intFromFloat(m)), max_bits));
         const n_keys = Bloom.numKeys(@floatFromInt(n_bits), n_items_f);
 
-        const seed = @as(u64, @intCast(std.time.milliTimestamp()));
-        var rnd = RndGen.init(seed);
-
         var keys = try ArrayList(u64).initCapacity(alloc, n_keys);
         for (0..n_keys) |_| {
-            const v = rnd.random().int(u64);
+            const v = rand.int(u64);
             keys.appendAssumeCapacity(v);
         }
 
@@ -132,7 +130,8 @@ test "bloom.bloom: helper fcns match rust" {
     const n_keys = Bloom.numKeys(100.2, 10);
     try testing.expectEqual(@as(usize, 7), n_keys);
 
-    var bloom = try Bloom.random(std.testing.allocator, 100, 0.1, 10000);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    var bloom = try Bloom.random(std.testing.allocator, prng.random(), 100, 0.1, 10000);
     defer bloom.deinit();
 }
 

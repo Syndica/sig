@@ -169,7 +169,7 @@ pub fn randomPullRequestWithContactInfo(
     const N_FILTER_BITS = rng.intRangeAtMost(u6, 1, 10);
 
     // only consider the first bit so we know well get matches
-    var bloom = try Bloom.random(allocator, 100, 0.1, N_FILTER_BITS);
+    var bloom = try Bloom.random(allocator, rng, 100, 0.1, N_FILTER_BITS);
     defer bloom.deinit();
 
     var filter = GossipPullFilter{
@@ -194,7 +194,7 @@ pub fn randomPullRequestWithContactInfo(
         }
     } else {
         // add some valid hashes
-        var filter_set = try GossipPullFilterSet.initTest(allocator, filter.mask_bits);
+        var filter_set = try GossipPullFilterSet.initTest(allocator, rng, filter.mask_bits);
 
         for (0..5) |_| {
             const rand_value = try randomSignedGossipData(rng, true);
@@ -204,7 +204,7 @@ pub fn randomPullRequestWithContactInfo(
             filter_set.add(&value_hash);
         }
 
-        var filters = try filter_set.consumeForGossipPullFilters(allocator, 1);
+        var filters = try filter_set.consumeForGossipPullFilters(allocator, rng, 1);
         filter.filter = filters.items[0].filter;
         filter.mask = filters.items[0].mask;
         filter.mask_bits = filters.items[0].mask_bits;
@@ -236,18 +236,15 @@ pub fn waitForExit(exit: *AtomicBool) void {
     exit.store(true, .unordered);
 }
 
-pub fn run() !void {
+pub fn run(args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
     // parse cli args to define where to send packets
-    var cli_args = try std.process.argsWithAllocator(allocator);
-    defer cli_args.deinit();
-    _ = cli_args.skip();
     // zig build fuzz -- <entrypoint> <seed> <max_messages>
-    const maybe_entrypoint = cli_args.next();
-    const maybe_seed = cli_args.next();
-    const maybe_max_messages_string = cli_args.next();
+    const maybe_entrypoint = args.next();
+    const maybe_seed = args.next();
+    const maybe_max_messages_string = args.next();
 
     const entrypoint = blk: {
         if (maybe_entrypoint) |entrypoint| {

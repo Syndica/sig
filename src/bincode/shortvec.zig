@@ -1,7 +1,10 @@
 const std = @import("std");
-const bincode = @import("../bincode/bincode.zig");
-const serialize_short_u16 = @import("varint.zig").serialize_short_u16;
-const deserialize_short_u16 = @import("varint.zig").deserialize_short_u16;
+const sig = @import("../lib.zig");
+
+const bincode = sig.bincode;
+
+const serialize_short_u16 = sig.bincode.varint.serialize_short_u16;
+const deserialize_short_u16 = sig.bincode.varint.deserialize_short_u16;
 
 pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
     const S = struct {

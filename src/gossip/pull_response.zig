@@ -101,6 +101,7 @@ test "gossip.pull_response: test filtering values works" {
     const failed_pull_hashes = std.ArrayList(Hash).init(std.testing.allocator);
     var filters = try buildGossipPullFilters(
         std.testing.allocator,
+        rng,
         &gossip_table_rw,
         &failed_pull_hashes,
         max_bytes,

@@ -1,4 +1,6 @@
-const var_int_config_u16 = @import("../utils/varint.zig").var_int_config_u16;
+const sig = @import("../lib.zig");
+
+const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
 
 pub const CURRENT_CLIENT_VERSION: ClientVersion = ClientVersion.new(0, 1, 0, 0, 0, 4);
 

@@ -16,7 +16,7 @@ pub const Pubkey = extern struct {
     pub fn fromString(str: []const u8) !Self {
         var out: [32]u8 = undefined;
         const written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
-        if (written != 32) @panic("written is not 32");
+        if (written != 32) return Error.InvalidBytesLength;
 
         return Self{ .data = out };
     }
@@ -80,11 +80,11 @@ pub const Pubkey = extern struct {
         return Self.fromBytes(&public_key.bytes) catch unreachable;
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
         var dest: [44]u8 = undefined;
         @memset(&dest, 0);
-        const written = encoder.encode(&self.data, &dest) catch return error.EncodingError;
-        return writer.print("{s}", .{dest[0..written]});
+        const written = encoder.encode(&self.data, &dest) catch unreachable;
+        return writer.print("{s}", .{dest[0..written]}) catch unreachable;
     }
 
     pub fn isDefault(self: *const Self) bool {

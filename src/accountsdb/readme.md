@@ -237,6 +237,24 @@ after validating accounts-db data, we also validate a few key structs:
 `BenchArgs` contains all the configuration of a benchmark (comments describe each parameter) 
 - found at the bottom of `db.zig`
 
-writing accounts uses `putAccountBatch` which takes a slice of accounts 
+writing accounts uses `putAccountSlice` which takes a slice of accounts 
 and `putAccountFile` which takes an account file 
 reading accounts uses `accounts_db.getAccount(pubkey);`.
+
+## swissmap benchmarks 
+- found at the bottom of `index.zig`
+- run using `zig build -Doptimize=ReleaseSafe benchmark -- swissmap`
+
+```
+Benchmark                        Iterations    Min(ns)    Max(ns)   Variance   Mean(ns)
+---------------------------------------------------------------------------------------
+        WRITE: 814.917us (2.00x faster than std)
+        READ: 2.706ms (0.78x faster than std)
+swissmapBenchmark(100k accounts)          1     814917     814917          0     814917
+        WRITE: 7.715ms (1.46x faster than std)
+        READ: 23.055ms (0.77x faster than std)
+swissmapBenchmark(500k accounts)          1    7715875    7715875          0    7715875
+        WRITE: 17.163ms (1.44x faster than std)
+        READ: 50.975ms (0.70x faster than std)
+swissmapBenchmark(1m accounts)            1   17163500   17163500          0   17163500
+```

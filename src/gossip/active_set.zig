@@ -1,17 +1,19 @@
 const std = @import("std");
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const network = @import("zig-network");
-const EndPoint = network.EndPoint;
-const _gossip_data = @import("../gossip/data.zig");
-const SignedGossipData = _gossip_data.SignedGossipData;
-const getWallclockMs = _gossip_data.getWallclockMs;
-const ContactInfo = _gossip_data.ContactInfo;
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
+const sig = @import("../lib.zig");
 
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const GossipTable = @import("../gossip/table.zig").GossipTable;
-const shuffleFirstN = @import("../gossip/pull_request.zig").shuffleFirstN;
-const Bloom = @import("../bloom/bloom.zig").Bloom;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const EndPoint = network.EndPoint;
+
+const Pubkey = sig.core.Pubkey;
+const Bloom = sig.bloom.Bloom;
+const ContactInfo = sig.gossip.data.ContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const GossipTable = sig.gossip.table.GossipTable;
+
+const getWallclockMs = sig.gossip.getWallclockMs;
+const shuffleFirstN = sig.gossip.pull_request.shuffleFirstN;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const GOSSIP_PUSH_FANOUT: usize = 6;
@@ -22,55 +24,57 @@ const BLOOM_MAX_BITS: usize = 1024 * 8 * 4;
 
 pub const ActiveSet = struct {
     // store pubkeys as keys in gossip table bc the data can change
-    pruned_peers: std.AutoHashMap(Pubkey, Bloom),
+    // For each peer, a bloom filter is used to store pruned origins
+    peers: std.AutoHashMap(Pubkey, Bloom),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .pruned_peers = std.AutoHashMap(Pubkey, Bloom).init(allocator),
+            .peers = std.AutoHashMap(Pubkey, Bloom).init(allocator),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        var iter = self.pruned_peers.iterator();
+        var iter = self.peers.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
-        self.pruned_peers.deinit();
+        self.peers.deinit();
     }
 
     pub fn len(self: *const Self) u32 {
-        return self.pruned_peers.count();
+        return self.peers.count();
     }
 
     pub fn rotate(
         self: *Self,
+        rand: std.Random,
         peers: []ContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
-        var iter = self.pruned_peers.iterator();
+        var iter = self.peers.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.deinit();
         }
-        self.pruned_peers.clearRetainingCapacity();
+        self.peers.clearRetainingCapacity();
 
         if (peers.len == 0) {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        var rng = std.rand.DefaultPrng.init(getWallclockMs());
-        shuffleFirstN(rng.random(), ContactInfo, peers, size);
+        shuffleFirstN(rand, ContactInfo, peers, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
-            const entry = try self.pruned_peers.getOrPut(peers[i].pubkey);
+            const entry = try self.peers.getOrPut(peers[i].pubkey);
             if (entry.found_existing == false) {
                 // *full* hard restart on blooms -- labs doesnt do this - bug?
                 const bloom = try Bloom.random(
                     self.allocator,
+                    rand,
                     bloom_num_items,
                     BLOOM_FALSE_RATE,
                     BLOOM_MAX_BITS,
@@ -82,7 +86,7 @@ pub const ActiveSet = struct {
 
     pub fn prune(self: *Self, from: Pubkey, origin: Pubkey) void {
         // we only prune peers which we are sending push messages to
-        if (self.pruned_peers.getEntry(from)) |entry| {
+        if (self.peers.getEntry(from)) |entry| {
             const origin_bytes = origin.data;
             entry.value_ptr.add(&origin_bytes);
         }
@@ -100,8 +104,7 @@ pub const ActiveSet = struct {
         var active_set_endpoints = try std.ArrayList(EndPoint).initCapacity(allocator, GOSSIP_PUSH_FANOUT);
         errdefer active_set_endpoints.deinit();
 
-        // change to while loop
-        var iter = self.pruned_peers.iterator();
+        var iter = self.peers.iterator();
         while (iter.next()) |entry| {
             // lookup peer contact info
             const peer_info = table.getContactInfo(entry.key_ptr.*) orelse continue;
@@ -154,7 +157,8 @@ test "gossip.active_set: init/deinit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(gossip_peers.items);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
@@ -165,7 +169,7 @@ test "gossip.active_set: init/deinit" {
     const no_prune_fanout_len = fanout.items.len;
     try std.testing.expect(no_prune_fanout_len > 0);
 
-    var iter = active_set.pruned_peers.keyIterator();
+    var iter = active_set.peers.keyIterator();
     const peer_pubkey = iter.next().?.*;
     active_set.prune(peer_pubkey, origin);
 
@@ -191,5 +195,6 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    try active_set.rotate(gossip_peers.items);
+    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    try active_set.rotate(prng.random(), gossip_peers.items);
 }

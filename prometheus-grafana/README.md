@@ -17,6 +17,7 @@ mac: `docker compose -f compose-mac.yaml up -d`
 linux: `docker compose -f compose-linux.yaml up -d`
 
 - grafana will be accessable on `localhost:3000`
+  - note: `username: admin password: grafana`
 - prometheus will be accessable on `localhost:9090`
 - sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will 
 need to also modify the prometheus `target` to point to the different port).
