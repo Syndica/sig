@@ -956,6 +956,7 @@ pub const DiskMemoryAllocator = struct {
         if (str_allocator) |a| {
             a.free(self.filepath);
         }
+        self.hashmap.deinit();
     }
 
     pub fn allocator(self: *Self) std.mem.Allocator {
@@ -1082,8 +1083,7 @@ pub const DiskMemoryAllocator = struct {
 };
 
 test "tests disk allocator on hashmaps" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = DiskMemoryAllocator.init("test_data/tmp", gpa.allocator());
+    var allocator = DiskMemoryAllocator.init("test_data/tmp", std.testing.allocator);
     defer allocator.deinit(null);
 
     var refs = std.AutoHashMap(Pubkey, AccountRef).init(allocator.allocator());
@@ -1100,14 +1100,12 @@ test "tests disk allocator on hashmaps" {
 }
 
 test "tests disk allocator" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = DiskMemoryAllocator.init("test_data/tmp", gpa.allocator());
+    var allocator = DiskMemoryAllocator.init("test_data/tmp", std.testing.allocator);
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
         allocator.allocator(),
         1,
     );
-    defer disk_account_refs.deinit();
 
     var ref = AccountRef.default();
     ref.location.Cache.index = 2;
