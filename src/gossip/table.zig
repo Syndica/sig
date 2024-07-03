@@ -399,13 +399,13 @@ pub const GossipTable = struct {
 
     /// Since a node may be represented with ContactInfo or LegacyContactInfo,
     /// this function checks for both, and efficiently returns the data as
-    /// ContactInfo, regardless of how it was received.
-    pub fn getContactInfo(self: *const Self, pubkey: Pubkey) ?ContactInfo {
+    /// ThreadSafeContactInfo, regardless of how it was received.
+    pub fn getThreadSafeContactInfo(self: *const Self, pubkey: Pubkey) ?ThreadSafeContactInfo {
         const label = GossipKey{ .ContactInfo = pubkey };
         if (self.store.get(label)) |v| {
-            return v.value.data.ContactInfo;
+            return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo);
         } else {
-            return self.converted_contact_infos.get(pubkey);
+            return ThreadSafeContactInfo.fromContactInfo(self.converted_contact_infos.get(pubkey).?);
         }
     }
 

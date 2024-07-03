@@ -107,8 +107,8 @@ pub const ActiveSet = struct {
         var iter = self.peers.iterator();
         while (iter.next()) |entry| {
             // lookup peer contact info
-            const peer_info = table.getContactInfo(entry.key_ptr.*) orelse continue;
-            const peer_gossip_addr = peer_info.getSocket(.gossip) orelse continue;
+            const peer_info = table.getThreadSafeContactInfo(entry.key_ptr.*) orelse continue;
+            const peer_gossip_addr = peer_info.gossip_addr orelse continue;
 
             peer_gossip_addr.sanitize() catch continue;
 

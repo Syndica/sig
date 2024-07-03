@@ -1537,11 +1537,11 @@ pub const GossipService = struct {
                 }
 
                 // lookup contact info
-                const from_contact_info = gossip_table.getContactInfo(push_message.from_pubkey.*) orelse {
+                const from_contact_info = gossip_table.getThreadSafeContactInfo(push_message.from_pubkey.*) orelse {
                     // unable to find contact info
                     continue;
                 };
-                const from_gossip_addr = from_contact_info.getSocket(.gossip) orelse continue;
+                const from_gossip_addr = from_contact_info.gossip_addr orelse continue;
                 from_gossip_addr.sanitize() catch {
                     // invalid gossip socket
                     continue;
