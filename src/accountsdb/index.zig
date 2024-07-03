@@ -925,15 +925,15 @@ pub const DiskMemoryAllocator = struct {
     count: usize = 0,
     mux: std.Thread.Mutex = .{},
 
-    /// HashMap that maps that Mmap-ed memory address of a file to the file's index number
+    /// HashMap that maps the Mmap-ed memory address of a file to the file's index number
     hashmap: std.AutoHashMap([*]u8, usize),
 
     const Self = @This();
 
-    pub fn init(filepath: []const u8, map_allocator: std.mem.Allocator) Self {
+    pub fn init(filepath: []const u8, hashmap_allocator: std.mem.Allocator) Self {
         return Self{
             .filepath = filepath,
-            .hashmap = std.AutoHashMap([*]u8, usize).init(map_allocator),
+            .hashmap = std.AutoHashMap([*]u8, usize).init(hashmap_allocator),
         };
     }
 
