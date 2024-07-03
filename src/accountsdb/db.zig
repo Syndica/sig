@@ -1,3 +1,5 @@
+//! includes the main database struct `AccountsDB`
+
 const std = @import("std");
 const sig = @import("../lib.zig");
 const builtin = @import("builtin");
@@ -76,6 +78,8 @@ pub const AccountsDBStats = struct {
 };
 
 /// database for accounts
+///
+/// Analogous to [AccountsDb](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1363)
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
 

@@ -32,6 +32,7 @@ const shred_collector_defaults = ShredCollectorConfig{
     .start_slot = null,
 };
 
+/// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
 pub const AccountsDBConfig = struct {
     // where to load/save snapshots from - also where disk indexes and account files are stored
     snapshot_dir: []const u8 = "ledger/accounts_db",

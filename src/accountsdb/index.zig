@@ -1,3 +1,5 @@
+//! all index related structs (account ref, simd hashmap, …)
+
 const std = @import("std");
 const lib = @import("../lib.zig");
 
@@ -43,6 +45,7 @@ pub const AccountRef = struct {
     location: AccountLocation,
     next_ptr: ?*AccountRef = null,
 
+    /// Analogous to [StorageLocation](https://github.com/anza-xyz/agave/blob/b47a4ec74d85dae0b6d5dd24a13a8923240e03af/accounts-db/src/account_info.rs#L23)
     pub const AccountLocation = union(enum(u8)) {
         File: struct {
             file_id: FileId,
@@ -67,6 +70,8 @@ pub const AccountRef = struct {
 const ReferenceMemory = std.AutoHashMap(Slot, ArrayList(AccountRef));
 
 /// stores the mapping from Pubkey to the account location (AccountRef)
+///
+/// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
 pub const AccountIndex = struct {
     allocator: std.mem.Allocator,
     reference_allocator: std.mem.Allocator,
@@ -882,6 +887,8 @@ pub const RamMemoryConfig = struct {
 
 /// calculator to know which bin a pubkey belongs to
 /// (since the index is sharded into bins).
+///
+/// Analogous to [PubkeyBinCalculator24](https://github.com/anza-xyz/agave/blob/c87f9cdfc98e80077f68a3d86aefbc404a1cb4d6/accounts-db/src/pubkey_bins.rs#L4)
 pub const PubkeyBinCalculator = struct {
     shift_bits: u6,
 
