@@ -1031,6 +1031,8 @@ pub const DiskMemoryAllocator = struct {
         
         self.hashmap.put(memory.ptr, count) catch |err| {
             std.debug.print("Disk Memory Allocator error: {}\n", .{err});
+            // unmap the memory
+            std.posix.munmap(memory);
             return null;
         };
 
