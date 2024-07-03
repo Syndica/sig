@@ -648,6 +648,13 @@ pub const GossipTable = struct {
             const did_remove = self.entries.swapRemove(versioned_value.cursor_on_insertion);
             std.debug.assert(did_remove);
         }
+
+        // free memory while versioned_value still points to the correct data
+        bincode.free(self.allocator, versioned_value.value.data);
+
+        // remove from store
+        // this operation replaces the data pointed to by versioned_value to
+        // either the last element of the store, or undefined if the store is empty
         {
             const did_remove = self.store.swapRemove(label);
             std.debug.assert(did_remove);
@@ -658,14 +665,14 @@ pub const GossipTable = struct {
         // if (index == table_len) then it was already the last
         // element so we dont need to do anything
         if (entry_index < table_len) {
-            const new_index_value = self.store.iterator().values[entry_index];
-            const new_index_cursor = new_index_value.cursor_on_insertion;
-            const new_index_origin = new_index_value.value.id();
+            // versioned data now points to the element which was swapped in and needs updating
+            const new_index_cursor = versioned_value.cursor_on_insertion;
+            const new_index_origin = versioned_value.value.id();
 
             // update shards
-            self.shards.remove(table_len, &new_index_value.value_hash);
+            self.shards.remove(table_len, &versioned_value.value_hash);
             // wont fail because we just removed a value in line above
-            self.shards.insert(entry_index, &new_index_value.value_hash) catch unreachable;
+            self.shards.insert(entry_index, &versioned_value.value_hash) catch unreachable;
 
             // these also should not fail since there are no allocations - just changing the value
             switch (versioned_value.value.data) {
@@ -697,7 +704,6 @@ pub const GossipTable = struct {
             std.debug.assert(did_remove);
             new_entry_indexs.put(entry_index, {}) catch unreachable;
         }
-        bincode.free(self.allocator, versioned_value.value.data);
     }
 
     /// Trim when over 90% of max capacity
