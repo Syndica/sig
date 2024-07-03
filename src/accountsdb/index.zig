@@ -925,11 +925,15 @@ pub const DiskMemoryAllocator = struct {
     count: usize = 0,
     mux: std.Thread.Mutex = .{},
 
+    /// HashMap that maps that Mmap-ed memory address of a file to the file's index number
+    hashmap: std.AutoHashMap([*]u8, usize),
+
     const Self = @This();
 
-    pub fn init(filepath: []const u8) Self {
+    pub fn init(filepath: []const u8, map_allocator: std.mem.Allocator) Self {
         return Self{
             .filepath = filepath,
+            .hashmap = std.AutoHashMap([*]u8, usize).init(map_allocator),
         };
     }
 
@@ -940,9 +944,11 @@ pub const DiskMemoryAllocator = struct {
 
         // delete all files
         var buf: [1024]u8 = undefined;
-        for (0..self.count) |i| {
+        var iterator = self.hashmap.iterator();
+        while (iterator.next()) |entry| {
+            const file_index = entry.value_ptr.*;
             // this should never fail since we know the file exists in alloc()
-            const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, i }) catch unreachable;
+            const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, file_index }) catch unreachable;
             std.fs.cwd().deleteFile(filepath) catch |err| {
                 std.debug.print("Disk Memory Allocator deinit: error: {}\n", .{err});
             };
@@ -1022,14 +1028,35 @@ pub const DiskMemoryAllocator = struct {
             std.debug.print("Disk Memory Allocator error: {}\n", .{err});
             return null;
         };
+        
+        self.hashmap.put(memory.ptr, count) catch |err| {
+            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
+            return null;
+        };
 
         return memory.ptr;
     }
 
     /// unmaps the memory (file still exists and is removed on deinit())
-    pub fn free(_: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
+    pub fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
         _ = log2_align;
         _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        // get file index from hashmap
+        const file_index = self.hashmap.get(buf.ptr) orelse {
+            std.debug.print("Buffer's Pointer Address {*} Was Not Found\n", .{buf.ptr});
+            return;
+        };
+        // delete file
+        var str_buf: [1024]u8 = undefined;
+        const filepath = std.fmt.bufPrint(&str_buf, "{s}_{d}", .{ self.filepath, file_index }) catch unreachable;
+        std.fs.cwd().deleteFile(filepath) catch |err| {
+            std.debug.print("Disk Memory Allocator free: error: {}\n", .{err});
+        };
+        // remove key from hashmap
+        _ = self.hashmap.remove(buf.ptr);
+
         // TODO: build a mapping from ptr to file so we can delete the corresponding file on free
         const buf_aligned_len = std.mem.alignForward(usize, buf.len, std.mem.page_size);
         std.posix.munmap(@alignCast(buf.ptr[0..buf_aligned_len]));
@@ -1053,7 +1080,8 @@ pub const DiskMemoryAllocator = struct {
 };
 
 test "tests disk allocator on hashmaps" {
-    var allocator = DiskMemoryAllocator.init("test_data/tmp");
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = DiskMemoryAllocator.init("test_data/tmp", gpa.allocator());
     defer allocator.deinit(null);
 
     var refs = std.AutoHashMap(Pubkey, AccountRef).init(allocator.allocator());
@@ -1070,7 +1098,8 @@ test "tests disk allocator on hashmaps" {
 }
 
 test "tests disk allocator" {
-    var allocator = DiskMemoryAllocator.init("test_data/tmp");
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var allocator = DiskMemoryAllocator.init("test_data/tmp", gpa.allocator());
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
         allocator.allocator(),
@@ -1084,6 +1113,8 @@ test "tests disk allocator" {
     disk_account_refs.appendAssumeCapacity(ref);
 
     try std.testing.expect(std.meta.eql(disk_account_refs.items[0], ref));
+    // tmp_0 should exist
+    try std.fs.cwd().access("test_data/tmp_0", .{});
 
     var ref2 = AccountRef.default();
     ref2.location.Cache.index = 4;
@@ -1094,20 +1125,20 @@ test "tests disk allocator" {
     try std.testing.expect(std.meta.eql(disk_account_refs.items[0], ref));
     try std.testing.expect(std.meta.eql(disk_account_refs.items[1], ref2));
 
-    // these should exist
-    try std.fs.cwd().access("test_data/tmp_0", .{});
-    try std.fs.cwd().access("test_data/tmp_1", .{});
-
-    // this should delete them
-    allocator.deinit(null);
-
-    // these should no longer exist
+    // tmp_0 should no longer exist
     var did_error = false;
     std.fs.cwd().access("test_data/tmp_0", .{}) catch {
         did_error = true;
     };
     try std.testing.expect(did_error);
-    did_error = false;
+
+    // tmp_1 should exist
+    try std.fs.cwd().access("test_data/tmp_1", .{});
+
+    // this should delete all files
+    allocator.deinit(null);
+
+    // tmp_1 should no longer exist
     std.fs.cwd().access("test_data/tmp_1", .{}) catch {
         did_error = true;
     };

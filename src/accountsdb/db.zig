@@ -121,8 +121,9 @@ pub const AccountsDB = struct {
                 const disk_file_suffix = try std.fmt.allocPrint(allocator, "{s}/bin", .{disk_dir});
                 logger.infof("using disk index in {s}", .{disk_file_suffix});
 
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
                 const ptr = try allocator.create(DiskMemoryAllocator);
-                ptr.* = DiskMemoryAllocator.init(disk_file_suffix);
+                ptr.* = DiskMemoryAllocator.init(disk_file_suffix, gpa.allocator());
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
