@@ -552,35 +552,36 @@ pub const GossipService = struct {
                     },
                     .PullRequest => |*pull| {
                         const value: SignedGossipData = pull[1];
+                        var should_process_value = true;
                         switch (value.data) {
                             .ContactInfo => |*data| {
                                 if (data.pubkey.equals(&self.my_pubkey)) {
                                     // talking to myself == ignore
-                                    continue;
+                                    should_process_value = false;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.monotonic)) {
                                     // non-matching shred version
                                     self.stats.pull_requests_dropped.add(1);
-                                    continue;
+                                    should_process_value = false;
                                 }
                             },
                             .LegacyContactInfo => |*data| {
                                 if (data.id.equals(&self.my_pubkey)) {
                                     // talking to myself == ignore
-                                    continue;
+                                    should_process_value = false;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.monotonic)) {
                                     // non-matching shred version
                                     self.stats.pull_requests_dropped.add(1);
-                                    continue;
+                                    should_process_value = false;
                                 }
                             },
                             // only contact info supported
                             else => {
                                 self.stats.pull_requests_dropped.add(1);
-                                continue;
+                                should_process_value = false;
                             },
                         }
 
@@ -588,6 +589,11 @@ pub const GossipService = struct {
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
                             self.stats.pull_requests_dropped.add(1);
+                            should_process_value = false;
+                        }
+
+                        if (!should_process_value) {
+                            bincode.free(self.gossip_value_allocator, value.data);
                             continue;
                         }
 
@@ -606,6 +612,7 @@ pub const GossipService = struct {
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.stats.prune_messages_dropped.add(1);
+                            // prune_data free by defered shallowFree
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -2767,6 +2774,20 @@ test "gossip.gossip_service: process contact info push packet" {
         .from_endpoint = peer,
     };
     try verified_channel.send(ping_msg);
+
+    // send pull request with own pubkey
+    const erroneous_pull_request_msg = GossipMessageWithEndpoint{
+        .message = GossipMessage{
+            .PullRequest = .{
+                GossipPullFilter.init(allocator),
+                try SignedGossipData.initSigned(GossipData{
+                    .ContactInfo = try localhostTestContactInfo(my_pubkey),
+                }, &my_keypair),
+            },
+        },
+        .from_endpoint = peer,
+    };
+    try verified_channel.send(erroneous_pull_request_msg);
 
     // correct insertion into table
     var buf2: [100]ContactInfo = undefined;
