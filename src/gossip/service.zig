@@ -313,7 +313,7 @@ pub const GossipService = struct {
             self.logger,
         });
         try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
-        try manager.spawn("gossip processMessages", processMessages, .{ self, self.gossip_value_allocator });
+        try manager.spawn("gossip processMessages", processMessages, .{self});
 
         if (!params.spy_node) try manager.spawn("gossip buildMessages", buildMessages, .{self});
 
@@ -459,7 +459,7 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self, gossip_value_allocator: std.mem.Allocator) !void {
+    pub fn processMessages(self: *Self) !void {
         var timer = std.time.Timer.start() catch unreachable;
         var last_table_trim_ts: u64 = 0;
         var msg_count: usize = 0;
@@ -528,7 +528,7 @@ pub const GossipService = struct {
                     // would be safer. For more info, see:
                     // - GossipTable.remove
                     // - https://github.com/Syndica/sig/pull/69
-                    msg.message.shallowFree(gossip_value_allocator);
+                    msg.message.shallowFree(self.gossip_value_allocator);
                 }
                 self.verified_incoming_channel.allocator.free(messages);
             }
@@ -2741,7 +2741,7 @@ test "gossip.gossip_service: process contact info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.processMessages,
-        .{ &gossip_service, gossip_value_allocator },
+        .{&gossip_service},
     );
 
     // send a push message
