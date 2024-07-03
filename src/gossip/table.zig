@@ -14,6 +14,7 @@ const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Vote = sig.gossip.data.Vote;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
@@ -487,6 +488,24 @@ pub const GossipTable = struct {
             buf,
             caller_cursor,
         );
+    }
+
+    /// Same as getContactInfos, but returns a slice of ThreadSafeContactInfos.
+    /// It should be used in favour of getContactInfos whenever the result crosses
+    /// a table lock boundary.
+    pub fn getThreadSafeContactInfos(
+        self: *const Self,
+        buf: []ThreadSafeContactInfo,
+        minimum_insertion_timestamp: u64,
+    ) []ThreadSafeContactInfo {
+        var infos = self.contactInfoIterator(minimum_insertion_timestamp);
+        var i: usize = 0;
+        while (infos.next()) |info| {
+            if (i >= buf.len) break;
+            buf[i] = ThreadSafeContactInfo.fromContactInfo(info.*);
+            i += 1;
+        }
+        return buf[0..i];
     }
 
     /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.

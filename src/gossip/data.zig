@@ -1180,6 +1180,34 @@ pub const ContactInfo = struct {
     }
 };
 
+/// This exists to provide a version of ContactInfo which can safely cross gossip table lock
+/// boundaries without exposing unsafe pointers. For now it contains only the fields
+/// required to satisfy existing usage, it can be extended in the future if required.
+pub const ThreadSafeContactInfo = struct {
+    pubkey: Pubkey,
+    shred_version: u16,
+    gossip_addr: ?SocketAddr,
+    rpc_addr: ?SocketAddr,
+
+    pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
+        return .{
+            .pubkey = contact_info.pubkey,
+            .shred_version = contact_info.shred_version,
+            .gossip_addr = contact_info.getSocket(.gossip),
+            .rpc_addr = contact_info.getSocket(.rpc),
+        };
+    }
+
+    pub fn fromLegacyContactInfo(legacy_contact_info: LegacyContactInfo) ThreadSafeContactInfo {
+        return .{
+            .pubkey = legacy_contact_info.id,
+            .shred_version = legacy_contact_info.shred_version,
+            .gossip_addr = legacy_contact_info.gossip,
+            .rpc_addr = legacy_contact_info.rpc,
+        };
+    }
+};
+
 /// This exists for future proofing to allow easier additions to ContactInfo.
 /// Currently, ContactInfo has no extensions.
 /// This may be changed in the future to a union or enum as extensions are added.

@@ -34,6 +34,7 @@ const Channel = sig.sync.Channel;
 const ActiveSet = sig.gossip.active_set.ActiveSet;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
@@ -841,7 +842,7 @@ pub const GossipService = struct {
             // sleep
             const elapsed_ts = getWallclockMs() - top_of_loop_ts;
             if (elapsed_ts < GOSSIP_SLEEP_MILLIS) {
-                const time_left_ms = GOSSIP_SLEEP_MILLIS - elapsed_ts;
+                const time_left_ms = GOSSIP_SLEEP_MILLIS -| elapsed_ts;
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
@@ -863,8 +864,8 @@ pub const GossipService = struct {
 
     pub fn rotateActiveSet(self: *Self, rand: std.Random) !void {
         const now = getWallclockMs();
-        var buf: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
-        const gossip_peers = try self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
+        var buf: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
+        const gossip_peers = try self.getThreadSafeGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
         // filter out peers who have responded to pings
         const ping_cache_result = blk: {
@@ -878,7 +879,7 @@ pub const GossipService = struct {
         var valid_gossip_indexs = ping_cache_result.valid_peers;
         defer valid_gossip_indexs.deinit();
 
-        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
+        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
         for (0.., valid_gossip_indexs.items) |i, valid_gossip_index| {
             valid_gossip_peers[i] = gossip_peers[valid_gossip_index];
         }
@@ -1016,9 +1017,9 @@ pub const GossipService = struct {
         bloom_size: usize,
     ) !ArrayList(Packet) {
         // get nodes from gossip table
-        var buf: [MAX_NUM_PULL_REQUESTS]ContactInfo = undefined;
+        var buf: [MAX_NUM_PULL_REQUESTS]ThreadSafeContactInfo = undefined;
         const now = getWallclockMs();
-        const peers = try self.getGossipNodes(
+        const peers = try self.getThreadSafeGossipNodes(
             &buf,
             MAX_NUM_PULL_REQUESTS,
             now,
@@ -1102,7 +1103,7 @@ pub const GossipService = struct {
                 const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
-                if (peer_contact_info.getSocket(.gossip)) |gossip_addr| {
+                if (peer_contact_info.gossip_addr) |gossip_addr| {
                     const message = GossipMessage{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
                     var packet = &packet_batch.items[packet_index];
@@ -1220,23 +1221,18 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var peers = try ArrayList(ContactInfo).initCapacity(self.allocator, pull_requests.items.len);
+            var peers = try ArrayList(ThreadSafeContactInfo).initCapacity(self.allocator, pull_requests.items.len);
             defer peers.deinit();
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
-            {
-                var gossip_table_lock = self.gossip_table_rw.read();
-                defer gossip_table_lock.unlock();
-                var gossip_table: *const GossipTable = gossip_table_lock.get();
-                for (pull_requests.items) |req| {
-                    const contact_info = switch (req.value.data) {
-                        .ContactInfo => |ci| ci,
-                        .LegacyContactInfo => |legacy| gossip_table.getContactInfo(legacy.id) orelse
-                            try legacy.toContactInfo(arena.allocator()),
-                        else => return error.PullRequestWithoutContactInfo,
-                    };
-                    peers.appendAssumeCapacity(contact_info);
-                }
+
+            for (pull_requests.items) |req| {
+                const threads_safe_contact_info = switch (req.value.data) {
+                    .ContactInfo => |ci| ThreadSafeContactInfo.fromContactInfo(ci),
+                    .LegacyContactInfo => |legacy| ThreadSafeContactInfo.fromLegacyContactInfo(legacy),
+                    else => return error.PullRequestWithoutContactInfo,
+                };
+                peers.appendAssumeCapacity(threads_safe_contact_info);
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
@@ -1749,15 +1745,15 @@ pub const GossipService = struct {
     /// the contact infos from the gossip table and filtering out
     /// nodes that are 1) too old, 2) have a different shred version, or 3) have
     /// an invalid gossip address.
-    pub fn getGossipNodes(
+    pub fn getThreadSafeGossipNodes(
         self: *Self,
         /// the output slice which will be filled with gossip nodes
-        nodes: []ContactInfo,
+        nodes: []ThreadSafeContactInfo,
         /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
         comptime MAX_SIZE: usize,
         /// current time (used to filter out nodes that are too old)
         now: u64,
-    ) ![]ContactInfo {
+    ) ![]ThreadSafeContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
         // filter only valid gossip addresses
@@ -1765,13 +1761,13 @@ pub const GossipService = struct {
         const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
 
         // * 2 bc we might filter out some
-        var buf: [MAX_SIZE * 2]ContactInfo = undefined;
+        var buf: [MAX_SIZE * 2]ThreadSafeContactInfo = undefined;
         const contact_infos = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();
 
             var gossip_table: *const GossipTable = gossip_table_lock.get();
-            break :blk gossip_table.getContactInfos(&buf, too_old_ts);
+            break :blk gossip_table.getThreadSafeContactInfos(&buf, too_old_ts);
         };
 
         if (contact_infos.len == 0) {
@@ -1780,8 +1776,6 @@ pub const GossipService = struct {
 
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
-            const peer_gossip_addr = contact_info.getSocket(.gossip);
-
             // filter self
             if (contact_info.pubkey.equals(&self.my_pubkey)) {
                 continue;
@@ -1792,7 +1786,7 @@ pub const GossipService = struct {
                 continue;
             }
             // filter on valid gossip address
-            if (peer_gossip_addr) |addr| {
+            if (contact_info.gossip_addr) |addr| {
                 addr.sanitize() catch continue;
             } else continue;
 
@@ -2153,16 +2147,13 @@ test "gossip.service: tests handling prune messages" {
 
     // add some peers
     var lg = gossip_service.gossip_table_rw.write();
-    var peers = ArrayList(ContactInfo).init(allocator);
-    defer {
-        for (peers.items) |p| p.deinit();
-        peers.deinit();
-    }
+    var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
+    defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
-        try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
+        try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
 
@@ -2518,17 +2509,14 @@ test "gossip.service: test build push messages" {
     defer gossip_service.deinit();
 
     // add some peers
-    var peers = ArrayList(ContactInfo).init(allocator);
-    defer {
-        for (peers.items) |p| p.deinit();
-        peers.deinit();
-    }
+    var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
+    defer peers.deinit();
     var lg = gossip_service.gossip_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
-        try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
+        try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
 
