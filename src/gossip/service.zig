@@ -1204,17 +1204,6 @@ pub const GossipService = struct {
         // update the callers
         // TODO: parallelize this?
         const now = getWallclockMs();
-        {
-            var gossip_table_lock = self.gossip_table_rw.write();
-            defer gossip_table_lock.unlock();
-            var gossip_table: *GossipTable = gossip_table_lock.mut();
-
-            for (pull_requests.items) |*req| {
-                const caller = req.value.id();
-                gossip_table.insert(req.value, now) catch {};
-                gossip_table.updateRecordTimestamp(caller, now);
-            }
-        }
 
         var valid_indexs = blk: {
             var ping_cache_lock = self.ping_cache_rw.write();
@@ -1226,13 +1215,21 @@ pub const GossipService = struct {
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
 
-            for (pull_requests.items) |req| {
-                const threads_safe_contact_info = switch (req.value.data) {
-                    .ContactInfo => |ci| ThreadSafeContactInfo.fromContactInfo(ci),
-                    .LegacyContactInfo => |legacy| ThreadSafeContactInfo.fromLegacyContactInfo(legacy),
-                    else => return error.PullRequestWithoutContactInfo,
-                };
-                peers.appendAssumeCapacity(threads_safe_contact_info);
+            {
+                var gossip_table_lock = self.gossip_table_rw.write();
+                defer gossip_table_lock.unlock();
+                var gossip_table: *GossipTable = gossip_table_lock.mut();
+
+                for (pull_requests.items) |req| {
+                    gossip_table.insert(req.value, now) catch {};
+                    gossip_table.updateRecordTimestamp(req.value.id(), now);
+                    const threads_safe_contact_info = switch (req.value.data) {
+                        .ContactInfo => |ci| ThreadSafeContactInfo.fromContactInfo(ci),
+                        .LegacyContactInfo => |legacy| ThreadSafeContactInfo.fromLegacyContactInfo(legacy),
+                        else => return error.PullRequestWithoutContactInfo,
+                    };
+                    peers.appendAssumeCapacity(threads_safe_contact_info);
+                }
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
