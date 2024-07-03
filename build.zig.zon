@@ -31,5 +31,10 @@
             .url = "https://github.com/jiacai2050/zig-curl/archive/8a3f45798a80a5de4c11c6fa44dab8785c421d27.tar.gz",
             .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
         },
+        .rocksdb = .{
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/cc557c26d31d9429e7b80191327e61ce7b28935c.tar.gz",
+            .hash = "12208330301d41e52545543191459ec4dbc6afd2eed8cbeed5ba954a6119f609fb47",
+            // .path = "../rocksdb-zig",
+        },
     },
 }

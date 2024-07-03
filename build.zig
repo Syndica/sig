@@ -34,6 +34,9 @@ pub fn build(b: *Build) void {
     const curl_dep = b.dependency("curl", dep_opts);
     const curl_mod = curl_dep.module("curl");
 
+    const rocksdb_dep = b.dependency("rocksdb", dep_opts);
+    const rocksdb_mod = rocksdb_dep.module("rocksdb-bindings");
+
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
         .root_source_file = b.path("src/lib.zig"),
@@ -44,6 +47,7 @@ pub fn build(b: *Build) void {
     sig_mod.addImport("httpz", httpz_mod);
     sig_mod.addImport("zstd", zstd_mod);
     sig_mod.addImport("curl", curl_mod);
+    sig_mod.addImport("rocksdb", rocksdb_mod);
 
     // main executable
     const sig_exe = b.addExecutable(.{
@@ -59,6 +63,7 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-cli", zig_cli_module);
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
+    sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
 
     const main_exe_run = b.addRunArtifact(sig_exe);
     main_exe_run.addArgs(b.args orelse &.{});
@@ -77,6 +82,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("httpz", httpz_mod);
     unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
+    unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod);
 
     const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe_run.step);

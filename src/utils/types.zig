@@ -43,3 +43,21 @@ pub fn ParamsTuple(comptime function: anytype) type {
         .decls = &.{},
     } });
 }
+
+/// Gets the return type of a function or function pointer
+pub fn Return(comptime FnPtr: type) type {
+    return switch (@typeInfo(FnPtr)) {
+        .Fn => |fun| fun.return_type.?,
+        .Pointer => |ptr| @typeInfo(ptr.child).Fn.return_type.?,
+        else => @compileError("not a function or function pointer"),
+    };
+}
+
+pub fn fieldNames(comptime Struct: type) [@typeInfo(Struct).Struct.fields.len][:0]const u8 {
+    const fields = @typeInfo(Struct).Struct.fields;
+    var names: [fields.len][:0]const u8 = undefined;
+    for (fields, 0..) |field, i| {
+        names[i] = field.name;
+    }
+    return names;
+}
