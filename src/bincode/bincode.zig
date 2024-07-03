@@ -102,7 +102,10 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             } else if (comptime sig.utils.types.hashMapInfo(T)) |hm_info| {
                 const K = hm_info.Key;
                 const V = hm_info.Value;
-                const len = try bincode.read(allocator, u64, reader, params);
+                const len_u64 = try bincode.read(allocator, u64, reader, params);
+                const Size = if (hm_info.kind == .unordered) T.Size else usize;
+                if (len_u64 > std.math.maxInt(Size)) return error.HashMapTooBig;
+                const len: usize = @intCast(len_u64);
 
                 data = switch (hm_info.management) {
                     .managed => T.init(allocator),
@@ -114,8 +117,14 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
                 }
                 for (0..len) |_| {
                     const key = try bincode.read(allocator, K, reader, params);
+                    errdefer bincode.free(allocator, key);
+
                     const value = try bincode.read(allocator, V, reader, params);
-                    data.putAssumeCapacity(key, value);
+                    errdefer bincode.free(allocator, value);
+
+                    const gop = data.getOrPutAssumeCapacity(key);
+                    if (gop.found_existing) return error.DuplicateHashMapEntries;
+                    gop.value_ptr.* = value;
                 }
             } else {
                 inline for (info.fields) |field| {
@@ -470,15 +479,17 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
                     try bincode.write(writer, entry.value_ptr.*, params);
                 }
             } else {
-                inline for (info.fields) |field| {
+                inline for (info.fields) |field| runtime_continue: {
                     if (field.is_comptime) continue;
 
                     if (getFieldConfig(T, field)) |field_config| {
                         if (field_config.skip) {
-                            continue;
+                            break :runtime_continue;
+                        } else if (field_config.skip_write_fn(@field(data, field.name))) {
+                            break :runtime_continue;
                         } else if (field_config.serializer) |ser_fcn| {
                             try ser_fcn(writer, @field(data, field.name), params);
-                            continue;
+                            break :runtime_continue;
                         }
                     }
                     try bincode.write(writer, @field(data, field.name), params);
@@ -611,7 +622,20 @@ pub fn FieldConfig(comptime T: type) type {
         default_on_eof: bool = false,
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
         post_deserialize_fn: ?fn (self: *T) void = null,
+        skip_write_fn: fn (value: anytype) bool = neverSkip,
     };
+}
+
+pub fn alwaysSkip(_: anytype) bool {
+    return true;
+}
+
+pub fn neverSkip(_: anytype) bool {
+    return false;
+}
+
+pub fn skipIfNull(data: anytype) bool {
+    return data == null;
 }
 
 pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {

@@ -38,6 +38,23 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
     };
 }
 
+pub fn defaultArrayListUnmanagedOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayListUnmanaged(T)) {
+    const S = struct {
+        fn defaultEOF(_: std.mem.Allocator) std.ArrayListUnmanaged(T) {
+            return .{};
+        }
+
+        fn free(allocator: std.mem.Allocator, data: anytype) void {
+            data.deinit(allocator);
+        }
+    };
+
+    return .{
+        .default_on_eof = true,
+        .free = S.free,
+        .default_fn = S.defaultEOF,
+    };
+}
 pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayList(T)) {
     const S = struct {
         fn defaultEOF(allocator: std.mem.Allocator) std.ArrayList(T) {
@@ -49,7 +66,7 @@ pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.Arr
         }
     };
 
-    return bincode.FieldConfig(std.ArrayList(T)){
+    return .{
         .default_on_eof = true,
         .free = S.free,
         .default_fn = S.defaultEOF,
