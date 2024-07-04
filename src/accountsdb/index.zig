@@ -67,8 +67,6 @@ pub const AccountRef = struct {
     }
 };
 
-const ReferenceMemory = std.AutoHashMap(Slot, ArrayList(AccountRef));
-
 /// stores the mapping from Pubkey to the account location (AccountRef)
 ///
 /// Analogous to [AccountsIndex](https://github.com/anza-xyz/agave/blob/a6b2283142192c5360ad0f53bec1eb4a9fb36154/accounts-db/src/accounts_index.rs#L644)
@@ -79,6 +77,7 @@ pub const AccountIndex = struct {
     bins: []RwMux(RefMap),
     calculator: PubkeyBinCalculator,
 
+    pub const ReferenceMemory = std.AutoHashMap(Slot, ArrayList(AccountRef));
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
 
     const Self = @This();
