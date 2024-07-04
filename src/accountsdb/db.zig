@@ -205,19 +205,19 @@ pub const AccountsDB = struct {
     pub fn loadWithDefaults(
         self: *Self,
         snapshot_fields_and_paths: *SnapshotFieldsAndPaths,
-        snapshot_dir: []const u8,
+        snapshot_dir: std.fs.Dir,
         n_threads: u32,
         validate: bool,
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.all_fields.collapse();
-        const accounts_path = try std.fmt.allocPrint(self.allocator, "{s}/accounts/", .{snapshot_dir});
-        defer self.allocator.free(accounts_path);
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{});
+        defer accounts_dir.close();
 
         var timer = try std.time.Timer.start();
         self.logger.infof("loading from snapshot...", .{});
         try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields,
-            accounts_path,
+            accounts_dir,
             n_threads,
             std.heap.page_allocator,
         );
@@ -241,10 +241,10 @@ pub const AccountsDB = struct {
     /// loads the account files and gernates the account index from a snapshot
     pub fn loadFromSnapshot(
         self: *Self,
-        // fields from the snapshot
+        /// fields from the snapshot
         fields: AccountsDbFields,
-        // where the account files are
-        accounts_path: []const u8,
+        /// where the account files are
+        accounts_dir: std.fs.Dir,
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
     ) !void {
@@ -256,27 +256,7 @@ pub const AccountsDB = struct {
         var timer = std.time.Timer.start() catch unreachable;
         timer.reset();
 
-        // read the account files
-        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
-        defer accounts_dir.close();
-
-        const accounts_dir_iter = accounts_dir.iterate();
-
-        var files = try readDirectory(self.allocator, accounts_dir_iter);
-        const filenames = files.filenames;
-        defer {
-            files.filenames.deinit();
-            self.allocator.free(files.filename_memory);
-        }
-
-        var n_account_files: usize = 0;
-        for (filenames.items) |filename| {
-            var fiter = std.mem.tokenizeSequence(u8, filename, ".");
-            const slot = std.fmt.parseInt(Slot, fiter.next().?, 10) catch continue;
-            if (fields.file_map.contains(slot)) {
-                n_account_files += 1;
-            }
-        }
+        const n_account_files: usize = fields.file_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
         std.debug.assert(n_account_files > 0);
 
@@ -290,10 +270,11 @@ pub const AccountsDB = struct {
         // short path
         if (n_threads == 1) {
             try self.loadAndVerifyAccountsFiles(
-                accounts_path,
-                filenames.items,
+                accounts_dir,
                 ACCOUNTS_PER_FILE_EST,
                 fields,
+                0,
+                fields.file_map.count(),
                 true,
             );
             return;
@@ -352,11 +333,10 @@ pub const AccountsDB = struct {
                 loadAndVerifyAccountsFilesMultiThread,
                 .{
                     loading_threads.items,
-                    filenames.items,
-                    accounts_path,
+                    accounts_dir,
                     fields,
                 },
-                filenames.items.len,
+                fields.file_map.count(),
                 n_parse_threads,
             );
         }
@@ -374,8 +354,7 @@ pub const AccountsDB = struct {
     /// Assumes that `loading_threads[thread_id].fields != null`.
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
-        filenames: [][]const u8,
-        accounts_dir_path: []const u8,
+        accounts_dir: std.fs.Dir,
         fields: AccountsDbFields,
         // task specific
         start_index: usize,
@@ -383,13 +362,13 @@ pub const AccountsDB = struct {
         thread_id: usize,
     ) !void {
         const thread_db = &loading_threads[thread_id];
-        const thread_filenames = filenames[start_index..end_index];
 
         try thread_db.loadAndVerifyAccountsFiles(
-            accounts_dir_path,
-            thread_filenames,
+            accounts_dir,
             ACCOUNTS_PER_FILE_EST,
             fields,
+            start_index,
+            end_index,
             thread_id == 0,
         );
     }
@@ -399,10 +378,11 @@ pub const AccountsDB = struct {
     /// Assumes `self.fields != null`.
     pub fn loadAndVerifyAccountsFiles(
         self: *Self,
-        accounts_dir_path: []const u8,
-        file_names: [][]const u8,
+        accounts_dir: std.fs.Dir,
         accounts_per_file_est: usize,
         fields: AccountsDbFields,
+        file_map_start_index: usize,
+        file_map_end_index: usize,
         // when we multithread this function we only want to print on the first thread
         print_progress: bool,
     ) !void {
@@ -411,7 +391,7 @@ pub const AccountsDB = struct {
         // while loading from a snapshot
         const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
-        try file_map.ensureTotalCapacity(file_names.len);
+        try file_map.ensureTotalCapacity(fields.file_map.count());
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
@@ -421,7 +401,7 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         var references = try ArrayList(AccountRef).initCapacity(
             self.account_index.reference_allocator,
-            file_names.len * accounts_per_file_est,
+            fields.file_map.count() * accounts_per_file_est,
         );
         const references_ptr = references.items.ptr;
         defer {
@@ -436,61 +416,54 @@ pub const AccountsDB = struct {
             .alloc_count = 0,
         };
 
-        // NOTE: might need to be longer depending on abs path length
-        var buf: [1024]u8 = undefined;
-        var timer = try std.time.Timer.start();
-        var progress_timer = try std.time.Timer.start();
+        const ref_timer = try std.time.Timer.start();
+        var timer = ref_timer;
+        var progress_timer = ref_timer;
 
+        if (fields.file_map.count() > std.math.maxInt(AccountIndex.ReferenceMemory.Size)) {
+            return error.FileMapTooBig;
+        }
         // its ok to hold this lock for the entire function because nothing else
         // should be accessing the account index while loading from a snapshot
-        var reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
+        const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
         defer reference_memory_lg.unlock();
-        try reference_memory.ensureTotalCapacity(@intCast(file_names.len));
+        try reference_memory.ensureTotalCapacity(@intCast(fields.file_map.count()));
 
-        for (file_names, 1..) |file_name, file_count| {
-            // parse "{slot}.{id}" from the file_name
-            var fiter = std.mem.tokenizeSequence(u8, file_name, ".");
-            const slot = std.fmt.parseInt(Slot, fiter.next().?, 10) catch |err| {
-                self.logger.warnf("failed to parse slot from {s}", .{file_name});
-                return err;
-            };
-            const file_id_usize = try std.fmt.parseInt(usize, fiter.next().?, 10);
-
-            // read metadata
-            const file_infos: []const AccountFileInfo = fields.file_map.get(slot) orelse {
-                // dont read account files which are not in the file_map
-                // note: this can happen when we load from a snapshot and there are extra account files
-                // in the directory which dont correspond to the snapshot were loading
-                self.logger.warnf("failed to read metadata for slot {d}", .{slot});
-                continue;
-            };
+        for (
+            fields.file_map.keys()[file_map_start_index..file_map_end_index],
+            fields.file_map.values()[file_map_start_index..file_map_end_index],
+            1..,
+        ) |slot, file_infos, file_count| {
             // if this is hit, its likely an old snapshot
             if (file_infos.len != 1) {
                 self.logger.errf("incorrect file_info count for slot {d}, likley trying to load from an unsupported snapshot\n", .{slot});
                 return error.InvalidSnapshot;
             }
             const file_info = file_infos[0];
-            if (file_info.id != file_id_usize) {
-                self.logger.errf("file_id from metadata for slot {d} doesnt match file_id from filename: {d} vs {d}\n", .{ slot, file_info.id, file_id_usize });
-                return error.InvalidSnapshotFormat;
-            }
 
             // read accounts file
-            const abs_path = try std.fmt.bufPrint(&buf, "{s}/{s}", .{ accounts_dir_path, file_name });
-            const accounts_file_file = try std.fs.cwd().openFile(abs_path, .{ .mode = .read_write });
-            var accounts_file = AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
-                self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name, @errorName(err) });
-                return err;
+            var accounts_file = blk: {
+                const file_name_bounded = sig.utils.fmt.boundedFmt(
+                    "{d}.{d}",
+                    .{ slot, file_info.id },
+                    .{ std.math.maxInt(Slot), std.math.maxInt(@TypeOf(file_info.id)) },
+                ) catch unreachable;
+
+                const accounts_file_file = try accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write });
+                errdefer accounts_file_file.close();
+
+                break :blk AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
+                    self.logger.errf("failed to *open* AccountsFile {s}: {s}\n", .{ file_name_bounded.constSlice(), @errorName(err) });
+                    return err;
+                };
             };
+            errdefer accounts_file.deinit();
 
             self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
                 switch (err) {
-                    ValidateAccountFileError.OutOfReferenceMemory => {
+                    error.OutOfReferenceMemory => {
                         // TODO: support retry - error for now
-                        self.logger.errf(
-                            "out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n",
-                            .{},
-                        );
+                        self.logger.err("out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n");
                     },
                     else => {
                         self.logger.errf("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{
@@ -518,16 +491,17 @@ pub const AccountsDB = struct {
                 try reference_memory.putNoClobber(slot, ref_list);
             }
 
-            const file_id = FileId.fromInt(@intCast(file_id_usize));
+            const file_id = FileId.fromInt(@intCast(file_info.id));
 
             file_map.putAssumeCapacityNoClobber(file_id, RwMux(AccountFile).init(accounts_file));
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
+            _ = self.largest_root_slot.fetchMax(slot, .monotonic);
 
             if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
-                    file_names.len,
+                    fields.file_map.count(),
                     file_count,
                     "loading account files",
                     "thread0",
@@ -605,18 +579,18 @@ pub const AccountsDB = struct {
         );
 
         // ensure enough capacity
-        var m: u32 = 0;
+        var ref_mem_capacity: u32 = 0;
         for (thread_dbs) |*thread_db| {
             const thread_ref_memory, var thread_ref_memory_lg = thread_db.account_index.reference_memory.readWithLock();
             defer thread_ref_memory_lg.unlock();
-            m += thread_ref_memory.count();
+            ref_mem_capacity += thread_ref_memory.count();
         }
 
         // NOTE: its ok to hold this lock while we merge because
         // nothing else should be accessing the account index while loading from a snapshot
         const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
         defer reference_memory_lg.unlock();
-        try reference_memory.ensureTotalCapacity(m);
+        try reference_memory.ensureTotalCapacity(ref_mem_capacity);
 
         // NOTE: nothing else should try to access the file_map
         // while we are merging so this long hold is ok.
@@ -635,6 +609,7 @@ pub const AccountsDB = struct {
                 }
             }
             self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
+            _ = self.largest_root_slot.fetchMax(thread_db.largest_root_slot.load(.unordered), .monotonic);
 
             // combine underlying memory
             var thread_reference_memory, var thread_reference_memory_lg = thread_db.account_index.reference_memory.readWithLock();
@@ -648,10 +623,6 @@ pub const AccountsDB = struct {
                 );
             }
         }
-
-        var largest_account_file_rw = file_map.get(self.largest_file_id).?;
-        const largest_slot = largest_account_file_rw.readField("slot");
-        self.largest_root_slot.store(largest_slot, .unordered);
     }
 
     /// combines multiple thread indexes into the given index.
@@ -2033,6 +2004,70 @@ pub const AccountsDB = struct {
         return biggest;
     }
 
+    /// TODO: a number of these parameters are temporary stand-ins for data that will be derived from the state
+    /// of AccountsDB, which currently doesn't all exist.
+    pub fn writeSnapshotTarTo(
+        /// Although this is a mutable pointer, this method performs no mutations;
+        /// the mutable reference is simply needed in order to obtain a lock on some
+        /// fields.
+        self: *Self,
+        /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
+        archive_writer: anytype,
+        status_cache: StatusCache,
+        bank_fields: sig.accounts_db.snapshots.BankFields,
+        bank_fields_inc: sig.accounts_db.snapshots.BankFields.Incremental,
+        lamports_per_signature: u64,
+        bank_hash_info: sig.accounts_db.snapshots.BankHashInfo,
+        /// For tests against older snapshots
+        stored_meta_write_version: u64,
+    ) !void {
+        const file_map, var file_map_lg = self.file_map.readWithLock();
+        defer file_map_lg.unlock();
+
+        const max_rooted_slot = self.largest_root_slot.load(.unordered);
+        const version = sig.version.CURRENT_CLIENT_VERSION;
+
+        const account_file_infos_buf = try self.allocator.alloc(AccountFileInfo, file_map.count());
+        defer self.allocator.free(account_file_infos_buf);
+
+        var serializable_file_map = std.AutoArrayHashMap(Slot, []const AccountFileInfo).init(self.allocator);
+        defer serializable_file_map.deinit();
+        try serializable_file_map.ensureTotalCapacity(file_map.count());
+
+        for (file_map.values(), account_file_infos_buf) |*value_guarded, *info| {
+            const acc_file, var value_lg = value_guarded.readWithLock();
+            defer value_lg.unlock();
+
+            if (acc_file.slot > max_rooted_slot) continue;
+
+            info.* = .{
+                .id = acc_file.id,
+                .length = acc_file.length,
+            };
+
+            serializable_file_map.putAssumeCapacityNoClobber(acc_file.slot, info[0..1]);
+        }
+
+        const snapshot_fields: SnapshotFields = .{
+            .bank_fields = bank_fields,
+            .accounts_db_fields = .{
+                .file_map = serializable_file_map,
+
+                .stored_meta_write_version = stored_meta_write_version,
+
+                .slot = max_rooted_slot,
+                .bank_hash_info = bank_hash_info,
+
+                .rooted_slots = .{},
+                .rooted_slot_hashes = .{},
+            },
+            .lamports_per_signature = lamports_per_signature,
+            .bank_fields_inc = bank_fields_inc,
+        };
+
+        try writeSnapshotTar(archive_writer, version, status_cache, snapshot_fields, file_map);
+    }
+
     inline fn lessThanIf(
         slot: Slot,
         max_slot: ?Slot,
@@ -2140,7 +2175,7 @@ pub fn writeSnapshotTar(
     version: ClientVersion,
     status_cache: StatusCache,
     snapshot_fields: SnapshotFields,
-    storage: AccountStorage,
+    file_map: *const FileMap,
 ) !void {
     const slot: Slot = snapshot_fields.bank_fields.slot;
 
@@ -2167,9 +2202,11 @@ pub fn writeSnapshotTar(
         const manifest = snapshot_fields;
         const manifest_encoded_size = bincode.sizeOf(manifest, .{});
 
-        var str_buf: [std.fmt.count("snapshots/{0d}/{0d}", .{std.math.maxInt(Slot)})]u8 = undefined;
-        try writeTarHeader(writer, .directory, std.fmt.bufPrint(&str_buf, "snapshots/{d}/", .{slot}) catch unreachable, 0);
-        try writeTarHeader(writer, .regular, std.fmt.bufPrint(&str_buf, "snapshots/{0d}/{0d}", .{slot}) catch unreachable, manifest_encoded_size);
+        const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+        try writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
+
+        const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+        try writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
         try bincode.write(writer, manifest, .{});
         try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
     }
@@ -2177,10 +2214,14 @@ pub fn writeSnapshotTar(
     // create the accounts dir
     try writeTarHeader(writer, .directory, "accounts/", 0);
 
-    for (storage.file_map.keys(), storage.file_map.values()) |file_id, acc_file| {
+    for (file_map.keys(), file_map.values()) |file_id, *acc_file_guarded| {
+        const acc_file, var acc_file_lg = acc_file_guarded.readWithLock();
+        defer acc_file_lg.unlock();
+
         if (acc_file.slot < slot) continue;
-        var name_buf: [std.fmt.count("accounts/{d}.{d}", .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) })]u8 = undefined;
-        try writeTarHeader(writer, .regular, std.fmt.bufPrint(&name_buf, "accounts/{d}.{d}", .{ slot, file_id.toInt() }) catch unreachable, acc_file.memory.len);
+
+        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() }, .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) }) catch unreachable;
+        try writeTarHeader(writer, .regular, name_bounded.constSlice(), acc_file.memory.len);
         try writer.writeAll(acc_file.memory);
         try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
         counting_writer_state.bytes_written %= 512;
@@ -2266,6 +2307,82 @@ pub const AccountStorage = struct {
     }
 };
 
+fn testWriteSnapshot(
+    snapshot_dir: std.fs.Dir,
+    slot: Slot,
+) !void {
+    const allocator = std.testing.allocator;
+
+    const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+    const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
+    defer manifest_file.close();
+
+    const snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    defer snap_fields.deinit(allocator);
+
+    const status_cache_file = try snapshot_dir.openFile("status_cache", .{});
+    defer status_cache_file.close();
+
+    const status_cache = try StatusCache.decodeFromBincode(allocator, status_cache_file.reader());
+    defer status_cache.deinit(allocator);
+
+    var accounts_db = try AccountsDB.init(allocator, .noop, .{});
+    defer accounts_db.deinit(true);
+
+    {
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
+        defer accounts_dir.close();
+        try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, accounts_dir, 1, allocator);
+    }
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    const archive_file = try tmp_dir.createFile("snapshot.tar", .{ .read = true });
+    defer archive_file.close();
+
+    try accounts_db.writeSnapshotTarTo(
+        archive_file.writer(),
+        status_cache,
+        snap_fields.bank_fields,
+        snap_fields.bank_fields_inc,
+        snap_fields.lamports_per_signature,
+        snap_fields.accounts_db_fields.bank_hash_info,
+        snap_fields.accounts_db_fields.stored_meta_write_version,
+    );
+
+    var actual_snapshot_dir = try tmp_dir.makeOpenPath("output", .{ .iterate = true });
+    defer actual_snapshot_dir.close();
+
+    try archive_file.seekTo(0);
+    try std.tar.pipeToFileSystem(actual_snapshot_dir, archive_file.reader(), .{});
+
+    {
+        try manifest_file.seekTo(0);
+        const expected_manifest_bytes = try manifest_file.readToEndAlloc(allocator, 1 << 21);
+        defer allocator.free(expected_manifest_bytes);
+
+        const actual_manifest_file = try actual_snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
+        defer actual_manifest_file.close();
+
+        const actual_manifest_bytes = try actual_manifest_file.readToEndAlloc(allocator, 1 << 21);
+        defer allocator.free(actual_manifest_bytes);
+
+        const actual_manifest = try bincode.readFromSlice(allocator, SnapshotFields, actual_manifest_bytes, .{});
+        defer bincode.free(allocator, actual_manifest);
+
+        try std.testing.expectEqualSlices(u8, expected_manifest_bytes, actual_manifest_bytes);
+    }
+}
+
+test testWriteSnapshot {
+    var snapshot_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    defer snapshot_dir.close();
+    try testWriteSnapshot(snapshot_dir, 10);
+    try testWriteSnapshot(snapshot_dir, 25);
+}
+
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
@@ -2290,7 +2407,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
         true,
     );
 
-    var snapshot_files = try SnapshotFiles.find(allocator, dir_path);
+    var snapshot_files = try SnapshotFiles.find(allocator, dir);
     defer snapshot_files.deinit(allocator);
 
     var snapshots = try AllSnapshotFields.fromFiles(allocator, dir_path, snapshot_files);
@@ -2310,10 +2427,11 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
         .snapshot_dir = "test_data/tmp",
     });
 
-    const accounts_path = "test_data/accounts";
+    var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
+    defer accounts_dir.close();
     try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
-        accounts_path,
+        accounts_dir,
         1,
         allocator,
     );
@@ -2946,7 +3064,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             return 0;
         };
 
-        var snapshot_files = try SnapshotFiles.find(allocator, dir_path);
+        var snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
         defer snapshot_files.deinit(allocator);
 
         std.fs.cwd().access(accounts_path, .{}) catch {
@@ -2976,10 +3094,13 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         });
         // defer accounts_db.deinit(false);
 
+        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
+        defer accounts_dir.close();
+
         var timer = try std.time.Timer.start();
         try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields,
-            accounts_path,
+            accounts_dir,
             bench_args.n_threads,
             allocator,
         );

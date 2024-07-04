@@ -419,7 +419,8 @@ fn validator() !void {
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
 
-    try std.fs.cwd().makePath(snapshot_dir_str);
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    defer snapshot_dir.close();
 
     var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
@@ -765,12 +766,16 @@ fn loadFromSnapshot(
     );
     errdefer output.accounts_db.deinit(false);
 
-    output.snapshot_fields = try output.accounts_db.loadWithDefaults(
-        &snapshots,
-        snapshot_dir_str,
-        n_threads_snapshot_load,
-        true, // validate too
-    );
+    {
+        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
+        defer snapshot_dir.close();
+        output.snapshot_fields = try output.accounts_db.loadWithDefaults(
+            &snapshots,
+            snapshot_dir,
+            n_threads_snapshot_load,
+            true, // validate too
+        );
+    }
     errdefer output.snapshot_fields.deinit(allocator);
 
     const bank_fields = &output.snapshot_fields.bank_fields;
@@ -929,18 +934,17 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
+    var snap_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{ .iterate = true });
+    defer snap_dir.close();
+
     const maybe_snapshot_files: ?SnapshotFiles = blk: {
         if (force_new_snapshot_download) {
             break :blk null;
         }
 
-        break :blk SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| {
-            // if we cant find the full snapshot, we try to download it
-            if (err == error.NoFullSnapshotFileInfoFound) {
-                break :blk null;
-            } else {
-                return err;
-            }
+        break :blk SnapshotFiles.find(allocator, snap_dir) catch |err| switch (err) {
+            error.NoFullSnapshotFileInfoFound => null,
+            else => |e| return e,
         };
     };
 
@@ -957,7 +961,7 @@ fn getOrDownloadSnapshots(
             snapshot_dir_str,
             @intCast(min_mb_per_sec),
         );
-        break :blk try SnapshotFiles.find(allocator, snapshot_dir_str);
+        break :blk try SnapshotFiles.find(allocator, snap_dir);
     };
     defer snapshot_files.deinit(allocator);
 

@@ -22,6 +22,7 @@ const Inflation = sig.accounts_db.genesis_config.Inflation;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 
 const defaultArrayListOnEOFConfig = bincode.arraylist.defaultArrayListOnEOFConfig;
+const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const readDirectory = sig.utils.directory.readDirectory;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
 
@@ -315,9 +316,10 @@ pub const BankFields = struct {
         epoch_accounts_hash: ?Hash = null,
         epoch_reward_status: ?EpochRewardStatus = null,
 
+        // TODO: do a thorough review on this, this seems to work by chance with the test data, but I don't trust it yet
         pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
         pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
-        pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
+        pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true, .skip_write_fn = bincode.skipIfNull };
     };
 };
 
@@ -370,16 +372,23 @@ pub const SlotAndHash = struct { slot: Slot, hash: Hash };
 /// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
     file_map: std.AutoArrayHashMap(Slot, []const AccountFileInfo),
+
+    /// NOTE: this is not a meaningful field
+    /// NOTE: at the time of writing, a test snapshots we use actually have this field set to 601 on disk,
+    /// so be sure to keep that in mind while testing.
     stored_meta_write_version: u64,
+
     slot: Slot,
     bank_hash_info: BankHashInfo,
 
     // default on EOF
-    rooted_slots: ArrayList(Slot),
-    rooted_slot_hashes: ArrayList(SlotAndHash),
+    /// NOTE: these are currently always empty?
+    /// https://github.com/anza-xyz/agave/blob/b9eb4e2aa328abb9d3ee1d857d82ccd7a86f8c4d/runtime/src/serde_snapshot.rs#L769-L782
+    rooted_slots: std.ArrayListUnmanaged(Slot),
+    rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
 
-    pub const @"!bincode-config:rooted_slots" = defaultArrayListOnEOFConfig(Slot);
-    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotAndHash);
+    pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
+    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
 };
 
 /// contains all the metadata from a snapshot.
@@ -915,10 +924,7 @@ pub const SnapshotFiles = struct {
     const Self = @This();
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
-    pub fn find(allocator: std.mem.Allocator, snapshot_dir: []const u8) !Self {
-        var snapshot_directory = try std.fs.cwd().openDir(snapshot_dir, .{ .iterate = true });
-        defer snapshot_directory.close();
-
+    pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !Self {
         var snapshot_dir_iter = snapshot_directory.iterate();
 
         const files = try readDirectory(allocator, snapshot_dir_iter);
