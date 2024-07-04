@@ -2320,7 +2320,7 @@ fn testWriteSnapshot(
     const snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    const status_cache_file = try snapshot_dir.openFile("status_cache", .{});
+    const status_cache_file = try snapshot_dir.openFile("snapshots/status_cache", .{});
     defer status_cache_file.close();
 
     const status_cache = try StatusCache.decodeFromBincode(allocator, status_cache_file.reader());
@@ -2377,10 +2377,24 @@ fn testWriteSnapshot(
 }
 
 test testWriteSnapshot {
-    var snapshot_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
-    defer snapshot_dir.close();
-    try testWriteSnapshot(snapshot_dir, 10);
-    try testWriteSnapshot(snapshot_dir, 25);
+    var test_data_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    defer test_data_dir.close();
+
+    var snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
+    defer snap_files.deinit(std.testing.allocator);
+
+    var tmp_snap_dir_root = std.testing.tmpDir(.{});
+    defer tmp_snap_dir_root.cleanup();
+    const tmp_snap_dir = tmp_snap_dir_root.dir;
+
+    try parallelUnpackZstdTarBall(std.testing.allocator, .noop, snap_files.full_snapshot.filename, tmp_snap_dir, 4, true);
+
+    if (snap_files.incremental_snapshot) |inc_snap| {
+        try parallelUnpackZstdTarBall(std.testing.allocator, .noop, inc_snap.filename, tmp_snap_dir, 4, false);
+    }
+
+    try testWriteSnapshot(tmp_snap_dir, 10);
+    try testWriteSnapshot(tmp_snap_dir, 25);
 }
 
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
