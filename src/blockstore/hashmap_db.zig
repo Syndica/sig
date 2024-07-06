@@ -7,6 +7,8 @@ const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const Logger = sig.trace.Logger;
 const Return = sig.utils.types.Return;
+const Database = sig.blockstore.blockstore.Database;
+const ColumnFamily = sig.blockstore.blockstore.ColumnFamily;
 
 pub const SharedHashMapDB = struct {
     pub const CF = *SharedHashMap;
@@ -23,6 +25,8 @@ pub const SharedHashMapDB = struct {
         }
         return .{ .{}, maps };
     }
+
+    pub fn deinit(_: @This()) void {}
 };
 
 const SharedHashMap = struct {
@@ -42,13 +46,17 @@ const SharedHashMap = struct {
         return self;
     }
 
-    fn destroy(self: *Self) void {
+    pub fn deinit(self: *Self) void {
         var iter = self.map.keyIterator();
         while (iter.next()) |k| {
             self.allocator.free(k.*);
         }
         self.map.deinit();
         self.allocator.destroy(self);
+    }
+
+    pub fn free(self: Self, bytes: []const u8) void {
+        self.allocator.free(bytes);
     }
 
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {

@@ -11,6 +11,8 @@ pub fn Blockstore(comptime DB: type) type {
         db: Database(DB),
         schema: Schema(DB.CF),
 
+        const Self = @This();
+
         pub fn init(allocator: Allocator, logger: Logger, dir: []const u8) !@This() {
             const cf_names = comptime fieldNames(Schema(DB.CF));
             const database, const cfs = try Database(DB).open(allocator, logger, dir, &cf_names);
@@ -23,6 +25,10 @@ pub fn Blockstore(comptime DB: type) type {
                 .db = database,
                 .schema = stores,
             };
+        }
+
+        pub fn deinit(self: Self) void {
+            self.db.deinit();
         }
     };
 }
@@ -56,7 +62,9 @@ pub fn Schema(comptime CF: type) type {
 /// Interface defining the blockstore's dependency on a database
 pub fn Database(comptime Impl: type) type {
     return struct {
+        allocator: Allocator,
         impl: Impl,
+        cfs: []const ColumnFamily(CF),
 
         pub const CF: type = Impl.CF;
 
@@ -77,7 +85,18 @@ pub fn Database(comptime Impl: type) type {
                     .name = column_family_names[i],
                 };
             }
-            return .{ .{ .impl = impl }, wcfs };
+            return .{
+                .{ .allocator = allocator, .impl = impl, .cfs = wcfs },
+                wcfs,
+            };
+        }
+
+        pub fn deinit(self: Self) void {
+            self.impl.deinit();
+            for (self.cfs) |cf| {
+                cf.deinit();
+            }
+            self.allocator.free(self.cfs);
         }
     };
 }
@@ -89,6 +108,14 @@ pub fn ColumnFamily(comptime Impl: type) type {
         name: []const u8,
 
         const Self = @This();
+
+        pub inline fn deinit(self: Self) void {
+            self.impl.deinit();
+        }
+
+        pub inline fn free(self: Self, bytes: []const u8) void {
+            self.impl.free(bytes);
+        }
 
         pub inline fn put(self: Self, key: []const u8, value: []const u8) !void {
             return self.impl.put(key, value);
@@ -104,17 +131,23 @@ pub fn ColumnFamily(comptime Impl: type) type {
     };
 }
 
-test Blockstore {
+test "hashmap blockstore" {
     try testBlockstore(sig.blockstore.hashmap_db.SharedHashMapDB);
+}
+
+test "rocksdb blockstore" {
     try testBlockstore(sig.blockstore.rocksdb.RocksDB);
 }
 
 fn testBlockstore(comptime DB: type) !void {
     const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+    defer logger.deinit();
     const blockstore = try Blockstore(DB).init(std.testing.allocator, logger, "test_data/blockstore");
+    defer blockstore.deinit();
     try blockstore.schema.meta.put("123", "345");
     const got = try blockstore.schema.meta.get("123");
     try std.testing.expect(std.mem.eql(u8, "345", got.?));
+    blockstore.schema.meta.free(got.?);
     const not = try blockstore.schema.dead_slots.get("123");
     try std.testing.expect(null == not);
     const wrong_was_deleted = try blockstore.schema.duplicate_slots.delete("123");

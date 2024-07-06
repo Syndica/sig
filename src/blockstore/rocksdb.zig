@@ -42,6 +42,7 @@ pub const RocksDB = struct {
             std.time.sleep(10_000_000);
             return e;
         };
+        defer allocator.free(cfs);
         const self = Self{ .db = database, .logger = logger };
         const maps = try allocator.alloc(RocksCF, column_families.len);
         for (1..cfs.len) |i| {
@@ -52,6 +53,10 @@ pub const RocksDB = struct {
         }
         return .{ self, maps };
     }
+
+    pub fn deinit(self: RocksDB) void {
+        self.db.deinit();
+    }
 };
 
 const RocksCF = struct {
@@ -59,6 +64,12 @@ const RocksCF = struct {
     logger: Logger,
 
     const Self = @This();
+
+    pub fn deinit(_: RocksCF) void {}
+
+    pub fn free(_: Self, bytes: []const u8) void {
+        rocks.free(bytes);
+    }
 
     pub fn put(self: Self, key: []const u8, value: []const u8) !void {
         return self.callRocks(rocks.DB.put, .{ key, value });
