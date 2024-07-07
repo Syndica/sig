@@ -5,10 +5,10 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
+const Database = sig.blockstore.database.Database;
+const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
 const Return = sig.utils.types.Return;
-const Database = sig.blockstore.blockstore.Database;
-const ColumnFamily = sig.blockstore.blockstore.ColumnFamily;
 
 pub const SharedHashMapDB = struct {
     pub const CF = *SharedHashMap;
@@ -93,3 +93,7 @@ const SharedHashMap = struct {
         return true;
     }
 };
+
+test "hashmap database" {
+    try Database(SharedHashMapDB).runTest();
+}

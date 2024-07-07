@@ -5,6 +5,7 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
+const Database = sig.blockstore.database.Database;
 const Logger = sig.trace.Logger;
 const Return = sig.utils.types.Return;
 
@@ -93,3 +94,7 @@ const RocksCF = struct {
         };
     }
 };
+
+test "rocksdb database" {
+    try Database(RocksDB).runTest();
+}

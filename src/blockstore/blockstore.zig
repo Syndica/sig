@@ -6,6 +6,9 @@ const Allocator = std.mem.Allocator;
 const Logger = sig.trace.Logger;
 const fieldNames = sig.utils.types.fieldNames;
 
+const ColumnFamily = sig.blockstore.database.ColumnFamily;
+const Database = sig.blockstore.database.Database;
+
 pub fn Blockstore(comptime DB: type) type {
     return struct {
         db: Database(DB),
@@ -57,104 +60,4 @@ pub fn Schema(comptime CF: type) type {
         optimistic_slots: ColumnFamily(CF),
         merkle_root_meta: ColumnFamily(CF),
     };
-}
-
-/// Interface defining the blockstore's dependency on a database
-pub fn Database(comptime Impl: type) type {
-    return struct {
-        allocator: Allocator,
-        impl: Impl,
-        cfs: []const ColumnFamily(CF),
-
-        pub const CF: type = Impl.CF;
-
-        const Self = @This();
-
-        pub fn open(
-            allocator: Allocator,
-            logger: Logger,
-            path: []const u8,
-            column_family_names: []const []const u8,
-        ) !struct { Self, []ColumnFamily(CF) } {
-            const impl, const cfs = try Impl.open(allocator, logger, path, column_family_names);
-            defer allocator.free(cfs);
-            const wcfs = try allocator.alloc(ColumnFamily(CF), column_family_names.len);
-            for (0..column_family_names.len) |i| {
-                wcfs[i] = .{
-                    .impl = cfs[i],
-                    .name = column_family_names[i],
-                };
-            }
-            return .{
-                .{ .allocator = allocator, .impl = impl, .cfs = wcfs },
-                wcfs,
-            };
-        }
-
-        pub fn deinit(self: Self) void {
-            self.impl.deinit();
-            for (self.cfs) |cf| {
-                cf.deinit();
-            }
-            self.allocator.free(self.cfs);
-        }
-    };
-}
-
-/// Interface defining the blockstore's dependency on column families
-pub fn ColumnFamily(comptime Impl: type) type {
-    return struct {
-        impl: Impl,
-        name: []const u8,
-
-        const Self = @This();
-
-        pub inline fn deinit(self: Self) void {
-            self.impl.deinit();
-        }
-
-        pub inline fn free(self: Self, bytes: []const u8) void {
-            self.impl.free(bytes);
-        }
-
-        pub inline fn put(self: Self, key: []const u8, value: []const u8) !void {
-            return self.impl.put(key, value);
-        }
-
-        pub inline fn get(self: Self, key: []const u8) !?[]const u8 {
-            return self.impl.get(key);
-        }
-
-        pub inline fn delete(self: Self, key: []const u8) !bool {
-            return self.impl.delete(key);
-        }
-    };
-}
-
-test "hashmap blockstore" {
-    try testBlockstore(sig.blockstore.hashmap_db.SharedHashMapDB);
-}
-
-test "rocksdb blockstore" {
-    try testBlockstore(sig.blockstore.rocksdb.RocksDB);
-}
-
-fn testBlockstore(comptime DB: type) !void {
-    const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    const blockstore = try Blockstore(DB).init(std.testing.allocator, logger, "test_data/blockstore");
-    defer blockstore.deinit();
-    try blockstore.schema.meta.put("123", "345");
-    const got = try blockstore.schema.meta.get("123");
-    try std.testing.expect(std.mem.eql(u8, "345", got.?));
-    blockstore.schema.meta.free(got.?);
-    const not = try blockstore.schema.dead_slots.get("123");
-    try std.testing.expect(null == not);
-    const wrong_was_deleted = try blockstore.schema.duplicate_slots.delete("123");
-    _ = wrong_was_deleted;
-    // try std.testing.expect(!wrong_was_deleted); // FIXME
-    const was_deleted = try blockstore.schema.meta.delete("123");
-    try std.testing.expect(was_deleted);
-    const not_now = try blockstore.schema.meta.get("123");
-    try std.testing.expect(null == not_now);
 }
