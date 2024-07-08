@@ -2019,6 +2019,8 @@ pub const AccountsDB = struct {
         /// For tests against older snapshots. Should just be 0 during normal operation.
         stored_meta_write_version: u64,
     ) !void {
+        // NOTE: we hold the lock for the entire duration of the function to ensure
+        // flush and clean do not create files while generating a snapshot.
         const file_map, var file_map_lg = self.file_map.readWithLock();
         defer file_map_lg.unlock();
 
