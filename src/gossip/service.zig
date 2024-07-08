@@ -461,8 +461,7 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self) !void {
-        var timer = std.time.Timer.start() catch unreachable;
-        var last_table_trim_ts: u64 = 0;
+        var trim_table_timer = std.time.Timer.start() catch unreachable;
         var msg_count: usize = 0;
 
         // we batch messages bc:
@@ -495,10 +494,6 @@ pub const GossipService = struct {
 
             if (maybe_messages == null) {
                 continue;
-            }
-
-            if (msg_count == 0) {
-                timer.reset();
             }
 
             const messages = maybe_messages.?;
@@ -724,8 +719,8 @@ pub const GossipService = struct {
             }
 
             // TRIM gossip-table
-            const trim_elapsed_ts = getWallclockMs() -| last_table_trim_ts;
-            if (trim_elapsed_ts > GOSSIP_TRIM_INTERVAL_MS) {
+            if (trim_table_timer.read() > std.time.ns_per_ms * GOSSIP_TRIM_INTERVAL_MS) {
+                defer trim_table_timer.reset();
                 // first check with a read lock
                 const should_trim = blk: {
                     var gossip_table_lock = self.gossip_table_rw.read();
@@ -749,7 +744,6 @@ pub const GossipService = struct {
                     const elapsed = x_timer.read();
                     self.stats.handle_trim_table_time.add(elapsed);
                 }
-                last_table_trim_ts = getWallclockMs();
             }
         }
 
@@ -760,18 +754,19 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self) !void {
-        var last_push_ts: u64 = 0;
-        var last_stats_publish_ts: u64 = 0;
-        var last_pull_req_ts: u64 = 0;
+        var loop_timer = std.time.Timer.start() catch unreachable;
+        var push_timer = std.time.Timer.start() catch unreachable;
+        var pull_req_timer = std.time.Timer.start() catch unreachable;
+        var stats_publish_timer = std.time.Timer.start() catch unreachable;
         var push_cursor: u64 = 0;
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
         while (!self.exit.load(.unordered)) {
-            const top_of_loop_ts = getWallclockMs();
+            loop_timer.reset();
 
-            if (top_of_loop_ts -| last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
-                defer last_pull_req_ts = getWallclockMs();
+            if (pull_req_timer.read() > std.time.ns_per_ms * GOSSIP_PULL_RATE_MS) pull_blk: {
+                defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
                 var prng = std.Random.Xoshiro256.init(prng_seed);
@@ -806,7 +801,8 @@ pub const GossipService = struct {
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
-            if (top_of_loop_ts -| last_push_ts > GOSSIP_PULL_TIMEOUT_MS / 2) {
+            if (push_timer.read() > std.time.ns_per_ms * GOSSIP_PULL_TIMEOUT_MS / 2) {
+                defer push_timer.reset();
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
                 const my_contact_info_value = try SignedGossipData.initSigned(GossipData{
@@ -829,20 +825,18 @@ pub const GossipService = struct {
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
                 var prng = std.Random.Xoshiro256.init(prng_seed);
                 try self.rotateActiveSet(prng.random());
-                last_push_ts = getWallclockMs();
             }
 
-            // publish metrics
-            const stats_publish_elapsed_ts = getWallclockMs() -| last_stats_publish_ts;
-            if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL_MS) {
+            // publish metrics=
+            if (stats_publish_timer.read() > std.time.ns_per_ms * PUB_GOSSIP_STATS_INTERVAL_MS) {
+                defer stats_publish_timer.reset();
                 try self.collectGossipTableMetrics();
-                last_stats_publish_ts = getWallclockMs();
             }
 
             // sleep
-            const elapsed_ts = getWallclockMs() -| top_of_loop_ts;
-            if (elapsed_ts < GOSSIP_SLEEP_MILLIS) {
-                const time_left_ms = GOSSIP_SLEEP_MILLIS -| elapsed_ts;
+            if (loop_timer.read() < std.time.ns_per_ms * GOSSIP_SLEEP_MILLIS) {
+                defer loop_timer.reset();
+                const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read();
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
