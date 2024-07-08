@@ -724,7 +724,7 @@ pub const GossipService = struct {
             }
 
             // TRIM gossip-table
-            const trim_elapsed_ts = getWallclockMs() - last_table_trim_ts;
+            const trim_elapsed_ts = getWallclockMs() -| last_table_trim_ts;
             if (trim_elapsed_ts > GOSSIP_TRIM_INTERVAL_MS) {
                 // first check with a read lock
                 const should_trim = blk: {
@@ -770,7 +770,7 @@ pub const GossipService = struct {
         while (!self.exit.load(.unordered)) {
             const top_of_loop_ts = getWallclockMs();
 
-            if (top_of_loop_ts - last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
+            if (top_of_loop_ts -| last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer last_pull_req_ts = getWallclockMs();
                 // this also includes sending ping messages to other peers
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
@@ -806,7 +806,7 @@ pub const GossipService = struct {
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
-            if (top_of_loop_ts - last_push_ts > GOSSIP_PULL_TIMEOUT_MS / 2) {
+            if (top_of_loop_ts -| last_push_ts > GOSSIP_PULL_TIMEOUT_MS / 2) {
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
                 const my_contact_info_value = try SignedGossipData.initSigned(GossipData{
@@ -833,14 +833,14 @@ pub const GossipService = struct {
             }
 
             // publish metrics
-            const stats_publish_elapsed_ts = getWallclockMs() - last_stats_publish_ts;
+            const stats_publish_elapsed_ts = getWallclockMs() -| last_stats_publish_ts;
             if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL_MS) {
                 try self.collectGossipTableMetrics();
                 last_stats_publish_ts = getWallclockMs();
             }
 
             // sleep
-            const elapsed_ts = getWallclockMs() - top_of_loop_ts;
+            const elapsed_ts = getWallclockMs() -| top_of_loop_ts;
             if (elapsed_ts < GOSSIP_SLEEP_MILLIS) {
                 const time_left_ms = GOSSIP_SLEEP_MILLIS -| elapsed_ts;
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
