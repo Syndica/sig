@@ -317,7 +317,7 @@ pub const BankFields = struct {
         epoch_reward_status: ?EpochRewardStatus = null,
 
         // TODO: do a thorough review on this, this seems to work by chance with the test data, but I don't trust it yet
-        pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
+        pub const @"!bincode-config:snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
         pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
         pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true, .skip_write_fn = bincode.skipIfNull };
     };
@@ -371,7 +371,7 @@ pub const SlotAndHash = struct { slot: Slot, hash: Hash };
 
 /// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
-    file_map: std.AutoArrayHashMap(Slot, []const AccountFileInfo),
+    file_map: FileMap,
 
     /// NOTE: this is not a meaningful field
     /// NOTE: at the time of writing, a test snapshots we use actually have this field set to 601 on disk,
@@ -387,6 +387,13 @@ pub const AccountsDbFields = struct {
     rooted_slots: std.ArrayListUnmanaged(Slot),
     rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
 
+    pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+
+    pub const @"!bincode-config:file_map" = bincode.FieldConfig(FileMap){
+        .hashmap = .{
+            .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
+        },
+    };
     pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
     pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
 };
@@ -1073,7 +1080,6 @@ pub const AllSnapshotFields = struct {
 
             // only keep slots > full snapshot slot
             if (!(slot > full_slot)) {
-                storages_map.allocator.free(incremental_entry.value_ptr.*);
                 _ = storages_map.swapRemove(slot);
                 continue;
             }
