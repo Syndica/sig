@@ -1999,7 +1999,7 @@ pub const AccountsDB = struct {
 
     /// TODO: a number of these parameters are temporary stand-ins for data that will be derived from the state
     /// of AccountsDB, which currently doesn't all exist.
-    pub fn writeSnapshotTarTo(
+    pub fn writeSnapshotTar(
         /// Although this is a mutable pointer, this method performs no mutations;
         /// the mutable reference is simply needed in order to obtain a lock on some
         /// fields.
@@ -2060,7 +2060,7 @@ pub const AccountsDB = struct {
             .bank_fields_inc = bank_fields_inc,
         };
 
-        try writeSnapshotTar(archive_writer, version, status_cache, snapshot_fields, file_map);
+        try writeSnapshotTarWithFields(archive_writer, version, status_cache, snapshot_fields, file_map);
     }
 
     inline fn lessThanIf(
@@ -2165,7 +2165,7 @@ const CountingAllocator = struct {
     }
 };
 
-pub fn writeSnapshotTar(
+pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
     version: ClientVersion,
     status_cache: StatusCache,
@@ -2302,7 +2302,7 @@ fn testWriteSnapshot(
     const archive_file = try tmp_dir.createFile("snapshot.tar", .{ .read = true });
     defer archive_file.close();
 
-    try accounts_db.writeSnapshotTarTo(
+    try accounts_db.writeSnapshotTar(
         archive_file.writer(),
         status_cache,
         snap_fields.bank_fields,
