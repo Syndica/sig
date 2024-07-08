@@ -2209,15 +2209,15 @@ pub fn writeSnapshotTar(
     // create the accounts dir
     try writeTarHeader(writer, .directory, "accounts/", 0);
 
-    for (file_map.keys(), file_map.values()) |file_id, *acc_file_guarded| {
-        const acc_file, var acc_file_lg = acc_file_guarded.readWithLock();
-        defer acc_file_lg.unlock();
+    for (file_map.keys(), file_map.values()) |file_id, *account_file_rw| {
+        const account_file, var account_file_lg = account_file_rw.readWithLock();
+        defer account_file_lg.unlock();
 
-        if (acc_file.slot < slot) continue;
+        if (account_file.slot < slot) continue;
 
         const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() }, .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) }) catch unreachable;
-        try writeTarHeader(writer, .regular, name_bounded.constSlice(), acc_file.memory.len);
-        try writer.writeAll(acc_file.memory);
+        try writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
+        try writer.writeAll(account_file.memory);
         try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
         counting_writer_state.bytes_written %= 512;
         std.debug.assert(counting_writer_state.bytes_written == 0);
