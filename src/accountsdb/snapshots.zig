@@ -993,10 +993,18 @@ pub const SnapshotFieldsAndPaths = struct {
 
     pub fn deinit(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
         self.all_fields.deinit(allocator);
+        self.deinitPaths(allocator);
+    }
+
+    /// NOTE: used for hacky-ish code
+    pub fn deinitPaths(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
         allocator.free(self.full_path);
-        if (self.incremental_path) |incremental_path| {
-            allocator.free(incremental_path);
+        self.full_path = "";
+        if (self.incremental_path) |*incremental_path| {
+            allocator.free(incremental_path.*);
+            incremental_path.* = "";
         }
+        
     }
 };
 

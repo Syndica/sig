@@ -744,7 +744,7 @@ fn loadFromSnapshot(
         logger,
         gossip_service,
     );
-    defer snapshots.deinit(allocator);
+    defer snapshots.deinitPaths(allocator); // TODO: This is kind of a huge hack, but we can't free the snapshot fields, since they're used by the result
 
     logger.infof("full snapshot: {s}", .{snapshots.full_path});
     if (snapshots.incremental_path) |inc_path| {
