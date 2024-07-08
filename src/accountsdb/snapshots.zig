@@ -1004,7 +1004,6 @@ pub const SnapshotFieldsAndPaths = struct {
             allocator.free(incremental_path.*);
             incremental_path.* = "";
         }
-        
     }
 };
 
