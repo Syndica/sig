@@ -1211,7 +1211,7 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
-            for (pull_requests.items) |req| {
+            for (pull_requests.items) |*req| {
                 gossip_table.insert(req.value, now) catch {};
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
@@ -1227,7 +1227,7 @@ pub const GossipService = struct {
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
 
-            for (pull_requests.items) |req| {
+            for (pull_requests.items) |*req| {
                 const threads_safe_contact_info = switch (req.value.data) {
                     .ContactInfo => |ci| ThreadSafeContactInfo.fromContactInfo(ci),
                     .LegacyContactInfo => |legacy| ThreadSafeContactInfo.fromLegacyContactInfo(legacy),

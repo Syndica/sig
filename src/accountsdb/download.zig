@@ -99,10 +99,10 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             result.invalid_shred_version += 1;
             continue;
         }
-        _ = peer_contact_info.rpc_addr orelse {
+        if (peer_contact_info.rpc_addr == null) {
             result.no_rpc_count += 1;
             continue;
-        };
+        }
         const gossip_data = table.get(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
             result.no_snapshot_hashes_count += 1;
             continue;
@@ -144,7 +144,6 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         }
 
         valid_peers.appendAssumeCapacity(.{
-            // NOTE: maybe we need to deep clone here due to arraylist sockets?
             .contact_info = peer_contact_info.*,
             .full_snapshot = snapshot_hashes.full,
             .inc_snapshot = max_inc_hash,

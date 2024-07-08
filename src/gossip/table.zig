@@ -405,7 +405,7 @@ pub const GossipTable = struct {
         if (self.store.get(label)) |v| {
             return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo);
         } else {
-            return ThreadSafeContactInfo.fromContactInfo(self.converted_contact_infos.get(pubkey).?);
+            return ThreadSafeContactInfo.fromContactInfo(self.converted_contact_infos.get(pubkey) orelse return null);
         }
     }
 
