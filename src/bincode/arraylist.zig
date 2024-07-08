@@ -14,12 +14,11 @@ pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(C
             return;
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
-            const ally = allocator.?;
-            const len = try bincode.read(ally, u64, reader, params);
-            var list = try std.ArrayList(Child).initCapacity(ally, @as(usize, len));
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
+            const len = try bincode.read(allocator, u64, reader, params);
+            var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
             for (0..len) |_| {
-                const item = try bincode.read(ally, Child, reader, params);
+                const item = try bincode.read(allocator, Child, reader, params);
                 try list.append(item);
             }
             return list;

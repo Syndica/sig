@@ -503,7 +503,7 @@ pub const ShredVariantConfig = blk: {
             return writer.writeByte(try ShredVariant.toByte(data));
         }
 
-        pub fn deserialize(_: ?std.mem.Allocator, reader: anytype, _: bincode.Params) !ShredVariant {
+        pub fn deserialize(_: std.mem.Allocator, reader: anytype, _: bincode.Params) !ShredVariant {
             return try ShredVariant.fromByte(try reader.readByte());
         }
 

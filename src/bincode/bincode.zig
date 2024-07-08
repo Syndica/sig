@@ -1,6 +1,8 @@
 pub const arraylist = @import("arraylist.zig");
 pub const shortvec = @import("shortvec.zig");
 pub const varint = @import("varint.zig");
+pub const optional = @import("optional.zig");
+pub const list = @import("slice.zig");
 
 const std = @import("std");
 const sig = @import("../lib.zig");
@@ -66,11 +68,9 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
                 SerializedSize = T.BincodeSize;
             };
 
-            const tag = switch (params.endian) {
+            const tag = try switch (params.endian) {
                 .little => reader.readInt(SerializedSize, .little),
                 .big => reader.readInt(SerializedSize, .big),
-            } catch {
-                return error.EOF;
             };
             return std.meta.intToEnum(T, tag);
         },
@@ -90,91 +90,47 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             return error.UnknownUnionTag;
         },
         .Struct => |info| {
-            var data: T = undefined;
+            if (comptime sig.utils.types.arrayListInfo(T)) |list_info| {
+                const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
 
-            if (comptime sig.utils.types.arrayListInfo(T)) |al_info| {
-                const ElementType = al_info.Elem;
-                const len = try bincode.read(allocator, u64, reader, params);
-                data = try T.initCapacity(allocator, len);
+                var data: T = try T.initCapacity(allocator, len);
+                errdefer bincode.free(allocator, data);
                 for (0..len) |_| {
-                    data.appendAssumeCapacity(try bincode.read(allocator, ElementType, reader, params));
+                    data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
                 }
-            } else if (comptime sig.utils.types.hashMapInfo(T)) |hm_info| {
-                const K = hm_info.Key;
-                const V = hm_info.Value;
-                const len_u64 = try bincode.read(allocator, u64, reader, params);
-                const Size = if (hm_info.kind == .unordered) T.Size else usize;
-                if (len_u64 > std.math.maxInt(Size)) return error.HashMapTooBig;
-                const len: usize = @intCast(len_u64);
-
-                data = switch (hm_info.management) {
-                    .managed => T.init(allocator),
-                    .unmanaged => .{},
-                };
-                switch (hm_info.management) {
-                    .managed => try data.ensureTotalCapacity(@intCast(len)),
-                    .unmanaged => try data.ensureTotalCapacity(allocator, @intCast(len)),
-                }
-                for (0..len) |_| {
-                    const key = try bincode.read(allocator, K, reader, params);
-                    errdefer bincode.free(allocator, key);
-
-                    const value = try bincode.read(allocator, V, reader, params);
-                    errdefer bincode.free(allocator, value);
-
-                    const gop = data.getOrPutAssumeCapacity(key);
-                    if (gop.found_existing) return error.DuplicateHashMapEntries;
-                    gop.value_ptr.* = value;
-                }
+                return data;
+            } else if (comptime sig.utils.types.hashMapInfo(T) != null) {
+                return try readHashMap(allocator, reader, params, T, .{});
             } else {
-                inline for (info.fields) |field| {
+                var data: T = undefined;
+
+                inline for (info.fields, 0..) |field, i| {
+                    errdefer inline for (info.fields[0..i]) |prev| {
+                        if (prev.is_comptime) continue;
+                        bincode.free(allocator, @field(data, prev.name));
+                    };
+
                     if (field.is_comptime) continue;
-                    if (getFieldConfig(T, field)) |field_config| {
-                        if (shouldUseDefaultValue(field, field_config)) |default_value| {
-                            @field(data, field.name) = @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-                            continue;
-                        }
+                    const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
+                        errdefer std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                        @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
+                        continue;
+                    };
 
-                        if (field_config.deserializer) |deser_fcn| {
-                            @field(data, field.name) = try deser_fcn(allocator, reader, params);
-                            continue;
-                        }
-
-                        if (field_config.default_on_eof) {
-                            const field_type = field.type;
-                            @field(data, field.name) = bincode.read(allocator, field_type, reader, params) catch |err| blk: {
-                                if (err == error.EndOfStream) {
-                                    if (field.default_value) |default_value| {
-                                        break :blk @as(*const field_type, @ptrCast(@alignCast(default_value))).*;
-                                    } else if (field_config.default_fn) |default_fcn| {
-                                        break :blk default_fcn(allocator);
-                                    } else {
-                                        return error.MissingFieldDefaultValue;
-                                    }
-                                } else {
-                                    return err;
-                                }
-                            };
-                            continue;
-                        }
-                    }
-                    errdefer {
-                        std.debug.print("failed to deserialize field {s}\n", .{field.name});
-                    }
-                    @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
+                    @field(data, field.name) = try readFieldWithConfig(allocator, reader, params, field, field_config);
                 }
-            }
 
-            // TODO: improve implementation of post deserialise method
-            const post_deserialize = "!bincode-config:post-deserialize";
-            if (@hasDecl(T, post_deserialize)) {
-                const field_config = @field(T, post_deserialize);
-                if (field_config.post_deserialize_fn) |post_deserialize_fn| {
-                    post_deserialize_fn(&data);
+                // TODO: improve implementation of post deserialise method
+                const post_deserialize = "!bincode-config:post-deserialize";
+                if (@hasDecl(T, post_deserialize)) {
+                    const field_config = @field(T, post_deserialize);
+                    if (field_config.post_deserialize_fn) |post_deserialize_fn| {
+                        post_deserialize_fn(&data);
+                    }
                 }
-            }
 
-            return data;
+                return data;
+            }
         },
         .Optional => |info| {
             return switch (try reader.readByte()) {
@@ -345,89 +301,80 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
     @compileError("Deserializing '" ++ @typeName(T) ++ "' is unsupported.");
 }
 
-pub fn free(allocator: std.mem.Allocator, value: anytype) void {
-    const T = @TypeOf(value);
-    switch (@typeInfo(T)) {
-        .Array, .Vector => {
-            for (value) |element| {
-                bincode.free(allocator, element);
-            }
-        },
-        .Struct => |info| {
-            if (sig.utils.types.arrayListInfo(T)) |al_info| {
-                var copy = value;
-                for (copy.items) |item| {
-                    bincode.free(allocator, item);
-                }
-                switch (al_info.management) {
-                    .managed => copy.deinit(),
-                    .unmanaged => copy.deinit(allocator),
-                }
-            } else if (sig.utils.types.hashMapInfo(T)) |hm_info| {
-                var copy = value;
-                var iter = copy.iterator();
-                while (iter.next()) |item| {
-                    bincode.free(allocator, item.key_ptr.*);
-                    bincode.free(allocator, item.value_ptr.*);
-                }
-                switch (hm_info.management) {
-                    .managed => copy.deinit(),
-                    .unmanaged => copy.deinit(allocator),
-                }
-            } else inline for (info.fields) |field| {
-                if (getFieldConfig(T, field)) |field_config| {
-                    if (field_config.free) |free_fcn| {
-                        var field_value = @field(value, field.name);
-                        switch (@typeInfo(field.type)) {
-                            .Pointer => |*field_info| {
-                                // TODO: Why do we do only slice?
-                                if (field_info.size == .Slice) {
-                                    free_fcn(allocator, field_value);
-                                }
-                            },
-                            else => {
-                                free_fcn(allocator, &field_value);
-                            },
-                        }
-
-                        continue;
-                    }
-                }
-
-                if (!field.is_comptime) {
-                    bincode.free(allocator, @field(value, field.name));
-                }
-            }
-        },
-        .Optional => {
-            if (value) |v| {
-                bincode.free(allocator, v);
-            }
-        },
-        .Union => |info| {
-            inline for (info.fields) |field| {
-                if (value == @field(T, field.name)) {
-                    return bincode.free(allocator, @field(value, field.name));
-                }
-            }
-        },
-        .Pointer => |info| {
-            switch (info.size) {
-                .Slice => {
-                    for (value) |item| {
-                        bincode.free(allocator, item);
-                    }
-                    allocator.free(value);
-                },
-                .One => {
-                    bincode.free(allocator, value.*);
-                    allocator.destroy(value);
-                },
-                else => unreachable,
-            }
-        },
-        else => {},
+fn readFieldWithConfig(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    params: bincode.Params,
+    comptime field: std.builtin.Type.StructField,
+    comptime field_config: FieldConfig(field.type),
+) !field.type {
+    if (shouldUseDefaultValue(field, field_config)) |default_value| {
+        return default_value;
     }
+
+    if (field_config.deserializer) |deser_fcn| {
+        return try deser_fcn(allocator, reader, params);
+    }
+
+    if (sig.utils.types.hashMapInfo(field.type) != null) {
+        return try readHashMap(allocator, reader, params, field.type, field_config.hashmap);
+    }
+
+    return bincode.read(allocator, field.type, reader, params) catch |err| blk: {
+        if (!field_config.default_on_eof or err != error.EndOfStream) return err;
+
+        if (field.default_value) |default_value| {
+            break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
+        } else if (field_config.default_fn) |default_fcn| {
+            break :blk default_fcn(allocator);
+        } else {
+            return error.MissingFieldDefaultValue;
+        }
+    };
+}
+
+pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params) !?T {
+    var fba = comptime std.heap.FixedBufferAllocator.init(&.{});
+    const len_u64 = try bincode.read(fba.allocator(), u64, reader, params);
+    if (len_u64 > std.math.maxInt(T)) return null;
+    return @intCast(len_u64);
+}
+
+fn readHashMap(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    params: bincode.Params,
+    comptime T: type,
+    comptime hm_config: HashMapConfig(sig.utils.types.hashMapInfo(T).?),
+) !T {
+    const hm_info = sig.utils.types.hashMapInfo(T).?;
+    const Size = if (hm_info.kind == .unordered) T.Size else usize;
+    const len = (try readIntAsLength(Size, reader, params)) orelse return error.HashMapTooBig;
+
+    var data: T = switch (hm_info.management) {
+        .managed => T.init(allocator),
+        .unmanaged => .{},
+    };
+    switch (hm_info.management) {
+        .managed => try data.ensureTotalCapacity(len),
+        .unmanaged => try data.ensureTotalCapacity(allocator, len),
+    }
+
+    const key_field = std.meta.fieldInfo(T.KV, .key);
+    const value_field = std.meta.fieldInfo(T.KV, .value);
+    for (0..len) |_| {
+        const key = try bincode.readFieldWithConfig(allocator, reader, params, key_field, hm_config.key);
+        errdefer bincode.free(allocator, key);
+
+        const value = try bincode.readFieldWithConfig(allocator, reader, params, value_field, hm_config.value);
+        errdefer bincode.free(allocator, value);
+
+        const gop = data.getOrPutAssumeCapacity(key);
+        if (gop.found_existing) return error.DuplicateHashMapEntries;
+        gop.value_ptr.* = value;
+    }
+
+    return data;
 }
 
 pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
@@ -463,36 +410,16 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
             return;
         },
         .Struct => |info| {
-            if (comptime std.mem.startsWith(u8, @typeName(T), "array_list")) {
-                std.debug.assert(@typeInfo(T.Slice) == .Pointer and @typeInfo(T.Slice).Pointer.size == .Slice);
+            if (sig.utils.types.arrayListInfo(T) != null) {
                 try bincode.write(writer, data.items.len, params);
                 for (data.items) |item| {
                     try bincode.write(writer, item, params);
                 }
-            } else if (comptime std.mem.startsWith(u8, @typeName(T), "hash_map") or std.mem.startsWith(u8, @typeName(T), "array_hash_map")) {
-                // NOTE: we need to use unmanaged here because managed requires a mutable reference
-                const len: u64 = @intCast(data.count());
-                try bincode.write(writer, len, params);
-                var iter = data.iterator();
-                while (iter.next()) |entry| {
-                    try bincode.write(writer, entry.key_ptr.*, params);
-                    try bincode.write(writer, entry.value_ptr.*, params);
-                }
+            } else if (sig.utils.types.hashMapInfo(T) != null) {
+                try writeHashMap(writer, data, params, .{});
             } else {
-                inline for (info.fields) |field| runtime_continue: {
-                    if (field.is_comptime) continue;
-
-                    if (getFieldConfig(T, field)) |field_config| {
-                        if (field_config.skip) {
-                            break :runtime_continue;
-                        } else if (field_config.skip_write_fn(@field(data, field.name))) {
-                            break :runtime_continue;
-                        } else if (field_config.serializer) |ser_fcn| {
-                            try ser_fcn(writer, @field(data, field.name), params);
-                            break :runtime_continue;
-                        }
-                    }
-                    try bincode.write(writer, @field(data, field.name), params);
+                inline for (info.fields) |field| {
+                    try writeFieldWithConfig(field, getFieldConfig(T, field), writer, @field(data, field.name), params);
                 }
             }
             return;
@@ -606,9 +533,142 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
     @compileError("Serializing '" ++ @typeName(T) ++ "' is unsupported.");
 }
 
+fn writeFieldWithConfig(
+    comptime field: std.builtin.Type.StructField,
+    comptime maybe_field_config: ?FieldConfig(field.type),
+    writer: anytype,
+    data: field.type,
+    params: bincode.Params,
+) !void {
+    if (field.is_comptime) return;
+
+    if (maybe_field_config) |field_config| {
+        if (field_config.skip) return;
+        if (field_config.skip_write_fn(data)) return;
+        if (field_config.serializer) |ser_fcn| {
+            try ser_fcn(writer, data, params);
+            return;
+        }
+        if (sig.utils.types.hashMapInfo(field.type) != null) {
+            try writeHashMap(writer, data, params, field_config.hashmap);
+            return;
+        }
+    }
+
+    try bincode.write(writer, data, params);
+}
+
+fn writeHashMap(
+    writer: anytype,
+    data: anytype,
+    params: bincode.Params,
+    comptime hm_config: HashMapConfig(sig.utils.types.hashMapInfo(@TypeOf(data)).?),
+) !void {
+    const T = @TypeOf(data);
+
+    // NOTE: we need to use unmanaged here because managed requires a mutable reference
+    if (data.count() > std.math.maxInt(u64)) return error.HashMapTooBig;
+    const len: u64 = @intCast(data.count());
+    try bincode.write(writer, len, params);
+
+    const key_info = std.meta.fieldInfo(T.KV, .key);
+    const value_info = std.meta.fieldInfo(T.KV, .value);
+
+    var iter = data.iterator();
+    while (iter.next()) |entry| {
+        try bincode.writeFieldWithConfig(key_info, hm_config.key, writer, entry.key_ptr.*, params);
+        try bincode.writeFieldWithConfig(value_info, hm_config.value, writer, entry.value_ptr.*, params);
+    }
+}
+
+pub fn free(allocator: std.mem.Allocator, value: anytype) void {
+    const T = @TypeOf(value);
+    switch (@typeInfo(T)) {
+        .Array, .Vector => {
+            for (value) |element| {
+                bincode.free(allocator, element);
+            }
+        },
+        .Struct => |info| {
+            if (sig.utils.types.arrayListInfo(T)) |al_info| {
+                var copy = value;
+                for (copy.items) |item| {
+                    bincode.free(allocator, item);
+                }
+                switch (al_info.management) {
+                    .managed => copy.deinit(),
+                    .unmanaged => copy.deinit(allocator),
+                }
+            } else if (sig.utils.types.hashMapInfo(T)) |hm_info| {
+                var copy = value;
+                var iter = copy.iterator();
+                while (iter.next()) |item| {
+                    bincode.free(allocator, item.key_ptr.*);
+                    bincode.free(allocator, item.value_ptr.*);
+                }
+                switch (hm_info.management) {
+                    .managed => copy.deinit(),
+                    .unmanaged => copy.deinit(allocator),
+                }
+            } else inline for (info.fields) |field| {
+                if (getFieldConfig(T, field)) |field_config| {
+                    if (field_config.free) |free_fcn| {
+                        var field_value = @field(value, field.name);
+                        switch (@typeInfo(field.type)) {
+                            .Pointer => |*field_info| {
+                                // TODO: Why do we do only slice?
+                                if (field_info.size == .Slice) {
+                                    free_fcn(allocator, field_value);
+                                }
+                            },
+                            else => {
+                                free_fcn(allocator, &field_value);
+                            },
+                        }
+
+                        continue;
+                    }
+                }
+
+                if (!field.is_comptime) {
+                    bincode.free(allocator, @field(value, field.name));
+                }
+            }
+        },
+        .Optional => {
+            if (value) |v| {
+                bincode.free(allocator, v);
+            }
+        },
+        .Union => |info| {
+            inline for (info.fields) |field| {
+                if (value == @field(T, field.name)) {
+                    return bincode.free(allocator, @field(value, field.name));
+                }
+            }
+        },
+        .Pointer => |info| {
+            switch (info.size) {
+                .Slice => {
+                    for (value) |item| {
+                        bincode.free(allocator, item);
+                    }
+                    allocator.free(value);
+                },
+                .One => {
+                    bincode.free(allocator, value.*);
+                    allocator.destroy(value);
+                },
+                else => unreachable,
+            }
+        },
+        else => {},
+    }
+}
+
 // need this fn to define the return type T
 pub fn DeserializeFunction(comptime T: type) type {
-    return fn (alloc: ?std.mem.Allocator, reader: anytype, params: Params) anyerror!T;
+    return fn (alloc: std.mem.Allocator, reader: anytype, params: Params) anyerror!T;
 }
 pub const SerializeFunction = fn (writer: anytype, data: anytype, params: Params) anyerror!void;
 pub const FreeFunction = fn (allocator: std.mem.Allocator, data: anytype) void;
@@ -623,6 +683,19 @@ pub fn FieldConfig(comptime T: type) type {
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
         post_deserialize_fn: ?fn (self: *T) void = null,
         skip_write_fn: fn (value: anytype) bool = neverSkip,
+        hashmap: MaybeHashMapConfig(sig.utils.types.hashMapInfo(T)) = .{},
+    };
+}
+
+pub fn MaybeHashMapConfig(comptime maybe_hm_info: ?sig.utils.types.HashMapInfo) type {
+    const hm_info = maybe_hm_info orelse return struct {};
+    return HashMapConfig(hm_info);
+}
+
+pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
+    return struct {
+        key: FieldConfig(hm_info.Key) = .{},
+        value: FieldConfig(hm_info.Value) = .{},
     };
 }
 
@@ -650,19 +723,18 @@ pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
 pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
     const bincode_field = "!bincode-config:" ++ field.name;
     if (@hasDecl(struct_type, bincode_field)) {
-        const field_config = @field(struct_type, bincode_field);
-        return field_config;
+        return @field(struct_type, bincode_field);
     }
     return null;
 }
 
-pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime field_config: FieldConfig(field.type)) ?*const anyopaque {
+pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime field_config: FieldConfig(field.type)) ?field.type {
     if (field_config.skip) {
         if (field.default_value == null) {
-            const field_type_name = @typeName(field.type);
-            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ field_type_name ++ "." ++ field.name ++ "' deserialization if no default value set\n\n");
+            @compileError("┓\n|\n|--> Invalid config: cannot skip field '" ++ @typeName(field.type) ++ "." ++ field.name ++ "' deserialization if no default value set\n\n");
         }
-        return field.default_value;
+        const default_value: *align(1) const field.type = @ptrCast(field.default_value orelse return null);
+        return default_value.*;
     } else {
         return null;
     }
@@ -680,21 +752,14 @@ pub fn writeToArray(alloc: std.mem.Allocator, data: anytype, params: Params) !st
     return array_buf;
 }
 
-pub fn getSerializedSize(alloc: std.mem.Allocator, data: anytype, params: Params) !usize {
-    var list = try writeToArray(alloc, data, params);
-    defer list.deinit();
-    return list.items.len;
-}
-
 // ** Tests **//
 fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     const S = struct {
-        fn deserializeTestSlice(allocator: ?std.mem.Allocator, reader: anytype, params: Params) ![]Child {
-            var ally = allocator.?;
-            const len = try bincode.read(ally, u16, reader, params);
-            var elems = try ally.alloc(Child, len);
+        fn deserializeTestSlice(allocator: std.mem.Allocator, reader: anytype, params: Params) ![]Child {
+            const len = try bincode.read(allocator, u16, reader, params);
+            var elems = try allocator.alloc(Child, len);
             for (0..len) |i| {
-                elems[i] = try bincode.read(ally, Child, reader, params);
+                elems[i] = try bincode.read(allocator, Child, reader, params);
             }
             return elems;
         }
@@ -791,7 +856,7 @@ test "bincode: custom field serialization" {
     const out = try writeToSlice(&buf, foo, Params{});
     try std.testing.expect(out[out.len - 1] != 20); // skip worked
 
-    const size = try getSerializedSize(std.testing.allocator, foo, Params{});
+    const size = sizeOf(foo, Params{});
     try std.testing.expect(size > 0);
 
     const r = try readFromSlice(std.testing.allocator, Foo, out, Params{});
