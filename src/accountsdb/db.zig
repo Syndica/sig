@@ -41,6 +41,8 @@ const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
 const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
+const BankFields = sig.accounts_db.snapshots.BankFields;
+const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
 const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
@@ -2004,12 +2006,17 @@ pub const AccountsDB = struct {
         self: *Self,
         /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
         archive_writer: anytype,
+        /// Temporary: See above TODO
         status_cache: StatusCache,
-        bank_fields: sig.accounts_db.snapshots.BankFields,
-        bank_fields_inc: sig.accounts_db.snapshots.BankFields.Incremental,
+        /// Temporary: See above TODO
+        bank_fields: BankFields,
+        /// Temporary: See above TODO
+        bank_fields_inc: BankFields.Incremental,
+        /// Temporary: See above TODO
         lamports_per_signature: u64,
-        bank_hash_info: sig.accounts_db.snapshots.BankHashInfo,
-        /// For tests against older snapshots
+        /// Temporary: See above TODO
+        bank_hash_info: BankHashInfo,
+        /// For tests against older snapshots. Should just be 0 during normal operation.
         stored_meta_write_version: u64,
     ) !void {
         const file_map, var file_map_lg = self.file_map.readWithLock();
