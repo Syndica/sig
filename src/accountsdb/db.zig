@@ -2180,34 +2180,34 @@ pub fn writeSnapshotTar(
     { // write the version file
         var version_str_buf: [5]u8 = undefined;
         const version_str = try std.fmt.bufPrint(&version_str_buf, "{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
-        try writeTarHeader(writer, .regular, "version", version_str.len);
+        try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
         try writer.writeAll(version_str);
-        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
     }
 
     // create the snapshots dir
-    try writeTarHeader(writer, .directory, "snapshots/", 0);
+    try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
 
     // write the status cache
-    try writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
+    try sig.utils.tar.writeTarHeader(writer, .regular, "snapshots/status_cache", bincode.sizeOf(status_cache, .{}));
     try bincode.write(writer, status_cache, .{});
-    try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+    try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
 
     { // write the manifest
         const manifest = snapshot_fields;
         const manifest_encoded_size = bincode.sizeOf(manifest, .{});
 
         const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
-        try writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
+        try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
 
         const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
-        try writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
+        try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
         try bincode.write(writer, manifest, .{});
-        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
     }
 
     // create the accounts dir
-    try writeTarHeader(writer, .directory, "accounts/", 0);
+    try sig.utils.tar.writeTarHeader(writer, .directory, "accounts/", 0);
 
     for (file_map.keys(), file_map.values()) |file_id, *account_file_rw| {
         const account_file, var account_file_lg = account_file_rw.readWithLock();
@@ -2216,50 +2216,15 @@ pub fn writeSnapshotTar(
         if (account_file.slot < slot) continue;
 
         const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() }, .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) }) catch unreachable;
-        try writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
+        try sig.utils.tar.writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
         try writer.writeAll(account_file.memory);
-        try writer.writeByteNTimes(0, paddingBytes(counting_writer_state.bytes_written));
+        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
         counting_writer_state.bytes_written %= 512;
         std.debug.assert(counting_writer_state.bytes_written == 0);
     }
 
     // write the sentinel blocks
     try writer.writeByteNTimes(0, 512 * 2);
-}
-
-const TarOutputHeader = std.tar.output.Header;
-fn writeTarHeader(writer: anytype, typeflag: TarOutputHeader.FileType, path: []const u8, size: u64) !void {
-    var header = TarOutputHeader.init();
-    _ = try std.fmt.bufPrint(&header.name, "{s}", .{path});
-    try header.setSize(size);
-    header.typeflag = typeflag;
-
-    const mode: u21 = switch (typeflag) {
-        // allow read & write, but not execution by anyone
-        .regular => 0o666,
-
-        // allow read, write, and traversal by anyone
-        .directory => 0o777,
-
-        // we don't really use anything else, so just set no permissions so that it's obvious something is wrong if this somehow occurs
-        else => 0,
-    };
-    _ = std.fmt.bufPrint(&header.mode, "{o:0>7}", .{mode}) catch unreachable;
-
-    try header.updateChecksum();
-    try writer.writeAll(std.mem.asBytes(&header));
-}
-
-/// Returns the number of padding bytes that must be written in order to have a round 512 byte block.
-/// The result is 0 if the number of bytes written already form a round 512 byte block, or if there
-/// are 0 bytes written.
-fn paddingBytes(
-    /// The actual number of bytes written, or the number of bytes written modulo 512.
-    bytes_written_maybe_modulo: u64,
-) std.math.IntFittingRange(0, 512 - 1) {
-    const modulo = bytes_written_maybe_modulo % 512;
-    if (modulo == 0) return 0; // we don't want any padding if it's already a round 512 block
-    return @intCast(512 - modulo);
 }
 
 /// where accounts are stored
