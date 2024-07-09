@@ -1,10 +1,11 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 const bincode = sig.bincode;
+const hashMapInfo = sig.utils.types.hashMapInfo;
 
 pub fn defaultToNullOnEof(comptime T: type, fields: struct {
     free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,
-    hashmap: bincode.MaybeHashMapConfig(sig.utils.types.hashMapInfo(T)) = .{},
+    hashmap: if (hashMapInfo(T)) |hm_info| bincode.HashMapConfig(hm_info) else void = if (hashMapInfo(T) != null) .{} else {},
 }) bincode.FieldConfig(?T) {
     const gen = struct {
         fn deserializer(

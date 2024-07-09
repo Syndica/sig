@@ -9,6 +9,9 @@ const sig = @import("../lib.zig");
 
 const testing = std.testing;
 
+const arrayListInfo = sig.utils.types.arrayListInfo;
+const hashMapInfo = sig.utils.types.hashMapInfo;
+
 const bincode = @This();
 
 pub const Params = struct {
@@ -90,7 +93,7 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             return error.UnknownUnionTag;
         },
         .Struct => |info| {
-            if (comptime sig.utils.types.arrayListInfo(T)) |list_info| {
+            if (comptime arrayListInfo(T)) |list_info| {
                 const len = (try readIntAsLength(usize, reader, params)) orelse return error.ArrayListTooBig;
 
                 var data: T = try T.initCapacity(allocator, len);
@@ -99,7 +102,7 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
                     data.appendAssumeCapacity(try bincode.read(allocator, list_info.Elem, reader, params));
                 }
                 return data;
-            } else if (comptime sig.utils.types.hashMapInfo(T) != null) {
+            } else if (comptime hashMapInfo(T) != null) {
                 return try readHashMap(allocator, reader, params, T, .{});
             } else {
                 var data: T = undefined;
@@ -316,19 +319,21 @@ fn readFieldWithConfig(
         return try deser_fcn(allocator, reader, params);
     }
 
-    if (sig.utils.types.hashMapInfo(field.type) != null) {
+    if (hashMapInfo(field.type) != null) {
         return try readHashMap(allocator, reader, params, field.type, field_config.hashmap);
     }
 
     return bincode.read(allocator, field.type, reader, params) catch |err| blk: {
-        if (!field_config.default_on_eof or err != error.EndOfStream) return err;
-
-        if (field.default_value) |default_value| {
-            break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-        } else if (field_config.default_fn) |default_fcn| {
-            break :blk default_fcn(allocator);
+        if (field_config.default_on_eof and err == error.EndOfStream) {
+            if (field.default_value) |default_value| {
+                break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
+            } else if (field_config.default_fn) |default_fcn| {
+                break :blk default_fcn(allocator);
+            } else {
+                return error.MissingFieldDefaultValue;
+            }
         } else {
-            return error.MissingFieldDefaultValue;
+            return err;
         }
     };
 }
@@ -345,9 +350,9 @@ fn readHashMap(
     reader: anytype,
     params: bincode.Params,
     comptime T: type,
-    comptime hm_config: HashMapConfig(sig.utils.types.hashMapInfo(T).?),
+    comptime hm_config: HashMapConfig(hashMapInfo(T).?),
 ) !T {
-    const hm_info = sig.utils.types.hashMapInfo(T).?;
+    const hm_info = hashMapInfo(T).?;
     const Size = if (hm_info.kind == .unordered) T.Size else usize;
     const len = (try readIntAsLength(Size, reader, params)) orelse return error.HashMapTooBig;
 
@@ -410,12 +415,12 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
             return;
         },
         .Struct => |info| {
-            if (sig.utils.types.arrayListInfo(T) != null) {
+            if (arrayListInfo(T) != null) {
                 try bincode.write(writer, data.items.len, params);
                 for (data.items) |item| {
                     try bincode.write(writer, item, params);
                 }
-            } else if (sig.utils.types.hashMapInfo(T) != null) {
+            } else if (hashMapInfo(T) != null) {
                 try writeHashMap(writer, data, params, .{});
             } else {
                 inline for (info.fields) |field| {
@@ -549,7 +554,7 @@ fn writeFieldWithConfig(
             try ser_fcn(writer, data, params);
             return;
         }
-        if (sig.utils.types.hashMapInfo(field.type) != null) {
+        if (hashMapInfo(field.type) != null) {
             try writeHashMap(writer, data, params, field_config.hashmap);
             return;
         }
@@ -562,7 +567,7 @@ fn writeHashMap(
     writer: anytype,
     data: anytype,
     params: bincode.Params,
-    comptime hm_config: HashMapConfig(sig.utils.types.hashMapInfo(@TypeOf(data)).?),
+    comptime hm_config: HashMapConfig(hashMapInfo(@TypeOf(data)).?),
 ) !void {
     const T = @TypeOf(data);
 
@@ -590,7 +595,7 @@ pub fn free(allocator: std.mem.Allocator, value: anytype) void {
             }
         },
         .Struct => |info| {
-            if (sig.utils.types.arrayListInfo(T)) |al_info| {
+            if (arrayListInfo(T)) |al_info| {
                 var copy = value;
                 for (copy.items) |item| {
                     bincode.free(allocator, item);
@@ -599,7 +604,7 @@ pub fn free(allocator: std.mem.Allocator, value: anytype) void {
                     .managed => copy.deinit(),
                     .unmanaged => copy.deinit(allocator),
                 }
-            } else if (sig.utils.types.hashMapInfo(T)) |hm_info| {
+            } else if (hashMapInfo(T)) |hm_info| {
                 var copy = value;
                 var iter = copy.iterator();
                 while (iter.next()) |item| {
@@ -682,14 +687,17 @@ pub fn FieldConfig(comptime T: type) type {
         default_on_eof: bool = false,
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
         post_deserialize_fn: ?fn (self: *T) void = null,
+        /// A predicate which returns true for a given field value if it should be skipped
+        /// during serialization, and false otherwise.
+        ///
+        /// This predicate is needed in tandem with `default_on_eof` in order to help
+        /// ensure values which were never read (and thus set to a default) aren't written
+        /// back. It is defaulted to `neverSkip`, which simply always returns false.
+        /// The programmer overriding this field is encouraged to use a predicate which
+        /// coordinates with `default_fn`.
         skip_write_fn: fn (value: anytype) bool = neverSkip,
-        hashmap: MaybeHashMapConfig(sig.utils.types.hashMapInfo(T)) = .{},
+        hashmap: if (hashMapInfo(T)) |hm_info| bincode.HashMapConfig(hm_info) else void = if (hashMapInfo(T) != null) .{} else {},
     };
-}
-
-pub fn MaybeHashMapConfig(comptime maybe_hm_info: ?sig.utils.types.HashMapInfo) type {
-    const hm_info = maybe_hm_info orelse return struct {};
-    return HashMapConfig(hm_info);
 }
 
 pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
