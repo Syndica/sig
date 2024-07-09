@@ -2179,13 +2179,12 @@ pub fn writeSnapshotTarWithFields(
     var counting_writer_state = std.io.countingWriter(archive_writer);
     const writer = counting_writer_state.writer();
 
-    { // write the version file
-        var version_str_buf: [5]u8 = undefined;
-        const version_str = try std.fmt.bufPrint(&version_str_buf, "{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
-        try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
-        try writer.writeAll(version_str);
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
-    }
+    // write the version file
+    var version_str_buf: [5]u8 = undefined;
+    const version_str = try std.fmt.bufPrint(&version_str_buf, "{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+    try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
+    try writer.writeAll(version_str);
+    try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
 
     // create the snapshots dir
     try sig.utils.tar.writeTarHeader(writer, .directory, "snapshots/", 0);
@@ -2195,18 +2194,17 @@ pub fn writeSnapshotTarWithFields(
     try bincode.write(writer, status_cache, .{});
     try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
 
-    { // write the manifest
-        const manifest = snapshot_fields;
-        const manifest_encoded_size = bincode.sizeOf(manifest, .{});
+    // write the manifest
+    const manifest = snapshot_fields;
+    const manifest_encoded_size = bincode.sizeOf(manifest, .{});
 
-        const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
-        try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
+    const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+    try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
 
-        const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
-        try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
-        try bincode.write(writer, manifest, .{});
-        try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
-    }
+    const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+    try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
+    try bincode.write(writer, manifest, .{});
+    try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
 
     // create the accounts dir
     try sig.utils.tar.writeTarHeader(writer, .directory, "accounts/", 0);
