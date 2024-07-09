@@ -2229,46 +2229,6 @@ pub fn writeSnapshotTarWithFields(
     try writer.writeByteNTimes(0, 512 * 2);
 }
 
-/// where accounts are stored
-pub const AccountStorage = struct {
-    file_map: std.AutoArrayHashMap(FileId, AccountFile),
-    cache: std.ArrayList(Account),
-
-    pub fn init(allocator: std.mem.Allocator, cache_size: usize) !AccountStorage {
-        return AccountStorage{
-            .file_map = std.AutoArrayHashMap(FileId, AccountFile).init(allocator),
-            .cache = try std.ArrayList(Account).initCapacity(allocator, cache_size),
-        };
-    }
-
-    pub fn deinit(self: *AccountStorage) void {
-        for (self.file_map.values()) |*af| {
-            af.deinit();
-        }
-        self.file_map.deinit();
-        self.cache.deinit();
-    }
-
-    pub fn getAccountFile(self: *const AccountStorage, file_id: FileId) ?AccountFile {
-        return self.file_map.get(file_id);
-    }
-
-    /// gets an account given an file_id and offset value
-    pub fn getAccountInFile(
-        self: *const AccountStorage,
-        file_id: FileId,
-        offset: usize,
-    ) !AccountInFile {
-        const accounts_file: AccountFile = self.getAccountFile(file_id) orelse {
-            return error.FileIdNotFound;
-        };
-        const account = accounts_file.readAccount(offset) catch {
-            return error.InvalidOffset;
-        };
-        return account;
-    }
-};
-
 fn testWriteSnapshot(
     snapshot_dir: std.fs.Dir,
     slot: Slot,
