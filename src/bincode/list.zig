@@ -38,9 +38,6 @@ pub fn valueEncodedAsSlice(
         .serializer = gen.serializeImpl,
         .free = config.free,
         .skip = config.skip,
-        .default_on_eof = config.default_on_eof,
-        .default_fn = config.default_fn,
-        .skip_write_fn = config.skip_write_fn,
         .hashmap = config.hashmap,
     };
 }

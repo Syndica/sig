@@ -317,9 +317,10 @@ pub const BankFields = struct {
         epoch_reward_status: ?EpochRewardStatus = null,
 
         // TODO: do a thorough review on this, this seems to work by chance with the test data, but I don't trust it yet
-        pub const @"!bincode-config:snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
-        pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
-        pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true, .skip_write_fn = bincode.skipIfNull };
+
+        pub const @"!bincode-config:snapshot_persistence" = bincode.optional.defaultToNullOnEof(BankIncrementalSnapshotPersistence, .{ .encode_optional = true });
+        pub const @"!bincode-config:epoch_accounts_hash" = bincode.optional.defaultToNullOnEof(Hash, .{ .encode_optional = true });
+        pub const @"!bincode-config:epoch_reward_status" = bincode.optional.defaultToNullOnEof(EpochRewardStatus, .{ .encode_optional = false });
     };
 };
 
@@ -404,11 +405,11 @@ pub const AccountsDbFields = struct {
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
-    lamports_per_signature: u64 = 0,
+    lamports_per_signature: u64,
     /// incremental snapshot fields (to accompany added to bank_fields)
     bank_fields_inc: BankFields.Incremental = .{},
 
-    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
+    pub const @"!bincode-config:lamports_per_signature" = bincode.int.defaultOnEof(u64, 0);
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
         const file = std.fs.cwd().openFile(path, .{}) catch |err| {

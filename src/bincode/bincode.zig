@@ -2,7 +2,8 @@ pub const arraylist = @import("arraylist.zig");
 pub const shortvec = @import("shortvec.zig");
 pub const varint = @import("varint.zig");
 pub const optional = @import("optional.zig");
-pub const list = @import("slice.zig");
+pub const list = @import("list.zig");
+pub const int = @import("int.zig");
 
 const std = @import("std");
 const sig = @import("../lib.zig");
@@ -323,19 +324,7 @@ fn readFieldWithConfig(
         return try readHashMap(allocator, reader, params, field.type, field_config.hashmap);
     }
 
-    return bincode.read(allocator, field.type, reader, params) catch |err| blk: {
-        if (field_config.default_on_eof and err == error.EndOfStream) {
-            if (field.default_value) |default_value| {
-                break :blk @as(*const field.type, @ptrCast(@alignCast(default_value))).*;
-            } else if (field_config.default_fn) |default_fcn| {
-                break :blk default_fcn(allocator);
-            } else {
-                return error.MissingFieldDefaultValue;
-            }
-        } else {
-            return err;
-        }
-    };
+    return try bincode.read(allocator, field.type, reader, params);
 }
 
 pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params) !?T {
@@ -549,7 +538,6 @@ fn writeFieldWithConfig(
 
     if (maybe_field_config) |field_config| {
         if (field_config.skip) return;
-        if (field_config.skip_write_fn(data)) return;
         if (field_config.serializer) |ser_fcn| {
             try ser_fcn(writer, data, params);
             return;
@@ -684,18 +672,7 @@ pub fn FieldConfig(comptime T: type) type {
         serializer: ?SerializeFunction = null,
         free: ?FreeFunction = null,
         skip: bool = false,
-        default_on_eof: bool = false,
-        default_fn: ?fn (alloc: std.mem.Allocator) T = null,
         post_deserialize_fn: ?fn (self: *T) void = null,
-        /// A predicate which returns true for a given field value if it should be skipped
-        /// during serialization, and false otherwise.
-        ///
-        /// This predicate is needed in tandem with `default_on_eof` in order to help
-        /// ensure values which were never read (and thus set to a default) aren't written
-        /// back. It is defaulted to `neverSkip`, which simply always returns false.
-        /// The programmer overriding this field is encouraged to use a predicate which
-        /// coordinates with `default_fn`.
-        skip_write_fn: fn (value: anytype) bool = neverSkip,
         hashmap: if (hashMapInfo(T)) |hm_info| bincode.HashMapConfig(hm_info) else void = if (hashMapInfo(T) != null) .{} else {},
     };
 }
@@ -822,7 +799,7 @@ test "bincode: default on eof" {
         value: u8 = 0,
         accounts: std.ArrayList(u64),
         pub const @"!bincode-config:accounts" = defaultArrayListOnEOFConfig(u64);
-        pub const @"!bincode-config:value" = .{ .default_on_eof = true };
+        pub const @"!bincode-config:value" = int.defaultOnEof(u8, 0);
     };
 
     var buf: [1]u8 = .{1};
