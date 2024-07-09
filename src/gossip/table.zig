@@ -151,7 +151,7 @@ pub const GossipTable = struct {
 
         var store_iter = self.store.iterator();
         while (store_iter.next()) |entry| {
-            bincode.free(self.allocator, entry.value_ptr.value.data);
+            entry.value_ptr.value.data.deinit(self.allocator);
         }
         self.store.deinit();
     }
@@ -409,12 +409,13 @@ pub const GossipTable = struct {
         }
     }
 
-    pub fn genericGetWithCursor(
+    pub fn genericGetEntriesWithCursor(
+        allocator: ?std.mem.Allocator,
         hashmap: anytype,
         store: AutoArrayHashMap(GossipKey, GossipVersionedData),
         buf: []GossipVersionedData,
         caller_cursor: *usize,
-    ) []GossipVersionedData {
+    ) error{OutOfMemory}![]GossipVersionedData {
         const cursor_indexs = hashmap.keys();
         const store_values = store.values();
 
@@ -426,7 +427,7 @@ pub const GossipTable = struct {
 
             const entry_index = hashmap.get(cursor_index).?;
             const entry = store_values[entry_index];
-            buf[index] = entry;
+            buf[index] = if (allocator == null) entry else try entry.clone(allocator.?);
             index += 1;
 
             if (index == buf.len) {
@@ -438,12 +439,14 @@ pub const GossipTable = struct {
         return buf[0..index];
     }
 
-    pub fn getEntriesWithCursor(
+    pub fn getClonedEntriesWithCursor(
         self: *const Self,
+        allocator: std.mem.Allocator,
         buf: []GossipVersionedData,
         caller_cursor: *usize,
-    ) []GossipVersionedData {
-        return genericGetWithCursor(
+    ) error{OutOfMemory}![]GossipVersionedData {
+        return genericGetEntriesWithCursor(
+            allocator,
             self.entries,
             self.store,
             buf,
@@ -456,7 +459,8 @@ pub const GossipTable = struct {
         buf: []GossipVersionedData,
         caller_cursor: *usize,
     ) ![]GossipVersionedData {
-        return genericGetWithCursor(
+        return genericGetEntriesWithCursor(
+            null,
             self.votes,
             self.store,
             buf,
@@ -469,7 +473,8 @@ pub const GossipTable = struct {
         buf: []GossipVersionedData,
         caller_cursor: *usize,
     ) ![]GossipVersionedData {
-        return genericGetWithCursor(
+        return genericGetEntriesWithCursor(
+            null,
             self.epoch_slots,
             self.store,
             buf,
@@ -482,7 +487,8 @@ pub const GossipTable = struct {
         buf: []GossipVersionedData,
         caller_cursor: *usize,
     ) ![]GossipVersionedData {
-        return genericGetWithCursor(
+        return genericGetEntriesWithCursor(
+            null,
             self.duplicate_shreds,
             self.store,
             buf,
@@ -669,7 +675,7 @@ pub const GossipTable = struct {
         }
 
         // free memory while versioned_value still points to the correct data
-        bincode.free(self.allocator, versioned_value.value.data);
+        versioned_value.value.data.deinit(self.allocator);
 
         // remove from store
         // this operation replaces the data pointed to by versioned_value to

@@ -46,6 +46,19 @@ pub const GossipVersionedData = struct {
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
 
+    pub fn clone(self: *const GossipVersionedData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipVersionedData {
+        return .{
+            .value = try self.value.clone(allocator),
+            .value_hash = self.value_hash,
+            .timestamp_on_insertion = self.timestamp_on_insertion,
+            .cursor_on_insertion = self.cursor_on_insertion,
+        };
+    }
+
+    pub fn deinit(self: *GossipVersionedData, allocator: std.mem.Allocator) void {
+        self.value.deinit(allocator);
+    }
+
     pub fn overwrites(new_value: *const @This(), old_value: *const @This()) bool {
         // labels must match
         std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
@@ -85,6 +98,17 @@ pub const SignedGossipData = struct {
         };
         try self.sign(keypair);
         return self;
+    }
+
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+        return .{
+            .signature = self.signature,
+            .data = try self.data.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.data.deinit(allocator);
     }
 
     /// only used in tests
@@ -290,6 +314,44 @@ pub const GossipData = union(enum(u32)) {
     RestartLastVotedForkSlots: RestartLastVotedForkSlots,
     // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47
     RestartHeaviestFork: RestartHeaviestFork,
+
+    pub fn clone(self: *const GossipData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipData {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| .{ .LegacyContactInfo = v.* },
+            .Vote => |*v| .{ .Vote = .{ v[0], try v[1].clone(allocator) } },
+            .LowestSlot => |*v| .{ .LowestSlot = .{ v[0], try v[1].clone(allocator) } },
+            .LegacySnapshotHashes => |*v| .{ .LegacySnapshotHashes = try v.clone(allocator) },
+            .AccountsHashes => |*v| .{ .AccountsHashes = try v.clone(allocator) },
+            .EpochSlots => |*v| .{ .EpochSlots = .{ v[0], try v[1].clone(allocator) } },
+            .LegacyVersion => |*v| .{ .LegacyVersion = v.* },
+            .Version => |*v| .{ .Version = v.* },
+            .NodeInstance => |*v| .{ .NodeInstance = v.* },
+            .DuplicateShred => |*v| .{ .DuplicateShred = .{ v[0], try v[1].clone(allocator) } },
+            .SnapshotHashes => |*v| .{ .SnapshotHashes = try v.clone(allocator) },
+            .ContactInfo => |*v| .{ .ContactInfo = try v.clone() },
+            .RestartLastVotedForkSlots => |*v| .{ .RestartLastVotedForkSlots = try v.clone(allocator) },
+            .RestartHeaviestFork => |*v| .{ .RestartHeaviestFork = v.* },
+        };
+    }
+
+    pub fn deinit(self: *GossipData, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .LegacyContactInfo => {},
+            .Vote => |*v| v[1].deinit(allocator),
+            .LowestSlot => |*v| v[1].deinit(allocator),
+            .LegacySnapshotHashes => |*v| v.deinit(allocator),
+            .AccountsHashes => |*v| v.deinit(allocator),
+            .EpochSlots => |*v| v[1].deinit(allocator),
+            .LegacyVersion => {},
+            .Version => {},
+            .NodeInstance => {},
+            .DuplicateShred => |*v| v[1].deinit(allocator),
+            .SnapshotHashes => |*v| v.deinit(allocator),
+            .ContactInfo => |*v| v.deinit(),
+            .RestartLastVotedForkSlots => |*v| v.deinit(allocator),
+            .RestartHeaviestFork => {},
+        }
+    }
 
     pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
@@ -575,6 +637,19 @@ pub const Vote = struct {
 
     pub const @"!bincode-config:slot" = bincode.FieldConfig(Slot){ .skip = true };
 
+    pub fn clone(self: *const Vote, allocator: std.mem.Allocator) error{OutOfMemory}!Vote {
+        return .{
+            .from = self.from,
+            .transaction = try self.transaction.clone(allocator),
+            .wallclock = self.wallclock,
+            .slot = self.slot,
+        };
+    }
+
+    pub fn deinit(self: *Vote, allocator: std.mem.Allocator) void {
+        self.transaction.deinit(allocator);
+    }
+
     pub fn random(rng: std.rand.Random) Vote {
         return Vote{
             .from = Pubkey.random(rng),
@@ -597,6 +672,25 @@ pub const LowestSlot = struct {
     slots: []u64, //deprecated
     stash: []DeprecatedEpochIncompleteSlots, //deprecated
     wallclock: u64,
+
+    pub fn clone(self: *const LowestSlot, allocator: std.mem.Allocator) error{OutOfMemory}!LowestSlot {
+        const stash = try allocator.alloc(DeprecatedEpochIncompleteSlots, self.stash.len);
+        for (stash, 0..) |*item, i| item.* = try self.stash[i].clone(allocator);
+        return .{
+            .from = self.from,
+            .root = self.root,
+            .lowest = self.lowest,
+            .slots = try allocator.dupe(u64, self.slots),
+            .stash = stash,
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *LowestSlot, allocator: std.mem.Allocator) void {
+        allocator.free(self.slots);
+        for (self.stash) |*item| item.deinit(allocator);
+        allocator.free(self.stash);
+    }
 
     pub fn sanitize(value: *const LowestSlot) !void {
         try sanitizeWallclock(value.wallclock);
@@ -632,6 +726,18 @@ pub const DeprecatedEpochIncompleteSlots = struct {
     first: u64,
     compression: CompressionType,
     compressed_list: []u8,
+
+    pub fn clone(self: *const DeprecatedEpochIncompleteSlots, allocator: std.mem.Allocator) error{OutOfMemory}!DeprecatedEpochIncompleteSlots {
+        return .{
+            .first = self.first,
+            .compression = self.compression,
+            .compressed_list = try allocator.dupe(u8, self.compressed_list),
+        };
+    }
+
+    pub fn deinit(self: *DeprecatedEpochIncompleteSlots, allocator: std.mem.Allocator) void {
+        allocator.free(self.compressed_list);
+    }
 };
 
 pub const CompressionType = enum {
@@ -648,6 +754,18 @@ pub const AccountsHashes = struct {
     from: Pubkey,
     hashes: []SlotAndHash,
     wallclock: u64,
+
+    pub fn clone(self: *const AccountsHashes, allocator: std.mem.Allocator) error{OutOfMemory}!AccountsHashes {
+        return .{
+            .from = self.from,
+            .hashes = try allocator.dupe(SlotAndHash, self.hashes),
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *AccountsHashes, allocator: std.mem.Allocator) void {
+        allocator.free(self.hashes);
+    }
 
     pub fn random(rng: std.rand.Random) AccountsHashes {
         var slice: [0]SlotAndHash = .{};
@@ -673,6 +791,21 @@ pub const EpochSlots = struct {
     slots: []CompressedSlots,
     wallclock: u64,
 
+    pub fn clone(self: *const EpochSlots, allocator: std.mem.Allocator) error{OutOfMemory}!EpochSlots {
+        const slots = try allocator.alloc(CompressedSlots, self.slots.len);
+        for (slots, 0..) |*slot, i| slot.* = try self.slots[i].clone(allocator);
+        return .{
+            .from = self.from,
+            .slots = slots,
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *EpochSlots, allocator: std.mem.Allocator) void {
+        for (self.slots) |*slot| slot.deinit(allocator);
+        allocator.free(self.slots);
+    }
+
     pub fn random(rng: std.rand.Random) EpochSlots {
         var slice: [0]CompressedSlots = .{};
         return EpochSlots{
@@ -694,6 +827,20 @@ pub const CompressedSlots = union(enum(u32)) {
     Flate2: Flate2,
     Uncompressed: Uncompressed,
 
+    pub fn clone(self: *const CompressedSlots, allocator: std.mem.Allocator) error{OutOfMemory}!CompressedSlots {
+        return switch (self.*) {
+            .Flate2 => |*v| .{ .Flate2 = try v.clone(allocator) },
+            .Uncompressed => |*v| .{ .Uncompressed = try v.clone(allocator) },
+        };
+    }
+
+    pub fn deinit(self: *CompressedSlots, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .Flate2 => |*v| v.deinit(allocator),
+            .Uncompressed => |*v| v.deinit(allocator),
+        }
+    }
+
     pub fn sanitize(self: *const CompressedSlots) !void {
         switch (self.*) {
             .Flate2 => |*v| try v.sanitize(),
@@ -706,6 +853,18 @@ pub const Flate2 = struct {
     first_slot: Slot,
     num: usize,
     compressed: []u8,
+
+    pub fn clone(self: *const Flate2, allocator: std.mem.Allocator) error{OutOfMemory}!Flate2 {
+        return .{
+            .first_slot = self.first_slot,
+            .num = self.num,
+            .compressed = try allocator.dupe(u8, self.compressed),
+        };
+    }
+
+    pub fn deinit(self: *Flate2, allocator: std.mem.Allocator) void {
+        allocator.free(self.compressed);
+    }
 
     pub fn sanitize(self: *const Flate2) !void {
         if (self.first_slot >= MAX_SLOT) {
@@ -721,6 +880,18 @@ pub const Uncompressed = struct {
     first_slot: Slot,
     num: usize,
     slots: BitVec(u8),
+
+    pub fn clone(self: *const Uncompressed, allocator: std.mem.Allocator) error{OutOfMemory}!Uncompressed {
+        return .{
+            .first_slot = self.first_slot,
+            .num = self.num,
+            .slots = try self.slots.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Uncompressed, allocator: std.mem.Allocator) void {
+        self.slots.deinit(allocator);
+    }
 
     pub fn sanitize(self: *const Uncompressed) !void {
         if (self.first_slot >= MAX_SLOT) {
@@ -741,6 +912,17 @@ pub fn BitVec(comptime T: type) type {
     return struct {
         bits: ?[]T,
         len: usize,
+
+        pub fn clone(self: *const BitVec(T), allocator: std.mem.Allocator) error{OutOfMemory}!BitVec(T) {
+            return .{
+                .bits = if (self.bits == null) null else try allocator.dupe(T, self.bits.?),
+                .len = self.len,
+            };
+        }
+
+        pub fn deinit(self: *BitVec(T), allocator: std.mem.Allocator) void {
+            allocator.free(self.bits.?);
+        }
     };
 }
 
@@ -916,6 +1098,23 @@ pub const DuplicateShred = struct {
     chunk_index: u8,
     chunk: []u8,
 
+    pub fn clone(self: *const DuplicateShred, allocator: std.mem.Allocator) error{OutOfMemory}!DuplicateShred {
+        return .{
+            .from = self.from,
+            .wallclock = self.wallclock,
+            .slot = self.slot,
+            .shred_index = self.shred_index,
+            .shred_type = self.shred_type,
+            .num_chunks = self.num_chunks,
+            .chunk_index = self.chunk_index,
+            .chunk = try allocator.dupe(u8, self.chunk),
+        };
+    }
+
+    pub fn deinit(self: *DuplicateShred, allocator: std.mem.Allocator) void {
+        allocator.free(self.chunk);
+    }
+
     pub fn random(rng: std.rand.Random) DuplicateShred {
         // NOTE: cant pass around a slice here (since the stack data will get cleared)
         var slice = [0]u8{}; // empty slice
@@ -947,6 +1146,19 @@ pub const SnapshotHashes = struct {
     full: SlotAndHash,
     incremental: []SlotAndHash,
     wallclock: u64,
+
+    pub fn clone(self: *const SnapshotHashes, allocator: std.mem.Allocator) error{OutOfMemory}!SnapshotHashes {
+        return .{
+            .from = self.from,
+            .full = self.full,
+            .incremental = try allocator.dupe(SlotAndHash, self.incremental),
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *SnapshotHashes, allocator: std.mem.Allocator) void {
+        allocator.free(self.incremental);
+    }
 
     pub fn random(rng: std.rand.Random) SnapshotHashes {
         var slice: [0]SlotAndHash = .{};
@@ -1293,6 +1505,21 @@ pub const RestartLastVotedForkSlots = struct {
 
     const Self = @This();
 
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+        return .{
+            .from = self.from,
+            .wallclock = self.wallclock,
+            .offsets = try self.offsets.clone(allocator),
+            .last_voted_slot = self.last_voted_slot,
+            .last_voted_hash = self.last_voted_hash,
+            .shred_version = self.shred_version,
+        };
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.offsets.deinit(allocator);
+    }
+
     pub fn sanitize(self: *const Self) !void {
         try sanitizeWallclock(self.wallclock);
     }
@@ -1301,12 +1528,36 @@ pub const RestartLastVotedForkSlots = struct {
 pub const SlotsOffsets = union(enum(u32)) {
     RunLengthEncoding: std.ArrayList(u16),
     RawOffsets: RawOffsets,
+
+    pub fn clone(self: *const SlotsOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!SlotsOffsets {
+        return switch (self.*) {
+            .RunLengthEncoding => |*arr| .{ .RunLengthEncoding = try arr.clone() },
+            .RawOffsets => |*bits| .{ .RawOffsets = try bits.clone(allocator) },
+        };
+    }
+
+    pub fn deinit(self: *SlotsOffsets, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .RunLengthEncoding => |*arr| arr.deinit(),
+            .RawOffsets => |*bits| bits.deinit(allocator),
+        }
+    }
 };
 
 // note: need another struct so bincode deserialization/serialization works
 const RawOffsets = struct {
     bits: DynamicArrayBitSet(u8),
     pub const @"!bincode-config:bits" = BitVecConfig(u8);
+
+    pub fn clone(self: *const RawOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!RawOffsets {
+        return .{
+            .bits = try self.bits.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *RawOffsets, allocator: std.mem.Allocator) void {
+        self.bits.deinit(allocator);
+    }
 };
 
 test "gossip.data: new contact info" {
@@ -1375,7 +1626,7 @@ test "gossip.data: contact info bincode serialize matches rust bincode" {
 
     var stream = std.io.fixedBufferStream(buf.items);
     var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-    defer bincode.free(testing.allocator, ci2);
+    defer ci2.deinit();
 
     try testing.expect(ci2.addrs.items.len == 4);
     try testing.expect(ci2.sockets.items.len == 6);
@@ -1399,7 +1650,7 @@ test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
 
     var stream = std.io.fixedBufferStream(&contact_info_bytes_from_mainnet);
     const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-    defer bincode.free(testing.allocator, ci2);
+    defer ci2.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
     bincode.write(buf.writer(), ci2, bincode.Params.standard) catch unreachable;

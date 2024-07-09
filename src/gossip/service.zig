@@ -901,8 +901,9 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
 
             const gossip_table: *const GossipTable = gossip_table_lock.get();
-            break :blk gossip_table.getEntriesWithCursor(&buf, push_cursor); // MEM1: CLONE HERE; OR
+            break :blk try gossip_table.getClonedEntriesWithCursor(self.gossip_value_allocator, &buf, push_cursor);
         };
+        defer for (gossip_entries) |*ge| ge.deinit(self.gossip_value_allocator);
 
         var packet_batch = ArrayList(ArrayList(Packet)).init(self.allocator);
         errdefer packet_batch.deinit();
@@ -933,8 +934,6 @@ pub const GossipService = struct {
             defer active_set_lock.unlock();
 
             if (active_set.len() == 0) return packet_batch;
-
-            // MEM1: MOVE TABLE LOCK HERE
 
             for (gossip_entries) |entry| {
                 const value = entry.value;
@@ -968,7 +967,7 @@ pub const GossipService = struct {
                 for (active_set_peers.items) |peer| {
                     const maybe_peer_entry = push_messages.getEntry(peer);
                     if (maybe_peer_entry) |peer_entry| {
-                        try peer_entry.value_ptr.append(value); // MEM2: CLONE HERE; OR
+                        try peer_entry.value_ptr.append(value);
                     } else {
                         var peer_entry = try ArrayList(SignedGossipData).initCapacity(self.allocator, 1);
                         peer_entry.appendAssumeCapacity(value);
@@ -984,7 +983,6 @@ pub const GossipService = struct {
         const num_values_not_considered = gossip_entries.len - num_values_considered;
         push_cursor.* -= num_values_not_considered;
 
-        // MEM2: MOVE THIS INSIDE TABLE LOCK BOUNDARY
         var push_iter = push_messages.iterator();
         while (push_iter.next()) |push_entry| {
             const gossip_values: *const ArrayList(SignedGossipData) = push_entry.value_ptr;
