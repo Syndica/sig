@@ -244,7 +244,7 @@ pub const AccountsDB = struct {
     pub fn loadFromSnapshot(
         self: *Self,
         /// fields from the snapshot
-        fields_file_map: AccountsDbFields.FileMap,
+        file_info_map: AccountsDbFields.FileMap,
         /// where the account files are
         accounts_dir: std.fs.Dir,
         n_threads: u32,
@@ -258,7 +258,7 @@ pub const AccountsDB = struct {
         var timer = std.time.Timer.start() catch unreachable;
         timer.reset();
 
-        const n_account_files: usize = fields_file_map.count();
+        const n_account_files: usize = file_info_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
         std.debug.assert(n_account_files > 0);
 
@@ -274,9 +274,9 @@ pub const AccountsDB = struct {
             try self.loadAndVerifyAccountsFiles(
                 accounts_dir,
                 ACCOUNTS_PER_FILE_EST,
-                fields_file_map,
+                file_info_map,
                 0,
-                fields_file_map.count(),
+                file_info_map.count(),
                 true,
             );
             return;
@@ -336,9 +336,9 @@ pub const AccountsDB = struct {
                 .{
                     loading_threads.items,
                     accounts_dir,
-                    fields_file_map,
+                    file_info_map,
                 },
-                fields_file_map.count(),
+                file_info_map.count(),
                 n_parse_threads,
             );
         }
@@ -357,7 +357,7 @@ pub const AccountsDB = struct {
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         accounts_dir: std.fs.Dir,
-        fields_file_map: AccountsDbFields.FileMap,
+        file_info_map: AccountsDbFields.FileMap,
         // task specific
         start_index: usize,
         end_index: usize,
@@ -368,7 +368,7 @@ pub const AccountsDB = struct {
         try thread_db.loadAndVerifyAccountsFiles(
             accounts_dir,
             ACCOUNTS_PER_FILE_EST,
-            fields_file_map,
+            file_info_map,
             start_index,
             end_index,
             thread_id == 0,
@@ -382,7 +382,7 @@ pub const AccountsDB = struct {
         self: *Self,
         accounts_dir: std.fs.Dir,
         accounts_per_file_est: usize,
-        fields_file_map: AccountsDbFields.FileMap,
+        file_info_map: AccountsDbFields.FileMap,
         file_map_start_index: usize,
         file_map_end_index: usize,
         // when we multithread this function we only want to print on the first thread
@@ -393,7 +393,9 @@ pub const AccountsDB = struct {
         // while loading from a snapshot
         const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
-        try file_map.ensureTotalCapacity(fields_file_map.count());
+
+        const n_account_files = file_info_map.count();
+        try file_map.ensureTotalCapacity(n_account_files);
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
@@ -403,7 +405,7 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         var references = try ArrayList(AccountRef).initCapacity(
             self.account_index.reference_allocator,
-            fields_file_map.count() * accounts_per_file_est,
+            n_account_files * accounts_per_file_est,
         );
         const references_ptr = references.items.ptr;
         defer {
@@ -422,18 +424,18 @@ pub const AccountsDB = struct {
         var timer = ref_timer;
         var progress_timer = ref_timer;
 
-        if (fields_file_map.count() > std.math.maxInt(AccountIndex.ReferenceMemory.Size)) {
+        if (n_account_files > std.math.maxInt(AccountIndex.ReferenceMemory.Size)) {
             return error.FileMapTooBig;
         }
         // its ok to hold this lock for the entire function because nothing else
         // should be accessing the account index while loading from a snapshot
         const reference_memory, var reference_memory_lg = self.account_index.reference_memory.writeWithLock();
         defer reference_memory_lg.unlock();
-        try reference_memory.ensureTotalCapacity(@intCast(fields_file_map.count()));
+        try reference_memory.ensureTotalCapacity(@intCast(n_account_files));
 
         for (
-            fields_file_map.keys()[file_map_start_index..file_map_end_index],
-            fields_file_map.values()[file_map_start_index..file_map_end_index],
+            file_info_map.keys()[file_map_start_index..file_map_end_index],
+            file_info_map.values()[file_map_start_index..file_map_end_index],
             1..,
         ) |slot, file_info, file_count| {
             // read accounts file
@@ -496,7 +498,7 @@ pub const AccountsDB = struct {
                 printTimeEstimate(
                     self.logger,
                     &timer,
-                    fields_file_map.count(),
+                    n_account_files,
                     file_count,
                     "loading account files",
                     "thread0",
