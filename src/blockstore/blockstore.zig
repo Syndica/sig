@@ -12,7 +12,7 @@ const Database = sig.blockstore.database.Database;
 pub const Blockstore = AbstractBlockstore(sig.blockstore.rocksdb.RocksDB);
 
 pub fn AbstractBlockstore(comptime DB: type) type {
-    const cfs = &sig.blockstore.schema.schema.list();
+    const cfs = &sig.blockstore.schema.list;
     return struct {
         db: Database(DB, cfs),
 
