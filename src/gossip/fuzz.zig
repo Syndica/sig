@@ -222,12 +222,13 @@ pub fn waitForExit(exit: *AtomicBool) void {
     exit.store(true, .unordered);
 }
 
-pub fn run(args: *std.process.ArgIterator) !void {
+pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
+    var rng = std.rand.DefaultPrng.init(seed);
+
     // parse cli args to define where to send packets
-    const maybe_seed = args.next();
     const maybe_max_messages_string = args.next();
     const maybe_entrypoint = args.next();
 
@@ -241,16 +242,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
     };
 
-    const seed = blk: {
-        if (maybe_seed) |seed_str| {
-            break :blk try std.fmt.parseInt(u64, seed_str, 10);
-        } else {
-            break :blk getWallclockMs();
-        }
-    };
-    std.debug.print("using seed: {d}\n", .{seed});
-    var rng = std.rand.DefaultPrng.init(seed);
-
     const maybe_max_messages = blk: {
         if (maybe_max_messages_string) |max_messages_str| {
             break :blk try std.fmt.parseInt(usize, max_messages_str, 10);
@@ -258,10 +249,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
             break :blk null;
         }
     };
-
-    // var logger = Logger.init(gpa.allocator(), .debug);
-    // defer logger.deinit();
-    // logger.spawn();
 
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
@@ -287,7 +274,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
                 client_keypair,
                 null, // we will only recv packets
                 &exit,
-                .noop,
+                .noop, // no logs
             );
 
             const client_handle = try std.Thread.spawn(.{}, GossipService.run, .{
@@ -306,9 +293,11 @@ pub fn run(args: *std.process.ArgIterator) !void {
                 fuzz_keypair,
                 (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
                 &exit,
-                .noop,
+                .noop, // no logs
             );
 
+            // this is mainly used to just send packets through the fuzzer
+            // but we also want to respond to pings so we need to run the full gossip service
             const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
                 &gossip_service_fuzzer, .{
                     .spy_node = true,
@@ -320,15 +309,17 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
     };
 
+    // NOTE: this is useful when we want to run for an inf amount of time and want to
+    // early exit at some point without killing the process
+    var fuzzing_loop_exit = AtomicBool.init(false);
     // wait for any keyboard input to exit early
-    var loop_exit = AtomicBool.init(false);
-    var exit_handle = try std.Thread.spawn(.{}, waitForExit, .{&loop_exit});
+    var exit_handle = try std.Thread.spawn(.{}, waitForExit, .{&fuzzing_loop_exit});
     exit_handle.detach();
 
     // start fuzzing
     try fuzz(
         allocator,
-        &loop_exit,
+        &fuzzing_loop_exit,
         maybe_max_messages,
         &rng,
         &fuzz_keypair,
@@ -357,6 +348,7 @@ pub fn fuzz(
     while (!loop_exit.load(.unordered)) {
         if (maybe_max_messages) |max_messages| {
             if (msg_count >= max_messages) {
+                std.debug.print("reached max messages: {d}\n", .{msg_count});
                 break;
             }
         }

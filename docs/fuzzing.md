@@ -34,6 +34,9 @@ example commands:
 
 #                         <seed>  <n_messages> (option2)
 ./zig-out/bin/fuzz gossip 10      4_000
+
+#                         (run with random seed for inf)
+./zig-out/bin/fuzz gossip 
 ```
 
 ## accounts-db
@@ -45,7 +48,10 @@ the fuzzer does a few things
 the goal was to makes sure accounts-db was thread-safe for parallel access while also flushing/cleaning/purging
 
 example command: 
-```
+```bash
+#                             <seed>  <n_messages>
+./zig-out/bin/fuzz accountsdb 10      4_000
+#                         (run with random seed for inf)
 ./zig-out/bin/fuzz accountsdb
 ```
 
