@@ -5,15 +5,17 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
+const BytesRef = sig.blockstore.database.BytesRef;
+const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Database = sig.blockstore.database.Database;
 const Logger = sig.trace.Logger;
 const Return = sig.utils.types.Return;
 
 pub const RocksDB = struct {
+    allocator: Allocator,
     db: rocks.DB,
     logger: Logger,
-
-    pub const CF = RocksCF;
+    cf_handles: []const rocks.ColumnFamilyHandle,
 
     const Self = @This();
 
@@ -21,80 +23,132 @@ pub const RocksDB = struct {
         allocator: Allocator,
         logger: Logger,
         path: []const u8,
-        column_families: []const []const u8,
-    ) !struct { RocksDB, []RocksCF } {
-        var err_str: ?rocks.Data = null;
+        comptime column_families_: []const ColumnFamily,
+    ) !RocksDB {
+        // allocate cf descriptions
         const column_family_descriptions = try allocator
-            .alloc(rocks.ColumnFamilyDescription, column_families.len + 1);
+            .alloc(rocks.ColumnFamilyDescription, column_families_.len + 1);
         defer allocator.free(column_family_descriptions);
+
+        // initialize cf descriptions
         column_family_descriptions[0] = .{ .name = "default", .options = .{} };
-        for (column_families, 1..) |cf, i| {
-            column_family_descriptions[i] = .{ .name = cf, .options = .{} };
+        inline for (column_families_, 1..) |bcf, i| {
+            column_family_descriptions[i] = .{ .name = bcf.name, .options = .{} };
         }
-        const database, const cfs = rocks.DB.openCf(
-            allocator,
-            path,
-            .{ .create_if_missing = true, .create_missing_column_families = true },
-            column_family_descriptions,
-            &err_str,
-        ) catch |e| {
-            std.debug.print("_\n\n{} while opening RocksDB: {s}\n\n", .{ e, err_str.? });
-            logger.errf("{} while opening RocksDB: {s}", .{ e, err_str.? });
-            std.time.sleep(10_000_000);
-            return e;
-        };
+
+        // open rocksdb
+        const database: rocks.DB, //
+        const cfs: []const rocks.ColumnFamily //
+        = try callRocks(
+            logger,
+            rocks.DB.openCf,
+            .{
+                allocator,
+                path,
+                .{ .create_if_missing = true, .create_missing_column_families = true },
+                column_family_descriptions,
+            },
+        );
         defer allocator.free(cfs);
-        const self = Self{ .db = database, .logger = logger };
-        const maps = try allocator.alloc(RocksCF, column_families.len);
+
+        // allocate handle slice
+        var cf_handles = try allocator.alloc(rocks.ColumnFamilyHandle, column_families_.len);
+        errdefer allocator.free(cf_handles); // kept alive as a field
+
+        // initialize handle slice
         for (1..cfs.len) |i| {
-            maps[i - 1] = .{
-                .db = self.db.withDefaultColumnFamily(cfs[i].handle),
-                .logger = logger,
-            };
+            cf_handles[i - 1] = cfs[i].handle;
         }
-        return .{ self, maps };
+
+        return .{
+            .allocator = allocator,
+            .db = database,
+            .logger = logger,
+            .cf_handles = cf_handles,
+        };
     }
 
-    pub fn deinit(self: RocksDB) void {
+    pub fn deinit(self: Self) void {
+        self.allocator.free(self.cf_handles);
         self.db.deinit();
     }
-};
-
-const RocksCF = struct {
-    db: rocks.DB,
-    logger: Logger,
-
-    const Self = @This();
-
-    pub fn deinit(_: RocksCF) void {}
 
     pub fn free(_: Self, bytes: []const u8) void {
         rocks.free(bytes);
     }
 
-    pub fn put(self: Self, key: []const u8, value: []const u8) !void {
-        return self.callRocks(rocks.DB.put, .{ key, value });
+    pub fn put(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+        value: cf.Value,
+    ) !void {
+        const key_bytes = try cf.key().serializeToRef(self.allocator, key);
+        defer key_bytes.deinit();
+        const val_bytes = try cf.value().serializeToRef(self.allocator, value);
+        defer val_bytes.deinit();
+        return try callRocks(
+            self.logger,
+            rocks.DB.put,
+            .{ &self.db, self.cf_handles[cf_index], key_bytes.data, val_bytes.data },
+        );
     }
 
-    pub fn get(self: Self, key: []const u8) !?[]const u8 {
-        // FIXME: leak
-        return ((try self.callRocks(rocks.DB.get, .{key})) orelse return null).data;
+    pub fn get(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !?cf.Value {
+        const val_bytes = try self.getBytes(cf, cf_index, key) orelse return null;
+        defer val_bytes.deinit();
+        return try cf.value().deserialize(cf.Value, self.allocator, val_bytes.data);
     }
 
-    pub fn delete(self: Self, key: []const u8) !bool {
-        try self.callRocks(rocks.DB.delete, .{key});
-        return true; // FIXME
-    }
-
-    fn callRocks(self: Self, comptime func: anytype, args: anytype) Return(@TypeOf(func)) {
-        var err_str: ?rocks.Data = null;
-        return @call(.auto, func, .{ &self.db, null } ++ args ++ .{&err_str}) catch |e| {
-            self.logger.errf("rocksdb: {} - {s}", .{ e, err_str.? });
-            return e;
+    pub fn getBytes(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !?BytesRef {
+        const key_bytes = try cf.key().serializeToRef(self.allocator, key);
+        defer key_bytes.deinit();
+        const val_bytes: rocks.Data = try callRocks(
+            self.logger,
+            rocks.DB.get,
+            .{ &self.db, self.cf_handles[cf_index], key_bytes.data },
+        ) orelse return null;
+        return .{
+            .allocator = val_bytes.allocator,
+            .data = val_bytes.data,
         };
+    }
+
+    pub fn delete(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !void {
+        const key_bytes = try cf.key().serializeToRef(self.allocator, key);
+        defer key_bytes.deinit();
+        return try callRocks(
+            self.logger,
+            rocks.DB.delete,
+            .{ &self.db, self.cf_handles[cf_index], key_bytes.data },
+        );
     }
 };
 
+fn callRocks(logger: Logger, comptime func: anytype, args: anytype) Return(@TypeOf(func)) {
+    var err_str: ?rocks.Data = null;
+    return @call(.auto, func, args ++ .{&err_str}) catch |e| {
+        logger.errf("{} - {s}", .{ e, err_str.? });
+        return e;
+    };
+}
+
 test "rocksdb database" {
-    try Database(RocksDB).runTest();
+    try Database(RocksDB, &.{}).runTest();
 }

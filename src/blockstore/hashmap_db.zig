@@ -5,54 +5,136 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
+const BytesRef = sig.blockstore.database.BytesRef;
 const Database = sig.blockstore.database.Database;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
 const Return = sig.utils.types.Return;
 
 pub const SharedHashMapDB = struct {
-    pub const CF = *SharedHashMap;
+    allocator: Allocator,
+    maps: []SharedHashMap,
+    /// shared lock is required to call locking map methods.
+    /// exclusive lock is required to call non-locking map methods.
+    transaction_lock: DefaultRwLock = .{},
+
+    const Self = @This();
 
     pub fn open(
         allocator: Allocator,
         _: Logger,
         _: []const u8,
-        column_families: []const []const u8,
-    ) !struct { SharedHashMapDB, []*SharedHashMap } {
-        const maps = try allocator.alloc(*SharedHashMap, column_families.len);
-        for (0..column_families.len) |i| {
-            maps[i] = try SharedHashMap.create(allocator);
+        column_families_: []const ColumnFamily,
+    ) !SharedHashMapDB {
+        var maps = try allocator.alloc(SharedHashMap, column_families_.len);
+        inline for (0..column_families_.len) |i| {
+            maps[i] = try SharedHashMap.init(allocator);
         }
-        return .{ .{}, maps };
+        return .{ .allocator = allocator, .maps = maps };
     }
 
-    pub fn deinit(_: @This()) void {}
+    pub fn deinit(self_: Self) void {
+        var self = self_;
+        for (self.maps) |*map_| {
+            map_.deinit();
+        }
+        self.allocator.free(self.maps);
+    }
+
+    pub fn put(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+        value: cf.Value,
+    ) !void {
+        const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        const val_bytes = try cf.value().serializeAlloc(self.allocator, value);
+        self.transaction_lock.lockShared();
+        defer self.transaction_lock.unlockShared();
+        return try self.maps[cf_index].put(key_bytes, val_bytes);
+    }
+
+    pub fn get(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !?cf.Value {
+        const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        defer self.allocator.free(key_bytes);
+        const map = &self.maps[cf_index];
+
+        self.transaction_lock.lockShared();
+        defer self.transaction_lock.unlockShared();
+        map.lock.lockShared();
+        defer map.lock.unlockShared();
+
+        const val_bytes = map.getPreLocked(key_bytes) orelse return null;
+
+        return try cf.value().deserialize(cf.Value, self.allocator, val_bytes);
+    }
+
+    pub fn getBytes(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !?BytesRef {
+        const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        defer self.allocator.free(key_bytes);
+        const map = self.maps[cf_index];
+
+        self.transaction_lock.lockShared();
+        defer self.transaction_lock.unlockShared();
+        map.lock.lockShared();
+        defer map.lock.unlockShared();
+
+        const val_bytes = map.getPreLocked(key_bytes) orelse return null;
+
+        const ret = try self.allocator.alloc(u8, val_bytes.len);
+        @memcpy(ret, val_bytes);
+        return .{
+            .allocator = self.allocator,
+            .data = ret,
+        };
+    }
+
+    pub fn delete(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !void {
+        const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        defer self.allocator.free(key_bytes);
+        self.transaction_lock.lockShared();
+        defer self.transaction_lock.unlockShared();
+        _ = self.maps[cf_index].delete(self.allocator, key_bytes);
+    }
 };
 
 const SharedHashMap = struct {
     allocator: Allocator,
     map: std.StringHashMap([]const u8),
-    lock: DefaultRwLock,
+    lock: DefaultRwLock = .{},
 
     const Self = @This();
 
-    fn create(allocator: Allocator) Allocator.Error!*Self {
-        const self = try allocator.create(Self);
-        self.* = .{
+    fn init(allocator: Allocator) Allocator.Error!Self {
+        return .{
             .allocator = allocator,
             .map = std.StringHashMap([]const u8).init(allocator),
-            .lock = .{},
         };
-        return self;
     }
 
     pub fn deinit(self: *Self) void {
-        var iter = self.map.keyIterator();
-        while (iter.next()) |k| {
-            self.allocator.free(k.*);
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
         }
         self.map.deinit();
-        self.allocator.destroy(self);
     }
 
     pub fn free(self: Self, bytes: []const u8) void {
@@ -60,40 +142,31 @@ const SharedHashMap = struct {
     }
 
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {
-        const owned_key = try self.allocator.alloc(u8, key.len);
-        const owned_val = try self.allocator.alloc(u8, value.len);
-        @memcpy(owned_key, key);
-        @memcpy(owned_val, value);
         self.lock.lock();
         defer self.lock.unlock();
-        try self.map.put(owned_key, owned_val);
+        try self.map.put(key, value);
     }
 
-    pub fn get(self: *Self, key: []const u8) Allocator.Error!?[]const u8 {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-        const value = self.map.get(key) orelse return null;
-        const owned_val = try self.allocator.alloc(u8, value.len);
-        @memcpy(owned_val, value);
-        return owned_val;
+    /// Only call this while holding the lock
+    pub fn getPreLocked(self: *Self, key: []const u8) ?[]const u8 {
+        return self.map.get(key) orelse return null;
     }
 
-    pub fn delete(self: *Self, key_: []const u8) bool {
+    pub fn delete(self: *Self, liberator: Allocator, key_: []const u8) void {
         const key, const value = lock: {
             self.lock.lock();
             defer self.lock.unlock();
-            const entry = self.map.getEntry(key_) orelse return false;
+            const entry = self.map.getEntry(key_) orelse return;
             const key = entry.key_ptr.*;
             const val = entry.value_ptr.*;
             defer self.map.removeByPtr(entry.key_ptr);
             break :lock .{ key, val };
         };
-        self.allocator.free(key);
-        self.allocator.free(value);
-        return true;
+        liberator.free(key);
+        liberator.free(value);
     }
 };
 
 test "hashmap database" {
-    try Database(SharedHashMapDB).runTest();
+    try Database(SharedHashMapDB, &.{}).runTest();
 }
