@@ -2029,11 +2029,17 @@ pub const AccountsDB = struct {
         defer serializable_file_map.deinit();
         try serializable_file_map.ensureTotalCapacity(file_map.count());
 
+        const is_incremental = bank_fields_inc.snapshot_persistence != null;
+
         for (file_map.values()) |*account_file_rw| {
             const account_file, var account_file_lg = account_file_rw.readWithLock();
             defer account_file_lg.unlock();
 
-            if (account_file.slot > max_rooted_slot) continue;
+            if (is_incremental) {
+                if (account_file.slot != max_rooted_slot) continue;
+            } else {
+                if (account_file.slot > max_rooted_slot) continue;
+            }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
                 .id = account_file.id,
@@ -2209,7 +2215,7 @@ pub fn writeSnapshotTarWithFields(
         const account_file, var account_file_lg = account_file_rw.readWithLock();
         defer account_file_lg.unlock();
 
-        if (account_file.slot < slot) continue;
+        if (!snapshot_fields.accounts_db_fields.file_map.contains(account_file.slot)) continue;
 
         const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
         try sig.utils.tar.writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
