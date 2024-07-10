@@ -2,6 +2,8 @@ const std = @import("std");
 const Build = std.Build;
 
 pub fn build(b: *Build) void {
+    defer makeZlsNotInstallAnythingDuringBuildOnSave(b);
+
     // CLI options
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -113,4 +115,23 @@ pub fn build(b: *Build) void {
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
     benchmark_exe_run.addArgs(b.args orelse &.{});
     benchmark_step.dependOn(&benchmark_exe_run.step);
+}
+
+/// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
+fn makeZlsNotInstallAnythingDuringBuildOnSave(b: *Build) void {
+    const zls_is_build_runner = b.option(bool, "zls-is-build-runner", "" ++
+        "Option passed by zls to indicate that it's the one running this build script (configured in the local zls.json). " ++
+        "This should not be specified on the command line nor as a dependency argument.") orelse false;
+    if (!zls_is_build_runner) return;
+
+    for (b.install_tls.step.dependencies.items) |*install_step_dep| {
+        const install_artifact = install_step_dep.*.cast(Build.Step.InstallArtifact) orelse continue;
+        const artifact = install_artifact.artifact;
+        install_step_dep.* = &artifact.step;
+        // this will make it so `-fno-emit-bin` is passed, meaning
+        // that the compiler will only go as far as semantically
+        // analyzing the code, without sending it to any backend,
+        // namely the slow-to-compile LLVM.
+        artifact.generated_bin = null;
+    }
 }
