@@ -224,7 +224,7 @@ pub const AccountInFile = struct {
 pub const AccountFile = struct {
     // file contents
     memory: []align(std.mem.page_size) u8,
-    id: usize,
+    id: FileId,
     slot: Slot,
     // number of bytes used
     length: usize,
@@ -397,7 +397,7 @@ test "core.accounts_file: verify accounts file" {
     const path = "test_data/test_account_file";
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
     const file_info = AccountFileInfo{
-        .id = 0,
+        .id = FileId.fromInt(0),
         .length = 162224,
     };
     var accounts_file = try AccountFile.init(file, file_info, 10);

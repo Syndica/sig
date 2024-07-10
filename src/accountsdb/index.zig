@@ -386,7 +386,7 @@ pub const AccountIndex = struct {
                 .slot = accounts_file.slot,
                 .location = .{
                     .File = .{
-                        .file_id = FileId.fromInt(@intCast(accounts_file.id)),
+                        .file_id = accounts_file.id,
                         .offset = offset,
                     },
                 },

@@ -20,6 +20,7 @@ const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
 const Rent = sig.accounts_db.genesis_config.Rent;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
+const FileId = sig.accounts_db.accounts_file.FileId;
 
 const defaultArrayListOnEOFConfig = bincode.arraylist.defaultArrayListOnEOFConfig;
 const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
@@ -326,22 +327,34 @@ pub const BankFields = struct {
 
 /// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
 pub const AccountFileInfo = struct {
-    // note: serialized id is a usize but in code its FileId (u32)
-    id: usize,
+    // note: serialized id is a usize but in code it's FileId (u32)
+    id: FileId,
     length: usize, // amount of bytes used
+
+    pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
+        .serializer = idSerializer,
+        .deserializer = idDeserializer,
+    };
+
+    fn idSerializer(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
+        try bincode.write(writer, @as(usize, data.toInt()), params);
+    }
+
+    fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!FileId {
+        var fba = comptime std.heap.FixedBufferAllocator.init(&.{});
+        const int = try bincode.read(fba.allocator(), usize, reader, params);
+        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
+        return FileId.fromInt(@intCast(int));
+    }
 
     /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
-        IdOverflow,
         FileSizeTooSmall,
         FileSizeTooLarge,
         OffsetOutOfBounds,
     };
     /// Analogous to [sanitize_len_and_size](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L376)
     pub fn validate(self: *const AccountFileInfo, file_size: usize) ValidateError!void {
-        if (self.id > std.math.maxInt(u32)) {
-            return error.IdOverflow;
-        }
         if (file_size == 0) {
             return error.FileSizeTooSmall;
         } else if (file_size > @as(usize, MAXIMUM_ACCOUNT_FILE_SIZE)) {

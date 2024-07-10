@@ -440,7 +440,7 @@ pub const AccountsDB = struct {
         ) |slot, file_info, file_count| {
             // read accounts file
             var accounts_file = blk: {
-                const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id });
+                const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
 
                 const accounts_file_file = try accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write });
                 errdefer accounts_file_file.close();
@@ -461,7 +461,7 @@ pub const AccountsDB = struct {
                     else => {
                         self.logger.errf("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{
                             accounts_file.slot,
-                            accounts_file.id,
+                            accounts_file.id.toInt(),
                             @errorName(err),
                         });
                     },
@@ -484,7 +484,7 @@ pub const AccountsDB = struct {
                 try reference_memory.putNoClobber(slot, ref_list);
             }
 
-            const file_id = FileId.fromInt(@intCast(file_info.id));
+            const file_id = file_info.id;
 
             file_map.putAssumeCapacityNoClobber(file_id, RwMux(AccountFile).init(accounts_file));
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
@@ -1125,7 +1125,7 @@ pub const AccountsDB = struct {
         }
 
         var account_file = try AccountFile.init(file, .{
-            .id = @intCast(file_id.toInt()),
+            .id = file_id,
             .length = offset,
         }, slot);
         account_file.number_of_accounts = accounts.len;
@@ -1503,7 +1503,7 @@ pub const AccountsDB = struct {
             // add file to map
             var new_account_file = try AccountFile.init(
                 new_file,
-                .{ .id = @intCast(new_file_id.toInt()), .length = offset },
+                .{ .id = new_file_id, .length = offset },
                 slot,
             );
             new_account_file.number_of_accounts = accounts_alive_count;
@@ -1861,7 +1861,7 @@ pub const AccountsDB = struct {
             defer file_map_lg.unlock();
 
             try file_map.put(
-                FileId.fromInt(@intCast(account_file.id)),
+                account_file.id,
                 RwMux(AccountFile).init(account_file.*),
             );
         }
@@ -1997,7 +1997,7 @@ pub const AccountsDB = struct {
 
     /// TODO: a number of these parameters are temporary stand-ins for data that will be derived from the state
     /// of AccountsDB, which currently doesn't all exist.
-    pub fn writeSnapshotTar(
+    pub fn writeSnapshotTarFull(
         /// Although this is a mutable pointer, this method performs no mutations;
         /// the mutable reference is simply needed in order to obtain a lock on some
         /// fields.
@@ -2008,8 +2008,6 @@ pub const AccountsDB = struct {
         status_cache: StatusCache,
         /// Temporary: See above TODO
         bank_fields: BankFields,
-        /// Temporary: See above TODO
-        bank_fields_inc: BankFields.Incremental,
         /// Temporary: See above TODO
         lamports_per_signature: u64,
         /// Temporary: See above TODO
@@ -2029,17 +2027,11 @@ pub const AccountsDB = struct {
         defer serializable_file_map.deinit();
         try serializable_file_map.ensureTotalCapacity(file_map.count());
 
-        const is_incremental = bank_fields_inc.snapshot_persistence != null;
-
         for (file_map.values()) |*account_file_rw| {
             const account_file, var account_file_lg = account_file_rw.readWithLock();
             defer account_file_lg.unlock();
 
-            if (is_incremental) {
-                if (account_file.slot != max_rooted_slot) continue;
-            } else {
-                if (account_file.slot > max_rooted_slot) continue;
-            }
+            if (account_file.slot > max_rooted_slot) continue;
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
                 .id = account_file.id,
@@ -2061,7 +2053,7 @@ pub const AccountsDB = struct {
                 .rooted_slot_hashes = .{},
             },
             .lamports_per_signature = lamports_per_signature,
-            .bank_fields_inc = bank_fields_inc,
+            .bank_fields_inc = .{}, // default to null for full snapshot
         };
 
         try writeSnapshotTarWithFields(archive_writer, version, status_cache, snapshot_fields, file_map);
@@ -2169,6 +2161,8 @@ const CountingAllocator = struct {
     }
 };
 
+/// All entries in `snapshot_fields.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
+/// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
     archive_writer: anytype,
     version: ClientVersion,
@@ -2211,13 +2205,15 @@ pub fn writeSnapshotTarWithFields(
     // create the accounts dir
     try sig.utils.tar.writeTarHeader(writer, .directory, "accounts/", 0);
 
-    for (file_map.keys(), file_map.values()) |file_id, *account_file_rw| {
+    const file_info_map = &snapshot_fields.accounts_db_fields.file_map;
+    for (file_info_map.keys(), file_info_map.values()) |account_slot, account_file_info| {
+        const account_file_rw = file_map.getPtr(account_file_info.id) orelse unreachable;
         const account_file, var account_file_lg = account_file_rw.readWithLock();
         defer account_file_lg.unlock();
 
-        if (!snapshot_fields.accounts_db_fields.file_map.contains(account_file.slot)) continue;
+        std.debug.assert(account_file.id == account_file_info.id);
 
-        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
+        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ account_slot, account_file_info.id.toInt() });
         try sig.utils.tar.writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
         try writer.writeAll(account_file.memory);
         try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
@@ -2229,7 +2225,7 @@ pub fn writeSnapshotTarWithFields(
     try writer.writeByteNTimes(0, 512 * 2);
 }
 
-fn testWriteSnapshot(
+fn testWriteSnapshotFull(
     snapshot_dir: std.fs.Dir,
     slot: Slot,
 ) !void {
@@ -2264,11 +2260,10 @@ fn testWriteSnapshot(
     const archive_file = try tmp_dir.createFile("snapshot.tar", .{ .read = true });
     defer archive_file.close();
 
-    try accounts_db.writeSnapshotTar(
+    try accounts_db.writeSnapshotTarFull(
         archive_file.writer(),
         status_cache,
         snap_fields.bank_fields,
-        snap_fields.bank_fields_inc,
         snap_fields.lamports_per_signature,
         snap_fields.accounts_db_fields.bank_hash_info,
         snap_fields.accounts_db_fields.stored_meta_write_version,
@@ -2298,7 +2293,7 @@ fn testWriteSnapshot(
     }
 }
 
-test testWriteSnapshot {
+test testWriteSnapshotFull {
     var test_data_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
     defer test_data_dir.close();
 
@@ -2315,8 +2310,9 @@ test testWriteSnapshot {
         try parallelUnpackZstdTarBall(std.testing.allocator, .noop, inc_snap.filename, tmp_snap_dir, 4, false);
     }
 
-    try testWriteSnapshot(tmp_snap_dir, 10);
-    try testWriteSnapshot(tmp_snap_dir, 25);
+    try testWriteSnapshotFull(tmp_snap_dir, 10);
+    // TODO: write the test for incremental snapshots as well
+    // try testWriteSnapshot(tmp_snap_dir, 25);
 }
 
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
@@ -3312,7 +3308,7 @@ pub const BenchmarkAccountsDB = struct {
                 var account_file = blk: {
                     const file = try std.fs.cwd().openFile(filepath, .{ .mode = .read_write });
                     errdefer file.close();
-                    break :blk try AccountFile.init(file, .{ .id = s, .length = length }, s);
+                    break :blk try AccountFile.init(file, .{ .id = FileId.fromInt(@intCast(s)), .length = length }, s);
                 };
                 errdefer account_file.deinit();
 
