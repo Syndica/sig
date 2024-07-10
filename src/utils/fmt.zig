@@ -1,15 +1,38 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
 
-/// The only circumstance in which this function would return `error.Overflow` is if
-/// the `max_args` tuple posseses any incorrect (non-maximum) values.
+inline fn maxArg(comptime field: std.builtin.Type.StructField) field.type {
+    return switch (@typeInfo(field.type)) {
+        .ComptimeInt => sig.utils.types.defaultValue(field) orelse @compileError("comptime_int field without default value has no max value"),
+        .Int => std.math.maxInt(field.type),
+        else => @compileError("[Argument '" ++ field.name ++ "'] Unsupported type: " ++ @typeName(field.type)),
+    };
+}
+
+pub inline fn maxArgs(comptime Args: type) Args {
+    comptime {
+        var max_args: Args = undefined;
+        for (@typeInfo(Args).Struct.fields) |field| {
+            const ptr = &@field(max_args, field.name);
+            ptr.* = maxArg(field);
+        }
+        return max_args;
+    }
+}
+
+pub inline fn boundedLen(
+    comptime fmt_str: []const u8,
+    comptime Args: type,
+) usize {
+    comptime return std.fmt.count(fmt_str, maxArgs(Args));
+}
+
+/// Returns a bounded array string, guaranteed to be able to represent the formatted result.
 pub fn boundedFmt(
     comptime fmt_str: []const u8,
     args: anytype,
-    /// Each argument should have a value which is formatted as the maximum logical length of the corresponding runtime argument.
-    /// For example, if `@TypeOf(args[0]) == u64`, then it should follow that `max_args[0] == std.math.maxInt(u64)`.
-    comptime max_args: @TypeOf(args),
-) error{Overflow}!std.BoundedArray(u8, std.fmt.count(fmt_str, max_args)) {
-    var result: std.BoundedArray(u8, std.fmt.count(fmt_str, max_args)) = .{};
-    try result.writer().print(fmt_str, args);
+) std.BoundedArray(u8, boundedLen(fmt_str, @TypeOf(args))) {
+    var result: std.BoundedArray(u8, boundedLen(fmt_str, @TypeOf(args))) = .{};
+    result.writer().print(fmt_str, args) catch unreachable;
     return result;
 }

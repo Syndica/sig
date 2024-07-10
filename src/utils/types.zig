@@ -167,3 +167,33 @@ pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
         else => return null,
     }
 }
+
+pub inline fn defaultValue(comptime field: std.builtin.Type.StructField) ?field.type {
+    comptime {
+        const ptr = field.default_value orelse return null;
+        return comptimeZeroSizePtrCast(field.type, ptr);
+    }
+}
+
+/// This facilitates casts from a comptime type-erased pointer to zero-sized types,
+/// such as `type`, `comptime_int`, `comptime_float`, `@TypeOf(.enum_literal)`, and
+/// composites thereof.
+pub inline fn comptimeZeroSizePtrCast(comptime T: type, comptime ptr: *const anyopaque) T {
+    comptime {
+        const Dummy = @Type(.{ .Struct = .{
+            .layout = .auto,
+            .backing_integer = null,
+            .decls = &.{},
+            .is_tuple = false,
+            .fields = &.{.{
+                .name = "value",
+                .type = T,
+                .default_value = ptr,
+                .is_comptime = true,
+                .alignment = 0,
+            }},
+        } });
+        const dummy: Dummy = .{};
+        return dummy.value;
+    }
+}

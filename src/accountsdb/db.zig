@@ -440,11 +440,7 @@ pub const AccountsDB = struct {
         ) |slot, file_info, file_count| {
             // read accounts file
             var accounts_file = blk: {
-                const file_name_bounded = sig.utils.fmt.boundedFmt(
-                    "{d}.{d}",
-                    .{ slot, file_info.id },
-                    .{ std.math.maxInt(Slot), std.math.maxInt(@TypeOf(file_info.id)) },
-                ) catch unreachable;
+                const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id });
 
                 const accounts_file_file = try accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write });
                 errdefer accounts_file_file.close();
@@ -2198,10 +2194,10 @@ pub fn writeSnapshotTarWithFields(
     const manifest = snapshot_fields;
     const manifest_encoded_size = bincode.sizeOf(manifest, .{});
 
-    const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+    const dir_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{d}/", .{slot});
     try sig.utils.tar.writeTarHeader(writer, .directory, dir_name_bounded.constSlice(), 0);
 
-    const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+    const file_name_bounded = sig.utils.fmt.boundedFmt("snapshots/{0d}/{0d}", .{slot});
     try sig.utils.tar.writeTarHeader(writer, .regular, file_name_bounded.constSlice(), manifest_encoded_size);
     try bincode.write(writer, manifest, .{});
     try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
@@ -2215,7 +2211,7 @@ pub fn writeSnapshotTarWithFields(
 
         if (account_file.slot < slot) continue;
 
-        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() }, .{ std.math.maxInt(Slot), std.math.maxInt(FileId.Int) }) catch unreachable;
+        const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
         try sig.utils.tar.writeTarHeader(writer, .regular, name_bounded.constSlice(), account_file.memory.len);
         try writer.writeAll(account_file.memory);
         try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
@@ -2233,7 +2229,7 @@ fn testWriteSnapshot(
 ) !void {
     const allocator = std.testing.allocator;
 
-    const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot}, .{std.math.maxInt(Slot)}) catch unreachable;
+    const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
     defer manifest_file.close();
 
