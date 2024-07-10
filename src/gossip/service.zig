@@ -1191,6 +1191,9 @@ pub const GossipService = struct {
         }
     };
 
+    /// For all pull requests:
+    ///     - PullRequestMessage.value is inserted into the gossip table
+    ///     - PullRequestMessage.filter is freed in process messages
     fn handleBatchPullRequest(
         self: *Self,
         pull_requests: ArrayList(PullRequestMessage),
@@ -1351,6 +1354,8 @@ pub const GossipService = struct {
     /// successful inserted values, have their origin value timestamps updated.
     /// failed inserts (ie, too old or duplicate values) are added to the failed pull hashes so that they can be
     /// included in the next pull request (so we dont receive them again).
+    /// For all pull responses:
+    ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
     pub fn handleBatchPullResponses(
         self: *Self,
         pull_response_messages: *const ArrayList(PullResponseMessage),
@@ -1423,6 +1428,7 @@ pub const GossipService = struct {
                 };
                 const value_hash = Hash.generateSha256Hash(bytes);
                 try failed_pull_hashes.insert(value_hash, now);
+                bincode.free(self.gossip_value_allocator, gossip_value_ptr.*);
             }
         }
     }
@@ -1450,6 +1456,8 @@ pub const GossipService = struct {
         }
     }
 
+    /// For all push messages:
+    ///     - PushMessage.gossip_values are filtered and then inserted into the gossip table, filtered values and failed inserts are freed
     pub fn handleBatchPushMessages(
         self: *Self,
         batch_push_messages: *const ArrayList(PushMessage),
@@ -1502,6 +1510,7 @@ pub const GossipService = struct {
             for (batch_push_messages.items) |*push_message| {
                 n_gossip_data += push_message.gossip_values.len;
 
+                // Filtered values are freed
                 const valid_len = self.filterBasedOnShredVersion(
                     gossip_table,
                     push_message.gossip_values,
@@ -1526,6 +1535,13 @@ pub const GossipService = struct {
                 if (failed_insert_indexs.items.len == 0) {
                     // dont need to build prune messages
                     continue;
+                }
+
+                // Free failed inserts
+                defer {
+                    for (failed_insert_indexs.items) |failed_index| {
+                        bincode.free(self.gossip_value_allocator, push_message.gossip_values[failed_index]);
+                    }
                 }
 
                 // lookup contact info
@@ -1793,6 +1809,7 @@ pub const GossipService = struct {
         return nodes[0..node_index];
     }
 
+    /// Frees heap allocated memory of filtered values
     pub fn filterBasedOnShredVersion(
         self: *Self,
         gossip_table: *const GossipTable,
@@ -1821,7 +1838,8 @@ pub const GossipService = struct {
                     if (!sender_matches or
                         !gossip_table.checkMatchingShredVersion(gossip_value.id(), my_shred_version))
                     {
-                        _ = gossip_values_array.swapRemove(i);
+                        const removed_value = gossip_values_array.swapRemove(i);
+                        bincode.free(self.gossip_value_allocator, removed_value);
                         continue; // do not incrememnt `i`. it has a new value we need to inspect.
                     }
                 },
