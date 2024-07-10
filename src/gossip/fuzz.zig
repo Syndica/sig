@@ -1,5 +1,5 @@
 //! to use the fuzzer run the following command:
-//!     ./zig-out/bin/fuzz <seed> <num_messages> ?<entrypoint> 
+//!     ./zig-out/bin/fuzz <seed> <num_messages> ?<entrypoint>
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
@@ -272,8 +272,8 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
     var exit = AtomicBool.init(false);
 
-    var gossip_client, const packet_channel, var handle = blk: { 
-        if (fuzz_sig) { 
+    var gossip_client, const packet_channel, var handle = blk: {
+        if (fuzz_sig) {
             var client_keypair = try KeyPair.create(null);
             const client_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
             const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
@@ -298,8 +298,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
             });
 
             break :blk .{ gossip_service_client, gossip_service_client.packet_incoming_channel, client_handle };
-
-        } else { 
+        } else {
             var gossip_service_fuzzer = try GossipService.init(
                 allocator,
                 allocator,
@@ -353,7 +352,7 @@ pub fn fuzz(
     keypair: *const KeyPair,
     to_endpoint: EndPoint,
     outgoing_channel: *sig.sync.Channel(std.ArrayList(Packet)),
-) !void { 
+) !void {
     var msg_count: usize = 0;
     while (!loop_exit.load(.unordered)) {
         if (maybe_max_messages) |max_messages| {
