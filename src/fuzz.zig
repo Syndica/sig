@@ -29,5 +29,8 @@ pub fn main() !void {
         try accountsdb_fuzz.run(&cli_args);
     } else if (std.mem.startsWith(u8, filter, "gossip")) {
         try gossip_fuzz.run(&cli_args);
+    } else { 
+        std.debug.print("unknown fuzz filter: {s}\n", .{filter});
+        return error.UnknownFilter;
     }
 }

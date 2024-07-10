@@ -1,52 +1,38 @@
-//! how to run the fuzzer:
-//!     `zig build fuzz_gossip`
+//! to use the fuzzer run the following command:
+//!     ./zig-out/bin/fuzz <seed> <num_messages> ?<entrypoint> 
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
+const sig = @import("../lib.zig");
+const bincode = sig.bincode;
 
-const _gossip_service = @import("./service.zig");
-const GossipService = _gossip_service.GossipService;
-const ChunkType = _gossip_service.ChunkType;
-const gossipDataToPackets = _gossip_service.gossipDataToPackets;
-
-const Logger = @import("../trace/log.zig").Logger;
-const _gossip_data = @import("data.zig");
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
-const SignedGossipData = _gossip_data.SignedGossipData;
-const ContactInfo = _gossip_data.ContactInfo;
+const GossipService = sig.gossip.service.GossipService;
+const ChunkType = sig.gossip.service.ChunkType;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const ContactInfo = sig.gossip.data.ContactInfo;
+const Logger = sig.trace.log.Logger;
+const GossipMessage = sig.gossip.message.GossipMessage;
+const GossipPullFilterSet = sig.gossip.pull_request.GossipPullFilterSet;
+const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
+const Ping = sig.gossip.ping_pong.Ping;
+const Pong = sig.gossip.ping_pong.Pong;
+const SocketAddr = sig.net.net.SocketAddr;
+const Pubkey = sig.core.pubkey.Pubkey;
+const Bloom = sig.bloom.bloom.Bloom;
+const Packet = sig.net.packet.Packet;
+const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
+const Hash = sig.core.hash.Hash;
+const EndPoint = @import("zig-network").EndPoint;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AtomicBool = std.atomic.Value(bool);
 
-const SocketAddr = @import("../net/net.zig").SocketAddr;
+const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
+const getWallclockMs = sig.gossip.data.getWallclockMs;
 
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const getWallclockMs = @import("data.zig").getWallclockMs;
-
-const Bloom = @import("../bloom/bloom.zig").Bloom;
-const network = @import("zig-network");
-const EndPoint = network.EndPoint;
-const Packet = @import("../net/packet.zig").Packet;
-const PACKET_DATA_SIZE = @import("../net/packet.zig").PACKET_DATA_SIZE;
-const NonBlockingChannel = @import("../sync/channel.zig").NonBlockingChannel;
-
-const _gossip_message = @import("message.zig");
-const GossipMessage = _gossip_message.GossipMessage;
-
-const Ping = @import("ping_pong.zig").Ping;
-const Pong = @import("ping_pong.zig").Pong;
-const bincode = @import("../bincode/bincode.zig");
-
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
-const _gossip_table = @import("../gossip/table.zig");
-
-const _pull_request = @import("../gossip/pull_request.zig");
-const GossipPullFilterSet = _pull_request.GossipPullFilterSet;
-const GossipPullFilter = _pull_request.GossipPullFilter;
-
-const Hash = @import("../core/hash.zig").Hash;
-
-const PacketChannel = NonBlockingChannel(Packet);
-const GossipChannel = NonBlockingChannel(GossipMessage);
+const SLEEP_TIME = 0;
+// const SLEEP_TIME = std.time.ns_per_ms * 10;
+// const SLEEP_TIME = std.time.ns_per_s;
 
 pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -241,20 +227,19 @@ pub fn run(args: *std.process.ArgIterator) !void {
     const allocator = gpa.allocator(); // use std.testing.allocator to detect leaks
 
     // parse cli args to define where to send packets
-    // zig build fuzz -- <entrypoint> <seed> <max_messages>
-    const maybe_entrypoint = args.next();
     const maybe_seed = args.next();
     const maybe_max_messages_string = args.next();
+    const maybe_entrypoint = args.next();
 
-    const entrypoint = blk: {
+    const to_entrypoint, const fuzz_sig = blk: {
         if (maybe_entrypoint) |entrypoint| {
             const addr = SocketAddr.parse(entrypoint) catch @panic("invalid entrypoint");
-            break :blk addr;
+            break :blk .{ addr.toEndpoint(), false };
         } else {
-            @panic("usage: zig build fuzz -- <entrypoint> <seed> <num_messages>");
+            // default to localhost (wont actually send anything)
+            break :blk .{ try EndPoint.parse("127.0.0.1:8001"), true };
         }
     };
-    const to_endpoint = entrypoint.toEndpoint();
 
     const seed = blk: {
         if (maybe_seed) |seed_str| {
@@ -263,6 +248,8 @@ pub fn run(args: *std.process.ArgIterator) !void {
             break :blk getWallclockMs();
         }
     };
+    std.debug.print("using seed: {d}\n", .{seed});
+    var rng = std.rand.DefaultPrng.init(seed);
 
     const maybe_max_messages = blk: {
         if (maybe_max_messages_string) |max_messages_str| {
@@ -272,9 +259,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
     };
 
-    std.debug.print("using seed: {d}\n", .{seed});
-    var rng = std.rand.DefaultPrng.init(seed);
-
     // var logger = Logger.init(gpa.allocator(), .debug);
     // defer logger.deinit();
     // logger.spawn();
@@ -282,37 +266,94 @@ pub fn run(args: *std.process.ArgIterator) !void {
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
     const fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
-
     const fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
     try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
-    var fuzz_exit = AtomicBool.init(false);
-    var gossip_service_fuzzer = try GossipService.init(
-        allocator,
-        allocator,
-        fuzz_contact_info,
-        fuzz_keypair,
-        (&entrypoint)[0..1],
-        &fuzz_exit,
-        .noop,
-    );
+    var exit = AtomicBool.init(false);
 
-    const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
-        &gossip_service_fuzzer, .{
-            .spy_node = true,
-            .dump = false,
-        },
-    });
+    var gossip_client, const packet_channel, var handle = blk: { 
+        if (fuzz_sig) { 
+            var client_keypair = try KeyPair.create(null);
+            const client_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
+            const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
+            var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
+            try client_contact_info.setSocket(.gossip, client_address);
 
-    const SLEEP_TIME = 0;
-    // const SLEEP_TIME = std.time.ns_per_ms * 10;
-    // const SLEEP_TIME = std.time.ns_per_s;
+            var gossip_service_client = try GossipService.init(
+                allocator,
+                allocator,
+                client_contact_info,
+                client_keypair,
+                null, // we will only recv packets
+                &exit,
+                .noop,
+            );
 
-    // wait for keyboard input to exit
+            const client_handle = try std.Thread.spawn(.{}, GossipService.run, .{
+                &gossip_service_client, .{
+                    .spy_node = true,
+                    .dump = false,
+                },
+            });
+
+            break :blk .{ gossip_service_client, gossip_service_client.packet_incoming_channel, client_handle };
+
+        } else { 
+            var gossip_service_fuzzer = try GossipService.init(
+                allocator,
+                allocator,
+                fuzz_contact_info,
+                fuzz_keypair,
+                (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
+                &exit,
+                .noop,
+            );
+
+            const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
+                &gossip_service_fuzzer, .{
+                    .spy_node = true,
+                    .dump = false,
+                },
+            });
+
+            break :blk .{ gossip_service_fuzzer, gossip_service_fuzzer.packet_outgoing_channel, fuzz_handle };
+        }
+    };
+
+    // wait for any keyboard input to exit early
     var loop_exit = AtomicBool.init(false);
     var exit_handle = try std.Thread.spawn(.{}, waitForExit, .{&loop_exit});
+    exit_handle.detach();
 
+    // start fuzzing
+    try fuzz(
+        allocator,
+        &loop_exit,
+        maybe_max_messages,
+        &rng,
+        &fuzz_keypair,
+        to_entrypoint,
+        packet_channel,
+    );
+
+    // cleanup
+    std.debug.print("\t=> shutting down...\n", .{});
+    exit.store(true, .unordered);
+    handle.join();
+    gossip_client.deinit();
+    std.debug.print("\t=> done.\n", .{});
+}
+
+pub fn fuzz(
+    allocator: std.mem.Allocator,
+    loop_exit: *AtomicBool,
+    maybe_max_messages: ?usize,
+    rng: *std.rand.DefaultPrng,
+    keypair: *const KeyPair,
+    to_endpoint: EndPoint,
+    outgoing_channel: *sig.sync.Channel(std.ArrayList(Packet)),
+) !void { 
     var msg_count: usize = 0;
     while (!loop_exit.load(.unordered)) {
         if (maybe_max_messages) |max_messages| {
@@ -322,23 +363,20 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
 
         const command = rng.random().intRangeAtMost(u8, 0, 4);
-        // var command: usize = if (msg_count % 2 == 0) 2 else 4;
-        // var command: usize = 4;
-
         const packet = switch (command) {
             0 => blk: {
                 // send ping message
-                const packet = randomPingPacket(rng.random(), &fuzz_keypair, to_endpoint);
+                const packet = randomPingPacket(rng.random(), keypair, to_endpoint);
                 break :blk packet;
             },
             1 => blk: {
                 // send pong message
-                const packet = randomPongPacket(rng.random(), &fuzz_keypair, to_endpoint);
+                const packet = randomPongPacket(rng.random(), keypair, to_endpoint);
                 break :blk packet;
             },
             2 => blk: {
                 // send push message
-                const packets = randomPushMessage(rng.random(), &fuzz_keypair, to_endpoint) catch |err| {
+                const packets = randomPushMessage(rng.random(), keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -349,7 +387,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
             },
             3 => blk: {
                 // send pull response
-                const packets = randomPullResponse(rng.random(), &fuzz_keypair, to_endpoint) catch |err| {
+                const packets = randomPullResponse(rng.random(), keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -363,7 +401,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
                 const packet = randomPullRequest(
                     allocator,
                     rng.random(),
-                    &fuzz_keypair,
+                    keypair,
                     to_endpoint,
                 );
                 break :blk packet;
@@ -387,7 +425,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
 
         // send it
-        try gossip_service_fuzzer.packet_outgoing_channel.send(packet_batch);
+        try outgoing_channel.send(packet_batch);
 
         std.time.sleep(SLEEP_TIME);
 
@@ -395,14 +433,4 @@ pub fn run(args: *std.process.ArgIterator) !void {
             std.debug.print("{d} messages sent\n", .{msg_count});
         }
     }
-
-    // cleanup
-    std.debug.print("\t=> shutting down...\n", .{});
-    fuzz_exit.store(true, .unordered);
-    fuzz_handle.join();
-    gossip_service_fuzzer.deinit();
-    std.debug.print("\t=>fuzzy gossip service shutdown\n", .{});
-
-    exit_handle.join();
-    std.debug.print("fuzzing done\n", .{});
 }

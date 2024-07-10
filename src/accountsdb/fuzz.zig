@@ -7,7 +7,7 @@ const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 
-const MAX_FUZZ_TIME = std.time.ns_per_s * 100_000;
+const MAX_FUZZ_TIME = std.time.ns_per_s * 10;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -78,9 +78,11 @@ pub fn run(args: *std.process.ArgIterator) !void {
     const use_disk = rand.boolean();
     const snapshot_dir = "test_data/accountsdb_fuzz";
     defer {
+        std.debug.print("deleting snapshot dir...\n", .{});
         std.fs.cwd().deleteTree(snapshot_dir) catch |err| {
             std.debug.print("failed to delete snapshot dir: {}\n", .{err});
         };
+        std.debug.print("deleted snapshot dir\n", .{});
     }
     std.debug.print("use disk: {}\n", .{use_disk});
 
@@ -89,8 +91,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
         .snapshot_dir = snapshot_dir,
     });
     defer accounts_db.deinit(true);
-
-    // try accounts_db.account_index.ensureTotalCapacity(10_000);
 
     const exit = try allocator.create(std.atomic.Value(bool));
     exit.* = std.atomic.Value(bool).init(false);
@@ -113,7 +113,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
     var slot: usize = 0;
 
     const Actions = enum { put, get };
-    // var put_count: u64 = 0;
 
     // get/put a bunch of accounts
     var timer = try std.time.Timer.start();
@@ -125,10 +124,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
         switch (action) {
             .put => {
-                // if (put_count == 5) {
-                //     continue;
-                // }
-                // put_count += 1;
                 const N_ACCOUNTS_PER_SLOT = 10;
 
                 const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
@@ -186,6 +181,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
     }
 
+    std.debug.print("fuzzing complete\n", .{});
     exit.store(true, .seq_cst);
     handle.join();
 }

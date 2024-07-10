@@ -405,8 +405,10 @@ fn gossip() !void {
     var app_base = try AppBase.init(gpa_allocator);
 
     var gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_service.deinit();
-    defer gossip_manager.deinit();
+    defer { 
+        gossip_manager.deinit();
+        gossip_service.deinit();
+    }
 
     gossip_manager.join();
 }
