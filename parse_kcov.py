@@ -12,11 +12,13 @@ with open(coverage_path, "r") as f:
 
 max_path_length = max(len(file_info["file"]) for file_info in coverage["files"])
 
+# order by coverage percentage
+coverage["files"].sort(key=lambda x: float(x["percent_covered"]), reverse=False)
+
 output = ""
 for file_info in coverage["files"]:
     path = file_info["file"]
     path = path.split("sig/")[2]
-    
     file_coverage = float(file_info["percent_covered"])
 
     # Determine the color based on the coverage percentage
