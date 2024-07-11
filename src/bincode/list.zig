@@ -7,7 +7,7 @@ pub fn valueEncodedAsSlice(
     comptime T: type,
     comptime config: bincode.FieldConfig(T),
 ) bincode.FieldConfig(T) {
-    const gen = struct {
+    const S = struct {
         fn deserializeImpl(
             allocator: std.mem.Allocator,
             reader: anytype,
@@ -34,8 +34,8 @@ pub fn valueEncodedAsSlice(
         }
     };
     return .{
-        .deserializer = gen.deserializeImpl,
-        .serializer = gen.serializeImpl,
+        .deserializer = S.deserializeImpl,
+        .serializer = S.serializeImpl,
         .free = config.free,
         .skip = config.skip,
         .hashmap = config.hashmap,

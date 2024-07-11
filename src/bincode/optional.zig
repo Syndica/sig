@@ -14,7 +14,7 @@ pub fn defaultToNullOnEof(
         hashmap: if (hashMapInfo(T)) |hm_info| bincode.HashMapConfig(hm_info) else void = if (hashMapInfo(T) != null) .{} else {},
     },
 ) bincode.FieldConfig(?T) {
-    const gen = struct {
+    const S = struct {
         fn deserializer(
             allocator: std.mem.Allocator,
             reader: anytype,
@@ -41,8 +41,8 @@ pub fn defaultToNullOnEof(
         }
     };
     return .{
-        .deserializer = gen.deserializer,
-        .serializer = gen.serializer,
+        .deserializer = S.deserializer,
+        .serializer = S.serializer,
         .free = options.free,
         .skip = false,
         .hashmap = options.hashmap,

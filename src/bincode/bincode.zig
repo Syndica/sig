@@ -684,18 +684,6 @@ pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
     };
 }
 
-pub fn alwaysSkip(_: anytype) bool {
-    return true;
-}
-
-pub fn neverSkip(_: anytype) bool {
-    return false;
-}
-
-pub fn skipIfNull(data: anytype) bool {
-    return data == null;
-}
-
 pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
     const bincode_field = "!bincode-config";
     if (@hasDecl(struct_type, bincode_field)) {

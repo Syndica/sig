@@ -3,7 +3,7 @@ const sig = @import("../lib.zig");
 const bincode = sig.bincode;
 
 pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig(T) {
-    const gen = struct {
+    const S = struct {
         fn deserializer(
             _: std.mem.Allocator,
             reader: anytype,
@@ -26,7 +26,7 @@ pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig
         }
     };
     return .{
-        .deserializer = gen.deserializer,
-        .serializer = gen.serializer,
+        .deserializer = S.deserializer,
+        .serializer = S.serializer,
     };
 }
