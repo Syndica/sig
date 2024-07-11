@@ -68,7 +68,7 @@ jobs:
 
       - name: Install kcov
         run: |
-          sudo apt-get install -y cmake libcurl4-openssl-dev libssl-dev
+          sudo apt-get install -y binutils-dev libssl-dev libcurl4-openssl-dev zlib1g-dev libdw-dev libiberty-dev
           git clone https://github.com/SimonKagstrom/kcov.git
           cd kcov
           mkdir build
