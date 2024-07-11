@@ -63,24 +63,24 @@ jobs:
         with:
           submodules: recursive
 
-    - name: Set up dependencies
-      run: sudo apt-get update
+      - name: Set up dependencies
+        run: sudo apt-get update
 
-    - name: Install kcov
-      run: |
-        sudo apt-get install -y cmake libcurl4-openssl-dev libssl-dev
-        git clone https://github.com/SimonKagstrom/kcov.git
-        cd kcov
-        mkdir build
-        cd build
-        cmake ..
-        make
-        sudo make install
+      - name: Install kcov
+        run: |
+          sudo apt-get install -y cmake libcurl4-openssl-dev libssl-dev
+          git clone https://github.com/SimonKagstrom/kcov.git
+          cd kcov
+          mkdir build
+          cd build
+          cmake ..
+          make
+          sudo make install
 
-    - name: Run kcov
-      run: |
-        bash scripts/kcov_test.sh
-        python parse_kcov.py
+      - name: Run kcov
+        run: |
+          bash scripts/kcov_test.sh
+          python parse_kcov.py
 
   benchmarks:
     strategy:
