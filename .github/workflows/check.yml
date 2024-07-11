@@ -85,6 +85,9 @@ jobs:
       - name: Run kcov
         run: |
           bash scripts/kcov_test.sh
+
+      - name: Print coverage report
+        run: |
           python parse_kcov.py
 
   benchmarks:

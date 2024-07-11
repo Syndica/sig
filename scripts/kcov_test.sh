@@ -26,4 +26,4 @@ kcov \
     ./zig-out/bin/test
 
 echo "=> Opening kcov-output/index.html" 
-open kcov-output/index.html
+open kcov-output/index.html || echo "=> Failed to open kcov-output/index.html"
