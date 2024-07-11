@@ -461,7 +461,7 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self) !void {
-        var trim_table_timer = std.time.Timer.start() catch unreachable;
+        var trim_table_timer = sig.time.Timer.start() catch unreachable;
         var msg_count: usize = 0;
 
         // we batch messages bc:
@@ -719,7 +719,7 @@ pub const GossipService = struct {
             }
 
             // TRIM gossip-table
-            if (trim_table_timer.read() > std.time.ns_per_ms * GOSSIP_TRIM_INTERVAL_MS) {
+            if (trim_table_timer.read().as_millis() > GOSSIP_TRIM_INTERVAL_MS) {
                 defer trim_table_timer.reset();
                 // first check with a read lock
                 const should_trim = blk: {
@@ -754,10 +754,10 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self) !void {
-        var loop_timer = std.time.Timer.start() catch unreachable;
-        var push_timer = std.time.Timer.start() catch unreachable;
-        var pull_req_timer = std.time.Timer.start() catch unreachable;
-        var stats_publish_timer = std.time.Timer.start() catch unreachable;
+        var loop_timer = sig.time.Timer.start() catch unreachable;
+        var push_timer = sig.time.Timer.start() catch unreachable;
+        var pull_req_timer = sig.time.Timer.start() catch unreachable;
+        var stats_publish_timer = sig.time.Timer.start() catch unreachable;
         var push_cursor: u64 = 0;
         var entrypoints_identified = false;
         var shred_version_assigned = false;
@@ -765,7 +765,7 @@ pub const GossipService = struct {
         while (!self.exit.load(.unordered)) {
             loop_timer.reset();
 
-            if (pull_req_timer.read() > std.time.ns_per_ms * GOSSIP_PULL_RATE_MS) pull_blk: {
+            if (pull_req_timer.read().as_millis() > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
@@ -801,7 +801,7 @@ pub const GossipService = struct {
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
-            if (push_timer.read() > std.time.ns_per_ms * GOSSIP_PULL_TIMEOUT_MS / 2) {
+            if (push_timer.read().as_millis() > GOSSIP_PULL_TIMEOUT_MS / 2) {
                 defer push_timer.reset();
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
@@ -828,15 +828,15 @@ pub const GossipService = struct {
             }
 
             // publish metrics=
-            if (stats_publish_timer.read() > std.time.ns_per_ms * PUB_GOSSIP_STATS_INTERVAL_MS) {
+            if (stats_publish_timer.read().as_millis() > PUB_GOSSIP_STATS_INTERVAL_MS) {
                 defer stats_publish_timer.reset();
                 try self.collectGossipTableMetrics();
             }
 
             // sleep
-            if (loop_timer.read() < std.time.ns_per_ms * GOSSIP_SLEEP_MILLIS) {
+            if (loop_timer.read().as_millis() < GOSSIP_SLEEP_MILLIS) {
                 defer loop_timer.reset();
-                const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read();
+                const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read().as_millis();
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
