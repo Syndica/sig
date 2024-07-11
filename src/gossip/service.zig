@@ -763,8 +763,6 @@ pub const GossipService = struct {
         var shred_version_assigned = false;
 
         while (!self.exit.load(.unordered)) {
-            loop_timer.reset();
-
             if (pull_req_timer.read().as_millis() > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
@@ -827,7 +825,7 @@ pub const GossipService = struct {
                 try self.rotateActiveSet(prng.random());
             }
 
-            // publish metrics=
+            // publish metrics
             if (stats_publish_timer.read().as_millis() > PUB_GOSSIP_STATS_INTERVAL_MS) {
                 defer stats_publish_timer.reset();
                 try self.collectGossipTableMetrics();
