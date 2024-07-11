@@ -1,6 +1,12 @@
 import json 
 
-coverage_path = "kcov-output/fuzz/coverage.json"
+# read path from cli
+import sys
+if len(sys.argv) != 2:
+    print("Usage: python parse_kcov.py <path_to_coverage.json>")
+    sys.exit(1)
+coverage_path = sys.argv[1]
+
 with open(coverage_path, "r") as f:
     coverage = json.load(f)
 

@@ -88,7 +88,7 @@ jobs:
 
       - name: Print coverage report
         run: |
-          python parse_kcov.py
+          python parse_kcov.py kcov-output/test/coverage.json
 
   benchmarks:
     strategy:
