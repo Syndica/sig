@@ -341,8 +341,7 @@ pub const AccountFileInfo = struct {
     }
 
     fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!FileId {
-        var fba = comptime std.heap.FixedBufferAllocator.init(&.{});
-        const int = try bincode.read(fba.allocator(), usize, reader, params);
+        const int = try bincode.readInt(usize, reader, params);
         if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
         return FileId.fromInt(@intCast(int));
     }

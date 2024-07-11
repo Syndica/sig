@@ -197,112 +197,127 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             return @as(T, @bitCast(bytes));
         },
         .ComptimeInt => return bincode.read(allocator, u64, reader, params),
-        .Int => |info| {
-            if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
-                @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be deserialized, but attempted to deserialize " ++ @typeName(T) ++ ".");
-            }
-
-            switch (params.int_encoding) {
-                .variable => {
-                    const b = try reader.readByte();
-                    if (b < 251) {
-                        return switch (info.signedness) {
-                            .unsigned => b,
-                            .signed => zigzag: {
-                                if (b % 2 == 0) {
-                                    break :zigzag @as(T, @intCast(b / 2));
-                                } else {
-                                    break :zigzag ~@as(T, @bitCast(@as(std.meta.Int(.unsigned, info.bits), b / 2)));
-                                }
-                            },
-                        };
-                    } else if (b == 251) {
-                        const z = try switch (params.endian) {
-                            .little => reader.readInt(u16, .little),
-                            .big => reader.readInt(u16, .big),
-                        };
-                        return switch (info.signedness) {
-                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
-                            .signed => zigzag: {
-                                if (z % 2 == 0) {
-                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
-                                } else {
-                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
-                                }
-                            },
-                        };
-                    } else if (b == 252) {
-                        const z = try switch (params.endian) {
-                            .little => reader.readInt(u32, .little),
-                            .big => reader.readInt(u32, .big),
-                        };
-                        return switch (info.signedness) {
-                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
-                            .signed => zigzag: {
-                                if (z % 2 == 0) {
-                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
-                                } else {
-                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
-                                }
-                            },
-                        };
-                    } else if (b == 253) {
-                        const z = try switch (params.endian) {
-                            .little => reader.readInt(u64, .little),
-                            .big => reader.readInt(u64, .big),
-                        };
-                        return switch (info.signedness) {
-                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
-                            .signed => zigzag: {
-                                if (z % 2 == 0) {
-                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
-                                } else {
-                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
-                                }
-                            },
-                        };
-                    } else if (b == 254) {
-                        const z = try switch (params.endian) {
-                            .little => reader.readInt(u128, .little),
-                            .big => reader.readInt(u128, .big),
-                        };
-                        return switch (info.signedness) {
-                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
-                            .signed => zigzag: {
-                                if (z % 2 == 0) {
-                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
-                                } else {
-                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
-                                }
-                            },
-                        };
-                    } else {
-                        const z = try switch (params.endian) {
-                            .little => reader.readInt(u256, .little),
-                            .big => reader.readInt(u256, .big),
-                        };
-                        return switch (info.signedness) {
-                            .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
-                            .signed => zigzag: {
-                                if (z % 2 == 0) {
-                                    break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
-                                } else {
-                                    break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
-                                }
-                            },
-                        };
-                    }
-                },
-                .fixed => return switch (params.endian) {
-                    .little => reader.readInt(T, .little),
-                    .big => reader.readInt(T, .big),
-                },
-            }
-        },
+        .Int => return try bincode.readInt(T, reader, params),
         else => {},
     }
 
     @compileError("Deserializing '" ++ @typeName(T) ++ "' is unsupported.");
+}
+
+pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
+    const T = switch (U) {
+        usize => u64,
+        isize => i64,
+        else => U,
+    };
+
+    const info = @typeInfo(T).Int;
+    if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
+        @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be deserialized, but attempted to deserialize " ++ @typeName(T) ++ ".");
+    }
+
+    switch (params.int_encoding) {
+        .variable => {
+            const b = try reader.readByte();
+            if (b < 251) {
+                return switch (info.signedness) {
+                    .unsigned => b,
+                    .signed => zigzag: {
+                        if (b % 2 == 0) {
+                            break :zigzag @as(T, @intCast(b / 2));
+                        } else {
+                            break :zigzag ~@as(T, @bitCast(@as(std.meta.Int(.unsigned, info.bits), b / 2)));
+                        }
+                    },
+                };
+            } else if (b == 251) {
+                const z = try switch (params.endian) {
+                    .little => reader.readInt(u16, .little),
+                    .big => reader.readInt(u16, .big),
+                };
+                return switch (info.signedness) {
+                    .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                    .signed => zigzag: {
+                        if (z % 2 == 0) {
+                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                        } else {
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                        }
+                    },
+                };
+            } else if (b == 252) {
+                const z = try switch (params.endian) {
+                    .little => reader.readInt(u32, .little),
+                    .big => reader.readInt(u32, .big),
+                };
+                return switch (info.signedness) {
+                    .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                    .signed => zigzag: {
+                        if (z % 2 == 0) {
+                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                        } else {
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                        }
+                    },
+                };
+            } else if (b == 253) {
+                const z = try switch (params.endian) {
+                    .little => reader.readInt(u64, .little),
+                    .big => reader.readInt(u64, .big),
+                };
+                return switch (info.signedness) {
+                    .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                    .signed => zigzag: {
+                        if (z % 2 == 0) {
+                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                        } else {
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                        }
+                    },
+                };
+            } else if (b == 254) {
+                const z = try switch (params.endian) {
+                    .little => reader.readInt(u128, .little),
+                    .big => reader.readInt(u128, .big),
+                };
+                return switch (info.signedness) {
+                    .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                    .signed => zigzag: {
+                        if (z % 2 == 0) {
+                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                        } else {
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                        }
+                    },
+                };
+            } else {
+                const z = try switch (params.endian) {
+                    .little => reader.readInt(u256, .little),
+                    .big => reader.readInt(u256, .big),
+                };
+                return switch (info.signedness) {
+                    .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
+                    .signed => zigzag: {
+                        if (z % 2 == 0) {
+                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                        } else {
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                        }
+                    },
+                };
+            }
+        },
+        .fixed => return switch (params.endian) {
+            .little => reader.readInt(T, .little),
+            .big => reader.readInt(T, .big),
+        },
+    }
+}
+
+pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params) !?T {
+    const len_u64 = try bincode.readInt(u64, reader, params);
+    if (len_u64 > std.math.maxInt(T)) return null;
+    return @intCast(len_u64);
 }
 
 fn readFieldWithConfig(
@@ -325,13 +340,6 @@ fn readFieldWithConfig(
     }
 
     return try bincode.read(allocator, field.type, reader, params);
-}
-
-pub fn readIntAsLength(comptime T: type, reader: anytype, params: bincode.Params) !?T {
-    var fba = comptime std.heap.FixedBufferAllocator.init(&.{});
-    const len_u64 = try bincode.read(fba.allocator(), u64, reader, params);
-    if (len_u64 > std.math.maxInt(T)) return null;
-    return @intCast(len_u64);
 }
 
 fn readHashMap(
