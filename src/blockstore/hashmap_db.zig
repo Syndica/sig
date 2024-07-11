@@ -20,14 +20,16 @@ pub const SharedHashMapDB = struct {
 
     const Self = @This();
 
+    const Batch = MapBatch;
+
     pub fn open(
         allocator: Allocator,
         _: Logger,
         _: []const u8,
-        column_families_: []const ColumnFamily,
+        column_families: []const ColumnFamily,
     ) !SharedHashMapDB {
-        var maps = try allocator.alloc(SharedHashMap, column_families_.len);
-        inline for (0..column_families_.len) |i| {
+        var maps = try allocator.alloc(SharedHashMap, column_families.len);
+        inline for (0..column_families.len) |i| {
             maps[i] = try SharedHashMap.init(allocator);
         }
         return .{ .allocator = allocator, .maps = maps };
@@ -111,6 +113,69 @@ pub const SharedHashMapDB = struct {
         self.transaction_lock.lockShared();
         defer self.transaction_lock.unlockShared();
         _ = self.maps[cf_index].delete(self.allocator, key_bytes);
+    }
+
+    pub fn writeBatch(self: *Self) MapBatch {
+        return .{
+            .allocator = self.allocator,
+            .instructions = .{},
+        };
+    }
+
+    pub fn commit(self: *Self, batch: MapBatch) !void {
+        self.transaction_lock.lock();
+        defer self.transaction_lock.unlock();
+
+        for (batch.instructions) |ix| {
+            switch (ix) {
+                .put => |put_ix| {
+                    const cf_index, const key, const value = put_ix;
+                    try self.maps[cf_index].put(key, value);
+                },
+                .delete => |delete_ix| {
+                    const cf_index, const key = delete_ix;
+                    try self.maps[cf_index].delete(key);
+                },
+            }
+        }
+    }
+};
+
+pub const MapBatch = struct {
+    allocator: Allocator,
+    instructions: std.ArrayListUnmanaged(Instruction),
+
+    const Instruction = union(enum) {
+        put: struct { usize, []const u8, []const u8 },
+        delete: struct { usize, []const u8 },
+    };
+
+    const Self = @This();
+
+    pub fn put(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+        value: cf.Value,
+    ) !void {
+        return try self.instructions.append(.{ .put = .{
+            cf_index,
+            try cf.key().serializeAlloc(self.allocator, key),
+            try cf.value().serializeAlloc(self.allocator, value),
+        } });
+    }
+
+    pub fn delete(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !void {
+        return try self.instructions.append(.{ .delete = .{
+            cf_index,
+            try cf.key().serializeAlloc(self.allocator, key),
+        } });
     }
 };
 

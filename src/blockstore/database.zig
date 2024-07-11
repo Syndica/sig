@@ -15,6 +15,8 @@ pub fn Database(
 
         const Self = @This();
 
+        const BatchImpl = Batch(Impl.Batch, column_families);
+
         pub fn open(
             allocator: Allocator,
             logger: Logger,
@@ -60,6 +62,14 @@ pub fn Database(
             return try self.impl.delete(cf, comptime cf.find(column_families), key);
         }
 
+        pub fn initBatch(self: *Self) BatchImpl {
+            return try self.impl.initBatch();
+        }
+
+        pub fn commit(self: *Self, batch: BatchImpl) void {
+            return try self.impl.commit(batch.impl);
+        }
+
         pub fn runTest() !void {
             const Value = struct { hello: u16 };
             const cf1 = ColumnFamily{
@@ -99,6 +109,25 @@ pub fn Database(
     };
 }
 
+pub fn Batch(
+    comptime Impl: type,
+    comptime column_families: []const ColumnFamily,
+) type {
+    return struct {
+        impl: Impl,
+
+        const Self = @This();
+
+        pub fn put(self: *Self, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) !void {
+            return try self.impl.put(cf, comptime cf.find(column_families), key, value);
+        }
+
+        pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) !void {
+            return try self.impl.delete(cf, comptime cf.find(column_families), key);
+        }
+    };
+}
+
 pub const ColumnFamily = struct {
     name: []const u8,
     Key: type,
@@ -134,6 +163,7 @@ pub fn Serializer(comptime S: type) type {
 
         /// Returns data that is not owned by the current scope.
         /// The slice should be immediately copied and deinitialized.
+        /// Use this if the database backend accepts a pointer and calls memcpy.
         pub fn serializeToRef(
             comptime self: Self,
             allocator: Allocator,

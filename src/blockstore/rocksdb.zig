@@ -19,20 +19,22 @@ pub const RocksDB = struct {
 
     const Self = @This();
 
+    pub const WriteBatch = RocksWriteBatch;
+
     pub fn open(
         allocator: Allocator,
         logger: Logger,
         path: []const u8,
-        comptime column_families_: []const ColumnFamily,
+        comptime column_families: []const ColumnFamily,
     ) !RocksDB {
         // allocate cf descriptions
         const column_family_descriptions = try allocator
-            .alloc(rocks.ColumnFamilyDescription, column_families_.len + 1);
+            .alloc(rocks.ColumnFamilyDescription, column_families.len + 1);
         defer allocator.free(column_family_descriptions);
 
         // initialize cf descriptions
         column_family_descriptions[0] = .{ .name = "default", .options = .{} };
-        inline for (column_families_, 1..) |bcf, i| {
+        inline for (column_families, 1..) |bcf, i| {
             column_family_descriptions[i] = .{ .name = bcf.name, .options = .{} };
         }
 
@@ -52,7 +54,7 @@ pub const RocksDB = struct {
         defer allocator.free(cfs);
 
         // allocate handle slice
-        var cf_handles = try allocator.alloc(rocks.ColumnFamilyHandle, column_families_.len);
+        var cf_handles = try allocator.alloc(rocks.ColumnFamilyHandle, column_families.len);
         errdefer allocator.free(cf_handles); // kept alive as a field
 
         // initialize handle slice
@@ -138,6 +140,49 @@ pub const RocksDB = struct {
             rocks.DB.delete,
             .{ &self.db, self.cf_handles[cf_index], key_bytes.data },
         );
+    }
+
+    pub fn writeBatch(self: *Self) RocksWriteBatch {
+        return .{
+            .inner = rocks.WriteBatch.init(),
+            .cf_handles = self.cf_handles,
+        };
+    }
+
+    pub fn commit(self: *Self, batch: RocksWriteBatch) !void {
+        return callRocks(self.logger, self.db.write, .{batch.inner});
+    }
+};
+
+pub const RocksWriteBatch = struct {
+    inner: rocks.WriteBatch,
+    cf_handles: []const rocks.ColumnFamilyHandle,
+
+    const Self = @This();
+
+    pub fn put(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+        value: cf.Value,
+    ) !void {
+        const key_bytes = try cf.key().serializeToRef(self.allocator, key);
+        defer key_bytes.deinit();
+        const val_bytes = try cf.value().serializeToRef(self.allocator, value);
+        defer val_bytes.deinit();
+        self.inner.put(self.cf_handles[cf_index], key_bytes.data, val_bytes.data);
+    }
+
+    pub fn delete(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        comptime cf_index: usize,
+        key: cf.Key,
+    ) !void {
+        const key_bytes = try cf.key().serializeToRef(self.allocator, key);
+        defer key_bytes.deinit();
+        self.inner.delete(self.cf_handles[cf_index], key_bytes.data);
     }
 };
 
