@@ -63,6 +63,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.13.0
+
       - name: Set up dependencies
         run: sudo apt-get update
 
