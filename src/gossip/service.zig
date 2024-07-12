@@ -2083,10 +2083,6 @@ test "handle pong messages" {
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     const contact_info = try localhostTestContactInfo(pubkey);
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
-
     var gossip_service = try GossipService.init(
         allocator,
         allocator,
@@ -2094,7 +2090,7 @@ test "handle pong messages" {
         keypair,
         null,
         &exit,
-        logger,
+        .noop,
     );
     defer gossip_service.deinit();
 
@@ -2347,10 +2343,6 @@ test "handle old prune & pull request message" {
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
-    var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
-    logger.spawn();
-
     var gossip_service = try allocator.create(GossipService);
     gossip_service.* = try GossipService.init(
         allocator,
@@ -2359,7 +2351,7 @@ test "handle old prune & pull request message" {
         my_keypair,
         null,
         &exit,
-        logger,
+        .noop,
     );
     defer {
         gossip_service.deinit();
