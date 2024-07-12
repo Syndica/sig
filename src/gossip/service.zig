@@ -3393,6 +3393,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         for (0..bench_args.n_pull_requests) |_| {
             const packet = try fuzz.randomPullRequest(
                 allocator,
+                LegacyContactInfo.fromContactInfo(&contact_info_recv),
                 rng,
                 &recv_keypair,
                 address.toEndpoint(),
