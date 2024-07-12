@@ -227,6 +227,8 @@ pub const AccountIndex = struct {
     }
 
     /// adds a reference to the index
+    /// NOTE: this should only be used when you know the reference does not exist
+    /// because we never want duplicate state references in the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
         const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
 
