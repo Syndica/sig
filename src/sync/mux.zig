@@ -252,13 +252,13 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
-        pub fn readWithLock(self: *Self) struct { *const T, RLockGuard } {
+        pub fn readWithLock(self: *Self) struct { Const(T), RLockGuard } {
             var lock_guard = self.read();
             const t = lock_guard.get();
             return .{ t, lock_guard };
         }
 
-        pub fn writeWithLock(self: *Self) struct { *T, WLockGuard } {
+        pub fn writeWithLock(self: *Self) struct { Mutable(T), WLockGuard } {
             var lock_guard = self.write();
             const t = lock_guard.mut();
             return .{ t, lock_guard };

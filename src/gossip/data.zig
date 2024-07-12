@@ -94,7 +94,10 @@ pub const SignedGossipData = struct {
 
     /// only used in tests
     pub fn randomWithIndex(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
-        return try initSigned(GossipData.randomFromIndex(rng, index), keypair);
+        var data = GossipData.randomFromIndex(rng, index);
+        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        data.setId(pubkey);
+        return try initSigned(data, keypair);
     }
 
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {
@@ -155,6 +158,53 @@ pub const SignedGossipData = struct {
             },
             .RestartHeaviestFork => |*v| {
                 return v.from;
+            },
+        };
+    }
+
+    pub fn wallclockPtr(self: *Self) *u64 {
+        return switch (self.data) {
+            .LegacyContactInfo => |*v| {
+                return &v.wallclock;
+            },
+            .Vote => |*v| {
+                return &v[1].wallclock;
+            },
+            .LowestSlot => |*v| {
+                return &v[1].wallclock;
+            },
+            .LegacySnapshotHashes => |*v| {
+                return &v.wallclock;
+            },
+            .AccountsHashes => |*v| {
+                return &v.wallclock;
+            },
+            .EpochSlots => |*v| {
+                return &v[1].wallclock;
+            },
+            .LegacyVersion => |*v| {
+                return &v.wallclock;
+            },
+            .Version => |*v| {
+                return &v.wallclock;
+            },
+            .NodeInstance => |*v| {
+                return &v.wallclock;
+            },
+            .DuplicateShred => |*v| {
+                return &v[1].wallclock;
+            },
+            .SnapshotHashes => |*v| {
+                return &v.wallclock;
+            },
+            .ContactInfo => |*v| {
+                return &v.wallclock;
+            },
+            .RestartLastVotedForkSlots => |*v| {
+                return &v.wallclock;
+            },
+            .RestartHeaviestFork => |*v| {
+                return &v.wallclock;
             },
         };
     }
