@@ -39,3 +39,97 @@ to run the client
 - build the fuzz client in `ReleaseSafe` (ie, `zig build -Doptimize=ReleaseSafe`)
 - run the fuzz client pointing to sig with some seed and some number of random messages 
 to send: `./zig-out/bin/fuzz <entrypoint> <seed> <num_messages>` (eg, `./zig-out/bin/fuzz 127.0.0.1:8001 19 100000`)
+
+## Architecture
+
+### Gossip Service 
+
+The gossip service runs three main threads:
+
+- verify packet
+- process messages
+- build messages
+
+and two auxillary threads for reading and writing to the gossip socket.
+
+<p>
+<img alt="Gossip Service Diagram" src="imgs/gossip-service.png" style="width: 800px; margin: auto;">
+</p>
+
+### Verify Messages
+The verify messages thread verifies all incoming packets and forwards valid gossip messages to the process messages thread.
+<p>
+<img alt="Gossip Service Diagram" src="imgs/gossip-service-verify-packets.png" style="width: 600px; margin: auto;">
+</p>
+
+### Process Messages 
+The process messages thread handles all verified incoming gossip messages.
+<p>
+<img alt="Process Messages Diagram" src="imgs/gossip-service-process-messages.png" style="width: 600px; margin: auto;">
+</p>
+
+<details>
+<summary>Handle Ping Messages</summary>
+<br>
+<p>
+<img alt="Handle Ping Messages Diagram" src="imgs/gossip-service-handle-ping-messages.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+<details>
+<summary>Handle Pong Messages</summary>
+<br>
+<p>
+<img alt="Handle Pong Messages Diagram" src="imgs/gossip-service-handle-pong-messages.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+<details>
+<summary>Handle Pull Requests</summary>
+<br>
+<p>
+<img alt="Handle Pull Requests Diagram" src="imgs/gossip-service-handle-pull-requests.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+<details>
+<summary>Handle Pull Responses</summary>
+<br>
+<p>
+<img alt="Handle Pull Responses Diagram" src="imgs/gossip-service-handle-pull-responses.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+<details>
+<summary>Handle Push Messages</summary>
+<br>
+<p>
+<img alt="Handle Push Messages Diagram" src="imgs/gossip-service-handle-push-messages.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+<details>
+<summary>Handle Prune Messages</summary>
+<br>
+<p>
+<img alt="Handle Prune Messages Diagram" src="imgs/gossip-service-handle-prune-messages.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+
+### Build Messages
+The build messages thread uses the internal gossip service state to achieve two primary objectives:
+- build pull requests to obtain missing data from peers
+- build push messages to inform peers of our current state
+<p>
+<img alt="Build Messages Diagram" src="imgs/gossip-service-build-messages.png" style="width: 600px; margin: auto;">
+</p>
+
+<details>
+<summary>Build Pull Requests</summary>
+<br>
+<p>
+<img alt="Build Pull Requests" src="imgs/gossip-service-build-pull-requests.png" style="width: 600px; margin: auto;">
+</p>
+</details>
+<details>
+<summary>Build Push Messages</summary>
+<br>
+<p>
+<img alt="Build Push Messages" src="imgs/gossip-service-build-push-messages.png" style="width: 600px; margin: auto;">
+</p>
+</details>

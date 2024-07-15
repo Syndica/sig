@@ -218,7 +218,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }
 
                 // via direct method
-                _ = gossip_table.getContactInfo(pubkey) orelse {
+                _ = gossip_table.getThreadSafeContactInfo(pubkey) orelse {
                     logger.errf("failed to get contact info: {}\n", .{pubkey});
                     return;
                 };

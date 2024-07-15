@@ -4,19 +4,19 @@ const std = @import("std");
 const curl = @import("curl");
 const sig = @import("../lib.zig");
 
-const Pubkey = sig.core.pubkey.Pubkey;
-const GossipService = sig.gossip.GossipService;
-const ContactInfo = sig.gossip.data.ContactInfo;
-const GossipTable = sig.gossip.table.GossipTable;
 const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
-const Logger = sig.trace.log.Logger;
-const Hash = sig.core.hash.Hash;
+const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.Hash;
+const GossipTable = sig.gossip.GossipTable;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
+const GossipService = sig.gossip.GossipService;
+const Logger = sig.trace.Logger;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 
 /// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
 const PeerSnapshotHash = struct {
-    contact_info: ContactInfo,
+    contact_info: ThreadSafeContactInfo,
     full_snapshot: SlotAndHash,
     inc_snapshot: ?SlotAndHash,
 };
@@ -42,7 +42,7 @@ const PeerSearchResult = struct {
 pub fn findPeersToDownloadFromAssumeCapacity(
     allocator: std.mem.Allocator,
     table: *const GossipTable,
-    contact_infos: []const ContactInfo,
+    contact_infos: []const ThreadSafeContactInfo,
     my_shred_version: usize,
     my_pubkey: Pubkey,
     blacklist: []const Pubkey,
@@ -99,10 +99,10 @@ pub fn findPeersToDownloadFromAssumeCapacity(
             result.invalid_shred_version += 1;
             continue;
         }
-        _ = peer_contact_info.getSocket(.rpc) orelse {
+        if (peer_contact_info.rpc_addr == null) {
             result.no_rpc_count += 1;
             continue;
-        };
+        }
         const gossip_data = table.get(.{ .SnapshotHashes = peer_contact_info.pubkey }) orelse {
             result.no_snapshot_hashes_count += 1;
             continue;
@@ -144,7 +144,6 @@ pub fn findPeersToDownloadFromAssumeCapacity(
         }
 
         valid_peers.appendAssumeCapacity(.{
-            // NOTE: maybe we need to deep clone here due to arraylist sockets?
             .contact_info = peer_contact_info.*,
             .full_snapshot = snapshot_hashes.full,
             .inc_snapshot = max_inc_hash,
@@ -169,7 +168,7 @@ pub fn downloadSnapshotsFromGossip(
     logger.infof("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
 
     // TODO: maybe make this bigger? or dynamic?
-    var contact_info_buf: [1_000]ContactInfo = undefined;
+    var contact_info_buf: [1_000]ThreadSafeContactInfo = undefined;
 
     const my_contact_info = gossip_service.my_contact_info;
 
@@ -188,7 +187,7 @@ pub fn downloadSnapshotsFromGossip(
             defer lg.unlock();
             const table: *const GossipTable = lg.get();
 
-            const contacts = table.getContactInfos(&contact_info_buf, 0);
+            const contacts = table.getThreadSafeContactInfos(&contact_info_buf, 0);
 
             try available_snapshot_peers.ensureTotalCapacity(contacts.len);
             const result = try findPeersToDownloadFromAssumeCapacity(
@@ -215,7 +214,7 @@ pub fn downloadSnapshotsFromGossip(
             });
             defer allocator.free(snapshot_filename);
 
-            const rpc_socket = peer.contact_info.getSocket(.rpc).?;
+            const rpc_socket = peer.contact_info.rpc_addr.?;
             const rpc_url_bounded = rpc_socket.toStringBounded();
             const rpc_url = rpc_url_bounded.constSlice();
 
@@ -482,16 +481,13 @@ test "accounts_db.download: test remove untrusted peers" {
     const my_shred_version: usize = 19;
     const my_pubkey = Pubkey.random(rng);
 
-    const contact_infos: []ContactInfo = try allocator.alloc(ContactInfo, 10);
-    defer {
-        for (contact_infos) |ci| ci.deinit();
-        allocator.free(contact_infos);
-    }
+    const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
+    defer allocator.free(contact_infos);
 
     for (contact_infos) |*ci| {
         var lci = LegacyContactInfo.default(Pubkey.random(rng));
         lci.rpc.setPort(19); // no long unspecified = valid
-        ci.* = try lci.toContactInfo(allocator);
+        ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
         ci.shred_version = 19; // matching shred version
     }
 
@@ -561,16 +557,13 @@ test "accounts_db.download: test finding peers" {
     const my_shred_version: usize = 19;
     const my_pubkey = Pubkey.random(rng);
 
-    const contact_infos: []ContactInfo = try allocator.alloc(ContactInfo, 10);
-    defer {
-        for (contact_infos) |ci| ci.deinit();
-        allocator.free(contact_infos);
-    }
+    const contact_infos: []ThreadSafeContactInfo = try allocator.alloc(ThreadSafeContactInfo, 10);
+    defer allocator.free(contact_infos);
 
     for (contact_infos) |*ci| {
         var lci = LegacyContactInfo.default(Pubkey.random(rng));
         lci.rpc.setPort(19); // no long unspecified = valid
-        ci.* = try lci.toContactInfo(allocator);
+        ci.* = ThreadSafeContactInfo.fromLegacyContactInfo(lci);
         ci.shred_version = 19; // matching shred version
     }
 
