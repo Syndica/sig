@@ -2,14 +2,15 @@
 
 const std = @import("std");
 const curl = @import("curl");
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const gossip = @import("../gossip/service.zig");
-const GossipService = gossip.GossipService;
-const ContactInfo = @import("../gossip/data.zig").ContactInfo;
-const GossipTable = @import("../gossip/table.zig").GossipTable;
-const SlotAndHash = @import("./snapshots.zig").SlotAndHash;
-const Logger = @import("../trace/log.zig").Logger;
-const Hash = @import("../core/hash.zig").Hash;
+const sig = @import("../lib.zig");
+
+const Pubkey = sig.core.pubkey.Pubkey;
+const GossipService = sig.gossip.GossipService;
+const ContactInfo = sig.gossip.data.ContactInfo;
+const GossipTable = sig.gossip.table.GossipTable;
+const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
+const Logger = sig.trace.log.Logger;
+const Hash = sig.core.hash.Hash;
 
 const DOWNLOAD_PROGRESS_UPDATES_NS = 30 * std.time.ns_per_s;
 
@@ -463,9 +464,10 @@ pub fn downloadFile(
     }
 }
 
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
-const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
+const ThreadPool = sig.sync.thread_pool.ThreadPool;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 test "accounts_db.download: test remove untrusted peers" {

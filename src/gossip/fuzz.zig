@@ -126,16 +126,17 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     return packets;
 }
 
+/// note the contact info must have responded to a ping
+/// for a valid pull response to be generated
 pub fn randomPullRequest(
     allocator: std.mem.Allocator,
+    contact_info: LegacyContactInfo,
     rng: std.rand.Random,
     keypair: *const KeyPair,
     to_addr: EndPoint,
 ) !Packet {
     const value = try SignedGossipData.initSigned(.{
-        .LegacyContactInfo = LegacyContactInfo.default(
-            Pubkey.fromPublicKey(&keypair.public_key),
-        ),
+        .LegacyContactInfo = contact_info,
     }, keypair);
 
     return randomPullRequestWithContactInfo(
@@ -261,8 +262,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var gossip_client, const packet_channel, var handle = blk: {
         if (fuzz_sig) {
+            // this is who we blast messages at
             var client_keypair = try KeyPair.create(null);
-            const client_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
+            const client_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9988);
             const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
@@ -283,6 +285,27 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     .dump = false,
                 },
             });
+
+            // this is used to respond to pings
+            var gossip_service_fuzzer = try GossipService.init(
+                allocator,
+                allocator,
+                fuzz_contact_info,
+                fuzz_keypair,
+                (&SocketAddr.fromEndpoint(&to_entrypoint))[0..1], // we only want to communicate with one node
+                &exit,
+                .noop, // no logs
+            );
+
+            // this is mainly used to just send packets through the fuzzer
+            // but we also want to respond to pings so we need to run the full gossip service
+            const fuzz_handle = try std.Thread.spawn(.{}, GossipService.run, .{
+                &gossip_service_fuzzer, .{
+                    .spy_node = true,
+                    .dump = false,
+                },
+            });
+            fuzz_handle.detach();
 
             break :blk .{ gossip_service_client, gossip_service_client.packet_incoming_channel, client_handle };
         } else {
@@ -323,6 +346,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         maybe_max_messages,
         &rng,
         &fuzz_keypair,
+        LegacyContactInfo.fromContactInfo(&fuzz_contact_info),
         to_entrypoint,
         packet_channel,
     );
@@ -341,6 +365,7 @@ pub fn fuzz(
     maybe_max_messages: ?usize,
     rng: *std.rand.DefaultPrng,
     keypair: *const KeyPair,
+    contact_info: LegacyContactInfo,
     to_endpoint: EndPoint,
     outgoing_channel: *sig.sync.Channel(std.ArrayList(Packet)),
 ) !void {
@@ -391,6 +416,7 @@ pub fn fuzz(
                 // send pull request
                 const packet = randomPullRequest(
                     allocator,
+                    contact_info,
                     rng.random(),
                     keypair,
                     to_endpoint,
