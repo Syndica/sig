@@ -409,19 +409,19 @@ pub const GossipTable = struct {
         }
     }
 
-    /// Iterates over the values in the given hashmap and looks up the 
+    /// Iterates over the values in the given hashmap and looks up the
     /// corresponding values in the store. If the value is found, it is
-    /// copied into the buffer. The cursor is updated to the last index 
-    /// that was copied. 
-    /// 
+    /// copied into the buffer. The cursor is updated to the last index
+    /// that was copied.
+    ///
     /// NOTE: if the allocator is null, the values are
-    /// not cloned and the buffer will contain references to the store. 
+    /// not cloned and the buffer will contain references to the store.
     /// In this case, its not safe to access these values across lock boundaries.
-    /// 
+    ///
     /// Typical usage is to call this function with one of the tracked fields.
-    /// For example, using `GossipTable.contact_infos` or `GossipTable.votes` as 
+    /// For example, using `GossipTable.contact_infos` or `GossipTable.votes` as
     /// the `hashmap` field will return the corresponding ContactInfos or Votes from the store.
-    /// 
+    ///
     /// eg,
     /// genericGetWithCursor(
     ///     allocator,
