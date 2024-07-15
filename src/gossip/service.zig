@@ -742,7 +742,7 @@ pub const GossipService = struct {
                     var gossip_table: *GossipTable = gossip_table_lock.mut();
 
                     var x_timer = std.time.Timer.start() catch unreachable;
-                    gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                    _ = gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
                         self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                     };
                     const elapsed = x_timer.read();
@@ -1639,7 +1639,7 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             try gossip_table.purged.trim(purged_cutoff_timestamp);
-            try gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY);
+            _ = try gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY);
 
             // TODO: condition timeout on stake weight:
             // - values from nodes with non-zero stake: epoch duration
@@ -3133,7 +3133,7 @@ test "init, exit, and deinit" {
     gossip_service.deinit();
 }
 
-const fuzz = @import("./fuzz.zig");
+const fuzz_service = @import("./fuzz_service.zig");
 
 pub const BenchmarkGossipServiceGeneral = struct {
     pub const min_iterations = 1;
@@ -3234,13 +3234,13 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
         for (0..bench_args.message_counts.n_ping) |_| {
             // send a ping message
-            const packet = try fuzz.randomPingPacket(rng, &keypair, endpoint);
+            const packet = try fuzz_service.randomPingPacket(rng, &keypair, endpoint);
             try packet_batch.append(packet);
         }
 
         for (0..bench_args.message_counts.n_push_message) |_| {
             // send a push message
-            var packets = try fuzz.randomPushMessage(
+            var packets = try fuzz_service.randomPushMessage(
                 rng,
                 &keypair,
                 address.toEndpoint(),
@@ -3252,7 +3252,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
 
         for (0..bench_args.message_counts.n_pull_response) |_| {
             // send a pull response
-            var packets = try fuzz.randomPullResponse(
+            var packets = try fuzz_service.randomPullResponse(
                 rng,
                 &keypair,
                 address.toEndpoint(),
@@ -3391,7 +3391,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
             bench_args.n_pull_requests,
         );
         for (0..bench_args.n_pull_requests) |_| {
-            const packet = try fuzz.randomPullRequest(
+            const packet = try fuzz_service.randomPullRequest(
                 allocator,
                 LegacyContactInfo.fromContactInfo(&contact_info_recv),
                 rng,

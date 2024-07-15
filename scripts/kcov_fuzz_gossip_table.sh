@@ -23,8 +23,8 @@ kcov \
     --include-pattern=src/gossip/ \
     --exclude-pattern=$HOME/.cache \
     kcov-output/ \
-    ./zig-out/bin/fuzz gossip_service 19 50_000
-    
+    ./zig-out/bin/fuzz gossip_table 19 50_000
+
 # open report
 echo "=> Opening kcov-output/index.html" 
 open kcov-output/index.html

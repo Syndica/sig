@@ -2,7 +2,8 @@ const std = @import("std");
 const lib = @import("./lib.zig");
 
 const accountsdb_fuzz = lib.accounts_db.fuzz;
-const gossip_fuzz = lib.gossip.fuzz;
+const gossip_fuzz_service = lib.gossip.fuzz_service;
+const gossip_fuzz_table = lib.gossip.fuzz_table;
 const logger = lib.trace.log;
 
 // where seeds are saved (in case of too many logs)
@@ -40,10 +41,13 @@ pub fn main() !void {
     std.debug.print("using seed: {d}\n", .{seed});
     try writeSeedToFile(seed);
 
+    // NOTE: changing these hardcoded str values will require a change to the fuzz/kcov in `scripts/`
     if (std.mem.startsWith(u8, filter, "accountsdb")) {
         try accountsdb_fuzz.run(seed, &cli_args);
-    } else if (std.mem.startsWith(u8, filter, "gossip")) {
-        try gossip_fuzz.run(seed, &cli_args);
+    } else if (std.mem.startsWith(u8, filter, "gossip_service")) {
+        try gossip_fuzz_service.run(seed, &cli_args);
+    } else if (std.mem.startsWith(u8, filter, "gossip_table")) {
+        try gossip_fuzz_table.run(seed, &cli_args);
     } else {
         std.debug.print("unknown fuzz filter: {s}\n", .{filter});
         return error.UnknownFilter;
