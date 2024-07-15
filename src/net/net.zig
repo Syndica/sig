@@ -31,15 +31,13 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
-    pub fn parse(bytes: []const u8) !Self {
-        const address = parseIpv4(bytes) catch blk: {
-            break :blk parseIpv6(bytes);
-        };
-
-        return address;
+    pub const ParseIpError = error{InvalidIp};
+    pub fn parse(bytes: []const u8) ParseIpError!Self {
+        return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIp;
     }
 
-    pub fn parseIpv6(bytes: []const u8) !Self {
+    pub const ParseIpv6Error = error{InvalidIpv6};
+    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!Self {
         // https://ratfactor.com/zig/stdlib-browseable2/net.zig.html
         // ports with IPv6 are after square brackets, but stdlib has IPv6 parsing on only the address
         // so exploit stdlib for that portion, and parse the port afterwards.
@@ -69,7 +67,8 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn parseIpv4(bytes: []const u8) !Self {
+    pub const ParseIpv4Error = error{InvalidIpv4};
+    pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
         // parse v4
         var octs: [4]u8 = [_]u8{0} ** 4;
         var addr_port: u16 = 0;
