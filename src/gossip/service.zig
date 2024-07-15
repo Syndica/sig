@@ -763,6 +763,8 @@ pub const GossipService = struct {
         var shred_version_assigned = false;
 
         while (!self.exit.load(.unordered)) {
+            defer loop_timer.reset();
+
             if (pull_req_timer.read().as_millis() > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
@@ -833,7 +835,6 @@ pub const GossipService = struct {
 
             // sleep
             if (loop_timer.read().as_millis() < GOSSIP_SLEEP_MILLIS) {
-                defer loop_timer.reset();
                 const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read().as_millis();
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
@@ -3104,11 +3105,11 @@ pub const BenchmarkGossipServicePullRequests = struct {
             bench_args.n_pull_requests,
         );
         for (0..bench_args.n_pull_requests) |_| {
-            const packet = try fuzz.randomPullRequest(
+            const packet = try fuzz.randomPullRequestWithContactInfo(
                 allocator,
                 rng,
-                &recv_keypair,
                 address.toEndpoint(),
+                signed_contact_info_recv,
             );
             packet_batch.appendAssumeCapacity(packet);
         }

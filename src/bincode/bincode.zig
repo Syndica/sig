@@ -149,6 +149,15 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
                     @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
                 }
             }
+
+            const init_field = "!bincode-config:init";
+            if (@hasDecl(T, init_field)) {
+                const field_config = @field(T, init_field);
+                if (field_config.init_fn) |init| {
+                    init(&data);
+                }
+            }
+
             return data;
         },
         .Optional => |info| {
@@ -594,6 +603,7 @@ pub fn FieldConfig(comptime T: type) type {
         skip: bool = false,
         default_on_eof: bool = false,
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
+        init_fn: ?fn (self: *T) void = null,
     };
 }
 
