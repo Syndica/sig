@@ -461,7 +461,7 @@ pub const GossipService = struct {
 
     /// main logic for recieving and processing gossip messages.
     pub fn processMessages(self: *Self) !void {
-        var trim_table_timer = sig.time.Timer.start() catch unreachable;
+        var trim_table_timer = try sig.time.Timer.start();
         var msg_count: usize = 0;
 
         // we batch messages bc:
@@ -754,10 +754,10 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self) !void {
-        var loop_timer = sig.time.Timer.start() catch unreachable;
-        var push_timer = sig.time.Timer.start() catch unreachable;
-        var pull_req_timer = sig.time.Timer.start() catch unreachable;
-        var stats_publish_timer = sig.time.Timer.start() catch unreachable;
+        var loop_timer = try sig.time.Timer.start();
+        var push_timer = try sig.time.Timer.start();
+        var pull_req_timer = try sig.time.Timer.start();
+        var stats_publish_timer = try sig.time.Timer.start();
         var push_cursor: u64 = 0;
         var entrypoints_identified = false;
         var shred_version_assigned = false;

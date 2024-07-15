@@ -409,7 +409,7 @@ pub const GossipTable = struct {
         }
     }
 
-    pub fn genericGetEntriesWithCursor(
+    fn genericGetEntriesWithCursor(
         allocator: ?std.mem.Allocator,
         hashmap: anytype,
         store: AutoArrayHashMap(GossipKey, GossipVersionedData),
@@ -448,48 +448,6 @@ pub const GossipTable = struct {
         return genericGetEntriesWithCursor(
             allocator,
             self.entries,
-            self.store,
-            buf,
-            caller_cursor,
-        );
-    }
-
-    pub fn getVotesWithCursor(
-        self: *Self,
-        buf: []GossipVersionedData,
-        caller_cursor: *usize,
-    ) ![]GossipVersionedData {
-        return genericGetEntriesWithCursor(
-            null,
-            self.votes,
-            self.store,
-            buf,
-            caller_cursor,
-        );
-    }
-
-    pub fn getEpochSlotsWithCursor(
-        self: *Self,
-        buf: []GossipVersionedData,
-        caller_cursor: *usize,
-    ) ![]GossipVersionedData {
-        return genericGetEntriesWithCursor(
-            null,
-            self.epoch_slots,
-            self.store,
-            buf,
-            caller_cursor,
-        );
-    }
-
-    pub fn getDuplicateShredsWithCursor(
-        self: *Self,
-        buf: []GossipVersionedData,
-        caller_cursor: *usize,
-    ) ![]GossipVersionedData {
-        return genericGetEntriesWithCursor(
-            null,
-            self.duplicate_shreds,
             self.store,
             buf,
             caller_cursor,
@@ -1131,48 +1089,6 @@ test "gossip.table: insert and get" {
     const label = value.label();
     const x = table.get(label).?;
     _ = x;
-}
-
-test "gossip.table: insert and get votes" {
-    const kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk);
-
-    var vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    var gossip_value = try SignedGossipData.initSigned(GossipData{
-        .Vote = .{ 0, vote },
-    }, &kp);
-
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
-    try table.insert(gossip_value, 0);
-
-    var cursor: usize = 0;
-    var buf: [100]GossipVersionedData = undefined;
-    var votes = try table.getVotesWithCursor(&buf, &cursor);
-
-    try std.testing.expect(votes.len == 1);
-    try std.testing.expect(cursor == 1);
-
-    // try inserting another vote
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-    id = Pubkey.random(rng);
-    vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    gossip_value = try SignedGossipData.initSigned(GossipData{
-        .Vote = .{ 0, vote },
-    }, &kp);
-    try table.insert(gossip_value, 1);
-
-    votes = try table.getVotesWithCursor(&buf, &cursor);
-    try std.testing.expect(votes.len == 1);
-    try std.testing.expect(cursor == 2);
-
-    const v = try table.getBitmaskMatches(std.testing.allocator, 10, 1);
-    defer v.deinit();
 }
 
 test "gossip.table: insert and get contact_info" {
