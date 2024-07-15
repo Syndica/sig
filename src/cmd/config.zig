@@ -1,5 +1,7 @@
-const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
-const ShredCollectorConfig = @import("../shred_collector/service.zig").ShredCollectorConfig;
+const sig = @import("../lib.zig");
+const ACCOUNT_INDEX_BINS = sig.accounts_db.db.ACCOUNT_INDEX_BINS;
+const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
+const IpAddr = sig.net.IpAddr;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
@@ -24,6 +26,15 @@ const GossipConfig = struct {
     spy_node: bool = false,
     dump: bool = false,
     trusted_validators: [][]const u8 = &.{},
+
+    pub fn getHost(config: GossipConfig) ?sig.net.SocketAddr.ParseIpError!IpAddr {
+        const host_str = config.host orelse return null;
+        const socket = try sig.net.SocketAddr.parse(host_str);
+        return switch (socket) {
+            .V4 => |v4| .{ .ipv4 = v4.ip },
+            .V6 => |v6| .{ .ipv6 = v6.ip },
+        };
+    }
 };
 
 const shred_collector_defaults = ShredCollectorConfig{
