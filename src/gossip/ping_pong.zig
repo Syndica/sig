@@ -1,18 +1,19 @@
 const std = @import("std");
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Hash = @import("../core/hash.zig").Hash;
-const Signature = @import("../core/signature.zig").Signature;
-const _gossip_data = @import("data.zig");
-const ContactInfo = _gossip_data.ContactInfo;
-const getWallclockMs = _gossip_data.getWallclockMs;
+const sig = @import("../lib.zig");
+
+const testing = std.testing;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const testing = std.testing;
-const LruCache = @import("../common/lru.zig").LruCache;
-const SocketAddr = @import("../net/net.zig").SocketAddr;
-const Instant = std.time.Instant;
-const assert = std.debug.assert;
+
+const LruCache = sig.common.lru.LruCache;
+const Pubkey = sig.core.Pubkey;
+const Hash = sig.core.Hash;
+const Signature = sig.core.Signature;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
+const SocketAddr = sig.net.SocketAddr;
+
+const getWallclockMs = sig.gossip.data.getWallclockMs;
 
 const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{
@@ -29,11 +30,11 @@ pub const Ping = struct {
     const Self = @This();
 
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
-        const sig = try keypair.sign(&token, null);
+        const signature = try keypair.sign(&token, null);
         const self = Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
-            .signature = Signature.init(sig.toBytes()),
+            .signature = Signature.init(signature.toBytes()),
         };
         return self;
     }
@@ -41,12 +42,12 @@ pub const Ping = struct {
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
         var token: [PING_TOKEN_SIZE]u8 = undefined;
         rng.bytes(&token);
-        var sig = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
+        var signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .token = token,
-            .signature = Signature.init(sig.toBytes()),
+            .signature = Signature.init(signature.toBytes()),
         };
     }
 
@@ -67,12 +68,12 @@ pub const Pong = struct {
     pub fn init(ping: *const Ping, keypair: *const KeyPair) error{SignatureError}!Self {
         var token_with_prefix = PING_PONG_HASH_PREFIX ++ ping.token;
         var hash = Hash.generateSha256Hash(token_with_prefix[0..]);
-        const sig = keypair.sign(&hash.data, null) catch return error.SignatureError;
+        const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return Self{
             .from = Pubkey.fromPublicKey(&keypair.public_key),
             .hash = hash,
-            .signature = Signature.init(sig.toBytes()),
+            .signature = Signature.init(signature.toBytes()),
         };
     }
 
@@ -112,9 +113,9 @@ pub const PingCache = struct {
     rate_limit_delay_ns: u64,
     // Timestamp of last ping message sent to a remote node.
     // Used to rate limit pings to remote nodes.
-    pings: LruCache(.non_locking, PubkeyAndSocketAddr, Instant),
+    pings: LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant),
     // Verified pong responses from remote nodes.
-    pongs: LruCache(.non_locking, PubkeyAndSocketAddr, Instant),
+    pongs: LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant),
     // Hash of ping tokens sent out to remote nodes,
     // pending a pong response back.
     pending_cache: LruCache(.non_locking, Hash, PubkeyAndSocketAddr),
@@ -129,12 +130,12 @@ pub const PingCache = struct {
         rate_limit_delay_ns: u64,
         cache_capacity: usize,
     ) error{OutOfMemory}!Self {
-        assert(rate_limit_delay_ns <= ttl_ns / 2);
+        std.debug.assert(rate_limit_delay_ns <= ttl_ns / 2);
         return Self{
             .ttl_ns = ttl_ns,
             .rate_limit_delay_ns = rate_limit_delay_ns,
-            .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
-            .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, Instant).init(allocator, cache_capacity),
+            .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
+            .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
             .pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
             .allocator = allocator,
         };
@@ -147,7 +148,7 @@ pub const PingCache = struct {
     }
 
     /// Records a `Pong` if corresponding `Ping` exists in `pending_cache`
-    pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: Instant) bool {
+    pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: std.time.Instant) bool {
         const peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
             if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
@@ -168,7 +169,7 @@ pub const PingCache = struct {
     ) ?Ping {
         if (self.pings.peek(peer_and_addr)) |earlier| {
             // to prevent integer overflow
-            assert(now.order(earlier) != .lt);
+            std.debug.assert(now.order(earlier) != .lt);
 
             const elapsed: u64 = now.since(earlier);
             if (elapsed < self.rate_limit_delay_ns) {
@@ -192,7 +193,7 @@ pub const PingCache = struct {
     ) struct { passes_ping_check: bool, maybe_ping: ?Ping } {
         if (self.pongs.get(peer_and_addr)) |last_pong_time| {
             // to prevent integer overflow
-            assert(now.order(last_pong_time) != .lt);
+            std.debug.assert(now.order(last_pong_time) != .lt);
 
             const age = now.since(last_pong_time);
 
@@ -214,14 +215,14 @@ pub const PingCache = struct {
         self: *Self,
         allocator: std.mem.Allocator,
         our_keypair: KeyPair,
-        peers: []ContactInfo,
+        peers: []ThreadSafeContactInfo,
     ) error{OutOfMemory}!struct { valid_peers: std.ArrayList(usize), pings: std.ArrayList(PingAndSocketAddr) } {
         const now = std.time.Instant.now() catch @panic("time not supported by OS!");
         var valid_peers = std.ArrayList(usize).init(allocator);
         var pings = std.ArrayList(PingAndSocketAddr).init(allocator);
 
         for (peers, 0..) |*peer, i| {
-            if (peer.getSocket(.gossip)) |gossip_addr| {
+            if (peer.gossip_addr) |gossip_addr| {
                 const result = self.check(now, PubkeyAndSocketAddr{ .pubkey = peer.pubkey, .socket_addr = gossip_addr }, &our_keypair);
                 if (result.passes_ping_check) {
                     try valid_peers.append(i);
@@ -268,7 +269,7 @@ test "gossip.ping_pong: PingCache works" {
     try testing.expect(!resp.passes_ping_check);
     try testing.expect(resp.maybe_ping != null);
 
-    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]ContactInfo{});
+    var result = try ping_cache.filterValidPeers(testing.allocator, our_kp, &[_]ThreadSafeContactInfo{});
     defer result.valid_peers.deinit();
     defer result.pings.deinit();
 
@@ -283,9 +284,9 @@ test "gossip.ping_pong: ping signatures match rust" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
     var ping = Ping.init([_]u8{0} ** PING_TOKEN_SIZE, &keypair) catch unreachable;
-    const sig = ping.signature.data;
+    const signature = ping.signature.data;
 
     const rust_sig = [_]u8{ 52, 171, 91, 205, 183, 211, 38, 219, 53, 155, 163, 118, 202, 169, 15, 237, 147, 87, 209, 20, 6, 115, 24, 114, 196, 41, 217, 55, 123, 245, 35, 138, 126, 47, 233, 182, 90, 206, 13, 173, 212, 107, 94, 120, 167, 254, 14, 11, 253, 199, 158, 4, 203, 42, 173, 143, 214, 209, 132, 158, 223, 62, 214, 11 };
-    try testing.expect(std.mem.eql(u8, &sig, &rust_sig));
+    try testing.expect(std.mem.eql(u8, &signature, &rust_sig));
     try ping.verify();
 }

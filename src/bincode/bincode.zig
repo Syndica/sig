@@ -149,6 +149,16 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
                     @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
                 }
             }
+
+            // TODO: improve implementation of post deserialise method
+            const post_deserialize = "!bincode-config:post-deserialize";
+            if (@hasDecl(T, post_deserialize)) {
+                const field_config = @field(T, post_deserialize);
+                if (field_config.post_deserialize_fn) |post_deserialize_fn| {
+                    post_deserialize_fn(&data);
+                }
+            }
+
             return data;
         },
         .Optional => |info| {
@@ -594,6 +604,7 @@ pub fn FieldConfig(comptime T: type) type {
         skip: bool = false,
         default_on_eof: bool = false,
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
+        post_deserialize_fn: ?fn (self: *T) void = null,
     };
 }
 

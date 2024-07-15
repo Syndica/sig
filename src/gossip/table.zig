@@ -14,6 +14,7 @@ const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const Vote = sig.gossip.data.Vote;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
@@ -150,7 +151,7 @@ pub const GossipTable = struct {
 
         var store_iter = self.store.iterator();
         while (store_iter.next()) |entry| {
-            bincode.free(self.allocator, entry.value_ptr.value.data);
+            entry.value_ptr.value.data.deinit(self.allocator);
         }
         self.store.deinit();
     }
@@ -398,22 +399,44 @@ pub const GossipTable = struct {
 
     /// Since a node may be represented with ContactInfo or LegacyContactInfo,
     /// this function checks for both, and efficiently returns the data as
-    /// ContactInfo, regardless of how it was received.
-    pub fn getContactInfo(self: *const Self, pubkey: Pubkey) ?ContactInfo {
+    /// ThreadSafeContactInfo, regardless of how it was received.
+    pub fn getThreadSafeContactInfo(self: *const Self, pubkey: Pubkey) ?ThreadSafeContactInfo {
         const label = GossipKey{ .ContactInfo = pubkey };
         if (self.store.get(label)) |v| {
-            return v.value.data.ContactInfo;
+            return ThreadSafeContactInfo.fromContactInfo(v.value.data.ContactInfo);
         } else {
-            return self.converted_contact_infos.get(pubkey);
+            return ThreadSafeContactInfo.fromContactInfo(self.converted_contact_infos.get(pubkey) orelse return null);
         }
     }
 
-    pub fn genericGetWithCursor(
+    /// Iterates over the values in the given hashmap and looks up the
+    /// corresponding values in the store. If the value is found, it is
+    /// copied into the buffer. The cursor is updated to the last index
+    /// that was copied.
+    ///
+    /// NOTE: if the allocator is null, the values are
+    /// not cloned and the buffer will contain references to the store.
+    /// In this case, its not safe to access these values across lock boundaries.
+    ///
+    /// Typical usage is to call this function with one of the tracked fields.
+    /// For example, using `GossipTable.contact_infos` or `GossipTable.votes` as
+    /// the `hashmap` field will return the corresponding ContactInfos or Votes from the store.
+    ///
+    /// eg,
+    /// genericGetWithCursor(
+    ///     allocator,
+    ///     self.votes,
+    ///     self.store,
+    ///     &buf,
+    ///     &caller_cursor,
+    /// );
+    fn genericGetEntriesWithCursor(
+        allocator: ?std.mem.Allocator,
         hashmap: anytype,
         store: AutoArrayHashMap(GossipKey, GossipVersionedData),
         buf: []GossipVersionedData,
         caller_cursor: *usize,
-    ) []GossipVersionedData {
+    ) error{OutOfMemory}![]GossipVersionedData {
         const cursor_indexs = hashmap.keys();
         const store_values = store.values();
 
@@ -425,7 +448,7 @@ pub const GossipTable = struct {
 
             const entry_index = hashmap.get(cursor_index).?;
             const entry = store_values[entry_index];
-            buf[index] = entry;
+            buf[index] = if (allocator == null) entry else try entry.clone(allocator.?);
             index += 1;
 
             if (index == buf.len) {
@@ -437,12 +460,14 @@ pub const GossipTable = struct {
         return buf[0..index];
     }
 
-    pub fn getEntriesWithCursor(
+    pub fn getClonedEntriesWithCursor(
         self: *const Self,
+        allocator: std.mem.Allocator,
         buf: []GossipVersionedData,
         caller_cursor: *usize,
-    ) []GossipVersionedData {
-        return genericGetWithCursor(
+    ) error{OutOfMemory}![]GossipVersionedData {
+        return genericGetEntriesWithCursor(
+            allocator,
             self.entries,
             self.store,
             buf,
@@ -450,43 +475,22 @@ pub const GossipTable = struct {
         );
     }
 
-    pub fn getVotesWithCursor(
-        self: *Self,
-        buf: []GossipVersionedData,
-        caller_cursor: *usize,
-    ) ![]GossipVersionedData {
-        return genericGetWithCursor(
-            self.votes,
-            self.store,
-            buf,
-            caller_cursor,
-        );
-    }
-
-    pub fn getEpochSlotsWithCursor(
-        self: *Self,
-        buf: []GossipVersionedData,
-        caller_cursor: *usize,
-    ) ![]GossipVersionedData {
-        return genericGetWithCursor(
-            self.epoch_slots,
-            self.store,
-            buf,
-            caller_cursor,
-        );
-    }
-
-    pub fn getDuplicateShredsWithCursor(
-        self: *Self,
-        buf: []GossipVersionedData,
-        caller_cursor: *usize,
-    ) ![]GossipVersionedData {
-        return genericGetWithCursor(
-            self.duplicate_shreds,
-            self.store,
-            buf,
-            caller_cursor,
-        );
+    /// Same as getContactInfos, but returns a slice of ThreadSafeContactInfos.
+    /// It should be used in favour of getContactInfos whenever the result crosses
+    /// a table lock boundary.
+    pub fn getThreadSafeContactInfos(
+        self: *const Self,
+        buf: []ThreadSafeContactInfo,
+        minimum_insertion_timestamp: u64,
+    ) []ThreadSafeContactInfo {
+        var infos = self.contactInfoIterator(minimum_insertion_timestamp);
+        var i: usize = 0;
+        while (infos.next()) |info| {
+            if (i >= buf.len) break;
+            buf[i] = ThreadSafeContactInfo.fromContactInfo(info.*);
+            i += 1;
+        }
+        return buf[0..i];
     }
 
     /// Returns a slice of contact infos that are no older than minimum_insertion_timestamp.
@@ -650,7 +654,7 @@ pub const GossipTable = struct {
         }
 
         // free memory while versioned_value still points to the correct data
-        bincode.free(self.allocator, versioned_value.value.data);
+        versioned_value.value.data.deinit(self.allocator);
 
         // remove from store
         // this operation replaces the data pointed to by versioned_value to
@@ -1106,48 +1110,6 @@ test "gossip.table: insert and get" {
     const label = value.label();
     const x = table.get(label).?;
     _ = x;
-}
-
-test "gossip.table: insert and get votes" {
-    const kp_bytes = [_]u8{1} ** 32;
-    const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk);
-
-    var vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    var gossip_value = try SignedGossipData.initSigned(GossipData{
-        .Vote = .{ 0, vote },
-    }, &kp);
-
-    var tp = ThreadPool.init(.{});
-    var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
-    try table.insert(gossip_value, 0);
-
-    var cursor: usize = 0;
-    var buf: [100]GossipVersionedData = undefined;
-    var votes = try table.getVotesWithCursor(&buf, &cursor);
-
-    try std.testing.expect(votes.len == 1);
-    try std.testing.expect(cursor == 1);
-
-    // try inserting another vote
-    const seed: u64 = @intCast(std.time.milliTimestamp());
-    var rand = std.rand.DefaultPrng.init(seed);
-    const rng = rand.random();
-    id = Pubkey.random(rng);
-    vote = Vote{ .from = id, .transaction = Transaction.default(), .wallclock = 10 };
-    gossip_value = try SignedGossipData.initSigned(GossipData{
-        .Vote = .{ 0, vote },
-    }, &kp);
-    try table.insert(gossip_value, 1);
-
-    votes = try table.getVotesWithCursor(&buf, &cursor);
-    try std.testing.expect(votes.len == 1);
-    try std.testing.expect(cursor == 2);
-
-    const v = try table.getBitmaskMatches(std.testing.allocator, 10, 1);
-    defer v.deinit();
 }
 
 test "gossip.table: insert and get contact_info" {
