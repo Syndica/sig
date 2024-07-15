@@ -2826,9 +2826,7 @@ test "test large push messages" {
         var keypair = try KeyPair.create(null);
         var value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lock_guard.mut().insert(value, getWallclockMs());
-        try peers.append(ThreadSafeContactInfo.fromContactInfo(
-            try value.data.LegacyContactInfo.toContactInfo(allocator)
-        ));
+        try peers.append(ThreadSafeContactInfo.fromContactInfo(try value.data.LegacyContactInfo.toContactInfo(allocator)));
     }
     lock_guard.unlock();
 
