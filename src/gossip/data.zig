@@ -1100,22 +1100,23 @@ pub const ContactInfo = struct {
         };
     }
 
-    pub fn initDummyForTest(
+    pub fn random(
         allocator: std.mem.Allocator,
+        rng: std.rand.Random,
         pubkey: Pubkey,
         wallclock: u64,
         outset: u64,
         shred_version: u16,
-    ) ContactInfo {
-        var addrs = ArrayList(IpAddr).initCapacity(allocator, 4) catch unreachable;
-        var sockets = ArrayList(SocketEntry).initCapacity(allocator, 6) catch unreachable;
+    ) !ContactInfo {
+        var addrs = try ArrayList(IpAddr).initCapacity(allocator, rng.intRangeAtMost(usize, 4, 10));
+        var sockets = try ArrayList(SocketEntry).initCapacity(allocator, rng.intRangeAtMost(usize, 4, 10));
 
-        for (0..4) |_| {
-            addrs.append(IpAddr.newIpv4(127, 0, 0, 1)) catch unreachable;
+        for (0..addrs.items.len) |_| {
+            addrs.appendAssumeCapacity(IpAddr.newIpv4(127, 0, 0, 1));
         }
 
-        for (0..6) |_| {
-            sockets.append(.{ .key = .turbine_recv, .index = 20, .offset = 30 }) catch unreachable;
+        for (0..sockets.items.len) |_| {
+            sockets.appendAssumeCapacity(.{ .key = .turbine_recv, .index = 20, .offset = 30 });
         }
 
         return ContactInfo{
@@ -1386,7 +1387,8 @@ test "gossip.data: contact info bincode serialize matches rust bincode" {
     };
 
     const pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
-    var ci = ContactInfo.initDummyForTest(testing.allocator, pubkey, 100, 200, 300);
+    var random = std.rand.DefaultPrng.init(0);
+    var ci = try ContactInfo.random(std.testing.allocator, random.random(), pubkey, 100, 200, 300);
     defer ci.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
@@ -1660,7 +1662,7 @@ test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
 test "gossip.data: sanitize valid ContactInfo works" {
     var rand = std.rand.DefaultPrng.init(871329);
     const rng = rand.random();
-    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng), 100, 123, 246);
+    const info = try ContactInfo.random(std.testing.allocator, rng, Pubkey.random(rng), 100, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     try data.sanitize();
@@ -1669,7 +1671,7 @@ test "gossip.data: sanitize valid ContactInfo works" {
 test "gossip.data: sanitize invalid ContactInfo has error" {
     var rand = std.rand.DefaultPrng.init(3414214);
     const rng = rand.random();
-    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng), 1_000_000_000_000_000, 123, 246);
+    const info = try ContactInfo.random(std.testing.allocator, rng, Pubkey.random(rng), 1_000_000_000_000_000, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}

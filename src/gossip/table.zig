@@ -30,11 +30,6 @@ const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8192;
 pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this
 
-pub const TableError = error{
-    OldValue,
-    DuplicateValue,
-};
-
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 
 // indexable HashSet
@@ -103,10 +98,16 @@ pub const GossipTable = struct {
     // head of the store
     cursor: usize = 0,
 
+    // NOTE: this allocator is used to free any memory allocated by the bincode library
     allocator: std.mem.Allocator,
     thread_pool: *ThreadPool,
 
     const Self = @This();
+
+    pub const InsertionError = error{
+        OldValue,
+        DuplicateValue,
+    };
 
     pub fn init(allocator: std.mem.Allocator, thread_pool: *ThreadPool) !Self {
         return Self{
@@ -275,10 +276,10 @@ pub const GossipTable = struct {
             if (old_entry.value_hash.order(&versioned_value.value_hash) != .eq) {
                 // if hash isnt the same and override() is false then msg is old
                 try self.purged.insert(old_entry.value_hash, now);
-                return TableError.OldValue;
+                return InsertionError.OldValue;
             } else {
                 // hash is the same then its a duplicate
-                return TableError.DuplicateValue;
+                return InsertionError.DuplicateValue;
             }
         }
     }
@@ -712,8 +713,10 @@ pub const GossipTable = struct {
         return (10 * n_pubkeys > 9 * max_pubkey_capacity);
     }
 
-    pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!void {
-        if (!self.shouldTrim(max_pubkey_capacity)) return;
+    /// removes pubkeys and their associated values until the pubkey count is less than max_pubkey_capacity.
+    /// returns true if any values were removed.
+    pub fn attemptTrim(self: *Self, max_pubkey_capacity: usize) error{OutOfMemory}!bool {
+        if (!self.shouldTrim(max_pubkey_capacity)) return false;
 
         const n_pubkeys = self.pubkey_to_values.count();
         const drop_size = n_pubkeys -| max_pubkey_capacity;
@@ -737,6 +740,8 @@ pub const GossipTable = struct {
         for (labels_to_remove.items) |label| {
             self.remove(label) catch unreachable;
         }
+
+        return true;
     }
 
     pub fn removeOldLabels(
@@ -1021,13 +1026,13 @@ test "gossip.table: trim pruned values" {
         _ = table.pubkey_to_values.get(origin).?;
     }
 
-    try table.attemptTrim(N_TRIM_VALUES);
+    _ = try table.attemptTrim(N_TRIM_VALUES);
 
     try std.testing.expectEqual(table.len(), N_VALUES - N_TRIM_VALUES);
     try std.testing.expectEqual(table.pubkey_to_values.count(), N_VALUES - N_TRIM_VALUES);
     try std.testing.expectEqual(table.purged.len(), N_TRIM_VALUES);
 
-    try table.attemptTrim(0);
+    _ = try table.attemptTrim(0);
     try std.testing.expectEqual(table.len(), 0);
 }
 
@@ -1174,7 +1179,7 @@ test "gossip.table: insert and get contact_info" {
 
     // test re-insertion
     const result = table.insert(gossip_value, 0);
-    try std.testing.expectError(TableError.DuplicateValue, result);
+    try std.testing.expectError(GossipTable.InsertionError.DuplicateValue, result);
 
     // test re-insertion with greater wallclock
     gossip_value.data.LegacyContactInfo.wallclock += 2;
