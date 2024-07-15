@@ -52,6 +52,44 @@ jobs:
       - name: test
         run: zig build test
 
+  kcov_test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{matrix.os}}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+
+      - name: setup-zig
+        uses: goto-bus-stop/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Set up dependencies
+        run: sudo apt-get update
+
+      - name: Install kcov
+        run: |
+          sudo apt-get install -y binutils-dev libssl-dev libcurl4-openssl-dev zlib1g-dev libdw-dev libiberty-dev
+          git clone https://github.com/SimonKagstrom/kcov.git
+          cd kcov
+          mkdir build
+          cd build
+          cmake ..
+          make
+          sudo make install
+
+      - name: Run kcov
+        run: |
+          bash scripts/kcov_test.sh
+
+      - name: Print coverage report
+        run: |
+          python parse_kcov.py kcov-output/test/coverage.json
+
   benchmarks:
     strategy:
       matrix:

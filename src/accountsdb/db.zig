@@ -428,8 +428,13 @@ pub const AccountsDB = struct {
         }
 
         const counting_alloc_ptr = try self.allocator.create(CountingAllocator);
+        defer {
+            if (counting_alloc_ptr.alloc_count == 0) {
+                self.allocator.destroy(counting_alloc_ptr);
+            }
+        }
         counting_alloc_ptr.* = .{
-            .deinit_self_allocator = self.allocator,
+            .self_allocator = self.allocator,
             .references = references,
             .alloc_count = 0,
         };
@@ -2074,7 +2079,7 @@ pub const AccountsDB = struct {
 /// multiple different ArrayLists -- alloc and resize are not implemented.
 const CountingAllocator = struct {
     /// optional heap allocator to deinit the ptr on deinit
-    deinit_self_allocator: std.mem.Allocator,
+    self_allocator: std.mem.Allocator,
     references: ArrayList(AccountRef),
     alloc_count: usize,
 
@@ -2099,7 +2104,7 @@ const CountingAllocator = struct {
         }
         self.references.deinit();
         // free pointer
-        self.deinit_self_allocator.destroy(self);
+        self.self_allocator.destroy(self);
     }
 
     pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
@@ -2132,7 +2137,7 @@ const CountingAllocator = struct {
     }
 };
 
-fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { AccountsDB, AllSnapshotFields } {
+fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: usize) !struct { AccountsDB, AllSnapshotFields } {
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
@@ -2142,7 +2147,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
         .noop,
         "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
         dir,
-        1,
+        n_threads,
         true,
     );
     try parallelUnpackZstdTarBall(
@@ -2150,7 +2155,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
         .noop,
         "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
         dir,
-        1,
+        n_threads,
         true,
     );
 
@@ -2178,7 +2183,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
     try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
         accounts_path,
-        1,
+        @intCast(n_threads),
         allocator,
     );
 
@@ -2191,7 +2196,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool) !struct { Ac
 test "write and read an account" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -2228,7 +2233,23 @@ test "write and read an account" {
 test "load and validate from test snapshot using disk index" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
+    defer {
+        accounts_db.deinit(true);
+        snapshots.deinit(allocator);
+    }
+
+    try accounts_db.validateLoadFromSnapshot(
+        snapshots.incremental.?.bank_fields.incremental_snapshot_persistence,
+        snapshots.full.bank_fields.slot,
+        snapshots.full.bank_fields.capitalization,
+    );
+}
+
+test "load and validate from test snapshot parallel" {
+    const allocator = std.testing.allocator;
+
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 2);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -2244,7 +2265,7 @@ test "load and validate from test snapshot using disk index" {
 test "load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -2260,7 +2281,7 @@ test "load and validate from test snapshot" {
 test "load clock sysvar" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
@@ -2280,7 +2301,7 @@ test "load clock sysvar" {
 test "load other sysvars" {
     const allocator = std.testing.allocator;
 
-    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false);
+    var accounts_db, var snapshots = try loadTestAccountsDB(std.testing.allocator, false, 1);
     defer {
         accounts_db.deinit(true);
         snapshots.deinit(allocator);
