@@ -548,9 +548,9 @@ test "net.net: set port works" {
 }
 
 test "net.net: parse IPv6 if IPv4 fails" {
-    try std.testing.expectError(error.InvalidIpv6, SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
+    try std.testing.expectError(error.InvalidIp, SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
 
-    try std.testing.expectError(error.InvalidIpv6, SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"));
+    try std.testing.expectError(error.InvalidIp, SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"));
 
     {
         const sa = try SocketAddr.parse("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000");
