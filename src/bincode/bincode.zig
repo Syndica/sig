@@ -151,11 +151,11 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
             }
 
             // TODO: improve implementation of post deserialise method
-            const init_field = "!bincode-config:init";
-            if (@hasDecl(T, init_field)) {
-                const field_config = @field(T, init_field);
-                if (field_config.init_fn) |init| {
-                    init(&data);
+            const post_deserialize = "!bincode-config:post-deserialize";
+            if (@hasDecl(T, post_deserialize)) {
+                const field_config = @field(T, post_deserialize);
+                if (field_config.post_deserialize_fn) |post_deserialize_fn| {
+                    post_deserialize_fn(&data);
                 }
             }
 
@@ -604,7 +604,7 @@ pub fn FieldConfig(comptime T: type) type {
         skip: bool = false,
         default_on_eof: bool = false,
         default_fn: ?fn (alloc: std.mem.Allocator) T = null,
-        init_fn: ?fn (self: *T) void = null,
+        post_deserialize_fn: ?fn (self: *T) void = null,
     };
 }
 
