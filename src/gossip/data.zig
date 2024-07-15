@@ -1218,6 +1218,7 @@ pub const ContactInfo = struct {
     extensions: ArrayList(Extension),
     cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
 
+    // TODO: improve implementation of post deserialise method
     pub const @"!bincode-config:init" = bincode.FieldConfig(ContactInfo){ .init_fn = ContactInfo.buildCache };
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
     pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
