@@ -210,27 +210,15 @@ test "gossip.message: push message serialization is predictable" {
     defer values.deinit();
 
     const msg = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
-    const empty_size = try bincode.getSerializedSize(
-        std.testing.allocator,
-        msg,
-        bincode.Params{},
-    );
+    const empty_size = bincode.sizeOf(msg, .{});
 
     const value = try SignedGossipData.random(rng.random(), &(try KeyPair.create(null)));
-    const value_size = try bincode.getSerializedSize(
-        std.testing.allocator,
-        value,
-        bincode.Params{},
-    );
+    const value_size = bincode.sizeOf(value, .{});
     try values.append(value);
     try std.testing.expect(values.items.len == 1);
 
     const msg_with_value = GossipMessage{ .PushMessage = .{ pubkey, values.items } };
-    const msg_value_size = try bincode.getSerializedSize(
-        std.testing.allocator,
-        msg_with_value,
-        bincode.Params{},
-    );
+    const msg_value_size = bincode.sizeOf(msg_with_value, .{});
     try std.testing.expectEqual(value_size + empty_size, msg_value_size);
 }
 

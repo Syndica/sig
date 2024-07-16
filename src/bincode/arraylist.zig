@@ -1,47 +1,38 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
-
 const bincode = sig.bincode;
 
-pub fn ArrayListConfig(comptime Child: type) bincode.FieldConfig(std.ArrayList(Child)) {
+pub fn defaultArrayListUnmanagedOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayListUnmanaged(T)) {
     const S = struct {
-        pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            const list: std.ArrayList(Child) = data;
-            try bincode.write(writer, @as(u64, list.items.len), params);
-            for (list.items) |item| {
-                try bincode.write(writer, item, params);
-            }
-            return;
+        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!std.ArrayListUnmanaged(T) {
+            const len = if (bincode.readIntAsLength(usize, reader, params)) |maybe_len|
+                (maybe_len orelse return error.ArrayListTooBig)
+            else |err| {
+                if (err == error.EndOfStream) return .{};
+                return err;
+            };
+
+            const slice = try allocator.alloc(T, len);
+            errdefer allocator.free(slice);
+
+            return std.ArrayListUnmanaged(T).fromOwnedSlice(slice);
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
-            const ally = allocator.?;
-            const len = try bincode.read(ally, u64, reader, params);
-            var list = try std.ArrayList(Child).initCapacity(ally, @as(usize, len));
-            for (0..len) |_| {
-                const item = try bincode.read(ally, Child, reader, params);
-                try list.append(item);
-            }
-            return list;
-        }
-
-        pub fn free(allocator: std.mem.Allocator, data: anytype) void {
-            _ = allocator;
-            data.deinit();
+        fn free(allocator: std.mem.Allocator, data: anytype) void {
+            data.deinit(allocator);
         }
     };
 
-    return bincode.FieldConfig(std.ArrayList(Child)){
-        .serializer = S.serialize,
+    return .{
         .deserializer = S.deserialize,
         .free = S.free,
     };
 }
-
 pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.ArrayList(T)) {
     const S = struct {
-        fn defaultEOF(allocator: std.mem.Allocator) std.ArrayList(T) {
-            return std.ArrayList(T).init(allocator);
+        fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!std.ArrayList(T) {
+            var unmanaged = try defaultArrayListUnmanagedOnEOFConfig(T).deserializer.?(allocator, reader, params);
+            return unmanaged.toManaged(allocator);
         }
 
         fn free(_: std.mem.Allocator, data: anytype) void {
@@ -49,9 +40,8 @@ pub fn defaultArrayListOnEOFConfig(comptime T: type) bincode.FieldConfig(std.Arr
         }
     };
 
-    return bincode.FieldConfig(std.ArrayList(T)){
-        .default_on_eof = true,
+    return .{
+        .deserializer = S.deserialize,
         .free = S.free,
-        .default_fn = S.defaultEOF,
     };
 }

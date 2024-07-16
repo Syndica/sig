@@ -16,7 +16,7 @@ pub fn VarIntConfig(comptime VarInt: type) bincode.FieldConfig(VarInt) {
             try writer.writeByte(@as(u8, @intCast(v)));
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !VarInt {
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !VarInt {
             _ = params;
             _ = allocator;
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const TarOutputHeader = std.tar.output.Header;
 
 const ThreadPoolTask = @import("../utils/thread.zig").ThreadPoolTask;
 const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
@@ -86,8 +87,10 @@ pub fn parallelUntarToFileSystem(
     const strip_components: u32 = 0;
     loop: while (true) {
         const header_buf = try allocator.alloc(u8, 512);
-        if (try reader.readAtLeast(header_buf, 512) != 512) {
-            std.debug.panic("Actual file size too small for header (< 512).", .{});
+        switch (try reader.readAtLeast(header_buf, 512)) {
+            0 => break,
+            512 => {},
+            else => |actual_size| std.debug.panic("Actual file size ({d}) too small for header (< 512).", .{actual_size}),
         }
 
         const header: TarHeaderMinimal = .{ .bytes = header_buf[0..512] };
@@ -171,6 +174,40 @@ pub fn parallelUntarToFileSystem(
         task.blockUntilCompletion();
         task.result catch |err| logger.errf("UnTarTask encountered error: {s}", .{@errorName(err)});
     }
+}
+
+pub fn writeTarHeader(writer: anytype, typeflag: TarOutputHeader.FileType, path: []const u8, size: u64) !void {
+    var header = TarOutputHeader.init();
+    _ = try std.fmt.bufPrint(&header.name, "{s}", .{path});
+    try header.setSize(size);
+    header.typeflag = typeflag;
+
+    const mode: u21 = switch (typeflag) {
+        // allow read & write, but not execution by anyone
+        .regular => 0o666,
+
+        // allow read, write, and traversal by anyone
+        .directory => 0o777,
+
+        // we don't really use anything else, so just set no permissions so that it's obvious something is wrong if this somehow occurs
+        else => 0,
+    };
+    _ = std.fmt.bufPrint(&header.mode, "{o:0>7}", .{mode}) catch unreachable;
+
+    try header.updateChecksum();
+    try writer.writeAll(std.mem.asBytes(&header));
+}
+
+/// Returns the number of padding bytes that must be written in order to have a round 512 byte block.
+/// The result is 0 if the number of bytes written already form a round 512 byte block, or if there
+/// are 0 bytes written.
+pub fn paddingBytes(
+    /// The actual number of bytes written, or the number of bytes written modulo 512.
+    bytes_written_maybe_modulo: u64,
+) std.math.IntFittingRange(0, 512 - 1) {
+    const modulo = bytes_written_maybe_modulo % 512;
+    if (modulo == 0) return 0; // we don't want any padding if it's already a round 512 block
+    return @intCast(512 - modulo);
 }
 
 /// Minimal implemenation of `std.tar.Header` since it's no longer `pub`
