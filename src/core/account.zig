@@ -9,9 +9,8 @@ pub const Account = struct {
     executable: bool,
     rent_epoch: Epoch,
 
-    pub fn deinit(self: *Account, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: Account, allocator: std.mem.Allocator) void {
         allocator.free(self.data);
-        self.* = undefined;
     }
 
     pub fn random(allocator: std.mem.Allocator, rng: std.rand.Random, data_len: usize) !Account {

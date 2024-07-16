@@ -4,6 +4,7 @@ const lib = @import("./lib.zig");
 const accountsdb_fuzz = lib.accounts_db.fuzz;
 const gossip_fuzz_service = lib.gossip.fuzz_service;
 const gossip_fuzz_table = lib.gossip.fuzz_table;
+const accountsdb_snapshot_fuzz = lib.accounts_db.fuzz_snapshot;
 const logger = lib.trace.log;
 
 // where seeds are saved (in case of too many logs)
@@ -44,6 +45,8 @@ pub fn main() !void {
     // NOTE: changing these hardcoded str values will require a change to the fuzz/kcov in `scripts/`
     if (std.mem.startsWith(u8, filter, "accountsdb")) {
         try accountsdb_fuzz.run(seed, &cli_args);
+    } else if (std.mem.startsWith(u8, filter, "snapshot")) {
+        try accountsdb_snapshot_fuzz.run(&cli_args);
     } else if (std.mem.startsWith(u8, filter, "gossip_service")) {
         try gossip_fuzz_service.run(seed, &cli_args);
     } else if (std.mem.startsWith(u8, filter, "gossip_table")) {

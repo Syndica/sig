@@ -39,7 +39,7 @@ pub const StakeHistoryEntry = struct {
 };
 
 /// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
-const StakeHistory = ArrayList(struct { Epoch, StakeHistoryEntry });
+pub const StakeHistory = ArrayList(struct { Epoch, StakeHistoryEntry });
 
 /// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
 pub const Stakes = struct {
@@ -57,11 +57,26 @@ pub const Stakes = struct {
 
     /// history of staking levels
     stake_history: StakeHistory,
+
+    pub fn deinit(stakes: *Stakes, allocator: std.mem.Allocator) void {
+        for (stakes.vote_accounts.vote_accounts.values()) |pair| {
+            _, var vote_account = pair;
+            vote_account.account.deinit(allocator);
+        }
+        stakes.vote_accounts.vote_accounts.deinit();
+
+        if (stakes.vote_accounts.staked_nodes) |*stakes_nodes| {
+            stakes_nodes.deinit();
+        }
+
+        stakes.stake_delegations.deinit();
+        stakes.stake_history.deinit();
+    }
 };
 
 /// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
 pub const VoteAccounts = struct {
-    vote_accounts: std.AutoArrayHashMap(Pubkey, struct { u64, VoteAccount }),
+    vote_accounts: std.AutoArrayHashMap(Pubkey, Entry),
 
     staked_nodes: ?std.AutoArrayHashMap(
         Pubkey, // VoteAccount.vote_state.node_pubkey.
@@ -71,6 +86,8 @@ pub const VoteAccounts = struct {
     pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?std.AutoArrayHashMap(Pubkey, u64)){ .skip = true };
 
     const Self = @This();
+
+    pub const Entry = struct { u64, VoteAccount };
 
     pub fn stakedNodes(self: *Self, allocator: std.mem.Allocator) !*const std.AutoArrayHashMap(Pubkey, u64) {
         if (self.staked_nodes) |*staked_nodes| {
@@ -193,7 +210,8 @@ pub const Ancestors = std.AutoArrayHashMap(Slot, usize);
 
 /// Analogous to [HardForks](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/hard_forks.rs#L13)
 pub const HardForks = struct {
-    hard_forks: std.ArrayList(struct { Slot, usize }),
+    hard_forks: std.ArrayList(Entry),
+    pub const Entry = struct { Slot, usize };
 };
 
 /// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L14)
@@ -312,6 +330,10 @@ pub const BankFields = struct {
     epoch_stakes: std.AutoArrayHashMap(Epoch, EpochStakes),
     is_delta: bool,
 
+    pub fn deinit(bank_fields: *const BankFields, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, bank_fields.*);
+    }
+
     pub const Incremental = struct {
         snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
         epoch_accounts_hash: ?Hash = null,
@@ -400,8 +422,6 @@ pub const AccountsDbFields = struct {
     rooted_slots: std.ArrayListUnmanaged(Slot),
     rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
 
-    pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
-
     pub const @"!bincode-config:file_map" = bincode.FieldConfig(FileMap){
         .hashmap = .{
             .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
@@ -409,6 +429,12 @@ pub const AccountsDbFields = struct {
     };
     pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
     pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
+
+    pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+
+    pub fn deinit(fields: AccountsDbFields, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, fields);
+    }
 };
 
 /// contains all the metadata from a snapshot.
