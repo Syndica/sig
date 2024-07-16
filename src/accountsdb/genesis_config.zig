@@ -1,3 +1,5 @@
+//! genesis config fields
+
 const std = @import("std");
 const AutoHashMap = std.AutoHashMap;
 const Account = @import("../core/account.zig").Account;
@@ -15,6 +17,7 @@ pub const RustDuration = struct {
     nanos: u32,
 };
 
+/// Analogous to [PohConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/poh_config.rs#L10)
 pub const PohConfig = struct {
     /// The target tick rate of the cluster.
     target_tick_duration: RustDuration,
@@ -28,6 +31,7 @@ pub const PohConfig = struct {
     hashes_per_tick: ?u64,
 };
 
+/// Analogous to [FeeRateGovernor](https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L55)
 pub const FeeRateGovernor = struct {
     // The current cost of a signature  This amount may increase/decrease over time based on
     // cluster processing load.
@@ -51,6 +55,7 @@ pub const FeeRateGovernor = struct {
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
 };
 
+/// Analogous to [Rent](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/rent.rs#L13)
 pub const Rent = extern struct {
     /// Rental rate in lamports/byte-year.
     lamports_per_byte_year: u64,
@@ -66,6 +71,7 @@ pub const Rent = extern struct {
     burn_percent: u8,
 };
 
+/// Analogous to [Inflation](https://github.com/anza-xyz/agave/blob/55aff7288e596e93d1184ba827048b1e3dc98061/sdk/src/inflation.rs#L6)
 pub const Inflation = struct {
     /// Initial inflation percentage, from time=0
     initial: f64,
@@ -86,6 +92,7 @@ pub const Inflation = struct {
     __unused: f64,
 };
 
+/// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/epoch_schedule.rs#L35)
 pub const EpochSchedule = extern struct {
     /// The maximum number of slots in each epoch.
     slots_per_epoch: u64,
@@ -145,6 +152,7 @@ pub const EpochSchedule = extern struct {
     }
 };
 
+/// Analogous to [ClusterType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L46)
 pub const ClusterType = enum(u8) {
     Testnet,
     MainnetBeta,
@@ -152,6 +160,7 @@ pub const ClusterType = enum(u8) {
     Development,
 };
 
+/// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
 pub const GenesisConfig = struct {
     // when the network (bootstrap validator) was started relative to the UNIX Epoch
     creation_time: UnixTimestamp,

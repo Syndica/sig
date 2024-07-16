@@ -1,5 +1,7 @@
-const ACCOUNT_INDEX_BINS = @import("../accountsdb/db.zig").ACCOUNT_INDEX_BINS;
-const ShredCollectorConfig = @import("../shred_collector/service.zig").ShredCollectorConfig;
+const sig = @import("../lib.zig");
+const ACCOUNT_INDEX_BINS = sig.accounts_db.ACCOUNT_INDEX_BINS;
+const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
+const LogLevel = sig.trace.Level;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
@@ -8,7 +10,7 @@ pub const Config = struct {
     accounts_db: AccountsDBConfig = .{},
     leader_schedule_path: ?[]const u8 = null,
     // general config
-    log_level: []const u8 = "debug",
+    log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
 };
 
@@ -32,6 +34,7 @@ const shred_collector_defaults = ShredCollectorConfig{
     .start_slot = null,
 };
 
+/// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
 pub const AccountsDBConfig = struct {
     // where to load/save snapshots from - also where disk indexes and account files are stored
     snapshot_dir: []const u8 = "ledger/accounts_db",

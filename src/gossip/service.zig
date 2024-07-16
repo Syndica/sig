@@ -34,6 +34,7 @@ const Channel = sig.sync.Channel;
 const ActiveSet = sig.gossip.active_set.ActiveSet;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipVersionedData = sig.gossip.data.GossipVersionedData;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const GossipData = sig.gossip.data.GossipData;
@@ -313,7 +314,7 @@ pub const GossipService = struct {
             self.logger,
         });
         try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
-        try manager.spawn("gossip processMessages", processMessages, .{ self, self.gossip_value_allocator });
+        try manager.spawn("gossip processMessages", processMessages, .{self});
 
         if (!params.spy_node) try manager.spawn("gossip buildMessages", buildMessages, .{self});
 
@@ -459,9 +460,8 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self, gossip_value_allocator: std.mem.Allocator) !void {
-        var timer = std.time.Timer.start() catch unreachable;
-        var last_table_trim_ts: u64 = 0;
+    pub fn processMessages(self: *Self) !void {
+        var trim_table_timer = try sig.time.Timer.start();
         var msg_count: usize = 0;
 
         // we batch messages bc:
@@ -496,10 +496,6 @@ pub const GossipService = struct {
                 continue;
             }
 
-            if (msg_count == 0) {
-                timer.reset();
-            }
-
             const messages = maybe_messages.?;
             defer {
                 for (messages) |*msg| {
@@ -528,7 +524,7 @@ pub const GossipService = struct {
                     // would be safer. For more info, see:
                     // - GossipTable.remove
                     // - https://github.com/Syndica/sig/pull/69
-                    msg.message.shallowFree(gossip_value_allocator);
+                    msg.message.shallowFree(self.gossip_value_allocator);
                 }
                 self.verified_incoming_channel.allocator.free(messages);
             }
@@ -552,35 +548,36 @@ pub const GossipService = struct {
                     },
                     .PullRequest => |*pull| {
                         const value: SignedGossipData = pull[1];
+                        var should_process_value = true;
                         switch (value.data) {
                             .ContactInfo => |*data| {
                                 if (data.pubkey.equals(&self.my_pubkey)) {
                                     // talking to myself == ignore
-                                    continue;
+                                    should_process_value = false;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.monotonic)) {
                                     // non-matching shred version
                                     self.stats.pull_requests_dropped.add(1);
-                                    continue;
+                                    should_process_value = false;
                                 }
                             },
                             .LegacyContactInfo => |*data| {
                                 if (data.id.equals(&self.my_pubkey)) {
                                     // talking to myself == ignore
-                                    continue;
+                                    should_process_value = false;
                                 }
                                 // Allow spy nodes with shred-verion == 0 to pull from other nodes.
                                 if (data.shred_version != 0 and data.shred_version != self.my_shred_version.load(.monotonic)) {
                                     // non-matching shred version
                                     self.stats.pull_requests_dropped.add(1);
-                                    continue;
+                                    should_process_value = false;
                                 }
                             },
                             // only contact info supported
                             else => {
                                 self.stats.pull_requests_dropped.add(1);
-                                continue;
+                                should_process_value = false;
                             },
                         }
 
@@ -588,6 +585,11 @@ pub const GossipService = struct {
                         if (from_addr.isUnspecified() or from_addr.port() == 0) {
                             // unable to respond to these messages
                             self.stats.pull_requests_dropped.add(1);
+                            should_process_value = false;
+                        }
+
+                        if (!should_process_value) {
+                            bincode.free(self.gossip_value_allocator, value.data);
                             continue;
                         }
 
@@ -606,6 +608,7 @@ pub const GossipService = struct {
                         const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.stats.prune_messages_dropped.add(1);
+                            // prune_data free by defered shallowFree
                             continue;
                         }
                         try prune_messages.append(prune_data);
@@ -716,8 +719,8 @@ pub const GossipService = struct {
             }
 
             // TRIM gossip-table
-            const trim_elapsed_ts = getWallclockMs() - last_table_trim_ts;
-            if (trim_elapsed_ts > GOSSIP_TRIM_INTERVAL_MS) {
+            if (trim_table_timer.read().as_millis() > GOSSIP_TRIM_INTERVAL_MS) {
+                defer trim_table_timer.reset();
                 // first check with a read lock
                 const should_trim = blk: {
                     var gossip_table_lock = self.gossip_table_rw.read();
@@ -741,7 +744,6 @@ pub const GossipService = struct {
                     const elapsed = x_timer.read();
                     self.stats.handle_trim_table_time.add(elapsed);
                 }
-                last_table_trim_ts = getWallclockMs();
             }
         }
 
@@ -752,18 +754,19 @@ pub const GossipService = struct {
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
     fn buildMessages(self: *Self) !void {
-        var last_push_ts: u64 = 0;
-        var last_stats_publish_ts: u64 = 0;
-        var last_pull_req_ts: u64 = 0;
+        var loop_timer = try sig.time.Timer.start();
+        var push_timer = try sig.time.Timer.start();
+        var pull_req_timer = try sig.time.Timer.start();
+        var stats_publish_timer = try sig.time.Timer.start();
         var push_cursor: u64 = 0;
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
         while (!self.exit.load(.unordered)) {
-            const top_of_loop_ts = getWallclockMs();
+            defer loop_timer.reset();
 
-            if (top_of_loop_ts - last_pull_req_ts > GOSSIP_PULL_RATE_MS) pull_blk: {
-                defer last_pull_req_ts = getWallclockMs();
+            if (pull_req_timer.read().as_millis() > GOSSIP_PULL_RATE_MS) pull_blk: {
+                defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
                 var prng = std.Random.Xoshiro256.init(prng_seed);
@@ -798,7 +801,8 @@ pub const GossipService = struct {
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
-            if (top_of_loop_ts - last_push_ts > GOSSIP_PULL_TIMEOUT_MS / 2) {
+            if (push_timer.read().as_millis() > GOSSIP_PULL_TIMEOUT_MS / 2) {
+                defer push_timer.reset();
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
                 const my_contact_info_value = try SignedGossipData.initSigned(GossipData{
@@ -821,20 +825,17 @@ pub const GossipService = struct {
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
                 var prng = std.Random.Xoshiro256.init(prng_seed);
                 try self.rotateActiveSet(prng.random());
-                last_push_ts = getWallclockMs();
             }
 
             // publish metrics
-            const stats_publish_elapsed_ts = getWallclockMs() - last_stats_publish_ts;
-            if (stats_publish_elapsed_ts > PUB_GOSSIP_STATS_INTERVAL_MS) {
+            if (stats_publish_timer.read().as_millis() > PUB_GOSSIP_STATS_INTERVAL_MS) {
+                defer stats_publish_timer.reset();
                 try self.collectGossipTableMetrics();
-                last_stats_publish_ts = getWallclockMs();
             }
 
             // sleep
-            const elapsed_ts = getWallclockMs() - top_of_loop_ts;
-            if (elapsed_ts < GOSSIP_SLEEP_MILLIS) {
-                const time_left_ms = GOSSIP_SLEEP_MILLIS - elapsed_ts;
+            if (loop_timer.read().as_millis() < GOSSIP_SLEEP_MILLIS) {
+                const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read().as_millis();
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
@@ -856,8 +857,8 @@ pub const GossipService = struct {
 
     pub fn rotateActiveSet(self: *Self, rand: std.Random) !void {
         const now = getWallclockMs();
-        var buf: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
-        const gossip_peers = try self.getGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
+        var buf: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
+        const gossip_peers = try self.getThreadSafeGossipNodes(&buf, NUM_ACTIVE_SET_ENTRIES, now);
 
         // filter out peers who have responded to pings
         const ping_cache_result = blk: {
@@ -871,7 +872,7 @@ pub const GossipService = struct {
         var valid_gossip_indexs = ping_cache_result.valid_peers;
         defer valid_gossip_indexs.deinit();
 
-        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]ContactInfo = undefined;
+        var valid_gossip_peers: [NUM_ACTIVE_SET_ENTRIES]ThreadSafeContactInfo = undefined;
         for (0.., valid_gossip_indexs.items) |i, valid_gossip_index| {
             valid_gossip_peers[i] = gossip_peers[valid_gossip_index];
         }
@@ -899,8 +900,9 @@ pub const GossipService = struct {
             defer gossip_table_lock.unlock();
 
             const gossip_table: *const GossipTable = gossip_table_lock.get();
-            break :blk gossip_table.getEntriesWithCursor(&buf, push_cursor);
+            break :blk try gossip_table.getClonedEntriesWithCursor(self.gossip_value_allocator, &buf, push_cursor);
         };
+        defer for (gossip_entries) |*ge| ge.deinit(self.gossip_value_allocator);
 
         var packet_batch = ArrayList(ArrayList(Packet)).init(self.allocator);
         errdefer packet_batch.deinit();
@@ -943,7 +945,7 @@ pub const GossipService = struct {
                     continue;
                 }
 
-                const byte_size = try bincode.getSerializedSize(self.allocator, value, bincode.Params{});
+                const byte_size = bincode.sizeOf(value, .{});
                 total_byte_size +|= byte_size;
 
                 if (total_byte_size > MAX_BYTES_PER_PUSH) {
@@ -1009,9 +1011,9 @@ pub const GossipService = struct {
         bloom_size: usize,
     ) !ArrayList(Packet) {
         // get nodes from gossip table
-        var buf: [MAX_NUM_PULL_REQUESTS]ContactInfo = undefined;
+        var buf: [MAX_NUM_PULL_REQUESTS]ThreadSafeContactInfo = undefined;
         const now = getWallclockMs();
-        const peers = try self.getGossipNodes(
+        const peers = try self.getThreadSafeGossipNodes(
             &buf,
             MAX_NUM_PULL_REQUESTS,
             now,
@@ -1095,7 +1097,7 @@ pub const GossipService = struct {
                 const peer_index = rand.intRangeAtMost(usize, 0, num_peers - 1);
                 const peer_contact_info_index = valid_gossip_peer_indexs.items[peer_index];
                 const peer_contact_info = peers[peer_contact_info_index];
-                if (peer_contact_info.getSocket(.gossip)) |gossip_addr| {
+                if (peer_contact_info.gossip_addr) |gossip_addr| {
                     const message = GossipMessage{ .PullRequest = .{ filter_i, my_contact_info_value } };
 
                     var packet = &packet_batch.items[packet_index];
@@ -1129,7 +1131,6 @@ pub const GossipService = struct {
         my_pubkey: *const Pubkey,
         from_endpoint: *const EndPoint,
         filter: *GossipPullFilter,
-        value: *SignedGossipData,
         gossip_table: *const GossipTable,
         output: ArrayList(Packet),
         output_limit: *std.atomic.Value(i64),
@@ -1189,6 +1190,9 @@ pub const GossipService = struct {
         }
     };
 
+    /// For all pull requests:
+    ///     - PullRequestMessage.value is inserted into the gossip table
+    ///     - PullRequestMessage.filter is freed in process messages
     fn handleBatchPullRequest(
         self: *Self,
         pull_requests: ArrayList(PullRequestMessage),
@@ -1202,9 +1206,8 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             for (pull_requests.items) |*req| {
-                const caller = req.value.id();
                 gossip_table.insert(req.value, now) catch {};
-                gossip_table.updateRecordTimestamp(caller, now);
+                gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
         }
 
@@ -1213,23 +1216,18 @@ pub const GossipService = struct {
             defer ping_cache_lock.unlock();
             var ping_cache: *PingCache = ping_cache_lock.mut();
 
-            var peers = try ArrayList(ContactInfo).initCapacity(self.allocator, pull_requests.items.len);
+            var peers = try ArrayList(ThreadSafeContactInfo).initCapacity(self.allocator, pull_requests.items.len);
             defer peers.deinit();
             var arena = std.heap.ArenaAllocator.init(self.allocator);
             defer arena.deinit();
-            {
-                var gossip_table_lock = self.gossip_table_rw.read();
-                defer gossip_table_lock.unlock();
-                var gossip_table: *const GossipTable = gossip_table_lock.get();
-                for (pull_requests.items) |req| {
-                    const contact_info = switch (req.value.data) {
-                        .ContactInfo => |ci| ci,
-                        .LegacyContactInfo => |legacy| gossip_table.getContactInfo(legacy.id) orelse
-                            try legacy.toContactInfo(arena.allocator()),
-                        else => return error.PullRequestWithoutContactInfo,
-                    };
-                    peers.appendAssumeCapacity(contact_info);
-                }
+
+            for (pull_requests.items) |*req| {
+                const threads_safe_contact_info = switch (req.value.data) {
+                    .ContactInfo => |ci| ThreadSafeContactInfo.fromContactInfo(ci),
+                    .LegacyContactInfo => |legacy| ThreadSafeContactInfo.fromLegacyContactInfo(legacy),
+                    else => return error.PullRequestWithoutContactInfo,
+                };
+                peers.appendAssumeCapacity(threads_safe_contact_info);
             }
 
             const result = try ping_cache.filterValidPeers(self.allocator, self.my_keypair, peers.items);
@@ -1267,7 +1265,6 @@ pub const GossipService = struct {
                     .my_pubkey = &self.my_pubkey,
                     .from_endpoint = &pull_requests.items[i].from_endpoint,
                     .filter = &pull_requests.items[i].filter,
-                    .value = &pull_requests.items[i].value,
                     .gossip_table = gossip_table,
                     .output = ArrayList(Packet).init(self.allocator),
                     .allocator = self.allocator,
@@ -1356,6 +1353,8 @@ pub const GossipService = struct {
     /// successful inserted values, have their origin value timestamps updated.
     /// failed inserts (ie, too old or duplicate values) are added to the failed pull hashes so that they can be
     /// included in the next pull request (so we dont receive them again).
+    /// For all pull responses:
+    ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
     pub fn handleBatchPullResponses(
         self: *Self,
         pull_response_messages: *const ArrayList(PullResponseMessage),
@@ -1428,6 +1427,7 @@ pub const GossipService = struct {
                 };
                 const value_hash = Hash.generateSha256Hash(bytes);
                 try failed_pull_hashes.insert(value_hash, now);
+                bincode.free(self.gossip_value_allocator, gossip_value_ptr.*);
             }
         }
     }
@@ -1455,6 +1455,8 @@ pub const GossipService = struct {
         }
     }
 
+    /// For all push messages:
+    ///     - PushMessage.gossip_values are filtered and then inserted into the gossip table, filtered values and failed inserts are freed
     pub fn handleBatchPushMessages(
         self: *Self,
         batch_push_messages: *const ArrayList(PushMessage),
@@ -1507,6 +1509,7 @@ pub const GossipService = struct {
             for (batch_push_messages.items) |*push_message| {
                 n_gossip_data += push_message.gossip_values.len;
 
+                // Filtered values are freed
                 const valid_len = self.filterBasedOnShredVersion(
                     gossip_table,
                     push_message.gossip_values,
@@ -1533,12 +1536,19 @@ pub const GossipService = struct {
                     continue;
                 }
 
+                // Free failed inserts
+                defer {
+                    for (failed_insert_indexs.items) |failed_index| {
+                        bincode.free(self.gossip_value_allocator, push_message.gossip_values[failed_index]);
+                    }
+                }
+
                 // lookup contact info
-                const from_contact_info = gossip_table.getContactInfo(push_message.from_pubkey.*) orelse {
+                const from_contact_info = gossip_table.getThreadSafeContactInfo(push_message.from_pubkey.*) orelse {
                     // unable to find contact info
                     continue;
                 };
-                const from_gossip_addr = from_contact_info.getSocket(.gossip) orelse continue;
+                const from_gossip_addr = from_contact_info.gossip_addr orelse continue;
                 from_gossip_addr.sanitize() catch {
                     // invalid gossip socket
                     continue;
@@ -1742,15 +1752,15 @@ pub const GossipService = struct {
     /// the contact infos from the gossip table and filtering out
     /// nodes that are 1) too old, 2) have a different shred version, or 3) have
     /// an invalid gossip address.
-    pub fn getGossipNodes(
+    pub fn getThreadSafeGossipNodes(
         self: *Self,
         /// the output slice which will be filled with gossip nodes
-        nodes: []ContactInfo,
+        nodes: []ThreadSafeContactInfo,
         /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
         comptime MAX_SIZE: usize,
         /// current time (used to filter out nodes that are too old)
         now: u64,
-    ) ![]ContactInfo {
+    ) ![]ThreadSafeContactInfo {
         std.debug.assert(MAX_SIZE == nodes.len);
 
         // filter only valid gossip addresses
@@ -1758,13 +1768,13 @@ pub const GossipService = struct {
         const too_old_ts = now -| GOSSIP_ACTIVE_TIMEOUT;
 
         // * 2 bc we might filter out some
-        var buf: [MAX_SIZE * 2]ContactInfo = undefined;
+        var buf: [MAX_SIZE * 2]ThreadSafeContactInfo = undefined;
         const contact_infos = blk: {
             var gossip_table_lock = self.gossip_table_rw.read();
             defer gossip_table_lock.unlock();
 
             var gossip_table: *const GossipTable = gossip_table_lock.get();
-            break :blk gossip_table.getContactInfos(&buf, too_old_ts);
+            break :blk gossip_table.getThreadSafeContactInfos(&buf, too_old_ts);
         };
 
         if (contact_infos.len == 0) {
@@ -1773,8 +1783,6 @@ pub const GossipService = struct {
 
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
-            const peer_gossip_addr = contact_info.getSocket(.gossip);
-
             // filter self
             if (contact_info.pubkey.equals(&self.my_pubkey)) {
                 continue;
@@ -1785,7 +1793,7 @@ pub const GossipService = struct {
                 continue;
             }
             // filter on valid gossip address
-            if (peer_gossip_addr) |addr| {
+            if (contact_info.gossip_addr) |addr| {
                 addr.sanitize() catch continue;
             } else continue;
 
@@ -1800,6 +1808,7 @@ pub const GossipService = struct {
         return nodes[0..node_index];
     }
 
+    /// Frees heap allocated memory of filtered values
     pub fn filterBasedOnShredVersion(
         self: *Self,
         gossip_table: *const GossipTable,
@@ -1828,7 +1837,8 @@ pub const GossipService = struct {
                     if (!sender_matches or
                         !gossip_table.checkMatchingShredVersion(gossip_value.id(), my_shred_version))
                     {
-                        _ = gossip_values_array.swapRemove(i);
+                        const removed_value = gossip_values_array.swapRemove(i);
+                        bincode.free(self.gossip_value_allocator, removed_value);
                         continue; // do not incrememnt `i`. it has a new value we need to inspect.
                     }
                 },
@@ -2146,16 +2156,13 @@ test "gossip.service: tests handling prune messages" {
 
     // add some peers
     var lg = gossip_service.gossip_table_rw.write();
-    var peers = ArrayList(ContactInfo).init(allocator);
-    defer {
-        for (peers.items) |p| p.deinit();
-        peers.deinit();
-    }
+    var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
+    defer peers.deinit();
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
-        try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
+        try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
 
@@ -2511,17 +2518,14 @@ test "gossip.service: test build push messages" {
     defer gossip_service.deinit();
 
     // add some peers
-    var peers = ArrayList(ContactInfo).init(allocator);
-    defer {
-        for (peers.items) |p| p.deinit();
-        peers.deinit();
-    }
+    var peers = ArrayList(ThreadSafeContactInfo).init(allocator);
+    defer peers.deinit();
     var lg = gossip_service.gossip_table_rw.write();
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
+        const value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
         try lg.mut().insert(value, getWallclockMs());
-        try peers.append(try value.data.LegacyContactInfo.toContactInfo(allocator));
+        try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
 
@@ -2734,7 +2738,7 @@ test "gossip.gossip_service: process contact info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.processMessages,
-        .{ &gossip_service, gossip_value_allocator },
+        .{&gossip_service},
     );
 
     // send a push message
@@ -2767,6 +2771,20 @@ test "gossip.gossip_service: process contact info push packet" {
         .from_endpoint = peer,
     };
     try verified_channel.send(ping_msg);
+
+    // send pull request with own pubkey
+    const erroneous_pull_request_msg = GossipMessageWithEndpoint{
+        .message = GossipMessage{
+            .PullRequest = .{
+                GossipPullFilter.init(allocator),
+                try SignedGossipData.initSigned(GossipData{
+                    .ContactInfo = try localhostTestContactInfo(my_pubkey),
+                }, &my_keypair),
+            },
+        },
+        .from_endpoint = peer,
+    };
+    try verified_channel.send(erroneous_pull_request_msg);
 
     // correct insertion into table
     var buf2: [100]ContactInfo = undefined;
@@ -3087,11 +3105,11 @@ pub const BenchmarkGossipServicePullRequests = struct {
             bench_args.n_pull_requests,
         );
         for (0..bench_args.n_pull_requests) |_| {
-            const packet = try fuzz.randomPullRequest(
+            const packet = try fuzz.randomPullRequestWithContactInfo(
                 allocator,
                 rng,
-                &recv_keypair,
                 address.toEndpoint(),
+                signed_contact_info_recv,
             );
             packet_batch.appendAssumeCapacity(packet);
         }

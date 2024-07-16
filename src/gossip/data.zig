@@ -46,6 +46,19 @@ pub const GossipVersionedData = struct {
     timestamp_on_insertion: u64,
     cursor_on_insertion: u64,
 
+    pub fn clone(self: *const GossipVersionedData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipVersionedData {
+        return .{
+            .value = try self.value.clone(allocator),
+            .value_hash = self.value_hash,
+            .timestamp_on_insertion = self.timestamp_on_insertion,
+            .cursor_on_insertion = self.cursor_on_insertion,
+        };
+    }
+
+    pub fn deinit(self: *GossipVersionedData, allocator: std.mem.Allocator) void {
+        self.value.deinit(allocator);
+    }
+
     pub fn overwrites(new_value: *const @This(), old_value: *const @This()) bool {
         // labels must match
         std.debug.assert(@intFromEnum(new_value.value.label()) == @intFromEnum(old_value.value.label()));
@@ -85,6 +98,17 @@ pub const SignedGossipData = struct {
         };
         try self.sign(keypair);
         return self;
+    }
+
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+        return .{
+            .signature = self.signature,
+            .data = try self.data.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.data.deinit(allocator);
     }
 
     /// only used in tests
@@ -290,6 +314,44 @@ pub const GossipData = union(enum(u32)) {
     RestartLastVotedForkSlots: RestartLastVotedForkSlots,
     // https://github.com/anza-xyz/agave/commit/4a2871f38419b4d9b303254273b19a2e41707c47
     RestartHeaviestFork: RestartHeaviestFork,
+
+    pub fn clone(self: *const GossipData, allocator: std.mem.Allocator) error{OutOfMemory}!GossipData {
+        return switch (self.*) {
+            .LegacyContactInfo => |*v| .{ .LegacyContactInfo = v.* },
+            .Vote => |*v| .{ .Vote = .{ v[0], try v[1].clone(allocator) } },
+            .LowestSlot => |*v| .{ .LowestSlot = .{ v[0], try v[1].clone(allocator) } },
+            .LegacySnapshotHashes => |*v| .{ .LegacySnapshotHashes = try v.clone(allocator) },
+            .AccountsHashes => |*v| .{ .AccountsHashes = try v.clone(allocator) },
+            .EpochSlots => |*v| .{ .EpochSlots = .{ v[0], try v[1].clone(allocator) } },
+            .LegacyVersion => |*v| .{ .LegacyVersion = v.* },
+            .Version => |*v| .{ .Version = v.* },
+            .NodeInstance => |*v| .{ .NodeInstance = v.* },
+            .DuplicateShred => |*v| .{ .DuplicateShred = .{ v[0], try v[1].clone(allocator) } },
+            .SnapshotHashes => |*v| .{ .SnapshotHashes = try v.clone(allocator) },
+            .ContactInfo => |*v| .{ .ContactInfo = try v.clone() },
+            .RestartLastVotedForkSlots => |*v| .{ .RestartLastVotedForkSlots = try v.clone(allocator) },
+            .RestartHeaviestFork => |*v| .{ .RestartHeaviestFork = v.* },
+        };
+    }
+
+    pub fn deinit(self: *GossipData, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .LegacyContactInfo => {},
+            .Vote => |*v| v[1].deinit(allocator),
+            .LowestSlot => |*v| v[1].deinit(allocator),
+            .LegacySnapshotHashes => |*v| v.deinit(allocator),
+            .AccountsHashes => |*v| v.deinit(allocator),
+            .EpochSlots => |*v| v[1].deinit(allocator),
+            .LegacyVersion => {},
+            .Version => {},
+            .NodeInstance => {},
+            .DuplicateShred => |*v| v[1].deinit(allocator),
+            .SnapshotHashes => |*v| v.deinit(allocator),
+            .ContactInfo => |*v| v.deinit(),
+            .RestartLastVotedForkSlots => |*v| v.deinit(allocator),
+            .RestartHeaviestFork => {},
+        }
+    }
 
     pub fn sanitize(self: *const GossipData) !void {
         switch (self.*) {
@@ -575,6 +637,19 @@ pub const Vote = struct {
 
     pub const @"!bincode-config:slot" = bincode.FieldConfig(Slot){ .skip = true };
 
+    pub fn clone(self: *const Vote, allocator: std.mem.Allocator) error{OutOfMemory}!Vote {
+        return .{
+            .from = self.from,
+            .transaction = try self.transaction.clone(allocator),
+            .wallclock = self.wallclock,
+            .slot = self.slot,
+        };
+    }
+
+    pub fn deinit(self: *Vote, allocator: std.mem.Allocator) void {
+        self.transaction.deinit(allocator);
+    }
+
     pub fn random(rng: std.rand.Random) Vote {
         return Vote{
             .from = Pubkey.random(rng),
@@ -597,6 +672,25 @@ pub const LowestSlot = struct {
     slots: []u64, //deprecated
     stash: []DeprecatedEpochIncompleteSlots, //deprecated
     wallclock: u64,
+
+    pub fn clone(self: *const LowestSlot, allocator: std.mem.Allocator) error{OutOfMemory}!LowestSlot {
+        const stash = try allocator.alloc(DeprecatedEpochIncompleteSlots, self.stash.len);
+        for (stash, 0..) |*item, i| item.* = try self.stash[i].clone(allocator);
+        return .{
+            .from = self.from,
+            .root = self.root,
+            .lowest = self.lowest,
+            .slots = try allocator.dupe(u64, self.slots),
+            .stash = stash,
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *LowestSlot, allocator: std.mem.Allocator) void {
+        allocator.free(self.slots);
+        for (self.stash) |*item| item.deinit(allocator);
+        allocator.free(self.stash);
+    }
 
     pub fn sanitize(value: *const LowestSlot) !void {
         try sanitizeWallclock(value.wallclock);
@@ -632,6 +726,18 @@ pub const DeprecatedEpochIncompleteSlots = struct {
     first: u64,
     compression: CompressionType,
     compressed_list: []u8,
+
+    pub fn clone(self: *const DeprecatedEpochIncompleteSlots, allocator: std.mem.Allocator) error{OutOfMemory}!DeprecatedEpochIncompleteSlots {
+        return .{
+            .first = self.first,
+            .compression = self.compression,
+            .compressed_list = try allocator.dupe(u8, self.compressed_list),
+        };
+    }
+
+    pub fn deinit(self: *DeprecatedEpochIncompleteSlots, allocator: std.mem.Allocator) void {
+        allocator.free(self.compressed_list);
+    }
 };
 
 pub const CompressionType = enum {
@@ -648,6 +754,18 @@ pub const AccountsHashes = struct {
     from: Pubkey,
     hashes: []SlotAndHash,
     wallclock: u64,
+
+    pub fn clone(self: *const AccountsHashes, allocator: std.mem.Allocator) error{OutOfMemory}!AccountsHashes {
+        return .{
+            .from = self.from,
+            .hashes = try allocator.dupe(SlotAndHash, self.hashes),
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *AccountsHashes, allocator: std.mem.Allocator) void {
+        allocator.free(self.hashes);
+    }
 
     pub fn random(rng: std.rand.Random) AccountsHashes {
         var slice: [0]SlotAndHash = .{};
@@ -673,6 +791,21 @@ pub const EpochSlots = struct {
     slots: []CompressedSlots,
     wallclock: u64,
 
+    pub fn clone(self: *const EpochSlots, allocator: std.mem.Allocator) error{OutOfMemory}!EpochSlots {
+        const slots = try allocator.alloc(CompressedSlots, self.slots.len);
+        for (slots, 0..) |*slot, i| slot.* = try self.slots[i].clone(allocator);
+        return .{
+            .from = self.from,
+            .slots = slots,
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *EpochSlots, allocator: std.mem.Allocator) void {
+        for (self.slots) |*slot| slot.deinit(allocator);
+        allocator.free(self.slots);
+    }
+
     pub fn random(rng: std.rand.Random) EpochSlots {
         var slice: [0]CompressedSlots = .{};
         return EpochSlots{
@@ -694,6 +827,20 @@ pub const CompressedSlots = union(enum(u32)) {
     Flate2: Flate2,
     Uncompressed: Uncompressed,
 
+    pub fn clone(self: *const CompressedSlots, allocator: std.mem.Allocator) error{OutOfMemory}!CompressedSlots {
+        return switch (self.*) {
+            .Flate2 => |*v| .{ .Flate2 = try v.clone(allocator) },
+            .Uncompressed => |*v| .{ .Uncompressed = try v.clone(allocator) },
+        };
+    }
+
+    pub fn deinit(self: *CompressedSlots, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .Flate2 => |*v| v.deinit(allocator),
+            .Uncompressed => |*v| v.deinit(allocator),
+        }
+    }
+
     pub fn sanitize(self: *const CompressedSlots) !void {
         switch (self.*) {
             .Flate2 => |*v| try v.sanitize(),
@@ -706,6 +853,18 @@ pub const Flate2 = struct {
     first_slot: Slot,
     num: usize,
     compressed: []u8,
+
+    pub fn clone(self: *const Flate2, allocator: std.mem.Allocator) error{OutOfMemory}!Flate2 {
+        return .{
+            .first_slot = self.first_slot,
+            .num = self.num,
+            .compressed = try allocator.dupe(u8, self.compressed),
+        };
+    }
+
+    pub fn deinit(self: *Flate2, allocator: std.mem.Allocator) void {
+        allocator.free(self.compressed);
+    }
 
     pub fn sanitize(self: *const Flate2) !void {
         if (self.first_slot >= MAX_SLOT) {
@@ -721,6 +880,18 @@ pub const Uncompressed = struct {
     first_slot: Slot,
     num: usize,
     slots: BitVec(u8),
+
+    pub fn clone(self: *const Uncompressed, allocator: std.mem.Allocator) error{OutOfMemory}!Uncompressed {
+        return .{
+            .first_slot = self.first_slot,
+            .num = self.num,
+            .slots = try self.slots.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Uncompressed, allocator: std.mem.Allocator) void {
+        self.slots.deinit(allocator);
+    }
 
     pub fn sanitize(self: *const Uncompressed) !void {
         if (self.first_slot >= MAX_SLOT) {
@@ -741,6 +912,17 @@ pub fn BitVec(comptime T: type) type {
     return struct {
         bits: ?[]T,
         len: usize,
+
+        pub fn clone(self: *const BitVec(T), allocator: std.mem.Allocator) error{OutOfMemory}!BitVec(T) {
+            return .{
+                .bits = if (self.bits == null) null else try allocator.dupe(T, self.bits.?),
+                .len = self.len,
+            };
+        }
+
+        pub fn deinit(self: *BitVec(T), allocator: std.mem.Allocator) void {
+            allocator.free(self.bits.?);
+        }
     };
 }
 
@@ -916,6 +1098,23 @@ pub const DuplicateShred = struct {
     chunk_index: u8,
     chunk: []u8,
 
+    pub fn clone(self: *const DuplicateShred, allocator: std.mem.Allocator) error{OutOfMemory}!DuplicateShred {
+        return .{
+            .from = self.from,
+            .wallclock = self.wallclock,
+            .slot = self.slot,
+            .shred_index = self.shred_index,
+            .shred_type = self.shred_type,
+            .num_chunks = self.num_chunks,
+            .chunk_index = self.chunk_index,
+            .chunk = try allocator.dupe(u8, self.chunk),
+        };
+    }
+
+    pub fn deinit(self: *DuplicateShred, allocator: std.mem.Allocator) void {
+        allocator.free(self.chunk);
+    }
+
     pub fn random(rng: std.rand.Random) DuplicateShred {
         // NOTE: cant pass around a slice here (since the stack data will get cleared)
         var slice = [0]u8{}; // empty slice
@@ -947,6 +1146,19 @@ pub const SnapshotHashes = struct {
     full: SlotAndHash,
     incremental: []SlotAndHash,
     wallclock: u64,
+
+    pub fn clone(self: *const SnapshotHashes, allocator: std.mem.Allocator) error{OutOfMemory}!SnapshotHashes {
+        return .{
+            .from = self.from,
+            .full = self.full,
+            .incremental = try allocator.dupe(SlotAndHash, self.incremental),
+            .wallclock = self.wallclock,
+        };
+    }
+
+    pub fn deinit(self: *SnapshotHashes, allocator: std.mem.Allocator) void {
+        allocator.free(self.incremental);
+    }
 
     pub fn random(rng: std.rand.Random) SnapshotHashes {
         var slice: [0]SlotAndHash = .{};
@@ -1006,6 +1218,8 @@ pub const ContactInfo = struct {
     extensions: ArrayList(Extension),
     cache: [SOCKET_CACHE_SIZE]SocketAddr = socket_addrs_unspecified(),
 
+    // TODO: improve implementation of post deserialise method
+    pub const @"!bincode-config:post-deserialize" = bincode.FieldConfig(ContactInfo){ .post_deserialize_fn = ContactInfo.buildCache };
     pub const @"!bincode-config:cache" = bincode.FieldConfig([SOCKET_CACHE_SIZE]SocketAddr){ .skip = true };
     pub const @"!bincode-config:addrs" = ShortVecArrayListConfig(IpAddr);
     pub const @"!bincode-config:sockets" = ShortVecArrayListConfig(SocketEntry);
@@ -1013,6 +1227,17 @@ pub const ContactInfo = struct {
     pub const @"!bincode-config:wallclock" = var_int_config_u64;
 
     const Self = @This();
+
+    pub fn buildCache(self: *Self) void {
+        var port: u16 = 0;
+        for (self.sockets.items) |socket_entry| {
+            port += socket_entry.offset;
+            const addr = self.addrs.items[socket_entry.index];
+            const socket = SocketAddr.initIpv4(addr.asV4(), port);
+            socket.sanitize() catch continue;
+            self.cache[@intFromEnum(socket_entry.key)] = socket;
+        }
+    }
 
     pub fn toNodeInstance(self: *Self, rand: std.Random) NodeInstance {
         return NodeInstance.init(rand, self.pubkey, @intCast(std.time.milliTimestamp()));
@@ -1180,6 +1405,34 @@ pub const ContactInfo = struct {
     }
 };
 
+/// This exists to provide a version of ContactInfo which can safely cross gossip table lock
+/// boundaries without exposing unsafe pointers. For now it contains only the fields
+/// required to satisfy existing usage, it can be extended in the future if required.
+pub const ThreadSafeContactInfo = struct {
+    pubkey: Pubkey,
+    shred_version: u16,
+    gossip_addr: ?SocketAddr,
+    rpc_addr: ?SocketAddr,
+
+    pub fn fromContactInfo(contact_info: ContactInfo) ThreadSafeContactInfo {
+        return .{
+            .pubkey = contact_info.pubkey,
+            .shred_version = contact_info.shred_version,
+            .gossip_addr = contact_info.getSocket(.gossip),
+            .rpc_addr = contact_info.getSocket(.rpc),
+        };
+    }
+
+    pub fn fromLegacyContactInfo(legacy_contact_info: LegacyContactInfo) ThreadSafeContactInfo {
+        return .{
+            .pubkey = legacy_contact_info.id,
+            .shred_version = legacy_contact_info.shred_version,
+            .gossip_addr = legacy_contact_info.gossip,
+            .rpc_addr = legacy_contact_info.rpc,
+        };
+    }
+};
+
 /// This exists for future proofing to allow easier additions to ContactInfo.
 /// Currently, ContactInfo has no extensions.
 /// This may be changed in the future to a union or enum as extensions are added.
@@ -1265,6 +1518,21 @@ pub const RestartLastVotedForkSlots = struct {
 
     const Self = @This();
 
+    pub fn clone(self: *const Self, allocator: std.mem.Allocator) error{OutOfMemory}!Self {
+        return .{
+            .from = self.from,
+            .wallclock = self.wallclock,
+            .offsets = try self.offsets.clone(allocator),
+            .last_voted_slot = self.last_voted_slot,
+            .last_voted_hash = self.last_voted_hash,
+            .shred_version = self.shred_version,
+        };
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.offsets.deinit(allocator);
+    }
+
     pub fn sanitize(self: *const Self) !void {
         try sanitizeWallclock(self.wallclock);
     }
@@ -1273,12 +1541,36 @@ pub const RestartLastVotedForkSlots = struct {
 pub const SlotsOffsets = union(enum(u32)) {
     RunLengthEncoding: std.ArrayList(u16),
     RawOffsets: RawOffsets,
+
+    pub fn clone(self: *const SlotsOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!SlotsOffsets {
+        return switch (self.*) {
+            .RunLengthEncoding => |*arr| .{ .RunLengthEncoding = try arr.clone() },
+            .RawOffsets => |*bits| .{ .RawOffsets = try bits.clone(allocator) },
+        };
+    }
+
+    pub fn deinit(self: *SlotsOffsets, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .RunLengthEncoding => |*arr| arr.deinit(),
+            .RawOffsets => |*bits| bits.deinit(allocator),
+        }
+    }
 };
 
 // note: need another struct so bincode deserialization/serialization works
 const RawOffsets = struct {
     bits: DynamicArrayBitSet(u8),
     pub const @"!bincode-config:bits" = BitVecConfig(u8);
+
+    pub fn clone(self: *const RawOffsets, allocator: std.mem.Allocator) error{OutOfMemory}!RawOffsets {
+        return .{
+            .bits = try self.bits.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *RawOffsets, allocator: std.mem.Allocator) void {
+        self.bits.deinit(allocator);
+    }
 };
 
 test "gossip.data: new contact info" {
@@ -1326,33 +1618,122 @@ test "gossip.data: set & get socket on contact info" {
 }
 
 test "gossip.data: contact info bincode serialize matches rust bincode" {
-    var rust_contact_info_serialized_bytes = [_]u8{
-        57,  54, 18,  6,  106, 202, 13, 245, 224, 235, 33,  252, 254, 251, 161, 17, 248, 108, 25,  214, 169,
-        154, 91, 101, 17, 121, 235, 82, 175, 197, 144, 145, 100, 200, 0,   0,   0,  0,   0,   0,   0,   44,
-        1,   1,  2,   3,  4,   0,   0,  0,   5,   0,   0,   0,   6,   4,   0,   0,  0,   0,   127, 0,   0,
-        1,   0,  0,   0,  0,   127, 0,  0,   1,   0,   0,   0,   0,   127, 0,   0,  1,   0,   0,   0,   0,
-        127, 0,  0,   1,  6,   10,  20, 30,  10,  20,  30,  10,  20,  30,  10,  20, 30,  10,  20,  30,  10,
-        20,  30, 0,
+    // ContactInfo generated using rust ConfigInfo::new_rand(..., ...); and printed in debug format
+    // ContactInfo serialized using rust bincode
+    //
+    // ContactInfo {
+    //     pubkey: 4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW,
+    //     wallclock: 1721060646885,
+    //     outset: 1721060141617172,
+    //     shred_version: 0,
+    //     version: 2.1.0 (src:00000000; feat:12366211, client:Agave),
+    //     addrs: [127.0.0.1],
+    //     sockets: [
+    //         SocketEntry { key: 10, index: 0, offset: 8001 },
+    //         SocketEntry { key: 11, index: 0, offset: 1 },
+    //         SocketEntry { key: 5, index: 0, offset: 1 },
+    //         SocketEntry { key: 6, index: 0, offset: 1 },
+    //         SocketEntry { key: 9, index: 0, offset: 1 },
+    //         SocketEntry { key: 1, index: 0, offset: 1 },
+    //         SocketEntry { key: 4, index: 0, offset: 2 },
+    //         SocketEntry { key: 8, index: 0, offset: 1 },
+    //         SocketEntry { key: 7, index: 0, offset: 1 },
+    //         SocketEntry { key: 2, index: 0, offset: 889 },
+    //         SocketEntry { key: 3, index: 0, offset: 1 },
+    //         SocketEntry { key: 0, index: 0, offset: 11780 }
+    //     ],
+    //     extensions: [],
+    //     cache: [
+    //         127.0.0.1:20680,
+    //         127.0.0.1:8006,
+    //         127.0.0.1:8899,
+    //         127.0.0.1:8900,
+    //         127.0.0.1:8008,
+    //         127.0.0.1:8003,
+    //         127.0.0.1:8004,
+    //         127.0.0.1:8010,
+    //         127.0.0.1:8009,
+    //         127.0.0.1:8005,
+    //         127.0.0.1:8001,
+    //         127.0.0.1:8002
+    //     ]
+    // }
+
+    const rust_contact_info_serialized_bytes = [_]u8{
+        50,  32,  58,  140, 212, 209, 174, 133, 183, 143, 242, 155,
+        13,  127, 185, 10,  117, 50,  199, 209, 255, 166, 74,  36,
+        67,  97,  239, 155, 203, 202, 153, 93,  229, 191, 213, 185,
+        139, 50,  20,  208, 96,  138, 75,  29,  6,   0,   0,   0,
+        2,   1,   0,   0,   0,   0,   0,   131, 177, 188, 0,   3,
+        1,   0,   0,   0,   0,   127, 0,   0,   1,   12,  10,  0,
+        193, 62,  11,  0,   1,   5,   0,   1,   6,   0,   1,   9,
+        0,   1,   1,   0,   1,   4,   0,   2,   8,   0,   1,   7,
+        0,   1,   2,   0,   249, 6,   3,   0,   1,   0,   0,   132,
+        92,  0,
     };
 
-    const pubkey = Pubkey.fromString("4rL4RCWHz3iNCdCaveD8KcHfV9YWGsqSHFPo7X2zBNwa") catch unreachable;
-    var ci = ContactInfo.initDummyForTest(testing.allocator, pubkey, 100, 200, 300);
-    defer ci.deinit();
+    const rust_contact_info_cache = [_]SocketAddr{
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 20680),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8006),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8899),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8900),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8008),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8004),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8010),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8009),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8005),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8001),
+        SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8002),
+    };
 
+    // Build identical Sig contact info
+    var sig_contact_info = ContactInfo{
+        .pubkey = Pubkey.fromString("4NftWecdfGcYZMJahnAAX5Cw1PLGLZhYFB19wL6AkXqW") catch unreachable,
+        .wallclock = 1721060646885,
+        .outset = 1721060141617172,
+        .shred_version = 0,
+        .version = ClientVersion.new(2, 1, 0, 0, 12366211, 3),
+        .addrs = ArrayList(IpAddr).init(testing.allocator),
+        .sockets = ArrayList(SocketEntry).init(testing.allocator),
+        .extensions = ArrayList(Extension).init(testing.allocator),
+    };
+    defer sig_contact_info.deinit();
+    sig_contact_info.addrs.append(IpAddr.newIpv4(127, 0, 0, 1)) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .turbine_recv, .index = 0, .offset = 8001 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .turbine_recv_quic, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .tpu, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .tpu_forwards, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .tpu_vote, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .repair, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .serve_repair, .index = 0, .offset = 2 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .tpu_quic, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .tpu_forwards_quic, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .rpc, .index = 0, .offset = 889 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .rpc_pubsub, .index = 0, .offset = 1 }) catch unreachable;
+    sig_contact_info.sockets.append(.{ .key = .gossip, .index = 0, .offset = 11780 }) catch unreachable;
+    sig_contact_info.buildCache();
+
+    // Check that the cache is built correctly
+    for (0.., sig_contact_info.cache) |i, socket| {
+        try testing.expect(socket.eql(&rust_contact_info_cache[i]));
+        break;
+    }
+
+    // Check that the serialized bytes match the rust serialized bytes
     var buf = std.ArrayList(u8).init(testing.allocator);
-    bincode.write(buf.writer(), ci, bincode.Params.standard) catch unreachable;
+    bincode.write(buf.writer(), sig_contact_info, bincode.Params.standard) catch unreachable;
     defer buf.deinit();
-
     try testing.expect(std.mem.eql(u8, &rust_contact_info_serialized_bytes, buf.items));
 
+    // Check that the deserialized contact info matches the original
     var stream = std.io.fixedBufferStream(buf.items);
-    var ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-    defer bincode.free(testing.allocator, ci2);
-
-    try testing.expect(ci2.addrs.items.len == 4);
-    try testing.expect(ci2.sockets.items.len == 6);
-    try testing.expect(ci2.pubkey.equals(&ci.pubkey));
-    try testing.expect(ci2.outset == ci.outset);
+    var sig_contact_info_deserialised = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
+    defer sig_contact_info_deserialised.deinit();
+    try testing.expect(sig_contact_info_deserialised.addrs.items.len == 1);
+    try testing.expect(sig_contact_info_deserialised.sockets.items.len == 12);
+    try testing.expect(sig_contact_info_deserialised.pubkey.equals(&sig_contact_info.pubkey));
+    try testing.expect(sig_contact_info_deserialised.outset == sig_contact_info.outset);
 }
 
 test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
@@ -1371,7 +1752,7 @@ test "gossip.data: ContactInfo bincode roundtrip maintains data integrity" {
 
     var stream = std.io.fixedBufferStream(&contact_info_bytes_from_mainnet);
     const ci2 = try bincode.read(testing.allocator, ContactInfo, stream.reader(), bincode.Params.standard);
-    defer bincode.free(testing.allocator, ci2);
+    defer ci2.deinit();
 
     var buf = std.ArrayList(u8).init(testing.allocator);
     bincode.write(buf.writer(), ci2, bincode.Params.standard) catch unreachable;

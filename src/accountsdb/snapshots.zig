@@ -1,3 +1,5 @@
+//! fields + data to deserialize snapshot metadata
+
 const std = @import("std");
 const zstd = @import("zstd");
 const sig = @import("../lib.zig");
@@ -5,7 +7,6 @@ const sig = @import("../lib.zig");
 const bincode = sig.bincode;
 
 const ArrayList = std.ArrayList;
-const HashMap = std.AutoHashMap;
 const ZstdReader = zstd.Reader;
 
 const Account = sig.core.account.Account;
@@ -19,8 +20,10 @@ const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
 const Rent = sig.accounts_db.genesis_config.Rent;
 const Inflation = sig.accounts_db.genesis_config.Inflation;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
+const FileId = sig.accounts_db.accounts_file.FileId;
 
 const defaultArrayListOnEOFConfig = bincode.arraylist.defaultArrayListOnEOFConfig;
+const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const readDirectory = sig.utils.directory.readDirectory;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
 
@@ -29,20 +32,23 @@ pub const MAX_RECENT_BLOCKHASHES: usize = 300;
 pub const MAX_CACHE_ENTRIES: usize = MAX_RECENT_BLOCKHASHES;
 const CACHED_KEY_SIZE: usize = 20;
 
+/// Analogous to [StakeHistoryEntry](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L17)
 pub const StakeHistoryEntry = struct {
     effective: u64, // effective stake at this epoch
     activating: u64, // sum of portion of stakes not fully warmed up
     deactivating: u64, // requested to be cooled down, not fully deactivated yet
 };
 
+/// Analogous to [StakeHistory](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/stake_history.rs#L62)
 const StakeHistory = ArrayList(struct { Epoch, StakeHistoryEntry });
 
+/// Analogous to [Stakes](https://github.com/anza-xyz/agave/blob/1f3ef3325fb0ce08333715aa9d92f831adc4c559/runtime/src/stakes.rs#L186)
 pub const Stakes = struct {
     /// vote accounts
     vote_accounts: VoteAccounts,
 
     /// stake_delegations
-    stake_delegations: HashMap(Pubkey, Delegation),
+    stake_delegations: std.AutoArrayHashMap(Pubkey, Delegation),
 
     /// unused
     unused: u64,
@@ -54,24 +60,25 @@ pub const Stakes = struct {
     stake_history: StakeHistory,
 };
 
+/// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/vote/src/vote_account.rs#L44)
 pub const VoteAccounts = struct {
-    vote_accounts: HashMap(Pubkey, struct { u64, VoteAccount }),
+    vote_accounts: std.AutoArrayHashMap(Pubkey, struct { u64, VoteAccount }),
 
-    staked_nodes: ?HashMap(
+    staked_nodes: ?std.AutoArrayHashMap(
         Pubkey, // VoteAccount.vote_state.node_pubkey.
         u64, // Total stake across all vote-accounts.
     ) = null,
 
-    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?HashMap(Pubkey, u64)){ .skip = true };
+    pub const @"!bincode-config:staked_nodes" = bincode.FieldConfig(?std.AutoArrayHashMap(Pubkey, u64)){ .skip = true };
 
     const Self = @This();
 
-    pub fn stakedNodes(self: *Self, allocator: std.mem.Allocator) !*const HashMap(Pubkey, u64) {
+    pub fn stakedNodes(self: *Self, allocator: std.mem.Allocator) !*const std.AutoArrayHashMap(Pubkey, u64) {
         if (self.staked_nodes) |*staked_nodes| {
             return staked_nodes;
         }
         const vote_accounts = self.vote_accounts;
-        var staked_nodes = HashMap(Pubkey, u64).init(allocator);
+        var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
         var iter = vote_accounts.iterator();
         while (iter.next()) |vote_entry| {
             const vote_state = try vote_entry.value_ptr[1].voteState();
@@ -118,6 +125,7 @@ test "deserialize VoteState.node_pubkey" {
     try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
 }
 
+/// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/f807911531359e0ae4cfcaf371bd3843ec52f1c6/sdk/program/src/stake/state.rs#L587)
 pub const Delegation = struct {
     /// to whom the stake is delegated
     voter_pubkey: Pubkey,
@@ -132,6 +140,7 @@ pub const Delegation = struct {
     warmup_cooldown_rate: f64,
 };
 
+/// Analogous to [RentCollector](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/rent_collector.rs#L16)
 pub const RentCollector = struct {
     epoch: Epoch,
     epoch_schedule: EpochSchedule,
@@ -139,6 +148,7 @@ pub const RentCollector = struct {
     rent: Rent,
 };
 
+/// Analogous to (FeeCalculator)[https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L13]
 pub const FeeCalculator = struct {
     /// The current cost of a signature.
     ///
@@ -147,18 +157,20 @@ pub const FeeCalculator = struct {
     lamports_per_signature: u64,
 };
 
+/// Analogous to [HashInfo](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L13)
 pub const HashAge = struct {
     fee_calculator: FeeCalculator,
     hash_index: u64,
     timestamp: u64,
 };
 
+/// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
 pub const BlockhashQueue = struct {
     last_hash_index: u64,
 
     /// last hash to be registered
     last_hash: ?Hash,
-    ages: HashMap(Hash, HashAge),
+    ages: std.AutoArrayHashMap(Hash, HashAge),
 
     /// hashes older than `max_age` will be dropped from the queue
     max_age: usize,
@@ -166,33 +178,39 @@ pub const BlockhashQueue = struct {
 
 // TODO: move this elsewhere
 pub fn HashSet(comptime T: type) type {
-    return HashMap(T, void);
+    return std.AutoArrayHashMap(T, void);
 }
 
+/// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)
 pub const UnusedAccounts = struct {
     unused1: HashSet(Pubkey),
     unused2: HashSet(Pubkey),
-    unused3: HashMap(Pubkey, u64),
+    unused3: std.AutoArrayHashMap(Pubkey, u64),
 };
 
-pub const Ancestors = HashMap(Slot, usize);
+/// Analogous to [AncestorsForSerialization](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/ancestors.rs#L8)
+pub const Ancestors = std.AutoArrayHashMap(Slot, usize);
 
+/// Analogous to [HardForks](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/hard_forks.rs#L13)
 pub const HardForks = struct {
     hard_forks: std.ArrayList(struct { Slot, usize }),
 };
 
+/// Analogous to [NodeVoteAccounts](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L14)
 pub const NodeVoteAccounts = struct {
     vote_accounts: ArrayList(Pubkey),
     total_stake: u64,
 };
 
+/// Analogous to [EpochStakes](https://github.com/anza-xyz/agave/blob/574bae8fefc0ed256b55340b9d87b7689bcdf222/runtime/src/epoch_stakes.rs#L22)
 pub const EpochStakes = struct {
     stakes: Stakes,
     total_stake: u64,
-    node_id_to_vote_accounts: HashMap(Pubkey, NodeVoteAccounts),
-    epoch_authorized_voters: HashMap(Pubkey, Pubkey),
+    node_id_to_vote_accounts: std.AutoArrayHashMap(Pubkey, NodeVoteAccounts),
+    epoch_authorized_voters: std.AutoArrayHashMap(Pubkey, Pubkey),
 };
 
+/// Analogous to [BankIncrementalSnapshotPersistence](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L100)
 pub const BankIncrementalSnapshotPersistence = struct {
     /// slot of full snapshot
     full_slot: Slot,
@@ -216,12 +234,14 @@ pub const BankIncrementalSnapshotPersistence = struct {
     }
 };
 
+/// Analogous to [StakeReward](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/stake_rewards.rs#L12)
 pub const StakeReward = struct {
     stake_pubkey: Pubkey,
     stake_reward_info: RewardInfo,
     stake_account: Account,
 };
 
+/// Analogous to [RewardInfo](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_info.rs#L5)
 pub const RewardInfo = struct {
     reward_type: RewardType,
     lamports: i64, // Reward amount
@@ -229,6 +249,7 @@ pub const RewardInfo = struct {
     commission: ?u8, // Vote account commission when the reward was credited, only present for voting and staking rewards
 };
 
+/// Analogous to [RewardType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/reward_type.rs#L7)
 pub const RewardType = enum {
     Fee,
     Rent,
@@ -236,6 +257,7 @@ pub const RewardType = enum {
     Voting,
 };
 
+/// Analogous to [StartBlockHeightAndRewards](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L60)
 pub const StartBlockHeightAndRewards = struct {
     /// the block height of the parent of the slot at which rewards distribution began
     parent_start_block_height: u64,
@@ -243,6 +265,7 @@ pub const StartBlockHeightAndRewards = struct {
     calculated_epoch_stake_rewards: ArrayList(StakeReward),
 };
 
+/// Analogous to [EpochRewardStatus](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L70)
 pub const EpochRewardStatus = union(enum) {
     Active: StartBlockHeightAndRewards,
     Inactive: void,
@@ -252,6 +275,8 @@ pub const EpochRewardStatus = union(enum) {
     }
 };
 
+/// Analogous to most of the fields of [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
+/// and [BankFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L459)
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
     ancestors: Ancestors,
@@ -284,35 +309,51 @@ pub const BankFields = struct {
     inflation: Inflation,
     stakes: Stakes,
     unused_accounts: UnusedAccounts, // required for deserialization
-    epoch_stakes: HashMap(Epoch, EpochStakes),
+    epoch_stakes: std.AutoArrayHashMap(Epoch, EpochStakes),
     is_delta: bool,
 
-    // we skip these values now because they may be at
-    // the end of the snapshot (after account_db_fields)
-    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    epoch_reward_status: ?EpochRewardStatus = null,
+    pub const Incremental = struct {
+        snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
+        epoch_accounts_hash: ?Hash = null,
+        epoch_reward_status: ?EpochRewardStatus = null,
 
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .skip = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .skip = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .skip = true };
+        // TODO: do a thorough review on this, this seems to work by chance with the test data, but I don't trust it yet
+
+        pub const @"!bincode-config:snapshot_persistence" = bincode.optional.defaultToNullOnEof(BankIncrementalSnapshotPersistence, .{ .encode_optional = true });
+        pub const @"!bincode-config:epoch_accounts_hash" = bincode.optional.defaultToNullOnEof(Hash, .{ .encode_optional = true });
+        pub const @"!bincode-config:epoch_reward_status" = bincode.optional.defaultToNullOnEof(EpochRewardStatus, .{ .encode_optional = false });
+    };
 };
 
+/// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
 pub const AccountFileInfo = struct {
-    // note: serialized id is a usize but in code its FileId (u32)
-    id: usize,
+    // note: serialized id is a usize but in code it's FileId (u32)
+    id: FileId,
     length: usize, // amount of bytes used
 
+    pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
+        .serializer = idSerializer,
+        .deserializer = idDeserializer,
+    };
+
+    fn idSerializer(writer: anytype, data: anytype, params: bincode.Params) anyerror!void {
+        try bincode.write(writer, @as(usize, data.toInt()), params);
+    }
+
+    fn idDeserializer(_: std.mem.Allocator, reader: anytype, params: bincode.Params) anyerror!FileId {
+        const int = try bincode.readInt(usize, reader, params);
+        if (int > std.math.maxInt(FileId.Int)) return error.IdOverflow;
+        return FileId.fromInt(@intCast(int));
+    }
+
+    /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
-        IdOverflow,
         FileSizeTooSmall,
         FileSizeTooLarge,
         OffsetOutOfBounds,
     };
+    /// Analogous to [sanitize_len_and_size](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L376)
     pub fn validate(self: *const AccountFileInfo, file_size: usize) ValidateError!void {
-        if (self.id > std.math.maxInt(u32)) {
-            return error.IdOverflow;
-        }
         if (file_size == 0) {
             return error.FileSizeTooSmall;
         } else if (file_size > @as(usize, MAXIMUM_ACCOUNT_FILE_SIZE)) {
@@ -323,12 +364,14 @@ pub const AccountFileInfo = struct {
     }
 };
 
+/// Analogous to [BankHashInfo](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L115)
 pub const BankHashInfo = struct {
     accounts_delta_hash: Hash,
     accounts_hash: Hash,
     stats: BankHashStats,
 };
 
+/// Analogous to [BankHashStats](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1299)
 pub const BankHashStats = struct {
     num_updated_accounts: u64,
     num_removed_accounts: u64,
@@ -339,18 +382,33 @@ pub const BankHashStats = struct {
 
 pub const SlotAndHash = struct { slot: Slot, hash: Hash };
 
+/// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
-    file_map: HashMap(Slot, ArrayList(AccountFileInfo)),
+    file_map: FileMap,
+
+    /// NOTE: this is not a meaningful field
+    /// NOTE: at the time of writing, a test snapshots we use actually have this field set to 601 on disk,
+    /// so be sure to keep that in mind while testing.
     stored_meta_write_version: u64,
+
     slot: Slot,
     bank_hash_info: BankHashInfo,
 
     // default on EOF
-    rooted_slots: ArrayList(Slot),
-    rooted_slot_hashes: ArrayList(SlotAndHash),
+    /// NOTE: these are currently always empty?
+    /// https://github.com/anza-xyz/agave/blob/b9eb4e2aa328abb9d3ee1d857d82ccd7a86f8c4d/runtime/src/serde_snapshot.rs#L769-L782
+    rooted_slots: std.ArrayListUnmanaged(Slot),
+    rooted_slot_hashes: std.ArrayListUnmanaged(SlotAndHash),
 
-    pub const @"!bincode-config:rooted_slots" = defaultArrayListOnEOFConfig(Slot);
-    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListOnEOFConfig(SlotAndHash);
+    pub const FileMap = std.AutoArrayHashMap(Slot, AccountFileInfo);
+
+    pub const @"!bincode-config:file_map" = bincode.FieldConfig(FileMap){
+        .hashmap = .{
+            .value = bincode.list.valueEncodedAsSlice(AccountFileInfo, .{}),
+        },
+    };
+    pub const @"!bincode-config:rooted_slots" = defaultArrayListUnmanagedOnEOFConfig(Slot);
+    pub const @"!bincode-config:rooted_slot_hashes" = defaultArrayListUnmanagedOnEOFConfig(SlotAndHash);
 };
 
 /// contains all the metadata from a snapshot.
@@ -359,47 +417,29 @@ pub const AccountsDbFields = struct {
 pub const SnapshotFields = struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
+    lamports_per_signature: u64,
+    /// incremental snapshot fields (to accompany added to bank_fields)
+    bank_fields_inc: BankFields.Incremental = .{},
 
-    // incremental snapshot fields (to be added to bank_fields)
-    lamports_per_signature: u64 = 0,
-    incremental_snapshot_persistence: ?BankIncrementalSnapshotPersistence = null,
-    epoch_accounts_hash: ?Hash = null,
-    epoch_reward_status: ?EpochRewardStatus = null,
-
-    pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .default_on_eof = true };
-    pub const @"!bincode-config:incremental_snapshot_persistence" = bincode.FieldConfig(?BankIncrementalSnapshotPersistence){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_accounts_hash" = bincode.FieldConfig(?Hash){ .default_on_eof = true };
-    pub const @"!bincode-config:epoch_reward_status" = bincode.FieldConfig(?EpochRewardStatus){ .default_on_eof = true };
+    pub const @"!bincode-config:lamports_per_signature" = bincode.int.defaultOnEof(u64, 0);
 
     pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
-        var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
             switch (err) {
                 error.FileNotFound => return error.SnapshotFieldsNotFound,
                 else => return err,
             }
         };
         defer file.close();
+        return try decodeFromBincode(allocator, file.reader());
+    }
 
-        const size = (try file.stat()).size;
-        const contents = try file.readToEndAlloc(allocator, size);
-        defer allocator.free(contents);
-
-        var snapshot_fields: SnapshotFields = try bincode.readFromSlice(allocator, SnapshotFields, contents, .{});
-
-        // if these are available, we push them onto the banks
-        var bank_fields = &snapshot_fields.bank_fields;
-        bank_fields.fee_rate_governor.lamports_per_signature = snapshot_fields.lamports_per_signature;
-        if (snapshot_fields.incremental_snapshot_persistence != null) {
-            bank_fields.incremental_snapshot_persistence = snapshot_fields.incremental_snapshot_persistence.?;
-        }
-        if (snapshot_fields.epoch_accounts_hash != null) {
-            bank_fields.epoch_accounts_hash = snapshot_fields.epoch_accounts_hash.?;
-        }
-        if (snapshot_fields.epoch_reward_status != null) {
-            bank_fields.epoch_reward_status = snapshot_fields.epoch_reward_status.?;
-        }
-
-        return snapshot_fields;
+    pub fn decodeFromBincode(
+        allocator: std.mem.Allocator,
+        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
+        reader: anytype,
+    ) !SnapshotFields {
+        return try bincode.read(allocator, SnapshotFields, reader, .{});
     }
 
     pub fn deinit(self: SnapshotFields, allocator: std.mem.Allocator) void {
@@ -407,6 +447,7 @@ pub const SnapshotFields = struct {
     }
 };
 
+/// Analogous to [InstructionError](https://github.com/anza-xyz/agave/blob/25ec30452c7d74e2aeb00f2fa35876de9ce718c6/sdk/program/src/instruction.rs#L36)
 pub const InstructionError = union(enum) {
     /// Deprecated! Use CustomError instead!
     /// The program instruction returned an error
@@ -588,6 +629,7 @@ pub const InstructionError = union(enum) {
     // conversions must also be added
 };
 
+/// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)
 const TransactionError = union(enum) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
@@ -710,31 +752,44 @@ const Result = union(enum) {
     Error: TransactionError,
 };
 
-const Status = HashMap(Hash, struct { i: usize, j: ArrayList(struct {
-    key_slice: [CACHED_KEY_SIZE]u8,
-    result: Result,
-}) });
+/// Analogous to [Status](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L24)
+pub const Status = struct {
+    i: usize,
+    j: []const KeySliceResult,
 
-const BankSlotDelta = struct { slot: Slot, is_root: bool, status: Status };
+    pub const KeySliceResult = struct {
+        key_slice: [CACHED_KEY_SIZE]u8,
+        result: Result,
+    };
+};
+pub const HashStatusMap = std.AutoArrayHashMapUnmanaged(Hash, Status);
+/// Analogous to [SlotDelta](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L35)
+pub const BankSlotDelta = struct {
+    slot: Slot,
+    is_root: bool,
+    status: HashStatusMap,
+};
 
+/// Analogous to [StatusCache](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L39)
 pub const StatusCache = struct {
-    bank_slot_deltas: ArrayList(BankSlotDelta),
+    bank_slot_deltas: []const BankSlotDelta,
 
-    pub fn init(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
+    pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
         var status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
-
-        const status_cache = try bincode.read(
-            allocator,
-            StatusCache,
-            status_cache_file.reader(),
-            .{},
-        );
-        return status_cache;
+        return try decodeFromBincode(allocator, status_cache_file.reader());
     }
 
-    pub fn deinit(self: *StatusCache) void {
-        bincode.free(self.bank_slot_deltas.allocator, self.*);
+    pub fn decodeFromBincode(
+        allocator: std.mem.Allocator,
+        /// `std.io.GenericReader(...)` | `std.io.AnyReader`
+        reader: anytype,
+    ) !StatusCache {
+        return try bincode.read(allocator, StatusCache, reader, .{});
+    }
+
+    pub fn deinit(self: StatusCache, allocator: std.mem.Allocator) void {
+        bincode.free(allocator, self);
     }
 
     /// [verify_slot_deltas](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/runtime/src/snapshot_bank_utils.rs#L709)
@@ -745,7 +800,7 @@ pub const StatusCache = struct {
         slot_history: *const SlotHistory,
     ) !void {
         // status cache validation
-        const len = self.bank_slot_deltas.items.len;
+        const len = self.bank_slot_deltas.len;
         if (len > MAX_CACHE_ENTRIES) {
             return error.TooManyCacheEntries;
         }
@@ -753,7 +808,7 @@ pub const StatusCache = struct {
         var slots_seen = std.AutoArrayHashMap(Slot, void).init(allocator);
         defer slots_seen.deinit();
 
-        for (self.bank_slot_deltas.items) |slot_delta| {
+        for (self.bank_slot_deltas) |slot_delta| {
             if (!slot_delta.is_root) {
                 return error.NonRootSlot;
             }
@@ -793,6 +848,8 @@ pub const StatusCache = struct {
 };
 
 /// information on a full snapshot including the filename, slot, and hash
+///
+/// Analogous to [SnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L44)
 pub const FullSnapshotFileInfo = struct {
     filename: []const u8,
     slot: Slot,
@@ -829,6 +886,8 @@ pub const FullSnapshotFileInfo = struct {
 };
 
 /// information on an incremental snapshot including the filename, base slot (full snapshot), slot, and hash
+///
+/// Analogous to [IncrementalSnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L103)
 pub const IncrementalSnapshotFileInfo = struct {
     filename: []const u8,
     // this references the full snapshot slot
@@ -885,10 +944,7 @@ pub const SnapshotFiles = struct {
     const Self = @This();
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
-    pub fn find(allocator: std.mem.Allocator, snapshot_dir: []const u8) !Self {
-        var snapshot_directory = try std.fs.cwd().openDir(snapshot_dir, .{ .iterate = true });
-        defer snapshot_directory.close();
-
+    pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !Self {
         var snapshot_dir_iter = snapshot_directory.iterate();
 
         const files = try readDirectory(allocator, snapshot_dir_iter);
@@ -950,14 +1006,23 @@ pub const SnapshotFieldsAndPaths = struct {
 
     pub fn deinit(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
         self.all_fields.deinit(allocator);
+        self.deinitPaths(allocator);
+    }
+
+    /// NOTE: used for hacky-ish code
+    pub fn deinitPaths(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
         allocator.free(self.full_path);
-        if (self.incremental_path) |incremental_path| {
-            allocator.free(incremental_path);
+        self.full_path = "";
+        if (self.incremental_path) |*incremental_path| {
+            allocator.free(incremental_path.*);
+            incremental_path.* = "";
         }
     }
 };
 
 /// contains all fields from a snapshot (full and incremental)
+///
+/// Analogous to [SnapshotBankFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L299)
 pub const AllSnapshotFields = struct {
     full: SnapshotFields,
     incremental: ?SnapshotFields,
@@ -1027,7 +1092,7 @@ pub const AllSnapshotFields = struct {
         const full_slot = self.full.bank_fields.slot;
 
         // collapse accounts-db fields
-        var storages_map = &self.incremental.?.accounts_db_fields.file_map;
+        const storages_map = &self.incremental.?.accounts_db_fields.file_map;
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
         while (storages_entry_iter.next()) |*incremental_entry| {
@@ -1035,8 +1100,7 @@ pub const AllSnapshotFields = struct {
 
             // only keep slots > full snapshot slot
             if (!(slot > full_slot)) {
-                incremental_entry.value_ptr.deinit();
-                _ = storages_map.remove(slot);
+                _ = storages_map.swapRemove(slot);
                 continue;
             }
 
@@ -1131,10 +1195,10 @@ test "core.accounts_db.snapshotss: parse status cache" {
     const allocator = std.testing.allocator;
 
     const status_cache_path = "test_data/status_cache";
-    var status_cache = try StatusCache.init(allocator, status_cache_path);
-    defer status_cache.deinit();
+    var status_cache = try StatusCache.initFromPath(allocator, status_cache_path);
+    defer status_cache.deinit(allocator);
 
-    try std.testing.expect(status_cache.bank_slot_deltas.items.len > 0);
+    try std.testing.expect(status_cache.bank_slot_deltas.len > 0);
 }
 
 test "core.accounts_db.snapshotss: parse snapshot fields" {
@@ -1153,5 +1217,5 @@ test "core.accounts_db.snapshotss: parse incremental snapshot fields" {
     defer snapshot_fields.deinit(allocator);
 
     try std.testing.expectEqual(snapshot_fields.lamports_per_signature, 5000);
-    try std.testing.expectEqual(snapshot_fields.bank_fields.incremental_snapshot_persistence.?.full_slot, 10);
+    try std.testing.expectEqual(snapshot_fields.bank_fields_inc.snapshot_persistence.?.full_slot, 10);
 }

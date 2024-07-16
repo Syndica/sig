@@ -20,6 +20,18 @@ pub const Transaction = struct {
         };
     }
 
+    pub fn clone(self: *const Transaction, allocator: std.mem.Allocator) error{OutOfMemory}!Transaction {
+        return .{
+            .signatures = try allocator.dupe(Signature, self.signatures),
+            .message = try self.message.clone(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Transaction, allocator: std.mem.Allocator) void {
+        allocator.free(self.signatures);
+        self.message.deinit(allocator);
+    }
+
     pub fn sanitize(self: *const Transaction) !void {
         const num_required_sigs = self.message.header.num_required_signatures;
         const num_signatures = self.signatures.len;
@@ -55,6 +67,23 @@ pub const Message = struct {
             .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
             .instructions = &[_]CompiledInstruction{},
         };
+    }
+
+    pub fn clone(self: *const Message, allocator: std.mem.Allocator) error{OutOfMemory}!Message {
+        const instructions = try allocator.alloc(CompiledInstruction, self.instructions.len);
+        for (instructions, 0..) |*ci, i| ci.* = try self.instructions[i].clone(allocator);
+        return .{
+            .header = self.header,
+            .account_keys = try allocator.dupe(Pubkey, self.account_keys),
+            .recent_blockhash = self.recent_blockhash,
+            .instructions = instructions,
+        };
+    }
+
+    pub fn deinit(self: *Message, allocator: std.mem.Allocator) void {
+        allocator.free(self.account_keys);
+        for (self.instructions) |*ci| ci.deinit(allocator);
+        allocator.free(self.instructions);
     }
 
     pub const MessageSanitizeError = error{
@@ -118,6 +147,19 @@ pub const CompiledInstruction = struct {
 
     pub const @"!bincode-config:accounts" = ShortVecConfig(u8);
     pub const @"!bincode-config:data" = ShortVecConfig(u8);
+
+    pub fn clone(self: *const CompiledInstruction, allocator: std.mem.Allocator) error{OutOfMemory}!CompiledInstruction {
+        return .{
+            .program_id_index = self.program_id_index,
+            .accounts = try allocator.dupe(u8, self.accounts),
+            .data = try allocator.dupe(u8, self.data),
+        };
+    }
+
+    pub fn deinit(self: *CompiledInstruction, allocator: std.mem.Allocator) void {
+        allocator.free(self.accounts);
+        allocator.free(self.data);
+    }
 };
 
 test "core.transaction: tmp" {

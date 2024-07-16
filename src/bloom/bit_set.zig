@@ -99,6 +99,16 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
             return self.bit_length;
         }
 
+        pub fn clone(self: Self, allocator: Allocator) error{OutOfMemory}!Self {
+            return .{
+                .num_masks = self.num_masks,
+                .last_pad_bits = self.last_pad_bits,
+                .last_item_mask = self.last_item_mask,
+                .bit_length = self.bit_length,
+                .masks = try allocator.dupe(MaskInt, self.masks),
+            };
+        }
+
         /// Returns true if the bit at the specified index
         /// is present in the set, false otherwise.
         pub fn isSet(self: Self, index: usize) bool {

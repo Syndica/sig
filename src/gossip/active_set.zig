@@ -7,9 +7,9 @@ const EndPoint = network.EndPoint;
 
 const Pubkey = sig.core.Pubkey;
 const Bloom = sig.bloom.Bloom;
-const ContactInfo = sig.gossip.data.ContactInfo;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipTable = sig.gossip.table.GossipTable;
 
 const getWallclockMs = sig.gossip.getWallclockMs;
@@ -52,7 +52,7 @@ pub const ActiveSet = struct {
     pub fn rotate(
         self: *Self,
         rand: std.Random,
-        peers: []ContactInfo,
+        peers: []ThreadSafeContactInfo,
     ) error{OutOfMemory}!void {
         // clear the existing
         var iter = self.peers.iterator();
@@ -65,7 +65,7 @@ pub const ActiveSet = struct {
             return;
         }
         const size = @min(peers.len, NUM_ACTIVE_SET_ENTRIES);
-        shuffleFirstN(rand, ContactInfo, peers, size);
+        shuffleFirstN(rand, ThreadSafeContactInfo, peers, size);
 
         const bloom_num_items = @max(peers.len, MIN_NUM_BLOOM_ITEMS);
         for (0..size) |i| {
@@ -107,8 +107,8 @@ pub const ActiveSet = struct {
         var iter = self.peers.iterator();
         while (iter.next()) |entry| {
             // lookup peer contact info
-            const peer_info = table.getContactInfo(entry.key_ptr.*) orelse continue;
-            const peer_gossip_addr = peer_info.getSocket(.gossip) orelse continue;
+            const peer_info = table.getThreadSafeContactInfo(entry.key_ptr.*) orelse continue;
+            const peer_gossip_addr = peer_info.gossip_addr orelse continue;
 
             peer_gossip_addr.sanitize() catch continue;
 
@@ -138,15 +138,12 @@ test "gossip.active_set: init/deinit" {
 
     // insert some contacts
     var rng = std.rand.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(ContactInfo).initCapacity(alloc, 10);
-    defer {
-        for (gossip_peers.items) |p| p.deinit();
-        gossip_peers.deinit();
-    }
+    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
+    defer gossip_peers.deinit();
 
     for (0..GOSSIP_PUSH_FANOUT) |_| {
-        var data = LegacyContactInfo.random(rng.random());
-        try gossip_peers.append(try data.toContactInfo(alloc));
+        const data = LegacyContactInfo.random(rng.random());
+        try gossip_peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(data));
 
         var keypair = try KeyPair.create(null);
         const value = try SignedGossipData.initSigned(.{
@@ -182,7 +179,7 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(100);
-    var gossip_peers = try std.ArrayList(ContactInfo).initCapacity(alloc, 10);
+    var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
     var data = try LegacyContactInfo.random(rng.random()).toContactInfo(alloc);
@@ -190,8 +187,8 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
     defer data.deinit();
     defer dupe.deinit();
     dupe.pubkey = data.pubkey;
-    try gossip_peers.append(data);
-    try gossip_peers.append(dupe);
+    try gossip_peers.append(ThreadSafeContactInfo.fromContactInfo(data));
+    try gossip_peers.append(ThreadSafeContactInfo.fromContactInfo(dupe));
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();

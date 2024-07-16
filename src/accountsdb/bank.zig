@@ -1,3 +1,5 @@
+//! minimal logic for bank (still being built out)
+
 const std = @import("std");
 const AccountsDB = @import("db.zig").AccountsDB;
 const GenesisConfig = @import("genesis_config.zig").GenesisConfig;
@@ -5,6 +7,7 @@ const BankFields = @import("snapshots.zig").BankFields;
 const SnapshotFields = @import("snapshots.zig").SnapshotFields;
 
 // TODO: we can likley come up with a better name for this struct
+/// Analogous to [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
 pub const Bank = struct {
     accounts_db: *AccountsDB,
     bank_fields: *const BankFields,
