@@ -77,7 +77,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const exit = try allocator.create(std.atomic.Value(bool));
     exit.* = std.atomic.Value(bool).init(false);
 
-    var manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
+    const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
         &accounts_db,
         exit,
     });
