@@ -117,8 +117,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             total_action_count += 1;
         }
 
-        const action_int = rand.intRangeAtMost(u8, 0, 1);
-        const action: Actions = @enumFromInt(action_int);
+        const action = rand.enumValue(Actions);
         switch (action) {
             .put => {
                 defer put_count += 1;
