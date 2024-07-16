@@ -946,7 +946,7 @@ pub const GossipService = struct {
                     continue;
                 }
 
-                const byte_size = try bincode.getSerializedSize(self.allocator, value, bincode.Params{});
+                const byte_size = bincode.sizeOf(value, .{});
                 total_byte_size +|= byte_size;
 
                 if (total_byte_size > MAX_BYTES_PER_PUSH) {

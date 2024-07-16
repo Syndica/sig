@@ -16,13 +16,13 @@ pub fn ShortVecConfig(comptime Child: type) bincode.FieldConfig([]Child) {
             }
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) ![]Child {
-            var ally = allocator.?;
-
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![]Child {
             const len = try deserialize_short_u16(reader, params);
-            var elems = try ally.alloc(Child, len);
-            for (0..len) |i| {
-                elems[i] = try bincode.read(ally, Child, reader, params);
+            const elems = try allocator.alloc(Child, len);
+            errdefer allocator.free(elems);
+            for (elems, 0..) |*elem, i| {
+                errdefer for (elems[0..i]) |prev| bincode.free(allocator, prev);
+                elem.* = try bincode.read(allocator, Child, reader, params);
             }
             return elems;
         }
@@ -50,13 +50,11 @@ pub fn ShortVecArrayListConfig(comptime Child: type) bincode.FieldConfig(std.Arr
             }
         }
 
-        pub fn deserialize(allocator: ?std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
-            const ally = allocator.?;
-
+        pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) !std.ArrayList(Child) {
             const len = try deserialize_short_u16(reader, params);
-            var list = try std.ArrayList(Child).initCapacity(ally, @as(usize, len));
+            var list = try std.ArrayList(Child).initCapacity(allocator, @as(usize, len));
             for (0..len) |_| {
-                const item = try bincode.read(ally, Child, reader, params);
+                const item = try bincode.read(allocator, Child, reader, params);
                 try list.append(item);
             }
             return list;
