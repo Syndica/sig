@@ -344,7 +344,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         allocator,
         &fuzzing_loop_exit,
         maybe_max_messages,
-        &rng,
+        rng.random(),
         &fuzz_keypair,
         LegacyContactInfo.fromContactInfo(&fuzz_contact_info),
         to_entrypoint,
@@ -363,13 +363,22 @@ pub fn fuzz(
     allocator: std.mem.Allocator,
     loop_exit: *AtomicBool,
     maybe_max_messages: ?usize,
-    rng: *std.rand.DefaultPrng,
+    rng: std.Random,
     keypair: *const KeyPair,
     contact_info: LegacyContactInfo,
     to_endpoint: EndPoint,
     outgoing_channel: *sig.sync.Channel(std.ArrayList(Packet)),
 ) !void {
     var msg_count: usize = 0;
+
+    const Actions = enum {
+        ping,
+        pong,
+        push,
+        pull_request,
+        pull_response,
+    };
+
     while (!loop_exit.load(.unordered)) {
         if (maybe_max_messages) |max_messages| {
             if (msg_count >= max_messages) {
@@ -378,21 +387,21 @@ pub fn fuzz(
             }
         }
 
-        const command = rng.random().intRangeAtMost(u8, 0, 4);
+        const command = rng.enumValue(Actions);
         const packet = switch (command) {
-            0 => blk: {
+            Actions.ping => blk: {
                 // send ping message
-                const packet = randomPingPacket(rng.random(), keypair, to_endpoint);
+                const packet = randomPingPacket(rng, keypair, to_endpoint);
                 break :blk packet;
             },
-            1 => blk: {
+            Actions.pong => blk: {
                 // send pong message
-                const packet = randomPongPacket(rng.random(), keypair, to_endpoint);
+                const packet = randomPongPacket(rng, keypair, to_endpoint);
                 break :blk packet;
             },
-            2 => blk: {
+            Actions.push => blk: {
                 // send push message
-                const packets = randomPushMessage(rng.random(), keypair, to_endpoint) catch |err| {
+                const packets = randomPushMessage(rng, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -401,9 +410,9 @@ pub fn fuzz(
                 const packet = packets.items[0];
                 break :blk packet;
             },
-            3 => blk: {
+            Actions.pull_request => blk: {
                 // send pull response
-                const packets = randomPullResponse(rng.random(), keypair, to_endpoint) catch |err| {
+                const packets = randomPullResponse(rng, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
                     continue;
                 };
@@ -412,12 +421,12 @@ pub fn fuzz(
                 const packet = packets.items[0];
                 break :blk packet;
             },
-            4 => blk: {
+            Actions.pull_response => blk: {
                 // send pull request
                 const packet = randomPullRequest(
                     allocator,
                     contact_info,
-                    rng.random(),
+                    rng,
                     keypair,
                     to_endpoint,
                 );
@@ -435,7 +444,7 @@ pub fn fuzz(
         try packet_batch.append(send_packet);
         msg_count +|= 1;
 
-        const send_duplicate = rng.random().boolean();
+        const send_duplicate = rng.boolean();
         if (send_duplicate) {
             msg_count +|= 1;
             try packet_batch.append(send_packet);
