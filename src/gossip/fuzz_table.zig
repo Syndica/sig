@@ -221,10 +221,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }
 
                 // via direct method
-                _ = gossip_table.getThreadSafeContactInfo(pubkey) orelse {
+                if (gossip_table.getThreadSafeContactInfo(pubkey) == null) {
                     logger.errf("failed to get contact info: {}", .{pubkey});
                     return error.ContactInfoNotFound;
-                };
+                }
 
                 // via iter
                 var found = false;
