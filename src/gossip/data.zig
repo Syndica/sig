@@ -141,147 +141,63 @@ pub const SignedGossipData = struct {
 
     pub fn id(self: *const Self) Pubkey {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| {
-                return v.id;
-            },
-            .Vote => |*v| {
-                return v[1].from;
-            },
-            .LowestSlot => |*v| {
-                return v[1].from;
-            },
-            .LegacySnapshotHashes => |*v| {
-                return v.from;
-            },
-            .AccountsHashes => |*v| {
-                return v.from;
-            },
-            .EpochSlots => |*v| {
-                return v[1].from;
-            },
-            .LegacyVersion => |*v| {
-                return v.from;
-            },
-            .Version => |*v| {
-                return v.from;
-            },
-            .NodeInstance => |*v| {
-                return v.from;
-            },
-            .DuplicateShred => |*v| {
-                return v[1].from;
-            },
-            .SnapshotHashes => |*v| {
-                return v.from;
-            },
-            .ContactInfo => |*v| {
-                return v.pubkey;
-            },
-            .RestartLastVotedForkSlots => |*v| {
-                return v.from;
-            },
-            .RestartHeaviestFork => |*v| {
-                return v.from;
-            },
+            .LegacyContactInfo => |*v| v.id,
+            .Vote => |*v| v[1].from,
+            .LowestSlot => |*v| v[1].from,
+            .LegacySnapshotHashes => |*v| v.from,
+            .AccountsHashes => |*v| v.from,
+            .EpochSlots => |*v| v[1].from,
+            .LegacyVersion => |*v| v.from,
+            .Version => |*v| v.from,
+            .NodeInstance => |*v| v.from,
+            .DuplicateShred => |*v| v[1].from,
+            .SnapshotHashes => |*v| v.from,
+            .ContactInfo => |*v| v.pubkey,
+            .RestartLastVotedForkSlots => |*v| v.from,
+            .RestartHeaviestFork => |*v| v.from,
         };
     }
 
     pub fn wallclockPtr(self: *Self) *u64 {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| {
-                return &v.wallclock;
-            },
-            .Vote => |*v| {
-                return &v[1].wallclock;
-            },
-            .LowestSlot => |*v| {
-                return &v[1].wallclock;
-            },
-            .LegacySnapshotHashes => |*v| {
-                return &v.wallclock;
-            },
-            .AccountsHashes => |*v| {
-                return &v.wallclock;
-            },
-            .EpochSlots => |*v| {
-                return &v[1].wallclock;
-            },
-            .LegacyVersion => |*v| {
-                return &v.wallclock;
-            },
-            .Version => |*v| {
-                return &v.wallclock;
-            },
-            .NodeInstance => |*v| {
-                return &v.wallclock;
-            },
-            .DuplicateShred => |*v| {
-                return &v[1].wallclock;
-            },
-            .SnapshotHashes => |*v| {
-                return &v.wallclock;
-            },
-            .ContactInfo => |*v| {
-                return &v.wallclock;
-            },
-            .RestartLastVotedForkSlots => |*v| {
-                return &v.wallclock;
-            },
-            .RestartHeaviestFork => |*v| {
-                return &v.wallclock;
-            },
+            .LegacyContactInfo => |*v| &v.wallclock,
+            .Vote => |*v| &v[1].wallclock,
+            .LowestSlot => |*v| &v[1].wallclock,
+            .LegacySnapshotHashes => |*v| &v.wallclock,
+            .AccountsHashes => |*v| &v.wallclock,
+            .EpochSlots => |*v| &v[1].wallclock,
+            .LegacyVersion => |*v| &v.wallclock,
+            .Version => |*v| &v.wallclock,
+            .NodeInstance => |*v| &v.wallclock,
+            .DuplicateShred => |*v| &v[1].wallclock,
+            .SnapshotHashes => |*v| &v.wallclock,
+            .ContactInfo => |*v| &v.wallclock,
+            .RestartLastVotedForkSlots => |*v| &v.wallclock,
+            .RestartHeaviestFork => |*v| &v.wallclock,
         };
     }
 
     pub fn wallclock(self: *const Self) u64 {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| {
-                return v.wallclock;
-            },
-            .Vote => |*v| {
-                return v[1].wallclock;
-            },
-            .LowestSlot => |*v| {
-                return v[1].wallclock;
-            },
-            .LegacySnapshotHashes => |*v| {
-                return v.wallclock;
-            },
-            .AccountsHashes => |*v| {
-                return v.wallclock;
-            },
-            .EpochSlots => |*v| {
-                return v[1].wallclock;
-            },
-            .LegacyVersion => |*v| {
-                return v.wallclock;
-            },
-            .Version => |*v| {
-                return v.wallclock;
-            },
-            .NodeInstance => |*v| {
-                return v.wallclock;
-            },
-            .DuplicateShred => |*v| {
-                return v[1].wallclock;
-            },
-            .SnapshotHashes => |*v| {
-                return v.wallclock;
-            },
-            .ContactInfo => |*v| {
-                return v.wallclock;
-            },
-            .RestartLastVotedForkSlots => |*v| {
-                return v.wallclock;
-            },
-            .RestartHeaviestFork => |*v| {
-                return v.wallclock;
-            },
+            .LegacyContactInfo => |*v| v.wallclock,
+            .Vote => |*v| v[1].wallclock,
+            .LowestSlot => |*v| v[1].wallclock,
+            .LegacySnapshotHashes => |*v| v.wallclock,
+            .AccountsHashes => |*v| v.wallclock,
+            .EpochSlots => |*v| v[1].wallclock,
+            .LegacyVersion => |*v| v.wallclock,
+            .Version => |*v| v.wallclock,
+            .NodeInstance => |*v| v.wallclock,
+            .DuplicateShred => |*v| v[1].wallclock,
+            .SnapshotHashes => |*v| v.wallclock,
+            .ContactInfo => |*v| v.wallclock,
+            .RestartLastVotedForkSlots => |*v| v.wallclock,
+            .RestartHeaviestFork => |*v| v.wallclock,
         };
     }
 
     pub fn label(self: *const Self) GossipKey {
-        return switch (self.data) {
+        switch (self.data) {
             .LegacyContactInfo => {
                 return .{ .LegacyContactInfo = self.id() };
             },
@@ -324,7 +240,7 @@ pub const SignedGossipData = struct {
             .RestartHeaviestFork => {
                 return .{ .RestartHeaviestFork = self.id() };
             },
-        };
+        }
     }
 };
 
