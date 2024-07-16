@@ -227,14 +227,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }
 
                 // via iter
-                var found = false;
                 var iter = gossip_table.contactInfoIterator(0);
-                while (iter.next()) |contact_info| {
+                const found = while (iter.next()) |contact_info| {
                     if (contact_info.pubkey.equals(&pubkey)) {
-                        found = true;
-                        break;
+                        break true;
                     }
-                }
+                } else false;
                 if (!found) {
                     logger.errf("failed to find pubkey: {}", .{pubkey});
                     return error.ContactInfoNotFound;
@@ -269,9 +267,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             var index: u64 = 0;
             while (index < pubkeys.items.len) {
                 const pubkey = pubkeys.items[index];
-                const still_exists = blk: for (available_keys) |*key| {
+                const still_exists = for (available_keys) |*key| {
                     if (key.equals(&pubkey)) {
-                        break :blk true;
+                        break true;
                     }
                 } else false;
 
