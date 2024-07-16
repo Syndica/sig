@@ -2821,14 +2821,16 @@ test "test large push messages" {
     defer {
         peers.deinit();
     }
-    var lock_guard = gossip_service.gossip_table_rw.write();
-    for (0..2_000) |_| {
-        var keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
-        try lock_guard.mut().insert(value, getWallclockMs());
-        try peers.append(ThreadSafeContactInfo.fromContactInfo(try value.data.LegacyContactInfo.toContactInfo(allocator)));
+    {
+        var lock_guard = gossip_service.gossip_table_rw.write();
+        defer lock_guard.unlock();
+        for (0..2_000) |_| {
+            var keypair = try KeyPair.create(null);
+            const value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
+            try lock_guard.mut().insert(value, getWallclockMs());
+            try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
+        }
     }
-    lock_guard.unlock();
 
     // set the active set
     {
