@@ -278,7 +278,7 @@ test "gossip.pull_request: test building filters" {
             .LegacyContactInfo = legacy_contact_info,
         }, &kp);
 
-        try gossip_table.insert(gossip_value, 0);
+        _ = try gossip_table.insert(gossip_value, 0);
     }
 
     const max_bytes = 2;

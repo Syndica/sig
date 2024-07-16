@@ -39,7 +39,7 @@ pub fn main() !void {
     };
 
     std.debug.print("using seed: {d}\n", .{seed});
-    try writeSeedToFile(seed);
+    try writeSeedToFile(filter, seed);
 
     // NOTE: changing these hardcoded str values will require a change to the fuzz/kcov in `scripts/`
     if (std.mem.startsWith(u8, filter, "accountsdb")) {
@@ -55,26 +55,13 @@ pub fn main() !void {
 }
 
 /// writes the seed to the defined seed file (defined by SEED_FILE_PATH)
-pub fn writeSeedToFile(seed: u64) !void {
-    std.fs.cwd().access(SEED_FILE_PATH, .{}) catch |err| {
-        switch (err) {
-            std.fs.Dir.AccessError.FileNotFound => {
-                var file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{});
-                file.close();
-            },
-            else => {
-                std.debug.print("failed to access seed file: {}\n", .{err});
-                return;
-            },
-        }
-    };
-
-    const seed_file = try std.fs.cwd().openFile(SEED_FILE_PATH, .{ .mode = .write_only });
+pub fn writeSeedToFile(filter: []const u8, seed: u64) !void {
+    const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{
+        .truncate = false,
+    });
     defer seed_file.close();
+    try seed_file.seekFromEnd(0);
 
-    var buf: [1024]u8 = undefined;
     const now: u64 = @intCast(std.time.timestamp());
-
-    const seed_slice = try std.fmt.bufPrint(&buf, "@{d} - seed: {d}\n", .{ now, seed });
-    try seed_file.writeAll(seed_slice);
+    try seed_file.writer().print("{s}: time: {d}, seed: {d}\n", .{ filter, now, seed });
 }

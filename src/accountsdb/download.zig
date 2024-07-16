@@ -502,7 +502,7 @@ test "accounts_db.download: test remove untrusted peers" {
         var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
         try trusted_validators.append(ci.pubkey);
-        try table.insert(data, 0);
+        _ = try table.insert(data, 0);
     }
 
     _ = try findPeersToDownloadFromAssumeCapacity(
@@ -593,7 +593,7 @@ test "accounts_db.download: test finding peers" {
         var kp = try KeyPair.create(null);
         var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
-        try table.insert(data, 0);
+        _ = try table.insert(data, 0);
     }
 
     result = try findPeersToDownloadFromAssumeCapacity(

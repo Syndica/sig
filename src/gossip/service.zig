@@ -738,7 +738,8 @@ pub const GossipService = struct {
                     var gossip_table: *GossipTable = gossip_table_lock.mut();
 
                     var x_timer = std.time.Timer.start() catch unreachable;
-                    _ = gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY) catch |err| {
+                    const now = getWallclockMs();
+                    _ = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| {
                         self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                     };
                     const elapsed = x_timer.read();
@@ -1206,7 +1207,7 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             for (pull_requests.items) |*req| {
-                gossip_table.insert(req.value, now) catch {};
+                _ = gossip_table.insert(req.value, now) catch {};
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
         }
@@ -1380,6 +1381,7 @@ pub const GossipService = struct {
                 );
 
                 const insert_results = try gossip_table.insertValues(
+                    now,
                     pull_message.gossip_values[0..valid_len],
                     GOSSIP_PULL_TIMEOUT_MS,
                     true,
@@ -1391,7 +1393,7 @@ pub const GossipService = struct {
                 const timeout_indexs = insert_results.timeouts.?;
                 defer timeout_indexs.deinit();
                 for (timeout_indexs.items) |index| {
-                    gossip_table.insert(
+                    _ = gossip_table.insert(
                         pull_message.gossip_values[index],
                         now,
                     ) catch {};
@@ -1506,6 +1508,7 @@ pub const GossipService = struct {
             var n_failed_inserts: usize = 0;
             var n_invalid_data: usize = 0;
 
+            const now = getWallclockMs();
             for (batch_push_messages.items) |*push_message| {
                 n_gossip_data += push_message.gossip_values.len;
 
@@ -1518,6 +1521,7 @@ pub const GossipService = struct {
                 n_invalid_data += push_message.gossip_values.len - valid_len;
 
                 try gossip_table.insertValuesMinAllocs(
+                    now,
                     push_message.gossip_values[0..valid_len],
                     GOSSIP_PUSH_MSG_TIMEOUT_MS,
                     &failed_insert_indexs,
@@ -1642,7 +1646,7 @@ pub const GossipService = struct {
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             try gossip_table.purged.trim(purged_cutoff_timestamp);
-            _ = try gossip_table.attemptTrim(UNIQUE_PUBKEY_CAPACITY);
+            _ = try gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY);
 
             // TODO: condition timeout on stake weight:
             // - values from nodes with non-zero stake: epoch duration
@@ -1719,7 +1723,7 @@ pub const GossipService = struct {
         var gossip_table: *GossipTable = gossip_table_lock.mut();
 
         while (push_msg_queue.popOrNull()) |gossip_value| {
-            gossip_table.insert(gossip_value, now) catch {};
+            _ = gossip_table.insert(gossip_value, now) catch {};
         }
     }
 
@@ -2183,7 +2187,7 @@ test "build messages startup and shutdown" {
         var value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
-        try lg.mut().insert(value, getWallclockMs());
+        _ = try lg.mut().insert(value, getWallclockMs());
         try peers.append(value.data.LegacyContactInfo);
         // set the pong status as OK so they included in active set
         ping_cache._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
@@ -2228,7 +2232,7 @@ test "handling prune messages" {
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
         const value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
-        try lg.mut().insert(value, getWallclockMs());
+        _ = try lg.mut().insert(value, getWallclockMs());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
@@ -2496,7 +2500,7 @@ test "handle pull request" {
             count += 1;
             for (0..10) |_| {
                 var value = try SignedGossipData.randomWithIndex(rng.random(), &(try KeyPair.create(null)), 0);
-                try gossip_table.insert(value, getWallclockMs());
+                _ = try gossip_table.insert(value, getWallclockMs());
 
                 // make sure well get a response from the request
                 const vers_value = gossip_table.get(value.label()).?;
@@ -2618,7 +2622,7 @@ test "test build prune messages and handle push messages" {
         .LegacyContactInfo = send_contact_info,
     }, &my_keypair);
     var lg = gossip_service.gossip_table_rw.write();
-    try lg.mut().insert(ci_value, getWallclockMs());
+    _ = try lg.mut().insert(ci_value, getWallclockMs());
     lg.unlock();
 
     var msgs = ArrayList(GossipService.PushMessage).init(allocator);
@@ -2702,7 +2706,7 @@ test "test build pull requests" {
             var value = try SignedGossipData.randomWithIndex(rng.random(), &rando_keypair, 0);
             value.wallclockPtr().* = now + 10 * i;
 
-            try lg.mut().insert(value, now + 10 * i);
+            _ = try lg.mut().insert(value, now + 10 * i);
             pc._setPong(value.data.LegacyContactInfo.id, value.data.LegacyContactInfo.gossip);
         }
     }
@@ -2749,7 +2753,7 @@ test "test build push messages" {
     for (0..10) |_| {
         var keypair = try KeyPair.create(null);
         const value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
-        try lg.mut().insert(value, getWallclockMs());
+        _ = try lg.mut().insert(value, getWallclockMs());
         try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
     }
     lg.unlock();
@@ -2827,7 +2831,7 @@ test "test large push messages" {
         for (0..2_000) |_| {
             var keypair = try KeyPair.create(null);
             const value = try SignedGossipData.randomWithIndex(rng.random(), &keypair, 0); // contact info
-            try lock_guard.mut().insert(value, getWallclockMs());
+            _ = try lock_guard.mut().insert(value, getWallclockMs());
             try peers.append(ThreadSafeContactInfo.fromLegacyContactInfo(value.data.LegacyContactInfo));
         }
     }
@@ -3365,11 +3369,11 @@ pub const BenchmarkGossipServicePullRequests = struct {
             var table_lock = gossip_service.gossip_table_rw.write();
             var table: *GossipTable = table_lock.mut();
             // insert contact info of pull request
-            try table.insert(signed_contact_info_recv, now);
+            _ = try table.insert(signed_contact_info_recv, now);
             // insert all other values
             for (0..bench_args.n_data_populated) |_| {
                 const value = try SignedGossipData.random(rng, &recv_keypair);
-                try table.insert(value, now);
+                _ = try table.insert(value, now);
             }
             table_lock.unlock();
         }

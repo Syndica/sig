@@ -83,7 +83,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var put_count: u64 = 0;
     var get_count: u64 = 0;
     var total_action_count: u64 = 0;
-    var now: u64 = 0;
+    var now: u64 = 100;
 
     var insertion_times = try std.ArrayList(u64).initCapacity(allocator, 100);
     defer insertion_times.deinit();
@@ -108,7 +108,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     while (true) {
         if (maybe_max_actions) |max_actions| {
             if (total_action_count >= max_actions) {
-                std.debug.print("reached max actions: {}\n", .{max_actions});
+                logger.infof("reached max actions: {}", .{max_actions});
                 break;
             }
         }
@@ -121,15 +121,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         const action: Actions = @enumFromInt(action_int);
         switch (action) {
             .put => {
+                defer put_count += 1;
                 const new_keypair = rand.boolean();
-                var data = GossipData.randomFromIndex(rand, 0);
 
-                const new_contact_info = rand.boolean();
-                if (new_contact_info) {
-                    data = GossipData{
-                        .ContactInfo = try ContactInfo.random(allocator, rand, Pubkey.random(rand), 0, 0, 0),
-                    };
-                }
+                var data = GossipData{
+                    .ContactInfo = try ContactInfo.random(allocator, rand, Pubkey.random(rand), 0, 0, 0),
+                };
 
                 if (new_keypair) {
                     rand.bytes(&seed_buf);
@@ -141,19 +138,20 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     signed_data.wallclockPtr().* = now;
 
                     // !
-                    try gossip_table.insert(signed_data, now);
+                    logger.debugf("putting pubkey: {}", .{pubkey});
+                    const did_insert = try gossip_table.insert(signed_data, now);
+                    std.debug.assert(did_insert);
 
-                    if (new_contact_info) {
-                        try keys.append(GossipKey{ .ContactInfo = pubkey });
-                    } else {
-                        try keys.append(GossipKey{ .LegacyContactInfo = pubkey });
-                    }
-
+                    try keys.append(GossipKey{ .ContactInfo = pubkey });
                     try keypairs.append(keypair);
                     try pubkeys.append(pubkey);
                     try signatures.put(pubkey, signed_data.signature);
                     try insertion_times.append(now);
                 } else {
+                    if (pubkeys.items.len == 0) {
+                        continue;
+                    }
+
                     const index = rand.intRangeAtMost(usize, 0, pubkeys.items.len - 1);
                     const keypair = keypairs.items[index];
                     const pubkey = pubkeys.items[index];
@@ -164,38 +162,41 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                     const should_overwrite = rand.boolean();
                     if (should_overwrite) {
+                        logger.debugf("overwriting pubkey: {}", .{pubkey});
                         signed_data.wallclockPtr().* = now;
                     } else {
+                        logger.debugf("writing old pubkey: {}", .{pubkey});
                         const other_insertion_time = insertion_times.items[index];
-                        signed_data.wallclockPtr().* = other_insertion_time -| rand.intRangeAtMost(u64, 0, 100);
+                        signed_data.wallclockPtr().* = other_insertion_time -| rand.intRangeAtMost(u64, 10, 100);
                     }
 
                     // !
-                    gossip_table.insert(signed_data, now) catch |err| {
+                    const did_insert = gossip_table.insert(signed_data, now) catch |err| blk: {
                         switch (err) {
                             GossipTable.InsertionError.OldValue => {
-                                // std.debug.assert(!should_overwrite);
+                                std.debug.assert(!should_overwrite);
                             },
-                            GossipTable.InsertionError.DuplicateValue => {},
+                            GossipTable.InsertionError.DuplicateValue => {
+                                logger.debugf("duplicate value: {}", .{pubkey});
+                            },
                             else => {
                                 return err;
                             },
                         }
+                        break :blk false;
                     };
 
+                    if (!should_overwrite and did_insert) {
+                        return error.ValueDidNotOverwrite;
+                    }
+
                     if (should_overwrite) {
-                        if (new_contact_info) {
-                            keys.items[index] = GossipKey{ .ContactInfo = pubkey };
-                        } else {
-                            keys.items[index] = GossipKey{ .LegacyContactInfo = pubkey };
-                        }
+                        keys.items[index] = GossipKey{ .ContactInfo = pubkey };
                         // should over-write the old value
                         insertion_times.items[index] = now;
                         try signatures.put(pubkey, signed_data.signature);
                     }
                 }
-
-                put_count += 1;
             },
             .get => {
                 if (pubkeys.items.len == 0) {
@@ -204,23 +205,26 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const index = rand.intRangeAtMost(usize, 0, pubkeys.items.len - 1);
                 const pubkey = pubkeys.items[index];
-                // general search
                 const search_key = keys.items[index];
 
+                errdefer {
+                    logger.errf("pubkey failed: {} with key: {}", .{ pubkey, search_key });
+                }
+
                 const versioned_data = gossip_table.get(search_key) orelse {
-                    logger.errf("failed to get pubkey: {}\n", .{search_key});
-                    return;
+                    logger.errf("failed to get pubkey: {}", .{search_key});
+                    return error.PubkeyNotFound;
                 };
 
                 if (!versioned_data.value.signature.eql(&signatures.get(pubkey).?)) {
-                    logger.errf("hash mismatch: {}\n", .{pubkey});
-                    return;
+                    logger.errf("signature mismatch: {}", .{pubkey});
+                    return error.SignatureMismatch;
                 }
 
                 // via direct method
                 _ = gossip_table.getThreadSafeContactInfo(pubkey) orelse {
-                    logger.errf("failed to get contact info: {}\n", .{pubkey});
-                    return;
+                    logger.errf("failed to get contact info: {}", .{pubkey});
+                    return error.ContactInfoNotFound;
                 };
 
                 // via iter
@@ -233,8 +237,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     }
                 }
                 if (!found) {
-                    logger.errf("failed to find pubkey: {}\n", .{pubkey});
-                    return;
+                    logger.errf("failed to find pubkey: {}", .{pubkey});
+                    return error.ContactInfoNotFound;
                 }
 
                 get_count += 1;
@@ -248,7 +252,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             if (rand.boolean()) {
                 // trim the table in half
                 const max_pubkey_capacity = size / 2;
-                const did_trim = try gossip_table.attemptTrim(max_pubkey_capacity);
+                const did_trim = try gossip_table.attemptTrim(now, max_pubkey_capacity);
                 if (!did_trim) continue;
 
                 logger.infof("op(trim): table size: {} -> {}", .{ size, gossip_table.len() });
@@ -273,9 +277,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 } else false;
 
                 if (!still_exists) {
-                    _ = pubkeys.swapRemove(index);
+                    const pk_removed = pubkeys.swapRemove(index);
                     _ = insertion_times.swapRemove(index);
                     _ = signatures.swapRemove(pubkey);
+                    _ = keys.swapRemove(index);
+
+                    std.debug.assert(pk_removed.equals(&pubkey));
                 } else {
                     index += 1;
                 }
