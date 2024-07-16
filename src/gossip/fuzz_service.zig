@@ -432,7 +432,6 @@ pub fn fuzz(
                 );
                 break :blk packet;
             },
-            else => unreachable,
         };
         const send_packet = packet catch |err| {
             std.debug.print("ERROR: {s}\n", .{@errorName(err)});
