@@ -32,9 +32,9 @@ const getWallclockMs = sig.gossip.data.getWallclockMs;
 
 const Duration = sig.time.Duration;
 
-const SLEEP_TIME = Duration.fromMillis(0);
-// const SLEEP_TIME = std.time.ns_per_ms * 10;
-// const SLEEP_TIME = std.time.ns_per_s;
+const SLEEP_TIME = Duration.zero();
+// const SLEEP_TIME = Duration.fromMillis(10);
+// const SLEEP_TIME = Duration.fromSecs(10);
 
 pub fn serializeToPacket(d: anytype, to_addr: EndPoint) !Packet {
     var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
