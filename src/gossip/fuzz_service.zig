@@ -30,7 +30,9 @@ const AtomicBool = std.atomic.Value(bool);
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
 const getWallclockMs = sig.gossip.data.getWallclockMs;
 
-const SLEEP_TIME = 0;
+const Duration = sig.time.Duration;
+
+const SLEEP_TIME = Duration.fromMillis(0);
 // const SLEEP_TIME = std.time.ns_per_ms * 10;
 // const SLEEP_TIME = std.time.ns_per_s;
 
@@ -452,7 +454,7 @@ pub fn fuzz(
         // send it
         try outgoing_channel.send(packet_batch);
 
-        std.time.sleep(SLEEP_TIME);
+        std.time.sleep(SLEEP_TIME.asNanos());
 
         if (msg_count % 1000 == 0) {
             std.debug.print("{d} messages sent\n", .{msg_count});

@@ -33,8 +33,9 @@ const GossipPullFilterSet = sig.gossip.pull_request.GossipPullFilterSet;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
 const Hash = sig.core.hash.Hash;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
+const Duration = sig.time.Duration;
 
-const TRIM_INTERVAL = 2 * std.time.ns_per_s;
+const TRIM_INTERVAL = Duration.fromSecs(2);
 const MAX_N_THREADS = 2;
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
@@ -100,7 +101,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var keys = try std.ArrayList(GossipKey).initCapacity(allocator, 100);
     defer keys.deinit();
 
-    var timer = std.time.Timer.start() catch unreachable;
+    var timer = try sig.time.Timer.start();
 
     // get/put a bunch of accounts
     while (true) {
@@ -241,7 +242,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             },
         }
 
-        if (timer.read() > TRIM_INTERVAL) {
+        if (timer.read().gt(TRIM_INTERVAL)) {
             defer timer.reset();
             const size = gossip_table.len();
 
