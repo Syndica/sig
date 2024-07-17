@@ -371,7 +371,7 @@ pub fn fuzz(
 ) !void {
     var msg_count: usize = 0;
 
-    const Actions = enum {
+    const Action = enum {
         ping,
         pong,
         push,
@@ -387,19 +387,19 @@ pub fn fuzz(
             }
         }
 
-        const command = rng.enumValue(Actions);
+        const command = rng.enumValue(Action);
         const packet = switch (command) {
-            Actions.ping => blk: {
+            .ping => blk: {
                 // send ping message
                 const packet = randomPingPacket(rng, keypair, to_endpoint);
                 break :blk packet;
             },
-            Actions.pong => blk: {
+            .pong => blk: {
                 // send pong message
                 const packet = randomPongPacket(rng, keypair, to_endpoint);
                 break :blk packet;
             },
-            Actions.push => blk: {
+            .push => blk: {
                 // send push message
                 const packets = randomPushMessage(rng, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
@@ -410,7 +410,7 @@ pub fn fuzz(
                 const packet = packets.items[0];
                 break :blk packet;
             },
-            Actions.pull_request => blk: {
+            .pull_request => blk: {
                 // send pull response
                 const packets = randomPullResponse(rng, keypair, to_endpoint) catch |err| {
                     std.debug.print("ERROR: {s}\n", .{@errorName(err)});
@@ -421,7 +421,7 @@ pub fn fuzz(
                 const packet = packets.items[0];
                 break :blk packet;
             },
-            Actions.pull_response => blk: {
+            .pull_response => blk: {
                 // send pull request
                 const packet = randomPullRequest(
                     allocator,

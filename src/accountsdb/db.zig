@@ -2369,7 +2369,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields.file_map,
         accounts_dir,
-        @intCast(n_threads),
+        n_threads,
         allocator,
     );
 

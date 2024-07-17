@@ -1096,7 +1096,7 @@ test "account index update/remove reference" {
         const ref_head, var ref_head_lg = ref_head_rw.writeWithLock();
         ref_head_lg.unlock();
         _, const ref_max = ref_head.highestRootedSlot(10);
-        try std.testing.expect(ref_max == 1);
+        try std.testing.expectEqual(1, ref_max);
     }
 
     // update the tail
@@ -1115,7 +1115,7 @@ test "account index update/remove reference" {
     // update the head
     var ref_a2 = ref_a;
     ref_a2.location = .{ .File = .{
-        .file_id = FileId.fromInt(@intCast(1)),
+        .file_id = FileId.fromInt(1),
         .offset = 20,
     } };
     try index.updateReference(&ref_a.pubkey, 0, &ref_a2);

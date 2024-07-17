@@ -79,7 +79,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         allocator.destroy(gossip_table);
     }
 
-    const Actions = enum { put, get };
+    const Action = enum { put, get };
     var put_count: u64 = 0;
     var get_count: u64 = 0;
     var total_action_count: u64 = 0;
@@ -115,7 +115,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             total_action_count += 1;
         }
 
-        const action = rand.enumValue(Actions);
+        const action = rand.enumValue(Action);
         switch (action) {
             .put => {
                 defer put_count += 1;
