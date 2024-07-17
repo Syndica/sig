@@ -474,6 +474,10 @@ pub const IpAddr = union(enum(u32)) {
         return self.ipv4.octets;
     }
 
+    pub fn asV6(self: *const Self) [16]u8 {
+        return self.ipv6.octets;
+    }
+
     pub fn eql(self: *const Self, other: *const IpAddr) bool {
         switch (self.*) {
             .ipv4 => |ip| {
