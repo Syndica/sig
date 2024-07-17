@@ -507,6 +507,10 @@ pub const Duration = struct {
         return .{ .ns = ms * std.time.ns_per_ms };
     }
 
+    pub fn fromMicros(us: u64) Duration {
+        return .{ .ns = us * std.time.ns_per_us };
+    }
+
     pub fn fromNanos(ns: u64) Duration {
         return .{ .ns = ns };
     }
@@ -519,8 +523,32 @@ pub const Duration = struct {
         return self.ns / std.time.ns_per_ms;
     }
 
+    pub fn asMicros(self: Duration) u64 {
+        return self.ns / std.time.ns_per_us;
+    }
+
     pub fn asNanos(self: Duration) u64 {
         return self.ns;
+    }
+
+    pub fn gt(self: Duration, other: Duration) bool {
+        return self.ns > other.ns;
+    }
+
+    pub fn gte(self: Duration, other: Duration) bool {
+        return self.ns >= other.ns;
+    }
+
+    pub fn lt(self: Duration, other: Duration) bool {
+        return self.ns < other.ns;
+    }
+
+    pub fn lte(self: Duration, other: Duration) bool {
+        return self.ns <= other.ns;
+    }
+
+    pub fn eql(self: Duration, other: Duration) bool {
+        return self.ns == other.ns;
     }
 };
 
