@@ -188,7 +188,7 @@ loading from a snapshot begins in `accounts_db.loadFromSnapshot` is a very
 expensive operation. 
 
 the steps include:
-- reads and load all the account files 
+- reads and load all the account files based on the snapshot manifest's file map 
 - validates + indexes every account in each file (in parallel) 
 - combines the results across the threads (also in parallel) 
 
@@ -232,6 +232,21 @@ after validating accounts-db data, we also validate a few key structs:
 - `GenesisConfig` : this data is validated in against the bank in `Bank.validateBankFields(bank.bank_fields, &genesis_config);`
 - `Bank` : contains `bank_fields` which is in the snapshot metadata (not used right now)
 - `StatusCache / SlotHistory Sysvar` : additional validation performed in `status_cache.validate`
+
+## generating a snapshot
+
+*note:* at the time of writing, this functionality is in its infancy.
+
+The core logic for generating a snapshot lives in `accounts_db.db.writeSnapshotTarWithFields`; the principle entrypoint is `AccountsDB.writeSnapshotTar`.
+The procedure consists of writing the version file, the status cache (`snapshots/status_cache`) file, the snapshot manifest (`snapshots/{SLOT}/{SLOT}`),
+and the account files (`accounts/{SLOT}.{FILE_ID}`). This is all written to a stream in the TAR archive format.
+
+The snapshot manifest file content is comprised of the bincoded (bincode-encoded) data structure `SnapshotFields`, which is an aggregate of:
+* implicit state: data derived from the current state of AccountsDB, like the file map for all the account which exist at that snapshot, or which have
+  changed relative to a full snapshot in an incremental one
+* configuration state: data that is used to communicate details about the snapshot, like the full slot to which an incremental snapshot is relative.
+
+For full snapshots, we write all account files present in AccountsDB which are rooted - as in, less than or equal to the latest rooted slot.
 
 ## read/write benchmarks 
 `BenchArgs` contains all the configuration of a benchmark (comments describe each parameter) 

@@ -27,7 +27,6 @@ const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
-const enumFromName = sig.utils.types.enumFromName;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
 const getWallclockMs = sig.gossip.getWallclockMs;
@@ -381,7 +380,7 @@ pub fn run() !void {
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
+    var logger = Logger.init(gpa_allocator, config.current.log_level);
     defer logger.deinit();
     logger.spawn();
 
@@ -411,7 +410,8 @@ fn validator() !void {
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
 
-    try std.fs.cwd().makePath(snapshot_dir_str);
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    defer snapshot_dir.close();
 
     var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
@@ -701,7 +701,7 @@ fn spawnMetrics(logger: Logger) !std.Thread {
 }
 
 fn spawnLogger() !Logger {
-    var logger = Logger.init(gpa_allocator, try enumFromName(Level, config.current.log_level));
+    var logger = Logger.init(gpa_allocator, config.current.log_level);
     logger.spawn();
     return logger;
 }
@@ -735,7 +735,7 @@ fn loadFromSnapshot(
         logger,
         gossip_service,
     );
-    defer snapshots.deinit(allocator);
+    defer snapshots.deinitPaths(allocator); // TODO: This is kind of a huge hack, but we can't free the snapshot fields, since they're used by the result
 
     logger.infof("full snapshot: {s}", .{snapshots.full_path});
     if (snapshots.incremental_path) |inc_path| {
@@ -757,12 +757,16 @@ fn loadFromSnapshot(
     );
     errdefer output.accounts_db.deinit(false);
 
-    output.snapshot_fields = try output.accounts_db.loadWithDefaults(
-        &snapshots,
-        snapshot_dir_str,
-        n_threads_snapshot_load,
-        true, // validate too
-    );
+    {
+        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
+        defer snapshot_dir.close();
+        output.snapshot_fields = try output.accounts_db.loadWithDefaults(
+            &snapshots,
+            snapshot_dir,
+            n_threads_snapshot_load,
+            true, // validate too
+        );
+    }
     errdefer output.snapshot_fields.deinit(allocator);
 
     const bank_fields = &output.snapshot_fields.bank_fields;
@@ -797,7 +801,7 @@ fn loadFromSnapshot(
         }
         return err;
     };
-    defer status_cache.deinit();
+    defer status_cache.deinit(allocator);
 
     var slot_history = try output.accounts_db.getSlotHistory();
     defer slot_history.deinit(output.accounts_db.allocator);
@@ -837,8 +841,7 @@ fn readStatusCache(allocator: Allocator, snapshot_dir: []const u8) !StatusCache 
         return error.StatusCacheNotFound;
     };
 
-    const status_cache = try StatusCache.init(allocator, status_cache_path);
-    return status_cache;
+    return try StatusCache.initFromPath(allocator, status_cache_path);
 }
 
 /// entrypoint to download snapshot
@@ -922,18 +925,17 @@ fn getOrDownloadSnapshots(
     );
     defer allocator.free(accounts_path);
 
+    var snap_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{ .iterate = true });
+    defer snap_dir.close();
+
     const maybe_snapshot_files: ?SnapshotFiles = blk: {
         if (force_new_snapshot_download) {
             break :blk null;
         }
 
-        break :blk SnapshotFiles.find(allocator, snapshot_dir_str) catch |err| {
-            // if we cant find the full snapshot, we try to download it
-            if (err == error.NoFullSnapshotFileInfoFound) {
-                break :blk null;
-            } else {
-                return err;
-            }
+        break :blk SnapshotFiles.find(allocator, snap_dir) catch |err| switch (err) {
+            error.NoFullSnapshotFileInfoFound => null,
+            else => |e| return e,
         };
     };
 
@@ -950,7 +952,7 @@ fn getOrDownloadSnapshots(
             snapshot_dir_str,
             @intCast(min_mb_per_sec),
         );
-        break :blk try SnapshotFiles.find(allocator, snapshot_dir_str);
+        break :blk try SnapshotFiles.find(allocator, snap_dir);
     };
     defer snapshot_files.deinit(allocator);
 

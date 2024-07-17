@@ -2,6 +2,7 @@ const sig = @import("../lib.zig");
 const ACCOUNT_INDEX_BINS = sig.accounts_db.db.ACCOUNT_INDEX_BINS;
 const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
 const IpAddr = sig.net.IpAddr;
+const LogLevel = sig.trace.Level;
 
 pub const Config = struct {
     identity: IdentityConfig = .{},
@@ -10,7 +11,7 @@ pub const Config = struct {
     accounts_db: AccountsDBConfig = .{},
     leader_schedule_path: ?[]const u8 = null,
     // general config
-    log_level: []const u8 = "debug",
+    log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,
 };
 
