@@ -31,15 +31,13 @@ pub const SocketAddr = union(enum(u8)) {
         };
     }
 
-    pub fn parse(bytes: []const u8) !Self {
-        const address = parseIpv4(bytes) catch blk: {
-            break :blk parseIpv6(bytes);
-        };
-
-        return address;
+    pub const ParseIpError = error{InvalidIp};
+    pub fn parse(bytes: []const u8) ParseIpError!Self {
+        return parseIpv4(bytes) catch parseIpv6(bytes) catch error.InvalidIp;
     }
 
-    pub fn parseIpv6(bytes: []const u8) !Self {
+    pub const ParseIpv6Error = error{InvalidIpv6};
+    pub fn parseIpv6(bytes: []const u8) ParseIpv6Error!Self {
         // https://ratfactor.com/zig/stdlib-browseable2/net.zig.html
         // ports with IPv6 are after square brackets, but stdlib has IPv6 parsing on only the address
         // so exploit stdlib for that portion, and parse the port afterwards.
@@ -69,7 +67,8 @@ pub const SocketAddr = union(enum(u8)) {
         }
     }
 
-    pub fn parseIpv4(bytes: []const u8) !Self {
+    pub const ParseIpv4Error = error{InvalidIpv4};
+    pub fn parseIpv4(bytes: []const u8) ParseIpv4Error!Self {
         // parse v4
         var octs: [4]u8 = [_]u8{0} ** 4;
         var addr_port: u16 = 0;
@@ -474,6 +473,10 @@ pub const IpAddr = union(enum(u32)) {
         return self.ipv4.octets;
     }
 
+    pub fn asV6(self: *const Self) [16]u8 {
+        return self.ipv6.octets;
+    }
+
     pub fn eql(self: *const Self, other: *const IpAddr) bool {
         switch (self.*) {
             .ipv4 => |ip| {
@@ -549,9 +552,9 @@ test "net.net: set port works" {
 }
 
 test "net.net: parse IPv6 if IPv4 fails" {
-    try std.testing.expectError(error.InvalidIpv6, SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
+    try std.testing.expectError(error.InvalidIp, SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
 
-    try std.testing.expectError(error.InvalidIpv6, SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"));
+    try std.testing.expectError(error.InvalidIp, SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"));
 
     {
         const sa = try SocketAddr.parse("[FE38:DCE3:124C:C1A2:BA03:6745:EF1C:683D]:8000");

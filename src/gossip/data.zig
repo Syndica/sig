@@ -1199,7 +1199,10 @@ pub const ContactInfo = struct {
         for (self.sockets.items) |socket_entry| {
             port += socket_entry.offset;
             const addr = self.addrs.items[socket_entry.index];
-            const socket = SocketAddr.initIpv4(addr.asV4(), port);
+            const socket = switch (addr) {
+                .ipv4 => SocketAddr.initIpv4(addr.asV4(), port),
+                .ipv6 => SocketAddr.initIpv6(addr.asV6(), port),
+            };
             socket.sanitize() catch continue;
             self.cache[@intFromEnum(socket_entry.key)] = socket;
         }

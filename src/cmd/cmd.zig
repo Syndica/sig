@@ -49,9 +49,8 @@ const gossip_value_gpa_allocator = gossip_value_gpa.allocator();
 
 const base58Encoder = base58.Encoder.init(.{});
 
-const gossip_host = struct {
-    // TODO: support domain names and ipv6 addresses
-    var option = cli.Option{
+pub fn run() !void {
+    var gossip_host_option = cli.Option{
         .long_name = "gossip-host",
         .help = "IPv4 address for the validator to advertise in gossip - default: get from --entrypoint, fallback to 127.0.0.1",
         .value_ref = cli.mkRef(&config.current.gossip.host),
@@ -59,333 +58,325 @@ const gossip_host = struct {
         .value_name = "Gossip Host",
     };
 
-    fn get() !?IpAddr {
-        if (config.current.gossip.host) |str| {
-            var buf: [15]u8 = undefined;
-            @memcpy(buf[0..str.len], str);
-            @memcpy(buf[str.len .. str.len + 2], ":0");
-            const sa = try SocketAddr.parseIpv4(buf[0 .. str.len + 2]);
-            return .{ .ipv4 = sa.V4.ip };
-        }
-        return null;
-    }
-};
+    var gossip_port_option = cli.Option{
+        .long_name = "gossip-port",
+        .help = "The port to run gossip listener - default: 8001",
+        .short_alias = 'p',
+        .value_ref = cli.mkRef(&config.current.gossip.port),
+        .required = false,
+        .value_name = "Gossip Port",
+    };
 
-var gossip_port_option = cli.Option{
-    .long_name = "gossip-port",
-    .help = "The port to run gossip listener - default: 8001",
-    .short_alias = 'p',
-    .value_ref = cli.mkRef(&config.current.gossip.port),
-    .required = false,
-    .value_name = "Gossip Port",
-};
+    var repair_port_option = cli.Option{
+        .long_name = "repair-port",
+        .help = "The port to run shred repair listener - default: 8002",
+        .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
+        .required = false,
+        .value_name = "Repair Port",
+    };
 
-var repair_port_option = cli.Option{
-    .long_name = "repair-port",
-    .help = "The port to run shred repair listener - default: 8002",
-    .value_ref = cli.mkRef(&config.current.shred_collector.repair_port),
-    .required = false,
-    .value_name = "Repair Port",
-};
+    var turbine_recv_port_option = cli.Option{
+        .long_name = "turbine-port",
+        .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
+        .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
+        .required = false,
+        .value_name = "Turbine Port",
+    };
 
-var turbine_recv_port_option = cli.Option{
-    .long_name = "turbine-port",
-    .help = "The port to run turbine shred listener (aka TVU port) - default: 8003",
-    .value_ref = cli.mkRef(&config.current.shred_collector.turbine_recv_port),
-    .required = false,
-    .value_name = "Turbine Port",
-};
+    var leader_schedule_option = cli.Option{
+        .long_name = "leader-schedule",
+        .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
+        .value_ref = cli.mkRef(&config.current.leader_schedule_path),
+        .required = false,
+        .value_name = "Leader schedule source",
+    };
 
-var leader_schedule_option = cli.Option{
-    .long_name = "leader-schedule",
-    .help = "Set a file path to load the leader schedule. Use '--' to load from stdin",
-    .value_ref = cli.mkRef(&config.current.leader_schedule_path),
-    .required = false,
-    .value_name = "Leader schedule source",
-};
+    var test_repair_option = cli.Option{
+        .long_name = "test-repair-for-slot",
+        .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
+        .value_ref = cli.mkRef(&config.current.shred_collector.start_slot),
+        .required = false,
+        .value_name = "slot number",
+    };
 
-var test_repair_option = cli.Option{
-    .long_name = "test-repair-for-slot",
-    .help = "Set a slot here to repeatedly send repair requests for shreds from this slot. This is only intended for use during short-lived tests of the repair service. Do not set this during normal usage.",
-    .value_ref = cli.mkRef(&config.current.shred_collector.start_slot),
-    .required = false,
-    .value_name = "slot number",
-};
+    var gossip_entrypoints_option = cli.Option{
+        .long_name = "entrypoint",
+        .help = "gossip address of the entrypoint validators",
+        .short_alias = 'e',
+        .value_ref = cli.mkRef(&config.current.gossip.entrypoints),
+        .required = false,
+        .value_name = "Entrypoints",
+    };
 
-var gossip_entrypoints_option = cli.Option{
-    .long_name = "entrypoint",
-    .help = "gossip address of the entrypoint validators",
-    .short_alias = 'e',
-    .value_ref = cli.mkRef(&config.current.gossip.entrypoints),
-    .required = false,
-    .value_name = "Entrypoints",
-};
+    var trusted_validators_option = cli.Option{
+        .long_name = "trusted_validator",
+        .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
+        .short_alias = 't',
+        .value_ref = cli.mkRef(&config.current.gossip.trusted_validators),
+        .required = false,
+        .value_name = "Trusted Validator",
+    };
 
-var trusted_validators_option = cli.Option{
-    .long_name = "trusted_validator",
-    .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
-    .short_alias = 't',
-    .value_ref = cli.mkRef(&config.current.gossip.trusted_validators),
-    .required = false,
-    .value_name = "Trusted Validator",
-};
+    var gossip_spy_node_option = cli.Option{
+        .long_name = "spy-node",
+        .help = "run as a gossip spy node (minimize outgoing packets)",
+        .value_ref = cli.mkRef(&config.current.gossip.spy_node),
+        .required = false,
+        .value_name = "Spy Node",
+    };
 
-var gossip_spy_node_option = cli.Option{
-    .long_name = "spy-node",
-    .help = "run as a gossip spy node (minimize outgoing packets)",
-    .value_ref = cli.mkRef(&config.current.gossip.spy_node),
-    .required = false,
-    .value_name = "Spy Node",
-};
+    var gossip_dump_option = cli.Option{
+        .long_name = "dump-gossip",
+        .help = "periodically dump gossip table to csv files and logs",
+        .value_ref = cli.mkRef(&config.current.gossip.dump),
+        .required = false,
+        .value_name = "Gossip Table Dump",
+    };
 
-var gossip_dump_option = cli.Option{
-    .long_name = "dump-gossip",
-    .help = "periodically dump gossip table to csv files and logs",
-    .value_ref = cli.mkRef(&config.current.gossip.dump),
-    .required = false,
-    .value_name = "Gossip Table Dump",
-};
+    var log_level_option = cli.Option{
+        .long_name = "log-level",
+        .help = "The amount of detail to log (default = debug)",
+        .short_alias = 'l',
+        .value_ref = cli.mkRef(&config.current.log_level),
+        .required = false,
+        .value_name = "err|warn|info|debug",
+    };
 
-var log_level_option = cli.Option{
-    .long_name = "log-level",
-    .help = "The amount of detail to log (default = debug)",
-    .short_alias = 'l',
-    .value_ref = cli.mkRef(&config.current.log_level),
-    .required = false,
-    .value_name = "err|warn|info|debug",
-};
+    var metrics_port_option = cli.Option{
+        .long_name = "metrics-port",
+        .help = "port to expose prometheus metrics via http - default: 12345",
+        .short_alias = 'm',
+        .value_ref = cli.mkRef(&config.current.metrics_port),
+        .required = false,
+        .value_name = "port_number",
+    };
 
-var metrics_port_option = cli.Option{
-    .long_name = "metrics-port",
-    .help = "port to expose prometheus metrics via http - default: 12345",
-    .short_alias = 'm',
-    .value_ref = cli.mkRef(&config.current.metrics_port),
-    .required = false,
-    .value_name = "port_number",
-};
+    // accounts-db options
+    var n_threads_snapshot_load_option = cli.Option{
+        .long_name = "n-threads-snapshot-load",
+        .help = "number of threads to load snapshots: - default: ncpus",
+        .short_alias = 't',
+        .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_load),
+        .required = false,
+        .value_name = "n_threads_snapshot_load",
+    };
 
-// accounts-db options
-var n_threads_snapshot_load_option = cli.Option{
-    .long_name = "n-threads-snapshot-load",
-    .help = "number of threads to load snapshots: - default: ncpus",
-    .short_alias = 't',
-    .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_load),
-    .required = false,
-    .value_name = "n_threads_snapshot_load",
-};
+    var n_threads_snapshot_unpack_option = cli.Option{
+        .long_name = "n-threads-snapshot-unpack",
+        .help = "number of threads to unpack snapshots - default: ncpus * 2",
+        .short_alias = 'u',
+        .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_unpack),
+        .required = false,
+        .value_name = "n_threads_snapshot_unpack",
+    };
 
-var n_threads_snapshot_unpack_option = cli.Option{
-    .long_name = "n-threads-snapshot-unpack",
-    .help = "number of threads to unpack snapshots - default: ncpus * 2",
-    .short_alias = 'u',
-    .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_unpack),
-    .required = false,
-    .value_name = "n_threads_snapshot_unpack",
-};
+    var force_unpack_snapshot_option = cli.Option{
+        .long_name = "force-unpack-snapshot",
+        .help = "force unpack snapshot even if it exists",
+        .short_alias = 'f',
+        .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
+        .required = false,
+        .value_name = "force_unpack_snapshot",
+    };
 
-var force_unpack_snapshot_option = cli.Option{
-    .long_name = "force-unpack-snapshot",
-    .help = "force unpack snapshot even if it exists",
-    .short_alias = 'f',
-    .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
-    .required = false,
-    .value_name = "force_unpack_snapshot",
-};
+    var use_disk_index_option = cli.Option{
+        .long_name = "use-disk-index",
+        .help = "use disk based index for accounts index",
+        .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
+        .required = false,
+        .value_name = "use_disk_index",
+    };
 
-var use_disk_index_option = cli.Option{
-    .long_name = "use-disk-index",
-    .help = "use disk based index for accounts index",
-    .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
-    .required = false,
-    .value_name = "use_disk_index",
-};
+    var force_new_snapshot_download_option = cli.Option{
+        .long_name = "force-new-snapshot-download",
+        .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
+        .value_ref = cli.mkRef(&config.current.accounts_db.force_new_snapshot_download),
+        .required = false,
+        .value_name = "force_new_snapshot_download",
+    };
 
-var force_new_snapshot_download_option = cli.Option{
-    .long_name = "force-new-snapshot-download",
-    .help = "force download of new snapshot (usually to get a more up-to-date snapshot)",
-    .value_ref = cli.mkRef(&config.current.accounts_db.force_new_snapshot_download),
-    .required = false,
-    .value_name = "force_new_snapshot_download",
-};
+    var snapshot_dir_option = cli.Option{
+        .long_name = "snapshot-dir",
+        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: ledger/accounts_db",
+        .short_alias = 's',
+        .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
+        .required = false,
+        .value_name = "snapshot_dir",
+    };
 
-var snapshot_dir_option = cli.Option{
-    .long_name = "snapshot-dir",
-    .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: ledger/accounts_db",
-    .short_alias = 's',
-    .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
-    .required = false,
-    .value_name = "snapshot_dir",
-};
+    var min_snapshot_download_speed_mb_option = cli.Option{
+        .long_name = "min-snapshot-download-speed",
+        .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
+        .value_ref = cli.mkRef(&config.current.accounts_db.min_snapshot_download_speed_mbs),
+        .required = false,
+        .value_name = "min_snapshot_download_speed_mb",
+    };
 
-var min_snapshot_download_speed_mb_option = cli.Option{
-    .long_name = "min-snapshot-download-speed",
-    .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
-    .value_ref = cli.mkRef(&config.current.accounts_db.min_snapshot_download_speed_mbs),
-    .required = false,
-    .value_name = "min_snapshot_download_speed_mb",
-};
+    var number_of_index_bins_option = cli.Option{
+        .long_name = "number-of-index-bins",
+        .help = "number of bins to shard the index pubkeys across",
+        .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
+        .required = false,
+        .value_name = "number_of_index_bins",
+    };
 
-var number_of_index_bins_option = cli.Option{
-    .long_name = "number-of-index-bins",
-    .help = "number of bins to shard the index pubkeys across",
-    .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
-    .required = false,
-    .value_name = "number_of_index_bins",
-};
-
-var app = &cli.App{
-    .version = "0.2.0",
-    .author = "Syndica & Contributors",
-    .command = .{
-        .name = "sig",
-        .description = .{
-            .one_line = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
-            // .detailed = "",
-        },
-        .options = &.{ &log_level_option, &metrics_port_option },
-        .target = .{
-            .subcommands = &.{
-                &cli.Command{
-                    .name = "identity",
-                    .description = .{
-                        .one_line = "Get own identity",
-                        .detailed =
-                        \\Gets own identity (Pubkey) or creates one if doesn't exist.
-                        \\
-                        \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
-                        ,
-                    },
-                    .target = .{
-                        .action = .{
-                            .exec = identity,
+    const app = cli.App{
+        .version = "0.2.0",
+        .author = "Syndica & Contributors",
+        .command = .{
+            .name = "sig",
+            .description = .{
+                .one_line = "Sig is a Solana client implementation written in Zig.\nThis is still a WIP, PRs welcome.",
+                // .detailed = "",
+            },
+            .options = &.{ &log_level_option, &metrics_port_option },
+            .target = .{
+                .subcommands = &.{
+                    &cli.Command{
+                        .name = "identity",
+                        .description = .{
+                            .one_line = "Get own identity",
+                            .detailed =
+                            \\Gets own identity (Pubkey) or creates one if doesn't exist.
+                            \\
+                            \\NOTE: Keypair is saved in $HOME/.sig/identity.key.
+                            ,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = identity,
+                            },
                         },
                     },
-                },
-                &cli.Command{
-                    .name = "gossip",
-                    .description = .{
-                        .one_line = "Run gossip client",
-                        .detailed =
-                        \\Start Solana gossip client on specified port.
-                        ,
-                    },
-                    .options = &.{
-                        &gossip_host.option,
-                        &gossip_port_option,
-                        &gossip_entrypoints_option,
-                        &gossip_spy_node_option,
-                        &gossip_dump_option,
-                    },
-                    .target = .{
-                        .action = .{
-                            .exec = gossip,
+                    &cli.Command{
+                        .name = "gossip",
+                        .description = .{
+                            .one_line = "Run gossip client",
+                            .detailed =
+                            \\Start Solana gossip client on specified port.
+                            ,
+                        },
+                        .options = &.{
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = gossip,
+                            },
                         },
                     },
-                },
-                &cli.Command{
-                    .name = "validator",
-                    .description = .{
-                        .one_line = "Run Solana validator",
-                        .detailed =
-                        \\Start a full Solana validator client.
-                        ,
-                    },
-                    .options = &.{
-                        // gossip
-                        &gossip_host.option,
-                        &gossip_port_option,
-                        &gossip_entrypoints_option,
-                        &gossip_spy_node_option,
-                        &gossip_dump_option,
-                        // repair
-                        &turbine_recv_port_option,
-                        &repair_port_option,
-                        &test_repair_option,
-                        // accounts-db
-                        &snapshot_dir_option,
-                        &use_disk_index_option,
-                        &n_threads_snapshot_load_option,
-                        &n_threads_snapshot_unpack_option,
-                        &force_unpack_snapshot_option,
-                        &min_snapshot_download_speed_mb_option,
-                        &force_new_snapshot_download_option,
-                        &trusted_validators_option,
-                        // general
-                        &leader_schedule_option,
-                    },
-                    .target = .{
-                        .action = .{
-                            .exec = validator,
+                    &cli.Command{
+                        .name = "validator",
+                        .description = .{
+                            .one_line = "Run Solana validator",
+                            .detailed =
+                            \\Start a full Solana validator client.
+                            ,
+                        },
+                        .options = &.{
+                            // gossip
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                            // repair
+                            &turbine_recv_port_option,
+                            &repair_port_option,
+                            &test_repair_option,
+                            // accounts-db
+                            &snapshot_dir_option,
+                            &use_disk_index_option,
+                            &n_threads_snapshot_load_option,
+                            &n_threads_snapshot_unpack_option,
+                            &force_unpack_snapshot_option,
+                            &min_snapshot_download_speed_mb_option,
+                            &force_new_snapshot_download_option,
+                            &trusted_validators_option,
+                            &number_of_index_bins_option,
+                            // general
+                            &leader_schedule_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = validator,
+                            },
                         },
                     },
-                },
-                &cli.Command{
-                    .name = "download-snapshot",
-                    .description = .{
-                        .one_line = "Downloads a snapshot",
-                        .detailed =
-                        \\starts a gossip client and downloads a snapshot from peers
-                        ,
-                    },
-                    .options = &.{
-                        // where to download the snapshot
-                        &snapshot_dir_option,
-                        // download options
-                        &trusted_validators_option,
-                        &min_snapshot_download_speed_mb_option,
-                        // gossip options
-                        &gossip_host.option,
-                        &gossip_port_option,
-                        &gossip_entrypoints_option,
-                    },
-                    .target = .{
-                        .action = .{
-                            .exec = downloadSnapshot,
+                    &cli.Command{
+                        .name = "download-snapshot",
+                        .description = .{
+                            .one_line = "Downloads a snapshot",
+                            .detailed =
+                            \\starts a gossip client and downloads a snapshot from peers
+                            ,
+                        },
+                        .options = &.{
+                            // where to download the snapshot
+                            &snapshot_dir_option,
+                            // download options
+                            &trusted_validators_option,
+                            &min_snapshot_download_speed_mb_option,
+                            // gossip options
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = downloadSnapshot,
+                            },
                         },
                     },
-                },
-                &cli.Command{
-                    .name = "leader-schedule",
-                    .description = .{
-                        .one_line = "Prints the leader schedule from the snapshot",
-                        .detailed =
-                        \\- Starts gossip
-                        \\- acquires a snapshot if necessary
-                        \\- loads accounts db from the snapshot
-                        \\- calculates the leader schedule from the snaphot
-                        \\- prints the leader schedule in the same format as `solana leader-schedule`
-                        \\- exits
-                        ,
-                    },
-                    .options = &.{
-                        // gossip
-                        &gossip_host.option,
-                        &gossip_port_option,
-                        &gossip_entrypoints_option,
-                        &gossip_spy_node_option,
-                        &gossip_dump_option,
-                        // accounts-db
-                        &snapshot_dir_option,
-                        &use_disk_index_option,
-                        &n_threads_snapshot_load_option,
-                        &n_threads_snapshot_unpack_option,
-                        &force_unpack_snapshot_option,
-                        &min_snapshot_download_speed_mb_option,
-                        &force_new_snapshot_download_option,
-                        &trusted_validators_option,
-                        // general
-                        &leader_schedule_option,
-                    },
-                    .target = .{
-                        .action = .{
-                            .exec = printLeaderSchedule,
+                    &cli.Command{
+                        .name = "leader-schedule",
+                        .description = .{
+                            .one_line = "Prints the leader schedule from the snapshot",
+                            .detailed =
+                            \\- Starts gossip
+                            \\- acquires a snapshot if necessary
+                            \\- loads accounts db from the snapshot
+                            \\- calculates the leader schedule from the snaphot
+                            \\- prints the leader schedule in the same format as `solana leader-schedule`
+                            \\- exits
+                            ,
+                        },
+                        .options = &.{
+                            // gossip
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                            // accounts-db
+                            &snapshot_dir_option,
+                            &use_disk_index_option,
+                            &n_threads_snapshot_load_option,
+                            &n_threads_snapshot_unpack_option,
+                            &force_unpack_snapshot_option,
+                            &min_snapshot_download_speed_mb_option,
+                            &force_new_snapshot_download_option,
+                            &trusted_validators_option,
+                            &number_of_index_bins_option,
+                            // general
+                            &leader_schedule_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = printLeaderSchedule,
+                            },
                         },
                     },
                 },
             },
         },
-    },
-};
+    };
+    return cli.run(&app, gpa_allocator);
+}
 
 /// entrypoint to print (and create if NONE) pubkey in ~/.sig/identity.key
 fn identity() !void {
@@ -637,7 +628,7 @@ fn getMyDataFromIpEcho(
         logger.warn("could not get a shred version from an entrypoint");
         break :loop 0;
     };
-    const my_ip = try gossip_host.get() orelse my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1);
+    const my_ip = try (config.current.gossip.getHost() orelse (my_ip_from_entrypoint orelse IpAddr.newIpv4(127, 0, 0, 1)));
     logger.infof("my ip: {}", .{my_ip});
     return .{
         .shred_version = my_shred_version,
@@ -1021,8 +1012,4 @@ fn getOrDownloadSnapshots(
     logger.infof("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
     return snapshots;
-}
-
-pub fn run() !void {
-    return cli.run(app, gpa_allocator);
 }
