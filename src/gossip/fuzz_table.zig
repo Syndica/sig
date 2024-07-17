@@ -102,8 +102,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var timer = std.time.Timer.start() catch unreachable;
 
-    var seed_buf: [32]u8 = undefined;
-
     // get/put a bunch of accounts
     while (true) {
         if (maybe_max_actions) |max_actions| {
@@ -128,6 +126,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 };
 
                 if (new_keypair) {
+                    var seed_buf: [32]u8 = undefined;
                     rand.bytes(&seed_buf);
                     const keypair = try KeyPair.create(seed_buf);
                     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
