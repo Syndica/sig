@@ -406,7 +406,7 @@ pub const DateTime = struct {
     };
 
     pub fn since(self: Self, other_in_the_past: Self) Duration {
-        return Duration.from_millis(self.toUnixMilli() - other_in_the_past.toUnixMilli());
+        return Duration.fromMillis(self.toUnixMilli() - other_in_the_past.toUnixMilli());
     }
 };
 
@@ -495,27 +495,31 @@ fn wrap(val: u16, at: u16) u16 {
 pub const Duration = struct {
     ns: u64,
 
-    pub fn from_secs(s: u64) Duration {
+    pub fn zero() Duration {
+        return .{ .ns = 0 };
+    }
+
+    pub fn fromSecs(s: u64) Duration {
         return .{ .ns = s * std.time.ns_per_s };
     }
 
-    pub fn from_millis(ms: u64) Duration {
+    pub fn fromMillis(ms: u64) Duration {
         return .{ .ns = ms * std.time.ns_per_ms };
     }
 
-    pub fn from_nanos(ns: u64) Duration {
+    pub fn fromNanos(ns: u64) Duration {
         return .{ .ns = ns };
     }
 
-    pub fn as_secs(self: Duration) u64 {
+    pub fn asSecs(self: Duration) u64 {
         return self.ns / std.time.ns_per_s;
     }
 
-    pub fn as_millis(self: Duration) u64 {
+    pub fn asMillis(self: Duration) u64 {
         return self.ns / std.time.ns_per_ms;
     }
 
-    pub fn as_nanos(self: Duration) u64 {
+    pub fn asNanos(self: Duration) u64 {
         return self.ns;
     }
 };
@@ -530,7 +534,7 @@ pub const Timer = struct {
     }
 
     pub fn read(self: *Timer) Duration {
-        return Duration.from_nanos(self.inner.read());
+        return Duration.fromNanos(self.inner.read());
     }
 
     pub fn reset(self: *Timer) void {
@@ -538,7 +542,7 @@ pub const Timer = struct {
     }
 
     pub fn lap(self: *Timer) Duration {
-        return Duration.from_nanos(self.inner.lap());
+        return Duration.fromNanos(self.inner.lap());
     }
 
     pub fn sample(self: *Timer) std.time.Instant {
