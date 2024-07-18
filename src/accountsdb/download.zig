@@ -463,9 +463,10 @@ pub fn downloadFile(
     }
 }
 
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
-const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
+const ThreadPool = sig.sync.thread_pool.ThreadPool;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 test "accounts_db.download: test remove untrusted peers" {
@@ -501,7 +502,7 @@ test "accounts_db.download: test remove untrusted peers" {
         var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
         try trusted_validators.append(ci.pubkey);
-        try table.insert(data, 0);
+        _ = try table.insert(data, 0);
     }
 
     _ = try findPeersToDownloadFromAssumeCapacity(
@@ -592,7 +593,7 @@ test "accounts_db.download: test finding peers" {
         var kp = try KeyPair.create(null);
         var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
-        try table.insert(data, 0);
+        _ = try table.insert(data, 0);
     }
 
     result = try findPeersToDownloadFromAssumeCapacity(

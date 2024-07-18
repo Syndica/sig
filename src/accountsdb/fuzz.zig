@@ -7,8 +7,6 @@ const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 
-const MAX_FUZZ_TIME = std.time.ns_per_s * 100_000;
-
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
     slot: u64,
@@ -37,10 +35,15 @@ pub const TrackedAccount = struct {
     }
 };
 
-pub fn run(args: *std.process.ArgIterator) !void {
-    _ = args;
-
-    const seed = std.crypto.random.int(u64);
+pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
+    const maybe_max_actions_string = args.next();
+    const maybe_max_actions = blk: {
+        if (maybe_max_actions_string) |max_actions_str| {
+            break :blk try std.fmt.parseInt(usize, max_actions_str, 10);
+        } else {
+            break :blk null;
+        }
+    };
 
     var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa_allocator.allocator();
@@ -49,53 +52,32 @@ pub fn run(args: *std.process.ArgIterator) !void {
     defer logger.deinit();
     logger.spawn();
 
-    // open and append seed
-    const SEED_FILE_PATH = "test_data/fuzz_seeds.txt";
-    {
-        std.fs.cwd().access(SEED_FILE_PATH, .{}) catch |err| {
-            switch (err) {
-                std.fs.Dir.AccessError.FileNotFound => {
-                    var file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{});
-                    file.close();
-                },
-                else => {
-                    std.debug.print("failed to access seed file: {}\n", .{err});
-                    return;
-                },
-            }
-        };
-        const seed_file = try std.fs.cwd().openFile(SEED_FILE_PATH, .{ .mode = .write_only });
-        defer seed_file.close();
-        var buf: [32]u8 = undefined;
-        const seed_slice = try std.fmt.bufPrint(&buf, "{d}\n", .{seed});
-        try seed_file.writeAll(seed_slice);
-    }
-    std.debug.print("seed: {}\n", .{seed});
-
     var prng = std.rand.DefaultPrng.init(seed);
     const rand = prng.random();
 
     const use_disk = rand.boolean();
     const snapshot_dir = "test_data/accountsdb_fuzz";
     defer {
+        // NOTE: sometimes this can take a long time so we print when we start and finish
+        std.debug.print("deleting snapshot dir...\n", .{});
         std.fs.cwd().deleteTree(snapshot_dir) catch |err| {
             std.debug.print("failed to delete snapshot dir: {}\n", .{err});
         };
+        std.debug.print("deleted snapshot dir\n", .{});
     }
     std.debug.print("use disk: {}\n", .{use_disk});
 
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .use_disk_index = use_disk,
         .snapshot_dir = snapshot_dir,
+        // TODO: other things we can fuzz (number of bins, ...)
     });
     defer accounts_db.deinit(true);
-
-    // try accounts_db.account_index.ensureTotalCapacity(10_000);
 
     const exit = try allocator.create(std.atomic.Value(bool));
     exit.* = std.atomic.Value(bool).init(false);
 
-    var handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
+    const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
         &accounts_db,
         exit,
     });
@@ -113,11 +95,15 @@ pub fn run(args: *std.process.ArgIterator) !void {
     var slot: usize = 0;
 
     const Actions = enum { put, get };
-    // var put_count: u64 = 0;
 
     // get/put a bunch of accounts
-    var timer = try std.time.Timer.start();
-    while (timer.read() < MAX_FUZZ_TIME) {
+    while (true) {
+        if (maybe_max_actions) |max_actions| {
+            if (slot >= max_actions) {
+                std.debug.print("reached max actions: {}\n", .{max_actions});
+                break;
+            }
+        }
         defer slot += 1;
 
         const action_int = rand.intRangeAtMost(u8, 0, 1);
@@ -125,10 +111,6 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
         switch (action) {
             .put => {
-                // if (put_count == 5) {
-                //     continue;
-                // }
-                // put_count += 1;
                 const N_ACCOUNTS_PER_SLOT = 10;
 
                 const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
@@ -186,6 +168,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
         }
     }
 
+    std.debug.print("fuzzing complete\n", .{});
     exit.store(true, .seq_cst);
-    handle.join();
+    manager_handle.join();
 }

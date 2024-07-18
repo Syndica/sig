@@ -4,6 +4,7 @@ zig-out/
 data/
 
 index_storage/
+kcov-output
 
 /gossip-dumps
 

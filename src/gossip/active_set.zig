@@ -149,7 +149,7 @@ test "gossip.active_set: init/deinit" {
         const value = try SignedGossipData.initSigned(.{
             .LegacyContactInfo = data,
         }, &keypair);
-        try table.insert(value, getWallclockMs());
+        _ = try table.insert(value, getWallclockMs());
     }
 
     var active_set = ActiveSet.init(alloc);
