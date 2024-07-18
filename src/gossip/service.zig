@@ -719,7 +719,7 @@ pub const GossipService = struct {
             }
 
             // TRIM gossip-table
-            if (trim_table_timer.read().as_millis() > GOSSIP_TRIM_INTERVAL_MS) {
+            if (trim_table_timer.read().asMillis() > GOSSIP_TRIM_INTERVAL_MS) {
                 defer trim_table_timer.reset();
                 // first check with a read lock
                 const should_trim = blk: {
@@ -765,7 +765,7 @@ pub const GossipService = struct {
         while (!self.exit.load(.unordered)) {
             defer loop_timer.reset();
 
-            if (pull_req_timer.read().as_millis() > GOSSIP_PULL_RATE_MS) pull_blk: {
+            if (pull_req_timer.read().asMillis() > GOSSIP_PULL_RATE_MS) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
@@ -801,7 +801,7 @@ pub const GossipService = struct {
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
-            if (push_timer.read().as_millis() > GOSSIP_PULL_TIMEOUT_MS / 2) {
+            if (push_timer.read().asMillis() > GOSSIP_PULL_TIMEOUT_MS / 2) {
                 defer push_timer.reset();
                 // update wallclock and sign
                 self.my_contact_info.wallclock = getWallclockMs();
@@ -828,14 +828,14 @@ pub const GossipService = struct {
             }
 
             // publish metrics
-            if (stats_publish_timer.read().as_millis() > PUB_GOSSIP_STATS_INTERVAL_MS) {
+            if (stats_publish_timer.read().asMillis() > PUB_GOSSIP_STATS_INTERVAL_MS) {
                 defer stats_publish_timer.reset();
                 try self.collectGossipTableMetrics();
             }
 
             // sleep
-            if (loop_timer.read().as_millis() < GOSSIP_SLEEP_MILLIS) {
-                const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read().as_millis();
+            if (loop_timer.read().asMillis() < GOSSIP_SLEEP_MILLIS) {
+                const time_left_ms = GOSSIP_SLEEP_MILLIS -| loop_timer.read().asMillis();
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
         }
