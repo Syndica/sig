@@ -9,3 +9,4 @@ kcov-output
 /gossip-dumps
 
 **/.DS_Store
+.vscode
