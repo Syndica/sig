@@ -94,8 +94,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var largest_rooted_slot: usize = 0;
     var slot: usize = 0;
 
-    const Actions = enum { put, get };
-
     // get/put a bunch of accounts
     while (true) {
         if (maybe_max_actions) |max_actions| {
@@ -106,8 +104,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
         defer slot += 1;
 
-        const action_int = rand.intRangeAtMost(u8, 0, 1);
-        const action: Actions = @enumFromInt(action_int);
+        const Action = enum { put, get };
+        const action: Action = rand.enumValue(Action);
 
         switch (action) {
             .put => {
@@ -165,6 +163,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         if (create_new_root) {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
             accounts_db.largest_root_slot.store(largest_rooted_slot, .seq_cst);
+        }
+
+        if (slot % 500 == 0) {
+            accounts_db.writeSnapshotTarFull();
         }
     }
 

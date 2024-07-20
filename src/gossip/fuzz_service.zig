@@ -371,14 +371,6 @@ pub fn fuzz(
 ) !void {
     var msg_count: usize = 0;
 
-    const Action = enum {
-        ping,
-        pong,
-        push,
-        pull_request,
-        pull_response,
-    };
-
     while (!loop_exit.load(.unordered)) {
         if (maybe_max_messages) |max_messages| {
             if (msg_count >= max_messages) {
@@ -387,6 +379,13 @@ pub fn fuzz(
             }
         }
 
+        const Action = enum {
+            ping,
+            pong,
+            push,
+            pull_request,
+            pull_response,
+        };
         const command = rng.enumValue(Action);
         const packet = switch (command) {
             .ping => blk: {
