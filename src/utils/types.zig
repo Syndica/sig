@@ -168,6 +168,38 @@ pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
     }
 }
 
+pub const BoundedArrayInfo = struct {
+    Elem: type,
+    capacity: usize,
+    alignment: usize,
+
+    pub fn Type(comptime info: BoundedArrayInfo) type {
+        return std.BoundedArrayAligned(info.Elem, info.alignment, info.capacity);
+    }
+};
+pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
+    const structure = switch (@typeInfo(T)) {
+        .Struct => |info| info,
+        else => return null,
+    };
+    if (!@hasField(T, "buffer")) return null;
+    const buffer_field = structure.fields[std.meta.fieldIndex(T, "buffer").?];
+    const alignment = buffer_field.alignment;
+    const Elem, const capacity = switch (@typeInfo(buffer_field.type)) {
+        .Array => |array| .{ array.child, array.len },
+        else => return null,
+    };
+
+    const Actual = std.BoundedArrayAligned(Elem, alignment, capacity);
+    if (T != Actual) return null;
+
+    return .{
+        .Elem = Elem,
+        .capacity = capacity,
+        .alignment = alignment,
+    };
+}
+
 pub inline fn defaultValue(comptime field: std.builtin.Type.StructField) ?field.type {
     comptime {
         const ptr = field.default_value orelse return null;

@@ -2166,6 +2166,67 @@ const CountingAllocator = struct {
     }
 };
 
+pub const CompressionMethod = enum { zstd };
+
+const full_snapshot_name_fmt = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
+pub fn fullSnapshotNameStr(
+    slot: Slot,
+    hash: Hash,
+    comptime compression_fmt: CompressionMethod,
+) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
+    full_snapshot_name_fmt,
+    @TypeOf(.{
+        .slot = slot,
+        .hash = sig.utils.fmt.boundedString(&hash.base58String()),
+        .extension = @tagName(compression_fmt),
+    }),
+)) {
+    const b58_str = hash.base58String();
+    return sig.utils.fmt.boundedFmt(full_snapshot_name_fmt, .{
+        .slot = slot,
+        .hash = sig.utils.fmt.boundedString(&b58_str),
+        .extension = @tagName(compression_fmt),
+    });
+}
+
+test fullSnapshotNameStr {
+    try std.testing.expectEqualStrings(
+        "snapshot-10-11111111111111111111111111111111.tar.zstd",
+        fullSnapshotNameStr(10, Hash.default(), .zstd).constSlice(),
+    );
+}
+
+const incremental_snapshot_name_fmt = "incremental-snapshot-{[base]d}-{[slot]d}.tar.{[extension]}";
+pub fn incrementalSnapshotNameStr(
+    base: Slot,
+    slot: Slot,
+    hash: Hash,
+    comptime compression_fmt: CompressionMethod,
+) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
+    full_snapshot_name_fmt,
+    @TypeOf(.{
+        .base = base,
+        .slot = slot,
+        .hash = sig.utils.fmt.boundedString(&hash.base58String()),
+        .extension = @tagName(compression_fmt),
+    }),
+)) {
+    const b58_str = hash.base58String();
+    return sig.utils.fmt.boundedFmt(incremental_snapshot_name_fmt, .{
+        .base = base,
+        .slot = slot,
+        .hash = sig.utils.fmt.boundedString(&b58_str),
+        .extension = @tagName(compression_fmt),
+    });
+}
+
+test incrementalSnapshotNameStr {
+    try std.testing.expectEqualStrings(
+        "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zstd",
+        fullSnapshotNameStr(10, 25, Hash.default(), .zstd).constSlice(),
+    );
+}
+
 /// All entries in `snapshot_fields.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
 /// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(

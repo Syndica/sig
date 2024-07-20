@@ -7,6 +7,8 @@ pub const HASH_SIZE: usize = 32;
 pub const Hash = extern struct {
     data: [HASH_SIZE]u8,
 
+    pub const MAX_VALUE: Hash = .{ .data = .{255} ** HASH_SIZE };
+
     pub fn default() Hash {
         return .{ .data = .{0} ** HASH_SIZE };
     }
@@ -32,11 +34,16 @@ pub const Hash = extern struct {
         return .eq;
     }
 
+    pub fn base58String(self: Hash) std.BoundedArray(u8, 44) {
+        var result_data: [44]u8 = undefined;
+        const b58_encoder = comptime base58.Encoder.init(.{});
+        const encoded_len = b58_encoder.encode(&self.data, &result_data) catch unreachable;
+        return std.BoundedArray(u8, 44).fromSlice(result_data[0..encoded_len]) catch unreachable;
+    }
+
     pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const b58_encoder = base58.Encoder.init(.{});
-        var buf: [44]u8 = undefined;
-        const size = b58_encoder.encode(&self.data, &buf) catch unreachable;
-        return writer.print("{s}", .{buf[0..size]});
+        const b58_str_bounded = self.base58String();
+        return writer.writeAll(b58_str_bounded.constSlice());
     }
 
     /// Intended to be used in tests.
