@@ -2242,8 +2242,8 @@ pub fn writeSnapshotTarWithFields(
     const writer = counting_writer_state.writer();
 
     // write the version file
-    var version_str_buf: [5]u8 = undefined;
-    const version_str = try std.fmt.bufPrint(&version_str_buf, "{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+    const version_str_bounded = sig.utils.fmt.boundedFmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
+    const version_str = version_str_bounded.constSlice();
     try sig.utils.tar.writeTarHeader(writer, .regular, "version", version_str.len);
     try writer.writeAll(version_str);
     try writer.writeByteNTimes(0, sig.utils.tar.paddingBytes(counting_writer_state.bytes_written));
