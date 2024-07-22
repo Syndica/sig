@@ -431,7 +431,13 @@ pub const SnapshotFields = struct {
             }
         };
         defer file.close();
-        return try decodeFromBincode(allocator, file.reader());
+
+        const size = (try file.stat()).size;
+        const contents = try file.readToEndAllocOptions(allocator, size, size, @alignOf(u8), null);
+        defer allocator.free(contents);
+
+        var fbs = std.io.fixedBufferStream(contents);
+        return try decodeFromBincode(allocator, fbs.reader());
     }
 
     pub fn decodeFromBincode(
@@ -1032,6 +1038,7 @@ pub const AllSnapshotFields = struct {
 
     pub fn fromFiles(
         allocator: std.mem.Allocator,
+        logger: Logger,
         snapshot_dir_str: []const u8,
         files: SnapshotFiles,
     ) !SnapshotFieldsAndPaths {
@@ -1042,6 +1049,7 @@ pub const AllSnapshotFields = struct {
             .{ snapshot_dir_str, "snapshots", files.full_snapshot.slot, files.full_snapshot.slot },
         );
 
+        logger.infof("reading snapshot fields from: {s}", .{full_metadata_path});
         const full_fields = try SnapshotFields.readFromFilePath(
             allocator,
             full_metadata_path,
@@ -1056,10 +1064,13 @@ pub const AllSnapshotFields = struct {
                 .{ snapshot_dir_str, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
             );
 
+            logger.infof("reading inc snapshot fields from: {s}", .{incremental_metadata_path.?});
             incremental_fields = try SnapshotFields.readFromFilePath(
                 allocator,
                 incremental_metadata_path.?,
             );
+        } else {
+            logger.info("no incremental snapshot fields found");
         }
 
         const fields: Self = .{
@@ -1143,6 +1154,7 @@ pub fn parallelUnpackZstdTarBall(
     path: []const u8,
     output_dir: std.fs.Dir,
     n_threads: usize,
+    /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
     const file = try std.fs.cwd().openFile(path, .{});

@@ -288,7 +288,8 @@ pub const AccountsDB = struct {
             n_parse_threads,
         );
         for (0..n_parse_threads) |_| {
-            var thread_db = try AccountsDB.init(
+            var thread_db = loading_threads.addOneAssumeCapacity();
+            thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
                 self.logger,
                 .{ .number_of_index_bins = self.config.number_of_index_bins },
@@ -298,7 +299,6 @@ pub const AccountsDB = struct {
             if (use_disk_index) {
                 thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
             }
-            loading_threads.appendAssumeCapacity(thread_db);
         }
         defer {
             // at this defer point, there are three memory components we care about
@@ -330,6 +330,7 @@ pub const AccountsDB = struct {
                 for (handles.items) |*h| h.join();
                 handles.deinit();
             }
+
             try spawnThreadTasks(
                 &handles,
                 loadAndVerifyAccountsFilesMultiThread,
@@ -394,7 +395,7 @@ pub const AccountsDB = struct {
         const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
 
-        const n_account_files = file_info_map.count();
+        const n_account_files = file_map_end_index - file_map_start_index;
         try file_map.ensureTotalCapacity(n_account_files);
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
@@ -407,6 +408,7 @@ pub const AccountsDB = struct {
             self.account_index.reference_allocator,
             n_account_files * accounts_per_file_est,
         );
+
         const references_ptr = references.items.ptr;
         defer {
             // rn we dont support resizing - something went wrong if we resized
@@ -464,7 +466,7 @@ pub const AccountsDB = struct {
                         self.logger.err("out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n");
                     },
                     else => {
-                        self.logger.errf("failed to *sanitize* AccountsFile: {d}.{d}: {s}\n", .{
+                        self.logger.errf("failed to *validate/index* AccountsFile: {d}.{d}: {s}\n", .{
                             accounts_file.slot,
                             accounts_file.id.toInt(),
                             @errorName(err),
@@ -2347,7 +2349,10 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     var snapshot_files = try SnapshotFiles.find(allocator, dir);
     defer snapshot_files.deinit(allocator);
 
-    var snapshots = try AllSnapshotFields.fromFiles(allocator, dir_path, snapshot_files);
+    const logger = Logger{ .noop = {} };
+    // var logger = Logger.init(std.heap.page_allocator, .debug);
+
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir_path, snapshot_files);
     defer {
         allocator.free(snapshots.full_path);
         if (snapshots.incremental_path) |inc_path| {
@@ -2356,8 +2361,6 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     }
 
     const snapshot = try snapshots.all_fields.collapse();
-    const logger = Logger{ .noop = {} };
-    // var logger = Logger.init(std.heap.page_allocator, .debug);
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
@@ -3032,7 +3035,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             );
         };
 
-        var snapshots = try AllSnapshotFields.fromFiles(allocator, dir_path, snapshot_files);
+        var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir_path, snapshot_files);
         defer {
             allocator.free(snapshots.full_path);
             if (snapshots.incremental_path) |inc_path| {
