@@ -164,10 +164,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
             accounts_db.largest_root_slot.store(largest_rooted_slot, .seq_cst);
         }
-
-        if (slot % 500 == 0) {
-            accounts_db.writeSnapshotTarFull();
-        }
     }
 
     std.debug.print("fuzzing complete\n", .{});

@@ -2196,14 +2196,14 @@ test fullSnapshotNameStr {
     );
 }
 
-const incremental_snapshot_name_fmt = "incremental-snapshot-{[base]d}-{[slot]d}.tar.{[extension]}";
+const incremental_snapshot_name_fmt = "incremental-snapshot-{[base]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
 pub fn incrementalSnapshotNameStr(
     base: Slot,
     slot: Slot,
     hash: Hash,
     comptime compression_fmt: CompressionMethod,
 ) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
-    full_snapshot_name_fmt,
+    incremental_snapshot_name_fmt,
     @TypeOf(.{
         .base = base,
         .slot = slot,
@@ -2223,7 +2223,7 @@ pub fn incrementalSnapshotNameStr(
 test incrementalSnapshotNameStr {
     try std.testing.expectEqualStrings(
         "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zstd",
-        fullSnapshotNameStr(10, 25, Hash.default(), .zstd).constSlice(),
+        incrementalSnapshotNameStr(10, 25, Hash.default(), .zstd).constSlice(),
     );
 }
 
