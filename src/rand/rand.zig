@@ -114,6 +114,35 @@ pub fn BlockRng(
     };
 }
 
+pub fn fillHashmapWithRng(
+    /// `*std.ArrayHashMap(Key, Value, _, _)`
+    /// `*std.HashMap(Key, Value, _, _)`
+    hashmap: anytype,
+    rand: std.Random,
+    /// Expected to provide methods & fields/decls:
+    /// * `fn randomKey(context, rand: std.Random) Key`
+    /// * `fn randomValue(context, rand: std.Random) Value`
+    /// The length to set the hashmap to.
+    hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
+    context: anytype,
+) !void {
+    const Hm = @TypeOf(hashmap.*);
+    const hm_info = sig.utils.types.hashMapInfo(Hm).?;
+
+    hashmap.clearRetainingCapacity();
+    try hashmap.ensureTotalCapacity(hm_len);
+
+    for (0..hm_len) |_| {
+        while (true) {
+            const new_key: hm_info.Key = context.randomKey(rand);
+            const gop = hashmap.getOrPutAssumeCapacity(new_key);
+            if (gop.found_existing) continue;
+            gop.value_ptr.* = try context.randomValue(rand);
+            break;
+        }
+    }
+}
+
 /// Downsample a random number generator to a smaller range.
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.

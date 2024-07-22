@@ -163,7 +163,7 @@ fn randomBankFields(
     var blockash_queue_ages = std.AutoArrayHashMap(Hash, HashAge).init(allocator);
     errdefer blockash_queue_ages.deinit();
 
-    try fillHashmapWithRng(&blockash_queue_ages, rand, 0, max_list_entries, struct {
+    try sig.rand.fillHashmapWithRng(&blockash_queue_ages, rand, rand.uintAtMost(usize, max_list_entries), struct {
         pub fn randomKey(_rand: std.Random) Hash {
             return Hash.random(_rand);
         }
@@ -179,7 +179,7 @@ fn randomBankFields(
     var ancestors = Ancestors.init(allocator);
     errdefer ancestors.deinit();
 
-    try fillHashmapWithRng(&ancestors, rand, 0, max_list_entries, struct {
+    try sig.rand.fillHashmapWithRng(&ancestors, rand, rand.uintAtMost(usize, max_list_entries), struct {
         pub fn randomKey(_rand: std.Random) Slot {
             return _rand.int(Slot);
         }
@@ -223,7 +223,7 @@ fn randomBankFields(
     inline for (@typeInfo(UnusedAccounts).Struct.fields) |field| {
         const ptr = &@field(unused_accounts, field.name);
         const hm_info = sig.utils.types.hashMapInfo(field.type).?;
-        try fillHashmapWithRng(ptr, rand, 0, max_list_entries, struct {
+        try sig.rand.fillHashmapWithRng(ptr, rand, rand.uintAtMost(usize, max_list_entries), struct {
             pub fn randomKey(_rand: std.Random) Pubkey {
                 return Pubkey.random(_rand);
             }
@@ -250,7 +250,7 @@ fn randomBankFields(
         epoch_stake.epoch_authorized_voters.deinit();
     };
 
-    try fillHashmapWithRng(&epoch_stakes, rand, 0, max_list_entries, struct {
+    try sig.rand.fillHashmapWithRng(&epoch_stakes, rand, rand.uintAtMost(usize, max_list_entries), struct {
         allocator: std.mem.Allocator,
 
         pub fn randomKey(_: @This(), _rand: std.Random) Epoch {
@@ -358,7 +358,7 @@ fn randomEpochStakes(allocator: std.mem.Allocator, rand: std.Random) !EpochStake
         node_vote_accounts.vote_accounts.deinit();
     };
 
-    try fillHashmapWithRng(&node_id_to_vote_accounts, rand, 0, max_list_entries, struct {
+    try sig.rand.fillHashmapWithRng(&node_id_to_vote_accounts, rand, rand.uintAtMost(usize, max_list_entries), struct {
         allocator: std.mem.Allocator,
 
         pub fn randomKey(_: @This(), _rand: std.Random) Pubkey {
@@ -415,7 +415,7 @@ fn randomStakes(
         allocator.free(vote_account.account.data);
     };
 
-    try fillHashmapWithRng(&stakes_vote_accounts, rand, 0, max_list_entries, struct {
+    try sig.rand.fillHashmapWithRng(&stakes_vote_accounts, rand, rand.uintAtMost(usize, max_list_entries), struct {
         allocator: std.mem.Allocator,
 
         pub fn randomKey(_: @This(), _rand: std.Random) Pubkey {
@@ -442,7 +442,7 @@ fn randomStakes(
     var stakes_maybe_staked_nodes = if (rand.boolean()) std.AutoArrayHashMap(Pubkey, u64).init(allocator) else null;
     errdefer if (stakes_maybe_staked_nodes) |*staked_nodes| staked_nodes.deinit();
 
-    if (stakes_maybe_staked_nodes) |*staked_nodes| try fillHashmapWithRng(staked_nodes, rand, 0, max_list_entries, struct {
+    if (stakes_maybe_staked_nodes) |*staked_nodes| try sig.rand.fillHashmapWithRng(staked_nodes, rand, rand.uintAtMost(usize, max_list_entries), struct {
         pub fn randomKey(_rand: std.Random) Pubkey {
             return Pubkey.random(_rand);
         }
@@ -454,7 +454,7 @@ fn randomStakes(
     var stake_delegations = std.AutoArrayHashMap(Pubkey, Delegation).init(allocator);
     errdefer stake_delegations.deinit();
 
-    try fillHashmapWithRng(&stake_delegations, rand, 0, max_list_entries, struct {
+    try sig.rand.fillHashmapWithRng(&stake_delegations, rand, rand.uintAtMost(usize, max_list_entries), struct {
         pub fn randomKey(_rand: std.Random) Pubkey {
             return Pubkey.random(_rand);
         }
@@ -602,28 +602,5 @@ fn randomAccountsDbFields(
         // NOTE: see field comment about these always being empty
         .rooted_slots = .{},
         .rooted_slot_hashes = .{},
-    };
-}
-
-fn fillHashmapWithRng(
-    hashmap: anytype,
-    rand: std.Random,
-    min_len: usize,
-    max_len: usize,
-    context: anytype,
-) !void {
-    const Hm = @TypeOf(hashmap.*);
-    const hm_info = sig.utils.types.hashMapInfo(Hm).?;
-    const hm_len = rand.intRangeAtMost(if (hm_info.kind == .array) usize else Hm.Size, min_len, max_len);
-
-    hashmap.clearRetainingCapacity();
-    try hashmap.ensureTotalCapacity(hm_len);
-
-    for (0..hm_len) |_| while (true) {
-        const new_key: hm_info.Key = context.randomKey(rand);
-        const gop = hashmap.getOrPutAssumeCapacity(new_key);
-        if (gop.found_existing) continue;
-        gop.value_ptr.* = try context.randomValue(rand);
-        break;
     };
 }

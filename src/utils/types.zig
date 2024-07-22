@@ -86,6 +86,32 @@ pub const HashMapInfo = struct {
         /// The `max_load_percentage` parameter
         unordered: std.math.IntFittingRange(1, 99),
     };
+
+    pub fn Type(comptime info: HashMapInfo) type {
+        const K = info.Key;
+        const V = info.Value;
+        const Ctx = info.Context;
+        return switch (info.kind) {
+            .array => |store_hash| switch (info.management) {
+                .managed => std.ArrayHashMap(K, V, Ctx, store_hash),
+                .unmanaged => std.ArrayHashMapUnmanaged(K, V, Ctx, store_hash),
+            },
+            .unordered => |max_load_percentage| switch (info.management) {
+                .managed => std.HashMap(K, V, Ctx, max_load_percentage),
+                .unmanaged => std.HashMapUnmanaged(K, V, Ctx, max_load_percentage),
+            },
+        };
+    }
+
+    pub fn Size(comptime info: HashMapInfo) type {
+        return switch (info.kind) {
+            .unordered => info.Type().Size,
+            .array => {
+                comptime std.debug.assert(!@hasDecl(info.Type(), "Size"));
+                return usize;
+            },
+        };
+    }
 };
 
 pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
