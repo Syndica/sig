@@ -879,19 +879,25 @@ pub const StatusCache = struct {
     }
 };
 
+pub const CompressionMethod = enum {
+    zstd,
+
+    pub inline fn extension(method: CompressionMethod) []const u8 {
+        return switch (method) {
+            .zstd => "zst",
+        };
+    }
+};
+
 /// information on a full snapshot including the filename, slot, and hash
 ///
 /// Analogous to [SnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L44)
 pub const FullSnapshotFileInfo = struct {
-    filename: []const u8,
     slot: Slot,
-    hash: []const u8,
+    hash: Hash,
+    comptime compression: CompressionMethod = .zstd,
 
     const Self = @This();
-
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.filename);
-    }
 
     /// matches with the regex: r"^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
     pub fn fromString(filename: []const u8) !Self {
@@ -911,9 +917,37 @@ pub const FullSnapshotFileInfo = struct {
         const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
         const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
 
-        const hash = parts.next() orelse return error.InvalidSnapshotPath;
+        const hash_str = parts.next() orelse return error.InvalidSnapshotPath;
+        const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
 
-        return .{ .filename = filename, .slot = slot, .hash = hash };
+        return .{
+            .slot = slot,
+            .hash = hash,
+        };
+    }
+
+    const full_snapshot_name_fmt = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
+    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
+        full_snapshot_name_fmt,
+        @TypeOf(.{
+            .slot = self.slot,
+            .hash = sig.utils.fmt.boundedString(&self.hash.base58String()),
+            .extension = self.compression.extension(),
+        }),
+    )) {
+        const b58_str = self.hash.base58String();
+        return sig.utils.fmt.boundedFmt(full_snapshot_name_fmt, .{
+            .slot = self.slot,
+            .hash = sig.utils.fmt.boundedString(&b58_str),
+            .extension = self.compression.extension(),
+        });
+    }
+
+    test snapshotNameStr {
+        try std.testing.expectEqualStrings(
+            "snapshot-10-11111111111111111111111111111111.tar.zst",
+            snapshotNameStr(.{ .slot = 10, .hash = Hash.default() }).constSlice(),
+        );
     }
 };
 
@@ -921,17 +955,12 @@ pub const FullSnapshotFileInfo = struct {
 ///
 /// Analogous to [IncrementalSnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L103)
 pub const IncrementalSnapshotFileInfo = struct {
-    filename: []const u8,
-    // this references the full snapshot slot
-    base_slot: Slot,
+    base: Slot,
     slot: Slot,
-    hash: []const u8,
+    hash: Hash,
+    comptime compression: CompressionMethod = .zstd,
 
     const Self = @This();
-
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.filename);
-    }
 
     /// matches against regex: r"^incremental-snapshot-(?P<base>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
     pub fn fromString(filename: []const u8) !Self {
@@ -958,14 +987,40 @@ pub const IncrementalSnapshotFileInfo = struct {
         const slot_str = parts.next() orelse return error.InvalidSnapshotPath;
         const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
 
-        const hash = parts.next() orelse return error.InvalidSnapshotPath;
+        const hash_str = parts.next() orelse return error.InvalidSnapshotPath;
+        const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
 
         return .{
-            .filename = filename,
+            .base = base_slot,
             .slot = slot,
-            .base_slot = base_slot,
             .hash = hash,
         };
+    }
+
+    const incremental_snapshot_name_fmt = "incremental-snapshot-{[base]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
+    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
+        incremental_snapshot_name_fmt,
+        @TypeOf(.{
+            .base = self.base,
+            .slot = self.slot,
+            .hash = sig.utils.fmt.boundedString(&self.hash.base58String()),
+            .extension = self.compression.extension(),
+        }),
+    )) {
+        const b58_str = self.hash.base58String();
+        return sig.utils.fmt.boundedFmt(incremental_snapshot_name_fmt, .{
+            .base = self.base,
+            .slot = self.slot,
+            .hash = sig.utils.fmt.boundedString(&b58_str),
+            .extension = self.compression.extension(),
+        });
+    }
+
+    test snapshotNameStr {
+        try std.testing.expectEqualStrings(
+            "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
+            snapshotNameStr(.{ .base = 10, .slot = 25, .hash = Hash.default() }).constSlice(),
+        );
     }
 };
 
@@ -977,7 +1032,7 @@ pub const SnapshotFiles = struct {
 
     /// finds existing snapshots (full and matching incremental) by looking for .tar.zstd files
     pub fn find(allocator: std.mem.Allocator, snapshot_directory: std.fs.Dir) !Self {
-        var snapshot_dir_iter = snapshot_directory.iterate();
+        const snapshot_dir_iter = snapshot_directory.iterate();
 
         const files = try readDirectory(allocator, snapshot_dir_iter);
         var filenames = files.filenames;
@@ -996,16 +1051,14 @@ pub const SnapshotFiles = struct {
             }
             count += 1;
         }
-        var latest_full_snapshot = maybe_latest_full_snapshot orelse return error.NoFullSnapshotFileInfoFound;
-        // clone the name so we can deinit the full array
-        latest_full_snapshot.filename = try snapshot_dir_iter.dir.realpathAlloc(allocator, latest_full_snapshot.filename);
+        const latest_full_snapshot = maybe_latest_full_snapshot orelse return error.NoFullSnapshotFileInfoFound;
 
         count = 0;
         var maybe_latest_incremental_snapshot: ?IncrementalSnapshotFileInfo = null;
         for (filenames.items) |filename| {
             const snapshot = IncrementalSnapshotFileInfo.fromString(filename) catch continue;
             // need to match the base slot
-            if (snapshot.base_slot == latest_full_snapshot.slot and (count == 0 or
+            if (snapshot.base == latest_full_snapshot.slot and (count == 0 or
                 // this unwrap is safe because count > 0
                 snapshot.slot > maybe_latest_incremental_snapshot.?.slot))
             {
@@ -1013,21 +1066,11 @@ pub const SnapshotFiles = struct {
             }
             count += 1;
         }
-        if (maybe_latest_incremental_snapshot) |*latest_incremental_snapshot| {
-            latest_incremental_snapshot.filename = try snapshot_dir_iter.dir.realpathAlloc(allocator, latest_incremental_snapshot.filename);
-        }
 
         return .{
             .full_snapshot = latest_full_snapshot,
             .incremental_snapshot = maybe_latest_incremental_snapshot,
         };
-    }
-
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        self.full_snapshot.deinit(allocator);
-        if (self.incremental_snapshot) |*incremental_snapshot| {
-            incremental_snapshot.deinit(allocator);
-        }
     }
 };
 
@@ -1177,15 +1220,12 @@ const Logger = @import("../trace/log.zig").Logger;
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
     logger: Logger,
-    path: []const u8,
+    file: std.fs.File,
     output_dir: std.fs.Dir,
     n_threads: usize,
     /// only used for progress estimation
     full_snapshot: bool,
 ) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
     const file_stat = try file.stat();
     const file_size: u64 = @intCast(file_stat.size);
     const memory = try std.posix.mmap(
@@ -1214,19 +1254,19 @@ test "core.accounts_db.snapshots: test full snapshot path parsing" {
     const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotFileInfo.fromString(full_snapshot_path);
 
-    try std.testing.expect(snapshot_info.slot == 269);
-    try std.testing.expect(std.mem.eql(u8, snapshot_info.hash, "EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn"));
-    try std.testing.expect(std.mem.eql(u8, snapshot_info.filename, full_snapshot_path));
+    try std.testing.expectEqual(269, snapshot_info.slot);
+    try std.testing.expectEqualStrings("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 
 test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
     const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotFileInfo.fromString(path);
 
-    try std.testing.expect(snapshot_info.base_slot == 269);
-    try std.testing.expect(snapshot_info.slot == 307);
-    try std.testing.expect(std.mem.eql(u8, snapshot_info.hash, "4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB"));
-    try std.testing.expect(std.mem.eql(u8, snapshot_info.filename, path));
+    try std.testing.expectEqual(269, snapshot_info.base);
+    try std.testing.expectEqual(307, snapshot_info.slot);
+    try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 
 test "core.accounts_db.snapshotss: parse status cache" {

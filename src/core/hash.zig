@@ -34,6 +34,14 @@ pub const Hash = extern struct {
         return .eq;
     }
 
+    pub fn parseBase58String(str: []const u8) error{InvalidHash}!Hash {
+        var result_data: [HASH_SIZE]u8 = undefined;
+        const b58_decoder = comptime base58.Decoder.init(.{});
+        const encoded_len = b58_decoder.decode(str, &result_data) catch return error.InvalidHash;
+        if (encoded_len != HASH_SIZE) return error.InvalidHash;
+        return .{ .data = result_data };
+    }
+
     pub fn base58String(self: Hash) std.BoundedArray(u8, 44) {
         var result_data: [44]u8 = undefined;
         const b58_encoder = comptime base58.Encoder.init(.{});

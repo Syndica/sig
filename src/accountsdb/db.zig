@@ -2166,67 +2166,6 @@ const CountingAllocator = struct {
     }
 };
 
-pub const CompressionMethod = enum { zstd };
-
-const full_snapshot_name_fmt = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-pub fn fullSnapshotNameStr(
-    slot: Slot,
-    hash: Hash,
-    comptime compression_fmt: CompressionMethod,
-) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
-    full_snapshot_name_fmt,
-    @TypeOf(.{
-        .slot = slot,
-        .hash = sig.utils.fmt.boundedString(&hash.base58String()),
-        .extension = @tagName(compression_fmt),
-    }),
-)) {
-    const b58_str = hash.base58String();
-    return sig.utils.fmt.boundedFmt(full_snapshot_name_fmt, .{
-        .slot = slot,
-        .hash = sig.utils.fmt.boundedString(&b58_str),
-        .extension = @tagName(compression_fmt),
-    });
-}
-
-test fullSnapshotNameStr {
-    try std.testing.expectEqualStrings(
-        "snapshot-10-11111111111111111111111111111111.tar.zstd",
-        fullSnapshotNameStr(10, Hash.default(), .zstd).constSlice(),
-    );
-}
-
-const incremental_snapshot_name_fmt = "incremental-snapshot-{[base]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-pub fn incrementalSnapshotNameStr(
-    base: Slot,
-    slot: Slot,
-    hash: Hash,
-    comptime compression_fmt: CompressionMethod,
-) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
-    incremental_snapshot_name_fmt,
-    @TypeOf(.{
-        .base = base,
-        .slot = slot,
-        .hash = sig.utils.fmt.boundedString(&hash.base58String()),
-        .extension = @tagName(compression_fmt),
-    }),
-)) {
-    const b58_str = hash.base58String();
-    return sig.utils.fmt.boundedFmt(incremental_snapshot_name_fmt, .{
-        .base = base,
-        .slot = slot,
-        .hash = sig.utils.fmt.boundedString(&b58_str),
-        .extension = @tagName(compression_fmt),
-    });
-}
-
-test incrementalSnapshotNameStr {
-    try std.testing.expectEqualStrings(
-        "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zstd",
-        incrementalSnapshotNameStr(10, 25, Hash.default(), .zstd).constSlice(),
-    );
-}
-
 /// All entries in `snapshot_fields.accounts_db_fields.file_map` must correspond to an entry in `file_map`,
 /// with the association defined by the file id (a field of the value of the former, the key of the latter).
 pub fn writeSnapshotTarWithFields(
@@ -2363,17 +2302,22 @@ test testWriteSnapshotFull {
     var test_data_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
     defer test_data_dir.close();
 
-    var snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
-    defer snap_files.deinit(std.testing.allocator);
+    const snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
 
     var tmp_snap_dir_root = std.testing.tmpDir(.{});
     defer tmp_snap_dir_root.cleanup();
     const tmp_snap_dir = tmp_snap_dir_root.dir;
 
-    try parallelUnpackZstdTarBall(std.testing.allocator, .noop, snap_files.full_snapshot.filename, tmp_snap_dir, 4, true);
+    {
+        const archive_file = try test_data_dir.openFile(snap_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+        defer archive_file.close();
+        try parallelUnpackZstdTarBall(std.testing.allocator, .noop, archive_file, tmp_snap_dir, 4, true);
+    }
 
     if (snap_files.incremental_snapshot) |inc_snap| {
-        try parallelUnpackZstdTarBall(std.testing.allocator, .noop, inc_snap.filename, tmp_snap_dir, 4, false);
+        const archive_file = try test_data_dir.openFile(inc_snap.snapshotNameStr().constSlice(), .{});
+        defer archive_file.close();
+        try parallelUnpackZstdTarBall(std.testing.allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
 
     try testWriteSnapshotFull(tmp_snap_dir, 10);
@@ -2387,26 +2331,32 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     const dir_path = "test_data";
     const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
 
-    // unpack both snapshots to get the acccount files
-    try parallelUnpackZstdTarBall(
-        allocator,
-        .noop,
-        "test_data/snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst",
-        dir,
-        n_threads,
-        true,
-    );
-    try parallelUnpackZstdTarBall(
-        allocator,
-        .noop,
-        "test_data/incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst",
-        dir,
-        n_threads,
-        true,
-    );
+    { // unpack both snapshots to get the acccount files
+        const full_archive = try dir.openFile("snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst", .{});
+        defer full_archive.close();
 
-    var snapshot_files = try SnapshotFiles.find(allocator, dir);
-    defer snapshot_files.deinit(allocator);
+        const inc_archive = try dir.openFile("incremental-snapshot-10-25-GXgKvm3NMAPgGdv2verVaNXmKTHQgfy2TAxLVEfAvdCS.tar.zst", .{});
+        defer inc_archive.close();
+
+        try parallelUnpackZstdTarBall(
+            allocator,
+            .noop,
+            full_archive,
+            dir,
+            n_threads,
+            true,
+        );
+        try parallelUnpackZstdTarBall(
+            allocator,
+            .noop,
+            inc_archive,
+            dir,
+            n_threads,
+            true,
+        );
+    }
+
+    const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
     const logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
@@ -3080,14 +3030,15 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             return 0;
         };
 
-        var snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
-        defer snapshot_files.deinit(allocator);
+        const snapshot_files = try SnapshotFiles.find(allocator, snapshot_dir);
 
         std.fs.cwd().access(accounts_path, .{}) catch {
+            const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+            defer archive_file.close();
             try parallelUnpackZstdTarBall(
                 allocator,
                 logger,
-                snapshot_files.full_snapshot.filename,
+                archive_file,
                 snapshot_dir,
                 try std.Thread.getCpuCount() / 2,
                 true,

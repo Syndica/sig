@@ -1015,7 +1015,7 @@ fn getOrDownloadSnapshots(
         };
     };
 
-    var snapshot_files = maybe_snapshot_files orelse blk: {
+    const snapshot_files = maybe_snapshot_files orelse blk: {
         const trusted_validators = try getTrustedValidators(gpa_allocator);
         defer if (trusted_validators) |*tvs| tvs.deinit();
 
@@ -1030,7 +1030,6 @@ fn getOrDownloadSnapshots(
         );
         break :blk try SnapshotFiles.find(allocator, snap_dir);
     };
-    defer snapshot_files.deinit(allocator);
 
     if (snapshot_files.incremental_snapshot == null) {
         logger.infof("no incremental snapshot found", .{});
@@ -1067,31 +1066,36 @@ fn getOrDownloadSnapshots(
     if (should_unpack_snapshot) {
         logger.infof("unpacking snapshots...", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
-        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{ .iterate = true });
-        defer snapshot_dir.close();
-
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.filename});
-        try parallelUnpackZstdTarBall(
-            allocator,
-            logger,
-            snapshot_files.full_snapshot.filename,
-            snapshot_dir,
-            n_threads_snapshot_unpack,
-            true,
-        );
+        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
+        {
+            const archive_file = try snap_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+            defer archive_file.close();
+            try parallelUnpackZstdTarBall(
+                allocator,
+                logger,
+                archive_file,
+                snap_dir,
+                n_threads_snapshot_unpack,
+                true,
+            );
+        }
         logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
-            logger.infof("unpacking {s}...", .{incremental_snapshot.filename});
+            logger.infof("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
+
+            const archive_file = try snap_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
+            defer archive_file.close();
+
             try parallelUnpackZstdTarBall(
                 allocator,
                 logger,
-                incremental_snapshot.filename,
-                snapshot_dir,
+                archive_file,
+                snap_dir,
                 n_threads_snapshot_unpack,
                 false,
             );
