@@ -731,7 +731,6 @@ pub const GossipTable = struct {
         defer labels_to_remove.deinit();
 
         for (drop_pubkeys) |pubkey| {
-            std.debug.print("dropping pubkey: {}\n", .{pubkey});
             // remove all entries associated with the pubkey
             const entry_indexs = self.pubkey_to_values.getEntry(pubkey).?.value_ptr;
             const count = entry_indexs.count();
@@ -812,7 +811,6 @@ pub const GossipTable = struct {
                     versioned_value.timestamp_on_insertion,
                 );
                 if (value_timestamp <= self.cutoff_timestamp) {
-                    std.debug.print("removing old label: {}\n", .{versioned_value.value.label()});
                     self.old_labels.append(versioned_value.value.label()) catch unreachable;
                 }
             }
