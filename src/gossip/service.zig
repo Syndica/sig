@@ -669,43 +669,43 @@ pub const GossipService = struct {
 
             // handle batch messages
             if (push_messages.items.len > 0) {
-                var x_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPushMessages(&push_messages) catch |err| {
                     self.logger.errf("handleBatchPushMessages failed: {}", .{err});
                 };
-                const elapsed = x_timer.read();
-                self.stats.handle_batch_push_time.add(elapsed);
+                const elapsed = x_timer.read().asMillis();
+                self.stats.handle_batch_push_time.observe(@floatFromInt(elapsed));
 
                 push_messages.clearRetainingCapacity();
             }
 
             if (prune_messages.items.len > 0) {
-                var x_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPruneMessages(&prune_messages);
-                const elapsed = x_timer.read();
-                self.stats.handle_batch_prune_time.add(elapsed);
+                const elapsed = x_timer.read().asMillis();
+                self.stats.handle_batch_prune_time.observe(@floatFromInt(elapsed));
 
                 prune_messages.clearRetainingCapacity();
             }
 
             if (pull_requests.items.len > 0) {
-                var x_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPullRequest(pull_requests) catch |err| {
                     self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
-                const elapsed = x_timer.read();
-                self.stats.handle_batch_pull_req_time.add(elapsed);
+                const elapsed = x_timer.read().asMillis();
+                self.stats.handle_batch_pull_req_time.observe(@floatFromInt(elapsed));
 
                 pull_requests.clearRetainingCapacity();
             }
 
             if (pull_responses.items.len > 0) {
-                var x_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPullResponses(&pull_responses) catch |err| {
                     self.logger.errf("handleBatchPullResponses failed: {}", .{err});
                 };
-                const elapsed = x_timer.read();
-                self.stats.handle_batch_pull_resp_time.add(elapsed);
+                const elapsed = x_timer.read().asMillis();
+                self.stats.handle_batch_pull_resp_time.observe(@floatFromInt(elapsed));
 
                 pull_responses.clearRetainingCapacity();
             }
@@ -722,10 +722,10 @@ pub const GossipService = struct {
             }
 
             if (pong_messages.items.len > 0) {
-                var x_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = sig.time.Timer.start() catch unreachable;
                 self.handleBatchPongMessages(&pong_messages);
-                const elapsed = x_timer.read();
-                self.stats.handle_batch_pong_time.add(elapsed);
+                const elapsed = x_timer.read().asMillis();
+                self.stats.handle_batch_pong_time.observe(@floatFromInt(elapsed));
 
                 pong_messages.clearRetainingCapacity();
             }
@@ -763,14 +763,14 @@ pub const GossipService = struct {
                 var gossip_table, var gossip_table_lock = self.gossip_table_rw.writeWithLock();
                 defer gossip_table_lock.unlock();
 
-                var x_timer = std.time.Timer.start() catch unreachable;
+                var x_timer = sig.time.Timer.start() catch unreachable;
                 const now = getWallclockMs();
                 const n_pubkeys_dropped = gossip_table.attemptTrim(now, UNIQUE_PUBKEY_CAPACITY) catch |err| err_blk: {
                     self.logger.warnf("gossip_table.attemptTrim failed: {s}", .{@errorName(err)});
                     break :err_blk 0;
                 };
-                const elapsed = x_timer.read();
-                self.stats.handle_trim_table_time.add(elapsed);
+                const elapsed = x_timer.read().asMillis();
+                self.stats.handle_trim_table_time.observe(@floatFromInt(elapsed));
 
                 break :blk n_pubkeys_dropped;
             } else {
@@ -1940,12 +1940,12 @@ pub const GossipStats = struct {
 
     // TODO(x19): these should be histograms
     handle_batch_ping_time: *Histogram,
-    handle_batch_pong_time: *Counter,
-    handle_batch_push_time: *Counter,
-    handle_batch_pull_req_time: *Counter,
-    handle_batch_pull_resp_time: *Counter,
-    handle_batch_prune_time: *Counter,
-    handle_trim_table_time: *Counter,
+    handle_batch_pong_time: *Histogram,
+    handle_batch_push_time: *Histogram,
+    handle_batch_pull_req_time: *Histogram,
+    handle_batch_pull_resp_time: *Histogram,
+    handle_batch_prune_time: *Histogram,
+    handle_trim_table_time: *Histogram,
     push_messages_time_to_insert: *Counter,
     push_messages_time_build_prune: *Counter,
 
@@ -1992,8 +1992,18 @@ pub const GossipStats = struct {
 
     const Self = @This();
 
-    // large final upper bound
-    const HANDLE_TIME_BUCKETS: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, std.time.ms_per_s * 15 };
+    const HANDLE_TIME_BUCKETS_MS: [10]f64 = .{
+        10,
+        25,
+        50,
+        100,
+        250,
+        500,
+        1000,
+        2500,
+        5000,
+        10000,
+    };
 
     pub fn init(logger: Logger) GetMetricError!Self {
         var self: Self = undefined;
@@ -2008,7 +2018,7 @@ pub const GossipStats = struct {
                     const field_gauge: *GaugeU64 = try registry.getOrCreateGauge(field.name, u64);
                     @field(self, field.name) = field_gauge;
                 } else if (field.type == *Histogram) {
-                    const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, &HANDLE_TIME_BUCKETS);
+                    const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, &HANDLE_TIME_BUCKETS_MS);
                     @field(self, field.name) = field_histogram;
                 } else {
                     unreachable;

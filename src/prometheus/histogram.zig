@@ -71,8 +71,8 @@ pub const Histogram = struct {
         self.upper_bounds.deinit();
     }
 
-    pub fn reset(self: *Self) void { 
-        for (0..2) |shard_i| { 
+    pub fn reset(self: *Self) void {
+        for (0..2) |shard_i| {
             var shard = &self.shards[shard_i];
             for (shard.buckets.items) |*bucket| {
                 _ = bucket.store(0, .monotonic);
@@ -90,7 +90,6 @@ pub const Histogram = struct {
 
     /// Writes a value into the histogram.
     pub fn observe(self: *Self, value: f64) void {
-        std.debug.print("histogram value: {}\n", .{value});
         const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (0.., self.upper_bounds.items) |i, bound| {
