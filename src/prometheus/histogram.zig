@@ -5,7 +5,7 @@ const Atomic = std.atomic.Value;
 
 const Metric = @import("metric.zig").Metric;
 
-pub const default_buckets: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
+pub const DEFAULT_BUCKETS: [11]f64 = .{ 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0 };
 
 /// Histogram optimized for fast concurrent writes.
 /// Reads and writes are thread-safe if you use the public methods.
@@ -71,6 +71,17 @@ pub const Histogram = struct {
         self.upper_bounds.deinit();
     }
 
+    pub fn reset(self: *Self) void { 
+        for (0..2) |shard_i| { 
+            var shard = &self.shards[shard_i];
+            for (shard.buckets.items) |*bucket| {
+                _ = bucket.store(0, .monotonic);
+            }
+            shard.sum.store(0.0, .monotonic);
+            shard.count.store(0, .monotonic);
+        }
+    }
+
     fn shardBuckets(allocator: Allocator, size: usize) !ArrayList(Atomic(u64)) {
         const slice = try allocator.alloc(u64, size);
         @memset(slice, 0);
@@ -79,6 +90,7 @@ pub const Histogram = struct {
 
     /// Writes a value into the histogram.
     pub fn observe(self: *Self, value: f64) void {
+        std.debug.print("histogram value: {}\n", .{value});
         const shard_sync = self.incrementCount(.acquire); // acquires lock. must be first step.
         const shard = &self.shards[shard_sync.shard];
         for (0.., self.upper_bounds.items) |i, bound| {
@@ -190,18 +202,18 @@ pub const Bucket = struct {
 
 test "prometheus.histogram: empty" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, &default_buckets);
+    var hist = try Histogram.init(allocator, &DEFAULT_BUCKETS);
     defer hist.deinit();
 
     var snapshot = try hist.getSnapshot(null);
     defer snapshot.deinit();
 
-    try expectSnapshot(0, &default_buckets, &(.{0} ** 11), snapshot);
+    try expectSnapshot(0, &DEFAULT_BUCKETS, &(.{0} ** 11), snapshot);
 }
 
 test "prometheus.histogram: data goes in correct buckets" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, &default_buckets);
+    var hist = try Histogram.init(allocator, &DEFAULT_BUCKETS);
     defer hist.deinit();
 
     const expected_buckets = observeVarious(&hist);
@@ -209,12 +221,12 @@ test "prometheus.histogram: data goes in correct buckets" {
     var snapshot = try hist.getSnapshot(null);
     defer snapshot.deinit();
 
-    try expectSnapshot(7, &default_buckets, &expected_buckets, snapshot);
+    try expectSnapshot(7, &DEFAULT_BUCKETS, &expected_buckets, snapshot);
 }
 
 test "prometheus.histogram: repeated snapshots measure the same thing" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, &default_buckets);
+    var hist = try Histogram.init(allocator, &DEFAULT_BUCKETS);
     defer hist.deinit();
 
     const expected_buckets = observeVarious(&hist);
@@ -224,12 +236,12 @@ test "prometheus.histogram: repeated snapshots measure the same thing" {
     var snapshot = try hist.getSnapshot(null);
     defer snapshot.deinit();
 
-    try expectSnapshot(7, &default_buckets, &expected_buckets, snapshot);
+    try expectSnapshot(7, &DEFAULT_BUCKETS, &expected_buckets, snapshot);
 }
 
 test "prometheus.histogram: values accumulate across snapshots" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, &default_buckets);
+    var hist = try Histogram.init(allocator, &DEFAULT_BUCKETS);
     defer hist.deinit();
 
     _ = observeVarious(&hist);
@@ -243,12 +255,12 @@ test "prometheus.histogram: values accumulate across snapshots" {
     defer snapshot.deinit();
 
     const expected_buckets: [11]u64 = .{ 1, 1, 1, 1, 4, 4, 4, 6, 7, 7, 7 };
-    try expectSnapshot(8, &default_buckets, &expected_buckets, snapshot);
+    try expectSnapshot(8, &DEFAULT_BUCKETS, &expected_buckets, snapshot);
 }
 
 test "prometheus.histogram: totals add up after concurrent reads and writes" {
     const allocator = std.testing.allocator;
-    var hist = try Histogram.init(allocator, &default_buckets);
+    var hist = try Histogram.init(allocator, &DEFAULT_BUCKETS);
     defer hist.deinit();
 
     var threads: [4]std.Thread = undefined;
@@ -278,7 +290,7 @@ test "prometheus.histogram: totals add up after concurrent reads and writes" {
     for (result) |r| {
         try expected.append(4000 * r);
     }
-    try expectSnapshot(28000, &default_buckets, expected.items, snapshot);
+    try expectSnapshot(28000, &DEFAULT_BUCKETS, expected.items, snapshot);
 }
 
 fn observeVarious(hist: *Histogram) [11]u64 {
@@ -301,7 +313,7 @@ fn expectSnapshot(
     snapshot: anytype,
 ) !void {
     try std.testing.expectEqual(expected_total, snapshot.count);
-    try std.testing.expectEqual(default_buckets.len, snapshot.buckets.len);
+    try std.testing.expectEqual(DEFAULT_BUCKETS.len, snapshot.buckets.len);
     for (0.., snapshot.buckets) |i, bucket| {
         try expectEqual(expected_buckets[i], bucket.cumulative_count, "value in bucket {}\n", .{i});
         try expectEqual(expected_bounds[i], bucket.upper_bound, "bound for bucket {}\n", .{i});

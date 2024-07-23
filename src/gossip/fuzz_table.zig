@@ -249,15 +249,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             if (rand.boolean()) {
                 // trim the table in half
                 const max_pubkey_capacity = size / 2;
-                const did_trim = try gossip_table.attemptTrim(now, max_pubkey_capacity);
-                if (!did_trim) continue;
+                const pubkeys_droppped_count = try gossip_table.attemptTrim(now, max_pubkey_capacity);
+                if (pubkeys_droppped_count == 0) continue;
 
                 logger.infof("op(trim): table size: {} -> {}", .{ size, gossip_table.len() });
             } else {
                 // NOTE: not completely accurate, but good enough
                 const middle_index = insertion_times.items.len / 2;
                 const middle_insert_time = insertion_times.items[middle_index];
-                try gossip_table.removeOldLabels(middle_insert_time, 0);
+                _ = try gossip_table.removeOldLabels(middle_insert_time, 0);
 
                 logger.infof("op(remove-old-labels): table size: {} -> {}", .{ size, gossip_table.len() });
             }

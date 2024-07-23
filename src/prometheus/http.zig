@@ -4,7 +4,7 @@ const httpz = @import("httpz");
 
 const Registry = @import("registry.zig").Registry;
 const globalRegistry = @import("registry.zig").globalRegistry;
-const default_buckets = @import("histogram.zig").default_buckets;
+const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
 
 pub fn servePrometheus(
     allocator: std.mem.Allocator,
@@ -49,7 +49,7 @@ pub fn main() !void {
                 const reg = globalRegistry();
                 var secs_counter = try reg.getOrCreateCounter("seconds_since_start");
                 var gauge = try reg.getOrCreateGauge("seconds_hand", u64);
-                var hist = try reg.getOrCreateHistogram("hist", &default_buckets);
+                var hist = try reg.getOrCreateHistogram("hist", &DEFAULT_BUCKETS);
                 while (true) {
                     std.time.sleep(1_000_000_000);
                     secs_counter.inc();
