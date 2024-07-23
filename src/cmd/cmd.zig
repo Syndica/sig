@@ -847,14 +847,13 @@ fn loadSnapshot(
     errdefer result.accounts_db.deinit(false);
 
     {
-        _ = validate_snapshot;
         var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
         defer snapshot_dir.close();
         result.snapshot_fields = try result.accounts_db.loadWithDefaults(
             &snapshots,
             snapshot_dir,
             n_threads_snapshot_load,
-            false,
+            validate_snapshot,
         );
     }
     errdefer result.snapshot_fields.deinit(allocator);
