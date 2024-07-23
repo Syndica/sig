@@ -1536,14 +1536,16 @@ pub const GossipService = struct {
 
         // insert values and track the failed origins per pubkey
         {
-            var timer = try std.time.Timer.start();
+            var timer = try sig.time.Timer.start();
 
             var gossip_table_lock = self.gossip_table_rw.write();
             var gossip_table: *GossipTable = gossip_table_lock.mut();
 
             defer {
                 gossip_table_lock.unlock();
-                self.stats.push_messages_time_to_insert.add(timer.read());
+
+                const elapsed = timer.read().asMillis();
+                self.stats.push_messages_time_to_insert.observe(@floatFromInt(elapsed));
             }
 
             var n_gossip_data: usize = 0;
@@ -1625,9 +1627,10 @@ pub const GossipService = struct {
 
         // build prune packets
         const now = getWallclockMs();
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         defer {
-            self.stats.push_messages_time_build_prune.add(timer.read());
+            const elapsed = timer.read().asMillis();
+            self.stats.push_messages_time_build_prune.observe(@floatFromInt(elapsed));
         }
         var pubkey_to_failed_origins_iter = pubkey_to_failed_origins.iterator();
 
@@ -1938,7 +1941,6 @@ pub const GossipStats = struct {
     push_message_n_failed_inserts: *Counter,
     push_message_n_invalid_values: *Counter,
 
-    // TODO(x19): these should be histograms
     handle_batch_ping_time: *Histogram,
     handle_batch_pong_time: *Histogram,
     handle_batch_push_time: *Histogram,
@@ -1946,8 +1948,8 @@ pub const GossipStats = struct {
     handle_batch_pull_resp_time: *Histogram,
     handle_batch_prune_time: *Histogram,
     handle_trim_table_time: *Histogram,
-    push_messages_time_to_insert: *Counter,
-    push_messages_time_build_prune: *Counter,
+    push_messages_time_to_insert: *Histogram,
+    push_messages_time_build_prune: *Histogram,
 
     incoming_channel_length: *GaugeU64,
     verified_channel_length: *GaugeU64,
