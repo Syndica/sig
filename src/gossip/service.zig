@@ -16,7 +16,6 @@ const UdpSocket = network.Socket;
 
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
-const Entry = sig.trace.entry.Entry;
 const Logger = sig.trace.log.Logger;
 const Packet = sig.net.Packet;
 const EchoServer = sig.net.echo.Server;
@@ -24,9 +23,7 @@ const SocketAddr = sig.net.SocketAddr;
 const Counter = sig.prometheus.Counter;
 const Gauge = sig.prometheus.Gauge;
 const Histogram = sig.prometheus.Histogram;
-const DEFAULT_HISTOGRAM_BUCKETS = sig.prometheus.DEFAULT_HISTOGRAM_BUCKETS;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
-const Registry = sig.prometheus.Registry;
 const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
@@ -62,7 +59,6 @@ const getWallclockMs = sig.gossip.data.getWallclockMs;
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 const UNIQUE_PUBKEY_CAPACITY = sig.gossip.table.UNIQUE_PUBKEY_CAPACITY;
 const MAX_NUM_PULL_REQUESTS = sig.gossip.pull_request.MAX_NUM_PULL_REQUESTS;
-const MAX_BLOOM_SIZE = sig.gossip.pull_request.MAX_BLOOM_SIZE;
 
 const PacketBatch = ArrayList(Packet);
 const GossipMessageWithEndpoint = struct { from_endpoint: EndPoint, message: GossipMessage };

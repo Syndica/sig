@@ -22,7 +22,6 @@ const Inflation = sig.accounts_db.genesis_config.Inflation;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const defaultArrayListOnEOFConfig = bincode.arraylist.defaultArrayListOnEOFConfig;
 const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const readDirectory = sig.utils.directory.readDirectory;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
