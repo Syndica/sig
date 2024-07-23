@@ -1,27 +1,13 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 const network = @import("zig-network");
-const bincode = sig.bincode.bincode;
 
 const AtomicBool = std.atomic.Value(bool);
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
-const GossipService = sig.gossip.service.GossipService;
-const ChunkType = sig.gossip.service.ChunkType;
-const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
-const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
-const getWallclockMs = sig.gossip.data.getWallclockMs;
 const Logger = sig.trace.log.Logger;
-const SocketAddr = sig.net.net.SocketAddr;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Bloom = sig.bloom.bloom.Bloom;
-const EndPoint = network.EndPoint;
-const Packet = sig.net.packet.Packet;
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
-const GossipMessage = sig.gossip.message.GossipMessage;
-const Ping = sig.gossip.ping_pong.Ping;
-const Pong = sig.gossip.ping_pong.Pong;
 const GossipTable = sig.gossip.GossipTable;
 
 const SignedGossipData = sig.gossip.data.SignedGossipData;
@@ -29,9 +15,6 @@ const GossipData = sig.gossip.data.GossipData;
 const GossipKey = sig.gossip.data.GossipKey;
 const Signature = sig.core.Signature;
 
-const GossipPullFilterSet = sig.gossip.pull_request.GossipPullFilterSet;
-const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
-const Hash = sig.core.hash.Hash;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const Duration = sig.time.Duration;
 

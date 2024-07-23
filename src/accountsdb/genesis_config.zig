@@ -194,6 +194,7 @@ pub const GenesisConfig = struct {
     ) !GenesisConfig {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
+
         const config = try bincode.read(allocator, GenesisConfig, file.reader(), .{});
 
         return config;
@@ -204,7 +205,7 @@ pub const GenesisConfig = struct {
     }
 };
 
-test "core.genesis_config: deserialize config" {
+test "genesis_config deserialize development config" {
     const allocator = std.testing.allocator;
 
     const genesis_path = "./test_data/genesis.bin";
@@ -212,4 +213,34 @@ test "core.genesis_config: deserialize config" {
     defer config.deinit(allocator);
 
     try std.testing.expect(config.cluster_type == ClusterType.Development);
+}
+
+test "genesis_config deserialize testnet config" {
+    const allocator = std.testing.allocator;
+
+    const genesis_path = "./genesis-files/testnet-genesis.bin";
+    const config = try GenesisConfig.init(allocator, genesis_path);
+    defer config.deinit(allocator);
+
+    try std.testing.expect(config.cluster_type == ClusterType.Testnet);
+}
+
+test "genesis_config deserialize devnet config" {
+    const allocator = std.testing.allocator;
+
+    const genesis_path = "./genesis-files/devnet-genesis.bin";
+    const config = try GenesisConfig.init(allocator, genesis_path);
+    defer config.deinit(allocator);
+
+    try std.testing.expect(config.cluster_type == ClusterType.Devnet);
+}
+
+test "genesis_config deserialize mainnet config" {
+    const allocator = std.testing.allocator;
+
+    const genesis_path = "./genesis-files/mainnet-genesis.bin";
+    const config = try GenesisConfig.init(allocator, genesis_path);
+    defer config.deinit(allocator);
+
+    try std.testing.expect(config.cluster_type == ClusterType.MainnetBeta);
 }

@@ -10,7 +10,6 @@ const exp = std.math.exp;
 const GossipTable = @import("table.zig").GossipTable;
 const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
-const getWallclockMs = _gossip_data.getWallclockMs;
 const RwMux = @import("../sync/mux.zig").RwMux;
 
 pub const MAX_BLOOM_SIZE: usize = 928;

@@ -16,7 +16,6 @@ const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
-const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
@@ -204,6 +203,15 @@ pub fn run() !void {
         .value_name = "snapshot_dir",
     };
 
+    var genesis_file_path = cli.Option{
+        .long_name = "genesis-file-path",
+        .help = "path to the genesis file",
+        .short_alias = 'g',
+        .value_ref = cli.mkRef(&config.current.genesis_file_path),
+        .required = false,
+        .value_name = "genesis_file_path",
+    };
+
     var min_snapshot_download_speed_mb_option = cli.Option{
         .long_name = "min-snapshot-download-speed",
         .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
@@ -300,6 +308,7 @@ pub fn run() !void {
                             &force_new_snapshot_download_option,
                             &trusted_validators_option,
                             &number_of_index_bins_option,
+                            &genesis_file_path,
                             // general
                             &leader_schedule_option,
                         },
@@ -351,6 +360,7 @@ pub fn run() !void {
                             &n_threads_snapshot_unpack_option,
                             &force_unpack_snapshot_option,
                             &number_of_index_bins_option,
+                            &genesis_file_path,
                         },
                         .target = .{
                             .action = .{
@@ -389,6 +399,7 @@ pub fn run() !void {
                             &force_new_snapshot_download_option,
                             &trusted_validators_option,
                             &number_of_index_bins_option,
+                            &genesis_file_path,
                             // general
                             &leader_schedule_option,
                         },
@@ -801,6 +812,8 @@ fn loadSnapshot(
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
 
+    result.allocator = allocator;
+
     var snapshots = try getOrDownloadSnapshots(
         allocator,
         logger,
@@ -834,13 +847,14 @@ fn loadSnapshot(
     errdefer result.accounts_db.deinit(false);
 
     {
+        _ = validate_snapshot;
         var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
         defer snapshot_dir.close();
         result.snapshot_fields = try result.accounts_db.loadWithDefaults(
             &snapshots,
             snapshot_dir,
             n_threads_snapshot_load,
-            validate_snapshot,
+            false,
         );
     }
     errdefer result.snapshot_fields.deinit(allocator);
@@ -849,9 +863,10 @@ fn loadSnapshot(
 
     // this should exist before we start to unpack
     logger.infof("reading genesis...", .{});
-    result.genesis_config = readGenesisConfig(allocator, snapshot_dir_str) catch |err| {
+    const genesis_file_path = config.current.genesis_file_path orelse return error.GenesisNotProvided;
+    result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
-            logger.errf("genesis.bin not found - expecting {s}/genesis.bin to exist", .{snapshot_dir_str});
+            logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
         return err;
     };
@@ -881,6 +896,7 @@ fn loadSnapshot(
 
     var slot_history = try result.accounts_db.getSlotHistory();
     defer slot_history.deinit(result.accounts_db.allocator);
+
     try status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
@@ -889,14 +905,7 @@ fn loadSnapshot(
 }
 
 /// load genesis config with default filenames
-fn readGenesisConfig(allocator: Allocator, snapshot_dir: []const u8) !GenesisConfig {
-    const genesis_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/genesis.bin",
-        .{snapshot_dir},
-    );
-    defer allocator.free(genesis_path);
-
+fn readGenesisConfig(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
     std.fs.cwd().access(genesis_path, .{}) catch {
         return error.GenesisNotFound;
     };
