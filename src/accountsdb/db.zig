@@ -3056,7 +3056,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
 
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields.file_map,
             accounts_dir,
@@ -3071,7 +3071,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         } });
         std.debug.print("r: {any}\n", .{r});
 
-        return elapsed;
+        return elapsed.asNanos();
     }
 };
 
