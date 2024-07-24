@@ -68,7 +68,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const snapshot_dir_name = "accountsdb_fuzz";
     var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
     defer snapshot_dir.close();
-
     defer {
         // NOTE: sometimes this can take a long time so we print when we start and finish
         std.debug.print("deleting snapshot dir...\n", .{});
@@ -229,11 +228,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, &zstd_write_buffer);
 
             random_bank_fields.slot = largest_rooted_slot;
+            const lamports_per_signature = rand.int(u64);
+
             try accounts_db.writeSnapshotTarFull(
                 zstd_write_ctx.writer(),
                 .{ .bank_slot_deltas = &.{} },
                 random_bank_fields,
-                rand.int(u64),
+                lamports_per_signature,
                 random_bank_hash_info,
                 0,
             );
@@ -263,8 +264,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             defer new_accounts_db.deinit(false);
 
             std.debug.print("Validating snapshot for slot {}...\n", .{largest_rooted_slot});
-
-            // std.debug.print("File Map:\n{|},\n\n", .{sig.utils.fmt.hashMapFmt(&snap_fields_and_paths.full.accounts_db_fields.file_map, ",\n")});
 
             try new_accounts_db.loadFromSnapshot(
                 snap_fields_and_paths.full.accounts_db_fields.file_map,

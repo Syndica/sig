@@ -2349,7 +2349,7 @@ test testWriteSnapshotFull {
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
-    var dir = try std.fs.cwd().openDir("test_data", .{});
+    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
     defer dir.close();
 
     { // unpack both snapshots to get the acccount files
