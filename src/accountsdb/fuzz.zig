@@ -1,11 +1,15 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
+const Hash = sig.core.Hash;
+const BankFields = sig.accounts_db.snapshots.BankFields;
+const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -48,11 +52,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{
-        .stack_trace_frames = 64,
-        .retain_metadata = true,
-        .never_unmap = true,
-    }){};
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
@@ -65,17 +65,31 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var test_data_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
     defer test_data_dir.close();
 
-    var snapshot_dir = try test_data_dir.makeOpenPath("accountsdb_fuzz", .{});
+    const snapshot_dir_name = "accountsdb_fuzz";
+    var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
     defer snapshot_dir.close();
-    // defer {
-    //     // NOTE: sometimes this can take a long time so we print when we start and finish
-    //     std.debug.print("deleting snapshot dir...\n", .{});
-    //     test_data_dir.deleteTree(snapshot_dir_name) catch |err| {
-    //         std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ snapshot_dir_name, err });
-    //     };
-    //     std.debug.print("deleted snapshot dir\n", .{});
-    // }
+
+    defer {
+        // NOTE: sometimes this can take a long time so we print when we start and finish
+        std.debug.print("deleting snapshot dir...\n", .{});
+        test_data_dir.deleteTree(snapshot_dir_name) catch |err| {
+            std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err });
+        };
+        std.debug.print("deleted snapshot dir\n", .{});
+    }
     std.debug.print("use disk: {}\n", .{use_disk});
+
+    const alt_dir_name = "alt";
+    var alt_dir = try snapshot_dir.makeOpenPath(alt_dir_name, .{});
+    defer alt_dir.close();
+    defer {
+        // NOTE: sometimes this can take a long time so we print when we start and finish
+        std.debug.print("deleting snapshot dir...\n", .{});
+        test_data_dir.deleteTree(alt_dir_name) catch |err| {
+            std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err });
+        };
+        std.debug.print("deleted snapshot dir\n", .{});
+    }
 
     var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
         .use_disk_index = use_disk,
@@ -103,8 +117,26 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
-    var largest_rooted_slot: usize = 0;
-    var slot: usize = 0;
+    var random_bank_fields = try BankFields.random(gpa, rand, 1 << 8);
+    defer random_bank_fields.deinit(gpa);
+
+    const random_bank_hash_info: BankHashInfo = .{
+        .accounts_delta_hash = Hash.random(rand),
+        .accounts_hash = Hash.random(rand),
+        .stats = .{
+            .num_updated_accounts = rand.int(u64),
+            .num_removed_accounts = rand.int(u64),
+            .num_lamports_stored = rand.int(u64),
+            .total_data_len = rand.int(u64),
+            .num_executable_accounts = rand.int(u64),
+        },
+    };
+
+    const zstd_compressor = try zstd.Compressor.init(.{});
+    defer zstd_compressor.deinit();
+
+    var largest_rooted_slot: Slot = 0;
+    var slot: Slot = 0;
 
     // get/put a bunch of accounts
     while (true) {
@@ -178,6 +210,68 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         if (create_new_root) {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
             accounts_db.largest_root_slot.store(largest_rooted_slot, .seq_cst);
+        }
+
+        if (slot % 500 == 0 and slot != largest_rooted_slot) {
+            const snapshot_random_hash = Hash.random(rand);
+            const snap_info: sig.accounts_db.snapshots.FullSnapshotFileInfo = .{
+                .slot = largest_rooted_slot,
+                .hash = snapshot_random_hash,
+            };
+
+            std.debug.print("Generating snapshot for slot {}...\n", .{largest_rooted_slot});
+
+            const archive_file = try alt_dir.createFile(snap_info.snapshotNameStr().constSlice(), .{ .read = true });
+            defer archive_file.close();
+
+            // write the archive
+            var zstd_write_buffer: [4096 * 4]u8 = undefined;
+            const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, &zstd_write_buffer);
+
+            random_bank_fields.slot = largest_rooted_slot;
+            try accounts_db.writeSnapshotTarFull(
+                zstd_write_ctx.writer(),
+                .{ .bank_slot_deltas = &.{} },
+                random_bank_fields,
+                rand.int(u64),
+                random_bank_hash_info,
+                0,
+            );
+
+            try zstd_write_ctx.finish();
+
+            std.debug.print("Unpacking snapshot for slot {}...\n", .{largest_rooted_slot});
+            try archive_file.seekTo(0);
+            try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                gpa,
+                logger,
+                archive_file,
+                alt_dir,
+                std.Thread.getCpuCount() catch 1,
+                true,
+            );
+
+            const snap_files: sig.accounts_db.SnapshotFiles = .{
+                .full_snapshot = snap_info,
+                .incremental_snapshot = null,
+            };
+
+            var snap_fields_and_paths = try sig.accounts_db.AllSnapshotFields.fromFiles(gpa, logger, alt_dir, snap_files);
+            defer snap_fields_and_paths.deinit(gpa);
+
+            var new_accounts_db = try AccountsDB.init(gpa, logger, alt_dir, accounts_db.config);
+            defer new_accounts_db.deinit(false);
+
+            std.debug.print("Validating snapshot for slot {}...\n", .{largest_rooted_slot});
+
+            // std.debug.print("File Map:\n{|},\n\n", .{sig.utils.fmt.hashMapFmt(&snap_fields_and_paths.full.accounts_db_fields.file_map, ",\n")});
+
+            try new_accounts_db.loadFromSnapshot(
+                snap_fields_and_paths.full.accounts_db_fields.file_map,
+                1,
+                gpa,
+            );
+            std.debug.print("Validated snapshot for slot {d}\n", .{largest_rooted_slot});
         }
     }
 
