@@ -108,3 +108,37 @@ inline fn boundedStringMaxArg(comptime T: type) ?T {
         return boundedString(&bounded);
     }
 }
+
+/// Tries to format the real path resolved from `dir` and `pathname`.
+/// Should it encounter an error when doing so, `"(error.Name)/pathname"`
+/// is printed instead.
+pub inline fn tryRealPath(dir: std.fs.Dir, pathname: []const u8) TryRealPathFmt {
+    return .{
+        .dir = dir,
+        .pathname = pathname,
+    };
+}
+
+pub const TryRealPathFmt = struct {
+    dir: std.fs.Dir,
+    pathname: []const u8,
+
+    pub fn format(
+        fmt: TryRealPathFmt,
+        comptime fmt_str: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        if (comptime !std.mem.eql(u8, fmt_str, "s")) std.fmt.invalidFmtError(fmt_str, fmt);
+
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+        if (fmt.dir.realpath(fmt.pathname, &path_buf)) |real_path| {
+            try writer.writeAll(real_path);
+        } else |err| {
+            try writer.print("(error.{s})/{s}", .{
+                @errorName(err), fmt.pathname,
+            });
+        }
+    }
+};
