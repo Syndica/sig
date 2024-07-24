@@ -45,15 +45,16 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
     };
 
-    var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa_allocator.allocator();
+    var prng = std.Random.DefaultPrng.init(seed);
+    const rand = prng.random();
 
-    const logger = Logger.init(allocator, .debug);
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa_state.deinit();
+    const gpa = gpa_state.allocator();
+
+    const logger = Logger.init(gpa, .debug);
     defer logger.deinit();
     logger.spawn();
-
-    var prng = std.rand.DefaultPrng.init(seed);
-    const rand = prng.random();
 
     const use_disk = rand.boolean();
     const snapshot_dir = "test_data/accountsdb_fuzz";
@@ -67,14 +68,15 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }
     std.debug.print("use disk: {}\n", .{use_disk});
 
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var accounts_db = try AccountsDB.init(gpa, logger, .{
         .use_disk_index = use_disk,
         .snapshot_dir = snapshot_dir,
         // TODO: other things we can fuzz (number of bins, ...)
     });
     defer accounts_db.deinit(true);
 
-    const exit = try allocator.create(std.atomic.Value(bool));
+    const exit = try gpa.create(std.atomic.Value(bool));
+    // defer gpa.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
     const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
@@ -82,13 +84,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         exit,
     });
 
-    var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(allocator);
-    defer {
-        for (tracked_accounts.keys()) |key| {
-            tracked_accounts.getEntry(key).?.value_ptr.deinit(allocator);
-        }
-        tracked_accounts.deinit();
-    }
+    var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(gpa);
+    defer tracked_accounts.deinit();
+    defer for (tracked_accounts.values()) |*value| {
+        value.deinit(gpa);
+    };
     try tracked_accounts.ensureTotalCapacity(10_000);
 
     var largest_rooted_slot: usize = 0;
@@ -111,11 +111,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             .put => {
                 const N_ACCOUNTS_PER_SLOT = 10;
 
-                const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
-                const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);
+                var accounts: [N_ACCOUNTS_PER_SLOT]Account = undefined;
+                var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
 
-                for (0..N_ACCOUNTS_PER_SLOT) |i| {
-                    var tracked_account = try TrackedAccount.random(rand, slot, allocator);
+                for (&accounts, &pubkeys) |*account, *pubkey| {
+                    var tracked_account = try TrackedAccount.random(rand, slot, gpa);
 
                     const existing_pubkey = rand.boolean();
                     if (existing_pubkey and tracked_accounts.count() > 0) {
@@ -124,20 +124,20 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                         tracked_account.pubkey = key;
                     }
 
-                    accounts[i] = try tracked_account.toAccount(allocator);
-                    pubkeys[i] = tracked_account.pubkey;
+                    account.* = try tracked_account.toAccount(gpa);
+                    pubkey.* = tracked_account.pubkey;
 
                     const r = try tracked_accounts.getOrPut(tracked_account.pubkey);
                     if (r.found_existing) {
-                        r.value_ptr.deinit(allocator);
+                        r.value_ptr.deinit(gpa);
                     }
                     // always overwrite the old slot
                     r.value_ptr.* = tracked_account;
                 }
 
                 try accounts_db.putAccountSlice(
-                    accounts,
-                    pubkeys,
+                    &accounts,
+                    &pubkeys,
                     slot,
                 );
             },
@@ -151,7 +151,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 const tracked_account = tracked_accounts.get(key).?;
                 var account = try accounts_db.getAccount(&tracked_account.pubkey);
-                defer account.deinit(allocator);
+                defer account.deinit(gpa);
 
                 if (!std.mem.eql(u8, tracked_account.data, account.data)) {
                     @panic("found accounts with different data");

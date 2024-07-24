@@ -54,7 +54,7 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
-const PubkeysAndAccounts = struct { []Pubkey, []Account };
+const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
 const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
 const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
 const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
@@ -171,7 +171,10 @@ pub const AccountsDB = struct {
         };
     }
 
-    pub fn deinit(self: *Self, delete_index_files: bool) void {
+    pub fn deinit(
+        self: *Self,
+        delete_index_files: bool,
+    ) void {
         self.account_index.deinit(true);
         if (self.disk_allocator_ptr) |ptr| {
             // note: we dont always deinit the allocator so we keep the index files
@@ -187,6 +190,13 @@ pub const AccountsDB = struct {
         {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
+            var iter = account_cache.valueIterator();
+            while (iter.next()) |pubkeys_and_accounts| {
+                const pubkeys, const accounts = pubkeys_and_accounts.*;
+                for (accounts) |account| account.deinit(self.allocator);
+                self.allocator.free(pubkeys);
+                self.allocator.free(accounts);
+            }
             account_cache.deinit();
         }
         {
@@ -1018,6 +1028,7 @@ pub const AccountsDB = struct {
     pub fn runManagerLoop(self: *Self, exit: *std.atomic.Value(bool)) !void {
         var timer = try std.time.Timer.start();
         var flush_slots = ArrayList(Slot).init(self.allocator);
+        defer flush_slots.deinit();
 
         // files which have been flushed but not cleaned yet (old-state or zero-lamport accounts)
         var unclean_account_files = std.ArrayList(FileId).init(self.allocator);
@@ -1100,7 +1111,7 @@ pub const AccountsDB = struct {
     pub fn flushSlot(self: *Self, slot: Slot, unclean_account_files: *ArrayList(FileId)) !void {
         defer self.stats.number_files_flushed.inc();
 
-        const pubkeys, const accounts: []Account = blk: {
+        const pubkeys, const accounts: []const Account = blk: {
             // NOTE: flush should the only function to delete/free cache slices of a flushed slot
             // -- purgeSlot removes slices but we should never purge rooted slots
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
@@ -1610,7 +1621,7 @@ pub const AccountsDB = struct {
     /// note: should only be called on non-rooted slots (ie, slots which
     /// only exist in the cache, and not on disk). this is mainly used for dropping
     /// forks.
-    pub fn purgeSlot(self: *Self, slot: Slot, allocator: std.mem.Allocator) void {
+    pub fn purgeSlot(self: *Self, slot: Slot) void {
         const pubkeys, const accounts = blk: {
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
             defer account_cache_lg.unlock();
@@ -1655,11 +1666,11 @@ pub const AccountsDB = struct {
         _ = account_cache.remove(slot);
 
         // free the account memory
-        for (accounts) |*account| {
-            allocator.free(account.data);
+        for (accounts) |account| {
+            account.deinit(self.allocator);
         }
-        allocator.free(accounts);
-        allocator.free(pubkeys);
+        self.allocator.free(accounts);
+        self.allocator.free(pubkeys);
     }
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
@@ -1908,18 +1919,29 @@ pub const AccountsDB = struct {
     /// writes a batch of accounts to storage and updates the index
     pub fn putAccountSlice(
         self: *Self,
-        accounts: []Account,
-        pubkeys: []Pubkey,
+        accounts: []const Account,
+        pubkeys: []const Pubkey,
         slot: Slot,
     ) !void {
         std.debug.assert(accounts.len == pubkeys.len);
         if (accounts.len == 0) return;
 
         {
+            const accounts_duped = try self.allocator.dupe(Account, accounts);
+            errdefer self.allocator.free(accounts_duped);
+
+            for (accounts_duped, 0..) |*account, i| {
+                errdefer for (accounts_duped[0..i]) |prev| prev.deinit(self.allocator);
+                account.* = try account.clone(self.allocator);
+            }
+
+            const pubkeys_duped = try self.allocator.dupe(Pubkey, pubkeys);
+            errdefer self.allocator.free(pubkeys_duped);
+
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
             // NOTE: there should only be a single state per slot
-            try account_cache.putNoClobber(slot, .{ pubkeys, accounts });
+            try account_cache.putNoClobber(slot, .{ pubkeys_duped, accounts_duped });
         }
 
         // prealloc the bins
@@ -2534,20 +2556,18 @@ test "flushing slots works" {
     const n_accounts = 3;
 
     // we dont defer deinit to make sure that they are cleared on purge
-    var pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    var accounts = try allocator.alloc(Account, n_accounts);
-    for (0..n_accounts) |i| {
-        pubkeys[i] = Pubkey.random(rng);
-        accounts[i] = try Account.random(allocator, rng, i % 1_000);
+    var pubkeys: [n_accounts]Pubkey = undefined;
+    var accounts: [n_accounts]Account = undefined;
+    for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
+        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+        pubkey.* = Pubkey.random(rng);
+        account.* = try Account.random(allocator, rng, i % 1_000);
     }
+    defer for (accounts) |account| account.deinit(allocator);
 
     // this gets written to cache
-    const slot = @as(u64, @intCast(200));
-    try accounts_db.putAccountSlice(
-        accounts,
-        pubkeys,
-        slot,
-    );
+    const slot: u64 = 200;
+    try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // this writes to disk
     var unclean_account_files = ArrayList(FileId).init(std.testing.allocator);
@@ -2585,24 +2605,20 @@ test "purge accounts in cache works" {
     const n_accounts = 3;
 
     // we dont defer deinit to make sure that they are cleared on purge
-    var pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    var accounts = try allocator.alloc(Account, n_accounts);
+    var pubkeys: [n_accounts]Pubkey = undefined;
+    var accounts: [n_accounts]Account = undefined;
 
-    for (0..n_accounts) |i| {
-        pubkeys[i] = Pubkey.random(rng);
-        accounts[i] = try Account.random(allocator, rng, i % 1_000);
+    for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
+        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+        pubkey.* = Pubkey.random(rng);
+        account.* = try Account.random(allocator, rng, i % 1_000);
     }
+    defer for (accounts) |account| account.deinit(allocator);
 
-    const pubkey_copy = try allocator.alloc(Pubkey, n_accounts);
-    defer allocator.free(pubkey_copy);
-    @memcpy(pubkey_copy, pubkeys);
+    const pubkey_copy: [n_accounts]Pubkey = pubkeys;
 
-    const slot = @as(u64, @intCast(200));
-    try accounts_db.putAccountSlice(
-        accounts,
-        pubkeys,
-        slot,
-    );
+    const slot: u64 = 200;
+    try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     for (0..n_accounts) |i| {
         try std.testing.expect(
@@ -2610,7 +2626,7 @@ test "purge accounts in cache works" {
         );
     }
 
-    accounts_db.purgeSlot(slot, allocator);
+    accounts_db.purgeSlot(slot);
 
     // ref backing memory is cleared
     {
@@ -2646,31 +2662,32 @@ test "clean to shrink account file works with zero-lamports" {
     const n_accounts = 10;
 
     // generate the account file for slot 0
-    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    const accounts = try allocator.alloc(Account, n_accounts);
-    for (0..n_accounts) |i| {
-        pubkeys[i] = Pubkey.random(rng);
-        accounts[i] = try Account.random(allocator, rng, 100);
+    var pubkeys: [n_accounts]Pubkey = undefined;
+    var accounts: [n_accounts]Account = undefined;
+    for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
+        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+        pubkey.* = Pubkey.random(rng);
+        account.* = try Account.random(allocator, rng, 100);
     }
-    const slot = @as(u64, @intCast(200));
-    try accounts_db.putAccountSlice(
-        accounts,
-        pubkeys,
-        slot,
-    );
+    defer for (accounts) |account| account.deinit(allocator);
+
+    const slot: u64 = 200;
+    try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // test to make sure we can still read it
     const pubkey_remain = pubkeys[pubkeys.len - 1];
 
     // duplicate some before the flush/deinit
     const new_len = n_accounts - 1; // one new root with zero lamports
-    const pubkeys2 = try allocator.alloc(Pubkey, new_len);
-    const accounts2 = try allocator.alloc(Account, new_len);
-    @memcpy(pubkeys2, pubkeys[0..new_len]);
-    for (0..new_len) |i| {
-        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
-        accounts2[i].lamports = 0; // !
+    var pubkeys2: [new_len]Pubkey = undefined;
+    var accounts2: [new_len]Account = undefined;
+    @memcpy(&pubkeys2, pubkeys[0..new_len]);
+    for (&accounts2, 0..) |*account, i| {
+        errdefer for (accounts2[0..i]) |prev_account| prev_account.deinit(allocator);
+        account.* = try Account.random(allocator, rng, i % 1_000);
+        account.lamports = 0; // !
     }
+    defer for (accounts2) |account| account.deinit(allocator);
 
     var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
@@ -2678,12 +2695,8 @@ test "clean to shrink account file works with zero-lamports" {
     try accounts_db.flushSlot(slot, &unclean_account_files);
 
     // write new state
-    const new_slot = @as(u64, @intCast(500));
-    try accounts_db.putAccountSlice(
-        accounts2,
-        pubkeys2,
-        new_slot,
-    );
+    const new_slot: u64 = 500;
+    try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
     try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
     var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
@@ -2723,27 +2736,28 @@ test "clean to shrink account file works" {
     const n_accounts = 10;
 
     // generate the account file for slot 0
-    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    const accounts = try allocator.alloc(Account, n_accounts);
-    for (0..n_accounts) |i| {
-        pubkeys[i] = Pubkey.random(rng);
-        accounts[i] = try Account.random(allocator, rng, 100);
+    var pubkeys: [n_accounts]Pubkey = undefined;
+    var accounts: [n_accounts]Account = undefined;
+    for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
+        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+        pubkey.* = Pubkey.random(rng);
+        account.* = try Account.random(allocator, rng, 100);
     }
-    const slot = @as(u64, @intCast(200));
-    try accounts_db.putAccountSlice(
-        accounts,
-        pubkeys,
-        slot,
-    );
+    defer for (accounts) |account| account.deinit(allocator);
+
+    const slot: u64 = 200;
+    try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // duplicate HALF before the flush/deinit
     const new_len = n_accounts - 1; // 90% delete = shrink
-    const pubkeys2 = try allocator.alloc(Pubkey, new_len);
-    const accounts2 = try allocator.alloc(Account, new_len);
-    @memcpy(pubkeys2, pubkeys[0..new_len]);
-    for (0..new_len) |i| {
-        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+    var pubkeys2: [new_len]Pubkey = undefined;
+    var accounts2: [new_len]Account = undefined;
+    @memcpy(&pubkeys2, pubkeys[0..new_len]);
+    for (&accounts2, 0..) |*account, i| {
+        errdefer for (accounts2[0..i]) |prev_account| prev_account.deinit(allocator);
+        account.* = try Account.random(allocator, rng, i % 1_000);
     }
+    defer for (accounts2) |account| account.deinit(allocator);
 
     var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
@@ -2757,12 +2771,8 @@ test "clean to shrink account file works" {
     try accounts_db.flushSlot(slot, &unclean_account_files);
 
     // write new state
-    const new_slot = @as(u64, @intCast(500));
-    try accounts_db.putAccountSlice(
-        accounts2,
-        pubkeys2,
-        new_slot,
-    );
+    const new_slot: u64 = 500;
+    try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
     try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
     const r = try accounts_db.cleanAccountFiles(
@@ -2792,26 +2802,27 @@ test "full clean account file works" {
     const n_accounts = 3;
 
     // generate the account file for slot 0
-    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    const accounts = try allocator.alloc(Account, n_accounts);
-    for (0..n_accounts) |i| {
-        pubkeys[i] = Pubkey.random(rng);
-        accounts[i] = try Account.random(allocator, rng, i % 1_000);
+    var pubkeys: [n_accounts]Pubkey = undefined;
+    var accounts: [n_accounts]Account = undefined;
+    for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
+        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+        pubkey.* = Pubkey.random(rng);
+        account.* = try Account.random(allocator, rng, i % 1_000);
     }
+    defer for (accounts) |account| account.deinit(allocator);
+
     const slot = @as(u64, @intCast(200));
-    try accounts_db.putAccountSlice(
-        accounts,
-        pubkeys,
-        slot,
-    );
+    try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // duplicate before the flush/deinit
-    const pubkeys2 = try allocator.alloc(Pubkey, n_accounts);
-    const accounts2 = try allocator.alloc(Account, n_accounts);
-    @memcpy(pubkeys2, pubkeys);
-    for (0..n_accounts) |i| {
-        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+    var pubkeys2: [n_accounts]Pubkey = undefined;
+    var accounts2: [n_accounts]Account = undefined;
+    @memcpy(&pubkeys2, &pubkeys);
+    for (&accounts2, 0..) |*account, i| {
+        errdefer for (accounts2[0..i]) |prev_account| prev_account.deinit(allocator);
+        account.* = try Account.random(allocator, rng, i % 1_000);
     }
+    defer for (&accounts2) |account| account.deinit(allocator);
 
     var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
@@ -2834,11 +2845,7 @@ test "full clean account file works" {
 
     // write new state
     const new_slot = @as(u64, @intCast(500));
-    try accounts_db.putAccountSlice(
-        accounts2,
-        pubkeys2,
-        new_slot,
-    );
+    try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
     try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
     r = try accounts_db.cleanAccountFiles(new_slot + 100, &unclean_account_files, &shrink_account_files, &delete_account_files);
@@ -2875,34 +2882,35 @@ test "shrink account file works" {
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
+
     const n_accounts = 10;
 
     // generate the account file for slot 0
-    const pubkeys = try allocator.alloc(Pubkey, n_accounts);
-    const accounts = try allocator.alloc(Account, n_accounts);
-    for (0..n_accounts) |i| {
-        pubkeys[i] = Pubkey.random(rng);
-        accounts[i] = try Account.random(allocator, rng, 100);
-    }
+    var pubkeys: [n_accounts]Pubkey = undefined;
+    var accounts: [n_accounts]Account = undefined;
 
-    const slot = @as(u64, @intCast(200));
-    try accounts_db.putAccountSlice(
-        accounts,
-        pubkeys,
-        slot,
-    );
+    for (&pubkeys, &accounts, 0..) |*pubkey, *account, i| {
+        errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(allocator);
+        pubkey.* = Pubkey.random(rng);
+        account.* = try Account.random(allocator, rng, 100);
+    }
+    defer for (accounts) |account| account.deinit(allocator);
+
+    const slot: u64 = 200;
+    try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // test to make sure we can still read it
     const pubkey_remain = pubkeys[pubkeys.len - 1];
 
     // duplicate some before the flush/deinit
     const new_len = n_accounts - 1; // 90% delete = shrink
-    const pubkeys2 = try allocator.alloc(Pubkey, new_len);
-    const accounts2 = try allocator.alloc(Account, new_len);
-    @memcpy(pubkeys2, pubkeys[0..new_len]);
-    for (0..new_len) |i| {
-        accounts2[i] = try Account.random(allocator, rng, i % 1_000);
+    var pubkeys2: [new_len]Pubkey = undefined;
+    var accounts2: [new_len]Account = undefined;
+    @memcpy(&pubkeys2, pubkeys[0..new_len]);
+    for (&accounts2, 0..new_len) |*account, i| {
+        account.* = try Account.random(allocator, rng, i % 1_000);
     }
+    defer for (accounts2) |account| account.deinit(allocator);
 
     var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
@@ -2916,8 +2924,8 @@ test "shrink account file works" {
     // write new state
     const new_slot = @as(u64, @intCast(500));
     try accounts_db.putAccountSlice(
-        accounts2,
-        pubkeys2,
+        &accounts2,
+        &pubkeys2,
         new_slot,
     );
     try accounts_db.flushSlot(new_slot, &unclean_account_files);
