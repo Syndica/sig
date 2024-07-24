@@ -57,20 +57,29 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     logger.spawn();
 
     const use_disk = rand.boolean();
-    const snapshot_dir = "test_data/accountsdb_fuzz";
-    defer {
-        // NOTE: sometimes this can take a long time so we print when we start and finish
-        std.debug.print("deleting snapshot dir...\n", .{});
-        std.fs.cwd().deleteTree(snapshot_dir) catch |err| {
-            std.debug.print("failed to delete snapshot dir: {}\n", .{err});
-        };
-        std.debug.print("deleted snapshot dir\n", .{});
-    }
+
+    const test_data_dir_path = "test_data";
+    const snapshot_dir_name = "accountsdb_fuzz";
+    const snapshot_dir_path = test_data_dir_path ++ "/" ++ snapshot_dir_name;
+
+    var test_data_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer test_data_dir.close();
+
+    var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
+    defer snapshot_dir.close();
+    // defer {
+    //     // NOTE: sometimes this can take a long time so we print when we start and finish
+    //     std.debug.print("deleting snapshot dir...\n", .{});
+    //     test_data_dir.deleteTree(snapshot_dir_name) catch |err| {
+    //         std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ snapshot_dir_name, err });
+    //     };
+    //     std.debug.print("deleted snapshot dir\n", .{});
+    // }
     std.debug.print("use disk: {}\n", .{use_disk});
 
     var accounts_db = try AccountsDB.init(gpa, logger, .{
         .use_disk_index = use_disk,
-        .snapshot_dir = snapshot_dir,
+        .snapshot_dir = snapshot_dir_path,
         // TODO: other things we can fuzz (number of bins, ...)
     });
     defer accounts_db.deinit(true);

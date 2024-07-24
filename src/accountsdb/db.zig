@@ -23,7 +23,6 @@ const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
 const BankIncrementalSnapshotPersistence = sig.accounts_db.snapshots.BankIncrementalSnapshotPersistence;
 const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
-const SnapshotFieldsAndPaths = sig.accounts_db.snapshots.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
@@ -214,12 +213,12 @@ pub const AccountsDB = struct {
     /// easier to use load function
     pub fn loadWithDefaults(
         self: *Self,
-        snapshot_fields_and_paths: *SnapshotFieldsAndPaths,
+        snapshot_fields_and_paths: *AllSnapshotFields,
         snapshot_dir: std.fs.Dir,
         n_threads: u32,
         validate: bool,
     ) !SnapshotFields {
-        const snapshot_fields = try snapshot_fields_and_paths.all_fields.collapse();
+        const snapshot_fields = try snapshot_fields_and_paths.collapse();
         var accounts_dir = try snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
@@ -231,18 +230,18 @@ pub const AccountsDB = struct {
             n_threads,
             std.heap.page_allocator,
         );
-        self.logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("loaded from snapshot in {}", .{std.fmt.fmtDuration(timer.read())});
 
         if (validate) {
             timer.reset();
-            const full_snapshot = snapshot_fields_and_paths.all_fields.full;
+            const full_snapshot = snapshot_fields_and_paths.full;
             try self.validateLoadFromSnapshot(
                 snapshot_fields.bank_fields_inc.snapshot_persistence,
                 full_snapshot.bank_fields.slot,
                 full_snapshot.bank_fields.capitalization,
                 snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
             );
-            self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+            self.logger.infof("validated from snapshot in {}", .{std.fmt.fmtDuration(timer.read())});
         }
 
         return snapshot_fields;
@@ -2348,8 +2347,8 @@ test testWriteSnapshotFull {
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
-    const dir_path = "test_data";
-    const dir = try std.fs.cwd().openDir(dir_path, .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir("test_data", .{});
+    defer dir.close();
 
     { // unpack both snapshots to get the acccount files
         const full_archive = try dir.openFile("snapshot-10-6ExseAZAVJsAZjhimxHTR7N8p6VGXiDNdsajYh1ipjAD.tar.zst", .{});
@@ -2381,15 +2380,10 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     const logger = Logger{ .noop = {} };
     // var logger = Logger.init(std.heap.page_allocator, .debug);
 
-    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir_path, snapshot_files);
-    defer {
-        allocator.free(snapshots.full_path);
-        if (snapshots.incremental_path) |inc_path| {
-            allocator.free(inc_path);
-        }
-    }
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
+    errdefer snapshots.deinit(allocator);
 
-    const snapshot = try snapshots.all_fields.collapse();
+    const snapshot = try snapshots.collapse();
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
@@ -2405,10 +2399,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
         allocator,
     );
 
-    return .{
-        accounts_db,
-        snapshots.all_fields,
-    };
+    return .{ accounts_db, snapshots };
 }
 
 test "write and read an account" {
@@ -3051,14 +3042,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             );
         };
 
-        var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir_path, snapshot_files);
-        defer {
-            allocator.free(snapshots.full_path);
-            if (snapshots.incremental_path) |inc_path| {
-                allocator.free(inc_path);
-            }
-        }
-        const snapshot = try snapshots.all_fields.collapse();
+        var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
+        defer snapshots.deinit(allocator);
+        const snapshot = try snapshots.collapse();
 
         var accounts_db = try AccountsDB.init(allocator, logger, .{
             .number_of_index_bins = 32,

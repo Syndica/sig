@@ -790,7 +790,10 @@ pub const SnapshotFields = struct {
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.int.defaultOnEof(u64, 0);
 
-    pub fn readFromFilePath(allocator: std.mem.Allocator, path: []const u8) !SnapshotFields {
+    pub fn readFromFilePath(
+        allocator: std.mem.Allocator,
+        path: []const u8,
+    ) !SnapshotFields {
         const file = std.fs.cwd().openFile(path, .{}) catch |err| {
             switch (err) {
                 error.FileNotFound => return error.SnapshotFieldsNotFound,
@@ -798,7 +801,13 @@ pub const SnapshotFields = struct {
             }
         };
         defer file.close();
+        return readFromFile(allocator, file);
+    }
 
+    pub fn readFromFile(
+        allocator: std.mem.Allocator,
+        file: std.fs.File,
+    ) !SnapshotFields {
         const size = (try file.stat()).size;
         const contents = try file.readToEndAllocOptions(allocator, size, size, @alignOf(u8), null);
         defer allocator.free(contents);
@@ -1415,27 +1424,6 @@ pub const SnapshotFiles = struct {
     }
 };
 
-pub const SnapshotFieldsAndPaths = struct {
-    all_fields: AllSnapshotFields,
-    full_path: []const u8,
-    incremental_path: ?[]const u8,
-
-    pub fn deinit(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
-        self.all_fields.deinit(allocator);
-        self.deinitPaths(allocator);
-    }
-
-    /// NOTE: used for hacky-ish code
-    pub fn deinitPaths(self: *SnapshotFieldsAndPaths, allocator: std.mem.Allocator) void {
-        allocator.free(self.full_path);
-        self.full_path = "";
-        if (self.incremental_path) |*incremental_path| {
-            allocator.free(incremental_path.*);
-            incremental_path.* = "";
-        }
-    }
-};
-
 /// contains all fields from a snapshot (full and incremental)
 ///
 /// Analogous to [SnapshotBankFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L299)
@@ -1449,49 +1437,47 @@ pub const AllSnapshotFields = struct {
     pub fn fromFiles(
         allocator: std.mem.Allocator,
         logger: Logger,
-        snapshot_dir_str: []const u8,
+        snapshot_dir: std.fs.Dir,
         files: SnapshotFiles,
-    ) !SnapshotFieldsAndPaths {
+    ) !Self {
         // unpack
-        const full_metadata_path = try std.fmt.allocPrint(
-            allocator,
-            "{s}/{s}/{d}/{d}",
-            .{ snapshot_dir_str, "snapshots", files.full_snapshot.slot, files.full_snapshot.slot },
-        );
+        const full_fields = blk: {
+            const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{files.full_snapshot.slot});
+            const rel_path = rel_path_bounded.constSlice();
 
-        logger.infof("reading snapshot fields from: {s}", .{full_metadata_path});
-        const full_fields = try SnapshotFields.readFromFilePath(
-            allocator,
-            full_metadata_path,
-        );
+            logger.infof("reading snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
 
-        var incremental_fields: ?SnapshotFields = null;
-        var incremental_metadata_path: ?[]const u8 = null;
-        if (files.incremental_snapshot) |incremental_snapshot_path| {
-            incremental_metadata_path = try std.fmt.allocPrint(
-                allocator,
-                "{s}/{s}/{d}/{d}",
-                .{ snapshot_dir_str, "snapshots", incremental_snapshot_path.slot, incremental_snapshot_path.slot },
-            );
+            const full_file = try snapshot_dir.openFile(rel_path, .{});
+            defer full_file.close();
 
-            logger.infof("reading inc snapshot fields from: {s}", .{incremental_metadata_path.?});
-            incremental_fields = try SnapshotFields.readFromFilePath(
-                allocator,
-                incremental_metadata_path.?,
-            );
-        } else {
-            logger.info("no incremental snapshot fields found");
-        }
-
-        const fields: Self = .{
-            .full = full_fields,
-            .incremental = incremental_fields,
+            break :blk try SnapshotFields.readFromFile(allocator, full_file);
         };
+        errdefer full_fields.deinit(allocator);
+
+        const incremental_fields: ?SnapshotFields = blk: {
+            if (files.incremental_snapshot) |incremental_snapshot_path| {
+                const rel_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{incremental_snapshot_path.slot});
+                const rel_path = rel_path_bounded.constSlice();
+
+                logger.infof("reading inc snapshot fields from: {s}", .{sig.utils.fmt.tryRealPath(snapshot_dir, rel_path)});
+
+                const incremental_file = try snapshot_dir.openFile(rel_path, .{});
+                defer incremental_file.close();
+
+                const incremental_fields = try SnapshotFields.readFromFile(allocator, incremental_file);
+                errdefer incremental_fields.deinit(allocator);
+
+                break :blk incremental_fields;
+            } else {
+                logger.info("no incremental snapshot fields found");
+                break :blk null;
+            }
+        };
+        errdefer if (incremental_fields) |fields| fields.deinit(allocator);
 
         return .{
-            .all_fields = fields,
-            .full_path = full_metadata_path,
-            .incremental_path = incremental_metadata_path,
+            .full = full_fields,
+            .incremental = incremental_fields,
         };
     }
 
