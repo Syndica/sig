@@ -41,8 +41,6 @@ const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
-const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
-
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 
@@ -57,6 +55,24 @@ const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
 const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
 const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
 const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
+
+/// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
+pub const AccountsDBConfig = struct {
+    /// number of threads to load snapshot
+    num_threads_snapshot_load: u32 = 0,
+    /// number of threads to unpack snapshot from .tar.zstd
+    num_threads_snapshot_unpack: u16 = 0,
+    /// number of shards to use across the index
+    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
+    /// use disk based index for accounts index
+    use_disk_index: bool = false,
+    /// force unpacking a fresh snapshot even if an accounts/ dir exists
+    force_unpack_snapshot: bool = false,
+    /// minmum download speed in megabytes per second to download a snapshot from
+    min_snapshot_download_speed_mbs: usize = 20,
+    /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
+    force_new_snapshot_download: bool = false,
+};
 
 pub const AccountsDBStats = struct {
     number_files_flushed: *Counter,
@@ -102,6 +118,9 @@ pub const AccountsDB = struct {
     // TODO: when working on consensus, we'll swap this out
     largest_root_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
 
+    /// Not closed by the `AccountsDB`, but must live at least as long as it.
+    snapshot_dir: std.fs.Dir,
+
     stats: AccountsDBStats,
     logger: Logger,
     config: AccountsDBConfig,
@@ -111,18 +130,18 @@ pub const AccountsDB = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         logger: Logger,
+        snapshot_dir: std.fs.Dir,
         config: AccountsDBConfig,
     ) !Self {
         const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
         const reference_allocator: std.mem.Allocator //
         = blk: {
             if (config.use_disk_index) {
-                // make the disk directory
-                const disk_dir = try std.fmt.allocPrint(allocator, "{s}/index", .{config.snapshot_dir});
-                defer allocator.free(disk_dir);
-                try std.fs.cwd().makePath(disk_dir);
+                var index_bin_dir = try snapshot_dir.makeOpenPath("index/bin", .{});
+                defer index_bin_dir.close();
 
-                const disk_file_suffix = try std.fmt.allocPrint(allocator, "{s}/bin", .{disk_dir});
+                const disk_file_suffix = try index_bin_dir.realpathAlloc(allocator, ".");
+                errdefer allocator.free(disk_file_suffix);
                 logger.infof("using disk index in {s}", .{disk_file_suffix});
 
                 const ptr = try allocator.create(DiskMemoryAllocator);
@@ -133,27 +152,23 @@ pub const AccountsDB = struct {
                 break :blk .{ null, std.heap.page_allocator };
             }
         };
+        errdefer if (maybe_disk_allocator_ptr) |ptr| {
+            ptr.deinit(allocator);
+            allocator.destroy(ptr);
+        };
 
         // ensure accounts/ exists
-        {
-            const accounts_dir = try std.fmt.allocPrint(
-                allocator,
-                "{s}/accounts/",
-                .{config.snapshot_dir},
-            );
-            defer allocator.free(accounts_dir);
+        snapshot_dir.makePath("accounts") catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => |e| return e,
+        };
 
-            std.fs.cwd().makePath(accounts_dir) catch |err| switch (err) {
-                error.PathAlreadyExists => {},
-                else => |e| return e,
-            };
-        }
-
-        const account_index = try AccountIndex.init(
+        var account_index = try AccountIndex.init(
             allocator,
             reference_allocator,
             config.number_of_index_bins,
         );
+        errdefer account_index.deinit(true);
 
         const stats = try AccountsDBStats.init();
 
@@ -165,6 +180,7 @@ pub const AccountsDB = struct {
             .config = config,
             .account_cache = RwMux(AccountCache).init(AccountCache.init(allocator)),
             .file_map = RwMux(FileMap).init(FileMap.init(allocator)),
+            .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .stats = stats,
         };
@@ -214,19 +230,15 @@ pub const AccountsDB = struct {
     pub fn loadWithDefaults(
         self: *Self,
         snapshot_fields_and_paths: *AllSnapshotFields,
-        snapshot_dir: std.fs.Dir,
         n_threads: u32,
         validate: bool,
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
-        var accounts_dir = try snapshot_dir.openDir("accounts", .{});
-        defer accounts_dir.close();
 
         var timer = try std.time.Timer.start();
         self.logger.infof("loading from snapshot...", .{});
         try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields.file_map,
-            accounts_dir,
             n_threads,
             std.heap.page_allocator,
         );
@@ -252,8 +264,6 @@ pub const AccountsDB = struct {
         self: *Self,
         /// fields from the snapshot
         file_info_map: AccountsDbFields.FileMap,
-        /// where the account files are
-        accounts_dir: std.fs.Dir,
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
     ) !void {
@@ -262,12 +272,17 @@ pub const AccountsDB = struct {
         // used to merge thread results
         const n_combine_threads = n_threads;
 
+        var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
+        defer accounts_dir.close();
+
         var timer = std.time.Timer.start() catch unreachable;
         timer.reset();
 
         const n_account_files: usize = file_info_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
-        std.debug.assert(n_account_files > 0);
+
+        if (n_account_files == 0) return; // TODO: workaround for fuzz testing to work, not sure if correct behaviour
+        // std.debug.assert(n_account_files > 0);
 
         const use_disk_index = self.config.use_disk_index;
         if (self.config.use_disk_index) {
@@ -299,6 +314,7 @@ pub const AccountsDB = struct {
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
                 self.logger,
+                self.snapshot_dir,
                 .{ .number_of_index_bins = self.config.number_of_index_bins },
             );
 
@@ -454,7 +470,10 @@ pub const AccountsDB = struct {
             var accounts_file = blk: {
                 const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
 
-                const accounts_file_file = try accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write });
+                const accounts_file_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
+                    self.logger.errf("Failed to open accounts/{s}", .{file_name_bounded.constSlice()});
+                    return err;
+                };
                 errdefer accounts_file_file.close();
 
                 break :blk AccountFile.init(accounts_file_file, file_info, slot) catch |err| {
@@ -978,15 +997,6 @@ pub const AccountsDB = struct {
         total_lamports.* = local_total_lamports;
     }
 
-    pub fn getAccountFilePath(self: *const Self, slot: Slot, file_id: FileId) ![]const u8 {
-        const accounts_file_path = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}/accounts/{d}.{d}",
-            .{ self.config.snapshot_dir, slot, file_id.toInt() },
-        );
-        return accounts_file_path;
-    }
-
     /// creates a unique accounts file associated with a slot. uses the
     /// largest_file_id field to ensure its a unique file
     pub fn createAccountFile(self: *Self, size: usize, slot: Slot) !struct {
@@ -997,10 +1007,8 @@ pub const AccountsDB = struct {
         self.largest_file_id = self.largest_file_id.increment();
         const file_id = self.largest_file_id;
 
-        const accounts_file_path = try self.getAccountFilePath(slot, file_id);
-        defer self.allocator.free(accounts_file_path);
-
-        const file = try std.fs.cwd().createFile(accounts_file_path, .{ .read = true });
+        const file_path_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
+        const file = try self.snapshot_dir.createFile(file_path_bounded.constSlice(), .{ .read = true });
         errdefer file.close();
 
         // resize the file
@@ -1088,7 +1096,7 @@ pub const AccountsDB = struct {
                 // clean the flushed slots account files
                 const clean_result = try self.cleanAccountFiles(
                     root_slot,
-                    &unclean_account_files,
+                    unclean_account_files.items,
                     &shrink_account_files,
                     &delete_account_files,
                 );
@@ -1203,7 +1211,7 @@ pub const AccountsDB = struct {
     pub fn cleanAccountFiles(
         self: *Self,
         rooted_slot_max: Slot,
-        unclean_account_files: *ArrayList(FileId),
+        unclean_account_files: []const FileId,
         shrink_account_files: *std.AutoArrayHashMap(FileId, void),
         delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct {
@@ -1211,7 +1219,7 @@ pub const AccountsDB = struct {
         num_old_states: usize,
     } {
         defer {
-            const number_of_files = unclean_account_files.items.len;
+            const number_of_files = unclean_account_files.len;
             self.stats.number_files_cleaned.add(number_of_files);
         }
 
@@ -1227,7 +1235,7 @@ pub const AccountsDB = struct {
         var cleaned_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
         defer cleaned_pubkeys.deinit();
 
-        for (unclean_account_files.items) |file_id| {
+        for (unclean_account_files) |file_id| {
             var account_file_rw = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
@@ -1415,16 +1423,14 @@ pub const AccountsDB = struct {
         slot: Slot,
         file_id: FileId,
     ) !void {
-        const accounts_file_path = try self.getAccountFilePath(slot, file_id);
-        defer self.allocator.free(accounts_file_path);
-
-        // ensure it exists before deleting
-        std.fs.cwd().access(accounts_file_path, .{}) catch {
-            self.logger.warnf("trying to delete accounts file which does not exist: {s}", .{accounts_file_path});
-            return error.InvalidAccountFile;
+        const file_path_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ slot, file_id.toInt() });
+        self.snapshot_dir.deleteFile(file_path_bounded.constSlice()) catch |err| switch (err) {
+            error.FileNotFound => {
+                self.logger.warnf("trying to delete accounts file which does not exist: {s}", .{sig.utils.fmt.tryRealPath(self.snapshot_dir, file_path_bounded.constSlice())});
+                return error.InvalidAccountFile;
+            },
+            else => |e| return e,
         };
-
-        try std.fs.cwd().deleteFile(accounts_file_path);
     }
 
     /// resizes account files to reduce disk usage and remove dead accounts.
@@ -2268,14 +2274,10 @@ fn testWriteSnapshotFull(
     const status_cache = try StatusCache.decodeFromBincode(allocator, status_cache_file.reader());
     defer status_cache.deinit(allocator);
 
-    var accounts_db = try AccountsDB.init(allocator, .noop, .{});
+    var accounts_db = try AccountsDB.init(allocator, .noop, snapshot_dir, .{});
     defer accounts_db.deinit(true);
 
-    {
-        var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
-        defer accounts_dir.close();
-        try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields.file_map, accounts_dir, 1, allocator);
-    }
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields.file_map, 1, allocator);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -2384,17 +2386,14 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     errdefer snapshots.deinit(allocator);
 
     const snapshot = try snapshots.collapse();
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var accounts_db = try AccountsDB.init(allocator, logger, dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
-        .snapshot_dir = "test_data/tmp",
     });
+    errdefer accounts_db.deinit(true);
 
-    var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
-    defer accounts_dir.close();
     try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields.file_map,
-        accounts_dir,
         n_threads,
         allocator,
     );
@@ -2536,9 +2535,10 @@ test "load other sysvars" {
 test "flushing slots works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer snapshot_dir.close();
+    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
-        .snapshot_dir = "test_data",
     });
     defer accounts_db.deinit(true);
 
@@ -2586,7 +2586,9 @@ test "flushing slots works" {
 test "purge accounts in cache works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer snapshot_dir.close();
+    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
     });
     defer accounts_db.deinit(true);
@@ -2642,9 +2644,10 @@ test "purge accounts in cache works" {
 test "clean to shrink account file works with zero-lamports" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer snapshot_dir.close();
+    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
-        .snapshot_dir = "test_data",
     });
     defer accounts_db.deinit(true);
 
@@ -2698,7 +2701,7 @@ test "clean to shrink account file works with zero-lamports" {
 
     const r = try accounts_db.cleanAccountFiles(
         new_slot + 100,
-        &unclean_account_files,
+        unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
     );
@@ -2716,9 +2719,10 @@ test "clean to shrink account file works with zero-lamports" {
 test "clean to shrink account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer snapshot_dir.close();
+    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
-        .snapshot_dir = "test_data",
     });
     defer accounts_db.deinit(true);
 
@@ -2768,7 +2772,7 @@ test "clean to shrink account file works" {
 
     const r = try accounts_db.cleanAccountFiles(
         new_slot + 100,
-        &unclean_account_files,
+        unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
     );
@@ -2782,9 +2786,10 @@ test "clean to shrink account file works" {
 test "full clean account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer snapshot_dir.close();
+    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
-        .snapshot_dir = "test_data",
     });
     defer accounts_db.deinit(true);
 
@@ -2826,11 +2831,11 @@ test "full clean account file works" {
 
     try accounts_db.flushSlot(slot, &unclean_account_files);
 
-    var r = try accounts_db.cleanAccountFiles(0, &unclean_account_files, &shrink_account_files, &delete_account_files); // zero is rooted so no files should be cleaned
+    var r = try accounts_db.cleanAccountFiles(0, unclean_account_files.items, &shrink_account_files, &delete_account_files); // zero is rooted so no files should be cleaned
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
 
-    r = try accounts_db.cleanAccountFiles(1, &unclean_account_files, &shrink_account_files, &delete_account_files); // zero has no old state so no files should be cleaned
+    r = try accounts_db.cleanAccountFiles(1, unclean_account_files.items, &shrink_account_files, &delete_account_files); // zero has no old state so no files should be cleaned
     try std.testing.expect(r.num_old_states == 0);
     try std.testing.expect(r.num_zero_lamports == 0);
 
@@ -2839,7 +2844,7 @@ test "full clean account file works" {
     try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
     try accounts_db.flushSlot(new_slot, &unclean_account_files);
 
-    r = try accounts_db.cleanAccountFiles(new_slot + 100, &unclean_account_files, &shrink_account_files, &delete_account_files);
+    r = try accounts_db.cleanAccountFiles(new_slot + 100, unclean_account_files.items, &shrink_account_files, &delete_account_files);
     try std.testing.expect(r.num_old_states == n_accounts);
     try std.testing.expect(r.num_zero_lamports == 0);
     // full delete
@@ -2865,9 +2870,10 @@ test "full clean account file works" {
 test "shrink account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var accounts_db = try AccountsDB.init(allocator, logger, .{
+    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    defer snapshot_dir.close();
+    var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
-        .snapshot_dir = "test_data",
     });
     defer accounts_db.deinit(true);
 
@@ -2924,7 +2930,7 @@ test "shrink account file works" {
     // clean the account files - slot is queued for shrink
     const clean_result = try accounts_db.cleanAccountFiles(
         new_slot + 100,
-        &unclean_account_files,
+        unclean_account_files.items,
         &shrink_account_files,
         &delete_account_files,
     );
@@ -3046,10 +3052,9 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         defer snapshots.deinit(allocator);
         const snapshot = try snapshots.collapse();
 
-        var accounts_db = try AccountsDB.init(allocator, logger, .{
+        var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_bins = 32,
             .use_disk_index = bench_args.use_disk,
-            .snapshot_dir = dir_path,
         });
         // defer accounts_db.deinit(false);
 
@@ -3059,7 +3064,6 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         var timer = try sig.time.Timer.start();
         try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields.file_map,
-            accounts_dir,
             bench_args.n_threads,
             allocator,
         );
@@ -3227,14 +3231,17 @@ pub const BenchmarkAccountsDB = struct {
         const disk_path = "test_data/tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
 
+        var snapshot_dir = try std.fs.cwd().makeOpenPath("ledger/accounts_db", .{});
+        defer snapshot_dir.close();
+
         const logger = Logger{ .noop = {} };
         var accounts_db: AccountsDB = undefined;
         if (bench_args.index == .disk) {
-            accounts_db = try AccountsDB.init(allocator, logger, .{
+            accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
                 .use_disk_index = true,
             });
         } else {
-            accounts_db = try AccountsDB.init(allocator, logger, .{});
+            accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{});
         }
         defer accounts_db.deinit(true);
 

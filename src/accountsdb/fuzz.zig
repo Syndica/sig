@@ -48,7 +48,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var prng = std.Random.DefaultPrng.init(seed);
     const rand = prng.random();
 
-    var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_state = std.heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = 64,
+        .retain_metadata = true,
+        .never_unmap = true,
+    }){};
     defer _ = gpa_state.deinit();
     const gpa = gpa_state.allocator();
 
@@ -58,14 +62,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const use_disk = rand.boolean();
 
-    const test_data_dir_path = "test_data";
-    const snapshot_dir_name = "accountsdb_fuzz";
-    const snapshot_dir_path = test_data_dir_path ++ "/" ++ snapshot_dir_name;
-
     var test_data_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
     defer test_data_dir.close();
 
-    var snapshot_dir = try test_data_dir.makeOpenPath(snapshot_dir_name, .{});
+    var snapshot_dir = try test_data_dir.makeOpenPath("accountsdb_fuzz", .{});
     defer snapshot_dir.close();
     // defer {
     //     // NOTE: sometimes this can take a long time so we print when we start and finish
@@ -77,21 +77,24 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // }
     std.debug.print("use disk: {}\n", .{use_disk});
 
-    var accounts_db = try AccountsDB.init(gpa, logger, .{
+    var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
         .use_disk_index = use_disk,
-        .snapshot_dir = snapshot_dir_path,
         // TODO: other things we can fuzz (number of bins, ...)
     });
     defer accounts_db.deinit(true);
 
     const exit = try gpa.create(std.atomic.Value(bool));
-    // defer gpa.destroy(exit);
+    defer gpa.destroy(exit);
     exit.* = std.atomic.Value(bool).init(false);
 
     const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{
         &accounts_db,
         exit,
     });
+    errdefer {
+        exit.store(true, .seq_cst);
+        manager_handle.join();
+    }
 
     var tracked_accounts = std.AutoArrayHashMap(Pubkey, TrackedAccount).init(gpa);
     defer tracked_accounts.deinit();
@@ -123,7 +126,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 var accounts: [N_ACCOUNTS_PER_SLOT]Account = undefined;
                 var pubkeys: [N_ACCOUNTS_PER_SLOT]Pubkey = undefined;
 
-                for (&accounts, &pubkeys) |*account, *pubkey| {
+                for (&accounts, &pubkeys, 0..) |*account, *pubkey, i| {
+                    errdefer for (accounts[0..i]) |prev_account| prev_account.deinit(gpa);
+
                     var tracked_account = try TrackedAccount.random(rand, slot, gpa);
 
                     const existing_pubkey = rand.boolean();
@@ -143,6 +148,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     // always overwrite the old slot
                     r.value_ptr.* = tracked_account;
                 }
+                defer for (accounts) |account| account.deinit(gpa);
 
                 try accounts_db.putAccountSlice(
                     &accounts,

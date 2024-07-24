@@ -197,7 +197,7 @@ pub fn run() !void {
         .long_name = "snapshot-dir",
         .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: ledger/accounts_db",
         .short_alias = 's',
-        .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
+        .value_ref = cli.mkRef(&config.current.accounts_db_snapshot_dir),
         .required = false,
         .value_name = "snapshot_dir",
     };
@@ -444,7 +444,7 @@ fn validator() !void {
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = config.current.accounts_db_snapshot_dir;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
@@ -495,7 +495,7 @@ fn validateSnapshot() !void {
     const allocator = gpa_allocator;
     const app_base = try AppBase.init(allocator);
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = config.current.accounts_db_snapshot_dir;
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
@@ -813,7 +813,7 @@ fn loadSnapshot(
 
     result.allocator = allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db.snapshot_dir, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db_snapshot_dir, .{});
     defer snapshot_dir.close();
 
     var snapshots, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
@@ -835,7 +835,7 @@ fn loadSnapshot(
     }
 
     // cli parsing
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = config.current.accounts_db_snapshot_dir;
     const n_threads_snapshot_load: u32 = blk: {
         const cli_n_threads_snapshot_load: u32 = config.current.accounts_db.num_threads_snapshot_load;
         if (cli_n_threads_snapshot_load == 0) {
@@ -850,13 +850,13 @@ fn loadSnapshot(
     result.accounts_db = try AccountsDB.init(
         allocator,
         logger,
+        snapshot_dir,
         config.current.accounts_db,
     );
     errdefer result.accounts_db.deinit(false);
 
     result.snapshot_fields = try result.accounts_db.loadWithDefaults(
         &snapshots,
-        snapshot_dir,
         n_threads_snapshot_load,
         validate_snapshot,
     );
@@ -960,7 +960,7 @@ fn downloadSnapshot() !void {
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();
 
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    const snapshot_dir_str = config.current.accounts_db_snapshot_dir;
     const min_mb_per_sec = config.current.accounts_db.min_snapshot_download_speed_mbs;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
