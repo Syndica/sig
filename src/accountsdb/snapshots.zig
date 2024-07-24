@@ -725,6 +725,19 @@ pub const AccountFileInfo = struct {
             return error.OffsetOutOfBounds;
         }
     }
+
+    pub fn format(
+        account_file_info: AccountFileInfo,
+        comptime fmt_str: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
+        _ = fmt_str;
+
+        try writer.print(".{{ .id = {}, .length = {} }}", .{
+            account_file_info.id.toInt(), account_file_info.length,
+        });
+    }
 };
 
 /// Analogous to [BankHashInfo](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L115)

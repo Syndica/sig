@@ -142,3 +142,57 @@ pub const TryRealPathFmt = struct {
         }
     }
 };
+
+pub inline fn hashMapFmt(hash_map: anytype, sep: []const u8) if (sig.utils.types.hashMapInfo(@TypeOf(hash_map.*))) |hm_info| HashMapFmt(hm_info) else noreturn {
+    const Hm = @TypeOf(hash_map.*);
+    if (sig.utils.types.hashMapInfo(Hm) == null) @compileError("Expected pointer to hash map, got " ++ @typeName(Hm));
+    return .{
+        .map = hash_map,
+        .sep = sep,
+    };
+}
+
+pub fn HashMapFmt(comptime hm_info: sig.utils.types.HashMapInfo) type {
+    return struct {
+        map: *const hm_info.Type(),
+        sep: []const u8,
+        const Self = @This();
+
+        pub fn format(
+            fmt: Self,
+            comptime combo_fmt_str: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) @TypeOf(writer).Error!void {
+            const key_fmt, const val_fmt = comptime blk: {
+                var key_fmt: []const u8 = "";
+
+                var i = 0;
+                while (std.mem.indexOfScalarPos(u8, combo_fmt_str, i, '|')) |pipe_idx| {
+                    const start = i;
+                    i = pipe_idx + 1;
+
+                    if (!std.mem.startsWith(u8, combo_fmt_str[start + 1 ..], "|")) {
+                        if (i == 0) break;
+                        break :blk .{ key_fmt, combo_fmt_str[start + 1 ..] };
+                    }
+
+                    key_fmt = key_fmt ++ combo_fmt_str[0..i];
+                    i += 1;
+                }
+
+                break :blk .{ combo_fmt_str[0..i], combo_fmt_str[i + 1 ..] };
+            };
+
+            var i: usize = 0;
+            var iter = fmt.map.iterator();
+            while (iter.next()) |entry| : (i += 1) {
+                if (i != 0) try writer.writeAll(fmt.sep);
+                try writer.print(
+                    "{{ {" ++ key_fmt ++ "}, {" ++ val_fmt ++ "} }}",
+                    .{ entry.key_ptr.*, entry.value_ptr.* },
+                );
+            }
+        }
+    };
+}
