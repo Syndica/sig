@@ -150,6 +150,16 @@ pub const EpochSchedule = extern struct {
         else
             self.slots_per_epoch;
     }
+
+    pub fn random(rand: std.Random) EpochSchedule {
+        return .{
+            .slots_per_epoch = rand.int(u64),
+            .leader_schedule_slot_offset = rand.int(u64),
+            .warmup = rand.boolean(),
+            .first_normal_epoch = rand.int(Epoch),
+            .first_normal_slot = rand.int(Slot),
+        };
+    }
 };
 
 /// Analogous to [ClusterType](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L46)

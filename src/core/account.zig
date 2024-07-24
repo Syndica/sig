@@ -13,7 +13,7 @@ pub const Account = struct {
         allocator.free(self.data);
     }
 
-    pub fn random(allocator: std.mem.Allocator, rng: std.rand.Random, data_len: usize) !Account {
+    pub fn random(allocator: std.mem.Allocator, rng: std.Random, data_len: usize) !Account {
         const data = try allocator.alloc(u8, data_len);
         rng.bytes(data);
 

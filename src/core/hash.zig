@@ -55,7 +55,7 @@ pub const Hash = extern struct {
     }
 
     /// Intended to be used in tests.
-    pub fn random(rand: std.rand.Random) Hash {
+    pub fn random(rand: std.Random) Hash {
         var data: [HASH_SIZE]u8 = undefined;
         rand.bytes(&data);
         return .{ .data = data };

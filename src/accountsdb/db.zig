@@ -352,7 +352,6 @@ pub const AccountsDB = struct {
     }
 
     /// multithread entrypoint into parseAndBinAccountFiles.
-    /// Assumes that `loading_threads[thread_id].fields != null`.
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         accounts_dir: std.fs.Dir,
@@ -376,7 +375,6 @@ pub const AccountsDB = struct {
 
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
-    /// Assumes `self.fields != null`.
     pub fn loadAndVerifyAccountsFiles(
         self: *Self,
         accounts_dir: std.fs.Dir,
@@ -3246,7 +3244,7 @@ pub const BenchmarkAccountsDB = struct {
         }
         defer accounts_db.deinit(true);
 
-        var random = std.rand.DefaultPrng.init(19);
+        var random = std.Random.DefaultPrng.init(19);
         const rng = random.random();
 
         var pubkeys = try allocator.alloc(Pubkey, n_accounts);
@@ -3267,7 +3265,7 @@ pub const BenchmarkAccountsDB = struct {
 
         if (bench_args.accounts == .ram) {
             const n_accounts_init = bench_args.n_accounts_multiple * bench_args.n_accounts;
-            var accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
+            const accounts = try allocator.alloc(Account, (total_n_accounts + n_accounts_init));
             for (0..(total_n_accounts + n_accounts_init)) |i| {
                 accounts[i] = try Account.random(allocator, rng, i % 1_000);
             }

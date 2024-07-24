@@ -134,7 +134,7 @@ pub fn fillHashmapWithRng(
 
     for (0..hm_len) |_| {
         while (true) {
-            const new_key: hm_info.Key = context.randomKey(rand);
+            const new_key: hm_info.Key = try context.randomKey(rand);
             const gop = hashmap.getOrPutAssumeCapacity(new_key);
             if (gop.found_existing) continue;
             gop.value_ptr.* = try context.randomValue(rand);
