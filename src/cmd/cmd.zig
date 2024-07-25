@@ -1043,6 +1043,16 @@ fn getOrDownloadSnapshots(
         .{snapshot_dir_str},
     );
     defer allocator.free(accounts_path);
+    errdefer {
+        // if something goes wrong, delete the accounts/ directory
+        // so we unpack the full snapshot the next time.
+        //
+        // NOTE: if we didnt do this, we would try to startup with a incomplete
+        // accounts/ directory the next time we ran the code - see `should_unpack_snapshot`.
+        std.fs.cwd().deleteTree(accounts_path) catch |err| {
+            std.debug.print("failed to delete accounts/ dir: {}\n", .{err});
+        };
+    }
 
     var accounts_path_exists = true;
     std.fs.cwd().access(accounts_path, .{}) catch {
