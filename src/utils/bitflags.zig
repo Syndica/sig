@@ -6,6 +6,10 @@ pub fn BitFlags(comptime FlagEnum: type) type {
 
         pub const Flag = FlagEnum;
 
+        pub fn from(flag: FlagEnum) Self {
+            return .{ .state = @intFromEnum(flag) };
+        }
+
         pub fn set(self: *Self, flag: FlagEnum) void {
             self.state |= @intFromEnum(flag);
         }
@@ -20,6 +24,10 @@ pub fn BitFlags(comptime FlagEnum: type) type {
 
         pub fn intersects(self: *const Self, flag: FlagEnum) bool {
             return self.state & @intFromEnum(flag) != 0;
+        }
+
+        pub fn intersection(self: Self, flag: FlagEnum) Self {
+            return .{ .state = self.state & @intFromEnum(flag) };
         }
     };
 }
