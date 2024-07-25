@@ -56,10 +56,10 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
-const PubkeysAndAccounts = struct { []Pubkey, []Account };
-const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
-const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
-const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
+pub const PubkeysAndAccounts = struct { []Pubkey, []Account };
+pub const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
+pub const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
+pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
 
 pub const AccountsDBStats = struct {
     number_files_flushed: *Counter,
