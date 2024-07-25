@@ -727,7 +727,7 @@ pub const GossipService = struct {
             }
 
             // TRIM gossip-table
-            if (trim_table_timer.read().asMillis() > TABLE_TRIM_RATE.asMillis()) {
+            if (trim_table_timer.read().asNanos() > TABLE_TRIM_RATE.asNanos()) {
                 defer trim_table_timer.reset();
                 try self.attemptGossipTableTrim();
             }
@@ -795,7 +795,7 @@ pub const GossipService = struct {
         while (!self.exit.load(.unordered)) {
             defer loop_timer.reset();
 
-            if (pull_req_timer.read().asMillis() > PULL_REQUEST_RATE.asMillis()) pull_blk: {
+            if (pull_req_timer.read().asNanos() > PULL_REQUEST_RATE.asNanos()) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
                 const prng_seed: u64 = @intCast(std.time.milliTimestamp());
@@ -824,7 +824,7 @@ pub const GossipService = struct {
             }
 
             // trim data
-            if (trim_memory_timer.read().asMillis() > TABLE_TRIM_RATE.asMillis()) {
+            if (trim_memory_timer.read().asNanos() > TABLE_TRIM_RATE.asNanos()) {
                 defer trim_memory_timer.reset();
                 try self.trimMemory(getWallclockMs());
             }
@@ -834,7 +834,7 @@ pub const GossipService = struct {
             shred_version_assigned = shred_version_assigned or self.assignDefaultShredVersionFromEntrypoint();
 
             // periodic things
-            if (active_set_timer.read().asMillis() > ACTIVE_SET_REFRESH_RATE.asMillis()) {
+            if (active_set_timer.read().asNanos() > ACTIVE_SET_REFRESH_RATE.asNanos()) {
                 defer active_set_timer.reset();
 
                 // update wallclock and sign
@@ -861,13 +861,13 @@ pub const GossipService = struct {
             }
 
             // publish metrics
-            if (stats_publish_timer.read().asMillis() > PUBLISH_STATS_INTERVAL.asMillis()) {
+            if (stats_publish_timer.read().asNanos() > PUBLISH_STATS_INTERVAL.asNanos()) {
                 defer stats_publish_timer.reset();
                 try self.collectGossipTableMetrics();
             }
 
             // sleep
-            if (loop_timer.read().asMillis() < BUILD_MESSAGE_LOOP_MIN.asMillis()) {
+            if (loop_timer.read().asNanos() < BUILD_MESSAGE_LOOP_MIN.asNanos()) {
                 const time_left_ms = BUILD_MESSAGE_LOOP_MIN.asMillis() -| loop_timer.read().asMillis();
                 std.time.sleep(time_left_ms * std.time.ns_per_ms);
             }
