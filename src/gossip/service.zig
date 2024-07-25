@@ -1991,18 +1991,12 @@ pub const GossipStats = struct {
     const Self = @This();
 
     const HANDLE_TIME_BUCKETS_MS: [10]f64 = .{
-        10,
-        25,
-        50,
-        100,
-        250,
-        500,
-        1000,
-        2500,
-        5000,
-        10000,
+        10,   25,
+        50,   100,
+        250,  500,
+        1000, 2500,
+        5000, 10000,
     };
-
     pub fn init(logger: Logger) GetMetricError!Self {
         var self: Self = undefined;
         const registry = globalRegistry();
