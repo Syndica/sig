@@ -2009,18 +2009,12 @@ pub const GossipStats = struct {
         const stats_struct_info = @typeInfo(GossipStats).Struct;
         inline for (stats_struct_info.fields) |field| {
             if (field.name[0] != '_') {
-                if (field.type == *Counter) {
-                    const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
-                    @field(self, field.name) = field_counter;
-                } else if (field.type == *GaugeU64) {
-                    const field_gauge: *GaugeU64 = try registry.getOrCreateGauge(field.name, u64);
-                    @field(self, field.name) = field_gauge;
-                } else if (field.type == *Histogram) {
-                    const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, &HANDLE_TIME_BUCKETS_MS);
-                    @field(self, field.name) = field_histogram;
-                } else {
-                    unreachable;
-                }
+                @field(self, field.name) = switch (field.type) {
+                    *Counter => try registry.getOrCreateCounter(field.name),
+                    *GaugeU64 => try registry.getOrCreateGauge(field.name, u64),
+                    *Histogram => try registry.getOrCreateHistogram(field.name, &HANDLE_TIME_BUCKETS_MS),
+                    else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
+                };
             }
         }
 
