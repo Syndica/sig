@@ -5,5 +5,3 @@ pub const meta = @import("meta.zig");
 pub const rocksdb = @import("rocksdb.zig");
 pub const schema = @import("schema.zig");
 pub const transaction_status = @import("transaction_status.zig");
-
-pub const Blockstore = blockstore.Blockstore;

@@ -15,16 +15,15 @@ pub fn Database(
 
         const Self = @This();
 
-        const BatchImpl = Batch(Impl.Batch, column_families);
+        pub const Batch = BatchImpl(Impl.Batch, column_families);
 
         pub fn open(
             allocator: Allocator,
             logger: Logger,
             path: []const u8,
-            comptime column_families_: []const ColumnFamily,
-        ) !Database(Impl, column_families_) {
+        ) !Database(Impl, column_families) {
             return .{
-                .impl = try Impl.open(allocator, logger, path, column_families_),
+                .impl = try Impl.open(allocator, logger, path, column_families),
             };
         }
 
@@ -62,12 +61,12 @@ pub fn Database(
             return try self.impl.delete(cf, comptime cf.find(column_families), key);
         }
 
-        pub fn initBatch(self: *Self) BatchImpl {
-            return try self.impl.initBatch();
+        pub fn initBatch(self: *Self) !Batch {
+            return .{ .impl = self.impl.initBatch() };
         }
 
-        pub fn commit(self: *Self, batch: BatchImpl) void {
-            return try self.impl.commit(batch.impl);
+        pub fn commit(self: *Self, batch: Batch) !void {
+            return self.impl.commit(batch.impl);
         }
 
         pub fn runTest() !void {
@@ -85,11 +84,10 @@ pub fn Database(
             const allocator = std.testing.allocator;
             const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
             defer logger.deinit();
-            var db = try Self.open(
+            var db = try Database(Impl, &.{ cf1, cf2 }).open(
                 allocator,
                 logger,
                 "test_data/bsdb",
-                &.{ cf1, cf2 },
             );
             defer db.deinit();
             try db.put(cf1, 123, .{ .hello = 345 });
@@ -109,7 +107,7 @@ pub fn Database(
     };
 }
 
-pub fn Batch(
+pub fn BatchImpl(
     comptime Impl: type,
     comptime column_families: []const ColumnFamily,
 ) type {

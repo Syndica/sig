@@ -20,7 +20,7 @@ pub const SharedHashMapDB = struct {
 
     const Self = @This();
 
-    const Batch = MapBatch;
+    pub const Batch = MapBatch;
 
     pub fn open(
         allocator: Allocator,
@@ -85,7 +85,7 @@ pub const SharedHashMapDB = struct {
     ) !?BytesRef {
         const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
         defer self.allocator.free(key_bytes);
-        const map = self.maps[cf_index];
+        var map = self.maps[cf_index];
 
         self.transaction_lock.lockShared();
         defer self.transaction_lock.unlockShared();
@@ -122,11 +122,17 @@ pub const SharedHashMapDB = struct {
         };
     }
 
+    pub fn initBatch(self: *Self) MapBatch {
+        return MapBatch.init(self.allocator);
+    }
+
+    /// Atomicity may be violated if there is insufficient
+    /// memory to complete a PUT.
     pub fn commit(self: *Self, batch: MapBatch) !void {
         self.transaction_lock.lock();
         defer self.transaction_lock.unlock();
 
-        for (batch.instructions) |ix| {
+        for (batch.instructions.items) |ix| {
             switch (ix) {
                 .put => |put_ix| {
                     const cf_index, const key, const value = put_ix;
@@ -134,7 +140,7 @@ pub const SharedHashMapDB = struct {
                 },
                 .delete => |delete_ix| {
                     const cf_index, const key = delete_ix;
-                    try self.maps[cf_index].delete(key);
+                    self.maps[cf_index].delete(batch.allocator, key);
                 },
             }
         }
@@ -152,6 +158,17 @@ pub const MapBatch = struct {
 
     const Self = @This();
 
+    pub fn init(allocator: Allocator) Self {
+        return .{
+            .allocator = allocator,
+            .instructions = std.ArrayListUnmanaged(Instruction){},
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.instructions.deinit(self.allocator);
+    }
+
     pub fn put(
         self: *Self,
         comptime cf: ColumnFamily,
@@ -159,7 +176,7 @@ pub const MapBatch = struct {
         key: cf.Key,
         value: cf.Value,
     ) !void {
-        return try self.instructions.append(.{ .put = .{
+        return try self.instructions.append(self.allocator, .{ .put = .{
             cf_index,
             try cf.key().serializeAlloc(self.allocator, key),
             try cf.value().serializeAlloc(self.allocator, value),
@@ -172,7 +189,7 @@ pub const MapBatch = struct {
         comptime cf_index: usize,
         key: cf.Key,
     ) !void {
-        return try self.instructions.append(.{ .delete = .{
+        return try self.instructions.append(self.allocator, .{ .delete = .{
             cf_index,
             try cf.key().serializeAlloc(self.allocator, key),
         } });

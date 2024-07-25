@@ -6,6 +6,7 @@ const meta = sig.blockstore.meta;
 const Allocator = std.mem.Allocator;
 
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
+const ErasureSetId = sig.shred_collector.shred.ErasureSetId;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -34,7 +35,7 @@ pub const schema = struct {
     };
     pub const erasure_meta: ColumnFamily = .{
         .name = "erasure_meta",
-        .Key = meta.ErasureSetId,
+        .Key = ErasureSetId,
         .Value = meta.ErasureMeta,
     };
     pub const orphans: ColumnFamily = .{
@@ -49,15 +50,15 @@ pub const schema = struct {
     };
     pub const data_shred: ColumnFamily = .{
         .name = "data_shred",
-        .Key = struct { slot: Slot, index: u64 },
+        .Key = struct { Slot, u64 },
         .Value = []const u8,
-        .KeySerializer = sig.blockstore.database.BytesSerializer,
+        .ValueSerializer = sig.blockstore.database.BytesSerializer,
     };
     pub const code_shred: ColumnFamily = .{
         .name = "code_shred",
-        .Key = struct { slot: Slot, index: u64 },
+        .Key = struct { Slot, u64 },
         .Value = []const u8,
-        .KeySerializer = sig.blockstore.database.BytesSerializer,
+        .ValueSerializer = sig.blockstore.database.BytesSerializer,
     };
     pub const transaction_status: ColumnFamily = .{
         .name = "transaction_status",
@@ -121,8 +122,8 @@ pub const schema = struct {
     };
     pub const merkle_root_meta: ColumnFamily = .{
         .name = "merkle_root_meta",
-        .Key = meta.ErasureSetId,
-        .Value = void,
+        .Key = ErasureSetId,
+        .Value = meta.MerkleRootMeta,
     };
 };
 
