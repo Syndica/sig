@@ -42,15 +42,6 @@ pub fn Return(comptime FnPtr: type) type {
     };
 }
 
-pub fn fieldNames(comptime Struct: type) [@typeInfo(Struct).Struct.fields.len][:0]const u8 {
-    const fields = @typeInfo(Struct).Struct.fields;
-    var names: [fields.len][:0]const u8 = undefined;
-    for (fields, 0..) |field, i| {
-        names[i] = field.name;
-    }
-    return names;
-}
-
 pub const AllocManagement = enum {
     managed,
     unmanaged,
