@@ -6,6 +6,7 @@ const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
+const GeyserWriter = sig.geyser.GeyserWriter;
 
 pub const TrackedAccount = struct {
     pubkey: Pubkey,
@@ -96,6 +97,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const Actions = enum { put, get };
 
+    var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe");
+    defer geyser.deinit();
+
     // get/put a bunch of accounts
     while (true) {
         if (maybe_max_actions) |max_actions| {
@@ -137,6 +141,10 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     r.value_ptr.* = tracked_account;
                 }
 
+                // send through geyser
+                try geyser.write(slot, accounts, pubkeys);
+
+                // write to accounts_db
                 try accounts_db.putAccountSlice(
                     accounts,
                     pubkeys,

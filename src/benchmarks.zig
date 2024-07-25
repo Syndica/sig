@@ -43,7 +43,7 @@ pub fn main() !void {
 
     if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
         try benchmark(
-            @import("geyser/pipe.zig").BenchmarkAccountStream,
+            @import("geyser/lib.zig").BenchmarkAccountStream,
             max_time_per_bench,
             TimeUnits.milliseconds,
         );
