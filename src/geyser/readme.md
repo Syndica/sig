@@ -16,6 +16,8 @@ data is organized to be written as `[size, serialized_data]`
 
 where `size` is the full length of the `serialized_data`
 
+see `GeyserWriter.write()` for an example
+
 this allows for more efficient buffered reads where you can read the first 8 bytes in 
 the pipe, cast to a u64, allocate a buffer of that size and then read the rest of 
 the data associated with that payload.
