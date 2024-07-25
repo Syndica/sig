@@ -87,8 +87,8 @@ pub const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const MAX_PRUNE_DATA_NODES: usize = 32;
 
 pub const PING_CACHE_CAPACITY: usize = 65_536;
-pub const PING_CACHE_TTL_NS: u64 = std.time.ns_per_s * 1280;
-pub const PING_CACHE_RATE_LIMIT_DELAY_NS: u64 = std.time.ns_per_s * (1280 / 64);
+pub const PING_CACHE_TTL = Duration.fromSecs(1280);
+pub const PING_CACHE_RATE_LIMIT_DELAY = Duration.fromSecs(1280 / 64);
 
 // TODO: replace with get_epoch_duration when BankForks is supported
 const DEFAULT_EPOCH_DURATION: u64 = 172800000;
@@ -193,8 +193,8 @@ pub const GossipService = struct {
         const ping_cache_ptr = try allocator.create(PingCache);
         ping_cache_ptr.* = try PingCache.init(
             allocator,
-            PING_CACHE_TTL_NS,
-            PING_CACHE_RATE_LIMIT_DELAY_NS,
+            PING_CACHE_TTL,
+            PING_CACHE_RATE_LIMIT_DELAY,
             PING_CACHE_CAPACITY,
         );
 
