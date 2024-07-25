@@ -1,11 +1,17 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
+const Allocator = std.mem.Allocator;
+
 const BitFlags = sig.utils.bitflags.BitFlags;
+const Shred = sig.shred_collector.shred.Shred;
+const CodingShred = sig.shred_collector.shred.CodingShred;
 const Slot = sig.core.Slot;
+const SortedSet = sig.utils.collections.SortedSet;
 
 /// The Meta column family
 pub const SlotMeta = struct {
+    // allocator: Allocator,
     /// The number of slots above the root (the genesis block). The first
     /// slot has slot 0.
     slot: Slot,
@@ -27,12 +33,111 @@ pub const SlotMeta = struct {
     parent_slot: ?Slot,
     /// The list of slots, each of which contains a block that derives
     /// from this one.
-    next_slots: []const Slot,
+    next_slots: std.ArrayList(Slot),
     /// Connected status flags of this slot
     connected_flags: ConnectedFlags,
     /// Shreds indices which are marked data complete.  That is, those that have the
     /// [`ShredFlags::DATA_COMPLETE_SHRED`][`crate::shred::ShredFlags::DATA_COMPLETE_SHRED`] set.
-    completed_data_indexes: std.AutoHashMap(u32, void),
+    completed_data_indexes: SortedSet(u32),
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, slot: Slot, parent_slot: ?Slot) Self {
+        const connected_flags = if (slot == 0)
+            // Slot 0 is the start, mark it as having its' parent connected
+            // such that slot 0 becoming full will be updated as connected
+            ConnectedFlags.from(.parent_connected)
+        else
+            ConnectedFlags{};
+        return .{
+            // .allocator = allocator,
+            .slot = slot,
+            .parent_slot = parent_slot,
+            .connected_flags = connected_flags,
+            .consumed = 0,
+            .received = 0,
+            .first_shred_timestamp = 0,
+            .last_index = null,
+            .next_slots = std.ArrayList(Slot).init(allocator),
+            .completed_data_indexes = SortedSet(u32).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.next_slots.deinit();
+    }
+
+    // TODO copy on write
+    pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
+        var next_slots = try std.ArrayList(Slot).initCapacity(allocator, self.next_slots.items.len);
+        next_slots.appendSliceAssumeCapacity(self.next_slots.items);
+        return .{
+            // .allocator = self.allocator,
+            .slot = self.slot,
+            .parent_slot = self.parent_slot,
+            .connected_flags = self.connected_flags,
+            .consumed = self.consumed,
+            .received = self.received,
+            .first_shred_timestamp = self.first_shred_timestamp,
+            .last_index = self.last_index,
+            .next_slots = next_slots,
+            .completed_data_indexes = try self.completed_data_indexes.clone(),
+        };
+    }
+
+    pub fn eql(self: *Self, other: *Self) bool {
+        return self.slot == other.slot and
+            self.consumed == other.consumed and
+            self.received == other.received and
+            self.first_shred_timestamp == other.first_shred_timestamp and
+            self.last_index == other.last_index and
+            self.parent_slot == other.parent_slot and
+            std.mem.eql(Slot, self.next_slots.items, other.next_slots.items) and
+            self.connected_flags.state == other.connected_flags.state and
+            self.completed_data_indexes.eql(&other.completed_data_indexes);
+    }
+
+    pub fn isFull(self: Self) bool {
+        return if (self.last_index) |last_index|
+            self.consumed > last_index + 1
+        else
+            false;
+    }
+
+    pub fn isOrphan(self: Self) bool {
+        return self.parent_slot == null;
+    }
+
+    pub fn isConnected(self: *Self) bool {
+        return self.connected_flags.isSet(.connected);
+    }
+
+    pub fn setConnected(self: *Self) void {
+        std.debug.assert(self.isParentConnected());
+        self.connected_flags.set(.connected);
+    }
+
+    pub fn isParentConnected(self: Self) bool {
+        return self.connected_flags.isSet(.parent_connected);
+    }
+
+    /// Mark the meta's parent as connected.
+    /// If the meta is also full, the meta is now connected as well. Return a
+    /// boolean indicating whether the meta becamed connected from this call.
+    pub fn setParentConnected(self: *Self) bool {
+        // Already connected so nothing to do, bail early
+        if (self.isConnected()) {
+            return false;
+        }
+
+        self.connected_flags.set(.parent_connected);
+
+        if (self.isFull()) {
+            self.setConnected();
+        }
+
+        return self.isConnected();
+    }
 };
 
 /// Flags to indicate whether a slot is a descendant of a slot on the main fork
@@ -71,6 +176,7 @@ pub const DuplicateSlotProof = struct {
 };
 
 /// Erasure coding information
+/// TODO: why does this need such large integer types?
 pub const ErasureMeta = struct {
     /// Which erasure set in the slot this is
     fec_set_index: u64,
@@ -80,8 +186,71 @@ pub const ErasureMeta = struct {
     first_received_coding_index: u64,
     /// Erasure configuration for this erasure set
     config: ErasureConfig,
+
+    const Self = @This();
+
+    pub fn fromCodingShred(shred: CodingShred) ?Self {
+        return .{
+            .fec_set_index = @intCast(shred.fields.common.fec_set_index),
+            .config = ErasureConfig{
+                .num_data = @intCast(shred.fields.custom.num_data_shreds),
+                .num_coding = @intCast(shred.fields.custom.num_coding_shreds),
+            },
+            .first_coding_index = @intCast(shred.firstCodingIndex() orelse return null),
+            .first_received_coding_index = @intCast(shred.fields.common.index),
+        };
+    }
+
+    /// Returns true if the erasure fields on the shred
+    /// are consistent with the erasure-meta.
+    pub fn checkCodingShred(self: Self, shred: CodingShred) bool {
+        var other = fromCodingShred(shred) orelse return false;
+        other.first_received_coding_index = self.first_received_coding_index;
+        return sig.utils.types.eql(self, other);
+    }
+
+    /// agave: status
+    pub fn status(self: Self, index: *Index) union(enum) {
+        can_recover,
+        data_full,
+        still_need: usize,
+    } {
+        const c_start, const c_end = self.codingShredsIndices();
+        const d_start, const d_end = self.dataShredsIndices();
+        const num_code = index.code.range(c_start, c_end).len;
+        const num_data = index.data.range(d_start, d_end).len;
+
+        const data_missing = self.config.num_data -| num_data;
+        const num_needed = data_missing -| num_code;
+
+        return if (data_missing == 0)
+            .data_full
+        else if (num_needed == 0)
+            .can_recover
+        else
+            .{ .still_need = num_needed };
+    }
+
+    /// agave: data_shreds_indices
+    pub fn dataShredsIndices(self: Self) [2]u64 {
+        const num_data = self.config.num_data;
+        return .{ self.fec_set_index, self.fec_set_index + num_data };
+    }
+
+    /// agave: coding_shreds_indices
+    pub fn codingShredsIndices(self: Self) [2]u64 {
+        const num_coding = self.config.num_coding;
+        return .{ self.first_coding_index, self.first_coding_index + num_coding };
+    }
+
+    /// agave: next_fec_set_index
+    pub fn nextFecSetIndex(self: Self) ?u32 {
+        const num_data: u32 = @intCast(self.config.num_data);
+        return sig.utils.math.checkedSub(@as(u32, @intCast(self.fec_set_index)), num_data) catch null;
+    }
 };
 
+/// TODO: usize seems like a poor choice here, but i just copied agave
 pub const ErasureConfig = struct {
     num_data: usize,
     num_coding: usize,
@@ -91,13 +260,18 @@ pub const ErasureConfig = struct {
 pub const Index = struct {
     slot: Slot,
     data: ShredIndex,
-    coding: ShredIndex,
+    code: ShredIndex,
+
+    pub fn init(allocator: std.mem.Allocator, slot: Slot) Index {
+        return .{
+            .slot = slot,
+            .data = ShredIndex.init(allocator),
+            .code = ShredIndex.init(allocator),
+        };
+    }
 };
 
-pub const ShredIndex = struct {
-    /// Map representing presence/absence of shreds
-    index: std.AutoHashMap(u64, void),
-};
+pub const ShredIndex = SortedSet(u64);
 
 pub const TransactionStatusMeta = sig.blockstore.transaction_status.TransactionStatusMeta;
 
@@ -148,11 +322,6 @@ pub const OptimisticSlotMetaV0 = struct {
     timestamp: UnixTimestamp,
 };
 
-pub const ErasureSetId = struct {
-    slot: Slot,
-    fec_set_index: u64,
-};
-
 pub const MerkleRootMeta = struct {
     /// The merkle root, `None` for legacy shreds
     merkle_root: ?sig.core.Hash,
@@ -160,4 +329,18 @@ pub const MerkleRootMeta = struct {
     first_received_shred_index: u32,
     /// The shred type of the first received shred
     first_received_shred_type: sig.shred_collector.shred.ShredType,
+
+    pub fn fromShred(shred: Shred) MerkleRootMeta {
+        return .{
+            // An error here after the shred has already sigverified
+            // can only indicate that the leader is sending
+            // legacy or malformed shreds. We should still store
+            // `None` for those cases in blockstore, as a later
+            // shred that contains a proper merkle root would constitute
+            // a valid duplicate shred proof.
+            .merkle_root = shred.merkleRoot() catch null,
+            .first_received_shred_index = shred.common().index,
+            .first_received_shred_type = shred,
+        };
+    }
 };
