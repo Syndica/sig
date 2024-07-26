@@ -11,7 +11,6 @@ const ChunkType = sig.gossip.service.ChunkType;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const SignedGossipData = sig.gossip.data.SignedGossipData;
 const ContactInfo = sig.gossip.data.ContactInfo;
-const Logger = sig.trace.log.Logger;
 const GossipMessage = sig.gossip.message.GossipMessage;
 const GossipPullFilterSet = sig.gossip.pull_request.GossipPullFilterSet;
 const GossipPullFilter = sig.gossip.pull_request.GossipPullFilter;
@@ -28,7 +27,6 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const AtomicBool = std.atomic.Value(bool);
 
 const gossipDataToPackets = sig.gossip.service.gossipDataToPackets;
-const getWallclockMs = sig.gossip.data.getWallclockMs;
 
 const Duration = sig.time.Duration;
 

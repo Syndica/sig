@@ -15,12 +15,10 @@ const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
-const Vote = sig.gossip.data.Vote;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
 const Hash = sig.core.hash.Hash;
-const Transaction = sig.core.transaction.Transaction;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
