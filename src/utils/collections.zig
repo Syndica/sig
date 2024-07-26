@@ -66,9 +66,7 @@ pub fn RecyclingList(
 /// A set that guarantees the contained items will be sorted whenever
 /// accessed through public methods like `items` and `range`.
 ///
-/// Only works with numbers.
-///
-/// TODO consider reimplementing with something faster (e.g. binary tree)
+/// Compatible with numbers and types that have an "order" method
 pub fn SortedSet(comptime T: type) type {
     return struct {
         map: SortedMap(T, void),
@@ -118,13 +116,34 @@ pub fn SortedSet(comptime T: type) type {
     };
 }
 
-/// A HashMap that guarantees the contained items will be sorted by key
+/// A map that guarantees the contained items will be sorted by key
 /// whenever accessed through public methods like `keys` and `range`.
 ///
-/// Only works with number keys.
+/// Compatible with numbers and types that have an "order" method
+pub fn SortedMap(comptime K: type, comptime V: type) type {
+    return if (@typeInfo(K) == .Int or @typeInfo(K) == .Float)
+        SortedMapCustom(K, V, std.math.order)
+    else if (@hasDecl(K, "order") and @TypeOf(K.order) == fn (a: K, b: K) std.math.Order)
+        SortedMapCustom(K, V, K.order)
+    else
+        @compileError(std.fmt.comptimePrint(
+            "{} not compatible with SortedMap, implement `order` or try SortedMapCustom.",
+            K,
+        ));
+}
+
+/// A map that guarantees the contained items will be sorted by key
+/// whenever accessed through public methods like `keys` and `range`.
 ///
 /// TODO consider reimplementing with something faster (e.g. binary tree)
-pub fn SortedMap(comptime K: type, comptime V: type) type {
+pub fn SortedMapCustom(
+    comptime K: type,
+    comptime V: type,
+    /// should have one of the following types:
+    /// - fn(a: T, b: T) std.math.Order
+    /// - fn(a: anytype, b: anytype) std.math.Order
+    comptime orderFn: anytype,
+) type {
     return struct {
         inner: std.AutoArrayHashMap(K, V),
         max: ?K = null,
@@ -192,7 +211,7 @@ pub fn SortedMap(comptime K: type, comptime V: type) type {
             var values_ = self.inner.values();
             if (start) |start_| {
                 // .any instead of .first because uniqueness is guaranteed
-                const start_index = switch (find(K, keys_, start_, .any)) {
+                const start_index = switch (find(K, keys_, start_, .any, orderFn)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => 0,
@@ -204,7 +223,7 @@ pub fn SortedMap(comptime K: type, comptime V: type) type {
             }
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
-                const end_index = switch (find(K, keys_, end_, .any)) {
+                const end_index = switch (find(K, keys_, end_, .any, orderFn)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => return .{ &.{}, &.{} },
@@ -241,6 +260,10 @@ fn find(
     /// If the number appears multiple times in the list,
     /// this decides which one to return.
     comptime which: enum { any, first, last },
+    /// should have one of the following types:
+    /// - fn(a: T, b: T) std.math.Order
+    /// - fn(a: anytype, b: anytype) std.math.Order
+    comptime orderFn: anytype,
 ) union(enum) {
     /// item was found at this index
     found: usize,
@@ -260,7 +283,7 @@ fn find(
     var right: usize = items.len;
     const maybe_index = while (left < right) {
         const mid = left + (right - left) / 2;
-        switch (std.math.order(search_term, items[mid])) {
+        switch (orderFn(search_term, items[mid])) {
             .eq => break mid,
             .gt => left = mid + 1,
             .lt => right = mid,
@@ -370,16 +393,16 @@ test "SortedSet range" {
 test find {
     const items: [4]u8 = .{ 1, 3, 3, 5 };
     inline for (.{ .any, .first, .last }) |w| {
-        try expectEqual(find(u8, &items, 0, w), .less);
-        try expectEqual(find(u8, &items, 1, w).found, 0);
-        try expectEqual(find(u8, &items, 2, w).after, 0);
-        try expectEqual(find(u8, &items, 4, w).after, 2);
-        try expectEqual(find(u8, &items, 5, w).found, 3);
-        try expectEqual(find(u8, &items, 6, w), .greater);
+        try expectEqual(find(u8, &items, 0, w, std.math.order), .less);
+        try expectEqual(find(u8, &items, 1, w, std.math.order).found, 0);
+        try expectEqual(find(u8, &items, 2, w, std.math.order).after, 0);
+        try expectEqual(find(u8, &items, 4, w, std.math.order).after, 2);
+        try expectEqual(find(u8, &items, 5, w, std.math.order).found, 3);
+        try expectEqual(find(u8, &items, 6, w, std.math.order), .greater);
     }
-    expect(find(u8, &items, 3, .any).found == 1) catch {
-        try expectEqual(find(u8, &items, 3, .any).found, 2);
+    expect(find(u8, &items, 3, .any, std.math.order).found == 1) catch {
+        try expectEqual(find(u8, &items, 3, .any, std.math.order).found, 2);
     };
-    try expectEqual(find(u8, &items, 3, .first).found, 1);
-    try expectEqual(find(u8, &items, 3, .last).found, 2);
+    try expectEqual(find(u8, &items, 3, .first, std.math.order).found, 1);
+    try expectEqual(find(u8, &items, 3, .last, std.math.order).found, 2);
 }
