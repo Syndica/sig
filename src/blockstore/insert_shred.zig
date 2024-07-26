@@ -23,6 +23,7 @@ const ReedSolomonCache = bs.shredder.ReedSolomonCache;
 const ShredId = sig.shred_collector.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
+const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
 const BlockstoreDB = bs.blockstore.BlockstoreDB;
@@ -125,7 +126,7 @@ pub fn ShredInserter(comptime DB: type) type {
             var write_batch = try self.db.initBatch();
 
             var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator); // TODO capacity = shreds.len
-            var erasure_metas = AutoHashMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
+            var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
             var merkle_root_metas = AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator);
             var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator);
             var index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(allocator);
@@ -269,10 +270,10 @@ pub fn ShredInserter(comptime DB: type) type {
             );
             // TODO return value
 
-            var erasure_iter = erasure_metas.iterator();
-            while (erasure_iter.next()) |entry| if (entry.value_ptr.* == .dirty) {
-                const slot = entry.key_ptr.slot;
-                const erasure_meta: ErasureMeta = entry.value_ptr.dirty;
+            const em0_keys, const em0_values = erasure_metas.items();
+            for (em0_keys, em0_values) |erasure_set, working_em| if (working_em == .dirty) {
+                const slot = erasure_set.slot;
+                const erasure_meta: ErasureMeta = working_em.dirty;
                 if (try self.hasDuplicateShredsInSlot(slot)) {
                     continue;
                 }
@@ -320,10 +321,8 @@ pub fn ShredInserter(comptime DB: type) type {
             }
 
             // TODO: this feels redundant: logic of next loop applied to the data of 2 loops ago
-            var erasure_commit_iter = erasure_metas.iterator();
-            while (erasure_commit_iter.next()) |erasure_entry| {
-                const erasure_set = erasure_entry.key_ptr.*;
-                const working_erasure_meta = erasure_entry.value_ptr;
+            const em1_keys, const em1_values = erasure_metas.items();
+            for (em1_keys, em1_values) |erasure_set, *working_erasure_meta| {
                 if (working_erasure_meta.* == .clean) {
                     continue;
                 }
@@ -379,7 +378,7 @@ pub fn ShredInserter(comptime DB: type) type {
         fn checkInsertCodingShred(
             self: *Self,
             shred: CodingShred,
-            erasure_metas: *AutoHashMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in rust
+            erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in rust
             merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
             index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
             write_batch: *WriteBatch,
@@ -595,7 +594,7 @@ pub fn ShredInserter(comptime DB: type) type {
         fn checkInsertDataShred(
             self: *Self,
             shred: DataShred,
-            erasure_metas: *AutoHashMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in rust
+            erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in rust
             merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
             index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
             slot_meta_working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
@@ -1036,7 +1035,7 @@ pub fn ShredInserter(comptime DB: type) type {
         // agave: try_shred_recovery
         fn tryShredRecovery(
             self: *Self,
-            erasure_metas: *const AutoHashMap(ErasureSetId, WorkingEntry(ErasureMeta)),
+            erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
             index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
             prev_inserted_shreds: *const AutoHashMap(ShredId, Shred),
             reed_solomon_cache: *const ReedSolomonCache,
@@ -1047,11 +1046,10 @@ pub fn ShredInserter(comptime DB: type) type {
             // 3. Before trying recovery, check if enough number of shreds have been received
             // 3a. Enough number of shreds = (#data + #coding shreds) > erasure.num_data
             var recovered_shreds = std.ArrayList(Shred).init(self.allocator);
-            var iter = erasure_metas.iterator();
+            const keys, const values = erasure_metas.items();
             // let index = &mut index_meta_entry.index;
-            while (iter.next()) |entry| {
-                const erasure_set = entry.key_ptr.*;
-                const erasure_meta = entry.value_ptr.asRef();
+            for (keys, values) |erasure_set, *working_erasure_meta| {
+                const erasure_meta = working_erasure_meta.asRef();
                 var index_meta_entry = index_working_set.get(erasure_set.slot) orelse {
                     return error.Unwrap; // TODO: consider all the unwraps
                 };
@@ -1417,7 +1415,7 @@ pub fn ShredInserter(comptime DB: type) type {
             self: *Self,
             shred: Shred,
             just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-            erasure_metas: *const AutoHashMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in agave
+            erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in agave
             duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
         ) !bool {
             const slot = shred.common().slot;
@@ -1492,7 +1490,7 @@ pub fn ShredInserter(comptime DB: type) type {
         fn previousErasureSet(
             self: *const Self,
             erasure_set: ErasureSetId,
-            erasure_metas: *const AutoHashMap(ErasureSetId, WorkingEntry(ErasureMeta)),
+            erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
         ) !?struct { ErasureSetId, ErasureMeta } { // TODO: agave uses CoW here
             _ = self;
             _ = erasure_set;

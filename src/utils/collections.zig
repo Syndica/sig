@@ -212,6 +212,11 @@ pub fn SortedMapCustom(
             return self.inner.keys();
         }
 
+        pub fn items(self: *Self) struct { []const K, []const V } {
+            self.sort();
+            return .{ self.inner.keys(), self.inner.values() };
+        }
+
         /// subslice of items ranging from start (inclusive) to end (exclusive)
         pub fn range(self: *Self, start: ?K, end: ?K) struct { []const K, []const V } {
             if (self.count() == 0) return .{ &.{}, &.{} };
@@ -249,7 +254,7 @@ pub fn SortedMapCustom(
         fn sort(self: *Self) void {
             if (self.is_sorted) return;
             self.inner.sort(struct {
-                items: std.MultiArrayList(std.AutoArrayHashMap(K, void).Unmanaged.Data).Slice,
+                items: std.MultiArrayList(std.AutoArrayHashMap(K, V).Unmanaged.Data).Slice,
                 pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
                     return orderFn(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
                 }

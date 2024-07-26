@@ -321,6 +321,18 @@ pub const ShredId = struct {
 pub const ErasureSetId = struct {
     slot: Slot,
     fec_set_index: u64,
+
+    pub fn order(a: ErasureSetId, b: ErasureSetId) std.math.Order {
+        if (a.slot == b.slot and a.fec_set_index == b.fec_set_index) {
+            return .eq;
+        } else if (a.slot < b.slot or a.slot == b.slot and a.fec_set_index < b.fec_set_index) {
+            return .lt;
+        } else if (a.slot > b.slot or a.slot == b.slot and a.fec_set_index > b.fec_set_index) {
+            return .gt;
+        } else {
+            unreachable;
+        }
+    }
 };
 
 fn getMerkleRoot(
