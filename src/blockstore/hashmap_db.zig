@@ -46,7 +46,7 @@ pub const SharedHashMapDB = struct {
     pub fn put(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
         value: cf.Value,
     ) !void {
@@ -60,7 +60,7 @@ pub const SharedHashMapDB = struct {
     pub fn get(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !?cf.Value {
         const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
@@ -80,7 +80,7 @@ pub const SharedHashMapDB = struct {
     pub fn getBytes(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !?BytesRef {
         const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
@@ -105,7 +105,7 @@ pub const SharedHashMapDB = struct {
     pub fn delete(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !void {
         const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
@@ -172,7 +172,7 @@ pub const MapBatch = struct {
     pub fn put(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
         value: cf.Value,
     ) !void {
@@ -186,7 +186,7 @@ pub const MapBatch = struct {
     pub fn delete(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !void {
         return try self.instructions.append(self.allocator, .{ .delete = .{

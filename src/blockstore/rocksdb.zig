@@ -82,7 +82,7 @@ pub const RocksDB = struct {
     pub fn put(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
         value: cf.Value,
     ) !void {
@@ -100,7 +100,7 @@ pub const RocksDB = struct {
     pub fn get(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !?cf.Value {
         const val_bytes = try self.getBytes(cf, cf_index, key) orelse return null;
@@ -111,7 +111,7 @@ pub const RocksDB = struct {
     pub fn getBytes(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !?BytesRef {
         const key_bytes = try cf.key().serializeToRef(self.allocator, key);
@@ -130,7 +130,7 @@ pub const RocksDB = struct {
     pub fn delete(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !void {
         const key_bytes = try cf.key().serializeToRef(self.allocator, key);
@@ -163,7 +163,7 @@ pub const RocksWriteBatch = struct {
     pub fn put(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
         value: cf.Value,
     ) !void {
@@ -177,7 +177,7 @@ pub const RocksWriteBatch = struct {
     pub fn delete(
         self: *Self,
         comptime cf: ColumnFamily,
-        comptime cf_index: usize,
+        cf_index: usize,
         key: cf.Key,
     ) !void {
         const key_bytes = try cf.key().serializeToRef(self.allocator, key);
