@@ -128,7 +128,7 @@ pub fn SortedMap(comptime K: type, comptime V: type) type {
     else
         @compileError(std.fmt.comptimePrint(
             "{} not compatible with SortedMap, implement `order` or try SortedMapCustom.",
-            K,
+            .{K},
         ));
 }
 
@@ -152,7 +152,7 @@ pub fn SortedMapCustom(
         const Self = @This();
 
         pub fn init(allocator: Allocator) Self {
-            return .{ .inner = std.AutoArrayHashMap(K, void).init(allocator) };
+            return .{ .inner = std.AutoArrayHashMap(K, V).init(allocator) };
         }
 
         pub fn deinit(self: *Self) void {
@@ -176,9 +176,19 @@ pub fn SortedMapCustom(
             return true;
         }
 
+        pub fn getOrPut(self: *Self, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
+            const result = try self.inner.getOrPut(key);
+            if (self.max == null or orderFn(key, self.max.?) == .gt) {
+                self.max = key;
+            } else {
+                self.is_sorted = false;
+            }
+            return result;
+        }
+
         pub fn put(self: *Self, key: K, value: V) !void {
             try self.inner.put(key, value);
-            if (self.max == null or key > self.max.?) {
+            if (self.max == null or orderFn(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
                 self.is_sorted = false;
@@ -241,7 +251,7 @@ pub fn SortedMapCustom(
             self.inner.sort(struct {
                 items: std.MultiArrayList(std.AutoArrayHashMap(K, void).Unmanaged.Data).Slice,
                 pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-                    return ctx.items.get(a_index).key < ctx.items.get(b_index).key;
+                    return orderFn(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
                 }
             }{ .items = self.inner.unmanaged.entries.slice() });
             self.is_sorted = true;
