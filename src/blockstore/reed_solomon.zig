@@ -1,14 +1,16 @@
 const std = @import("std");
-const table = @import("table.zig");
+const sig = @import("../lib.zig");
+const table = @import("reed_solomon_table.zig");
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-const ReedSolomon = struct {
+pub const ReedSolomon = struct {
     data_shard_count: usize,
     parity_shard_count: usize,
     total_shard_count: usize,
     matrix: Matrix,
+    rc: sig.sync.ReferenceCounter = .{},
     // TODO lru cache of matrices
 
     pub fn init(allocator: Allocator, data_shards: usize, parity_shards: usize) !ReedSolomon {
@@ -39,8 +41,12 @@ const ReedSolomon = struct {
         };
     }
 
-    pub fn deinit(self: ReedSolomon) void {
-        self.matrix.deinit();
+    pub fn acquire(self: *ReedSolomon) bool {
+        return self.rc.acquire();
+    }
+
+    pub fn deinit(self: *ReedSolomon) void {
+        if (self.rc.release()) self.matrix.deinit();
     }
 
     pub fn reconstruct(
@@ -564,7 +570,7 @@ const field = struct {
 
 test "ReedSolomon.reconstruct basic 0-11 sequence with any missing combination" {
     const allocator = std.testing.allocator;
-    const rs = try ReedSolomon.init(allocator, 3, 2);
+    var rs = try ReedSolomon.init(allocator, 3, 2);
     defer rs.deinit();
     var master_copy = [5][4]u8{
         .{ 0, 1, 2, 3 },
@@ -595,7 +601,7 @@ test "ReedSolomon.reconstruct basic 0-11 sequence with any missing combination" 
 
 test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
     const allocator = std.testing.allocator;
-    const rs = try ReedSolomon.init(allocator, 7, 4);
+    var rs = try ReedSolomon.init(allocator, 7, 4);
     defer rs.deinit();
     const num_shards = 11;
     const master_copy = [num_shards][]const u8{

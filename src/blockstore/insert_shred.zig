@@ -19,6 +19,7 @@ const Slot = sig.core.Slot;
 const Shred = sig.shred_collector.shred.Shred;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 const DataShred = sig.shred_collector.shred.DataShred;
+const ReedSolomonCache = bs.shredder.ReedSolomonCache;
 const ShredId = sig.shred_collector.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -1750,8 +1751,6 @@ pub const IndexMetaWorkingSetEntry = struct {
     }
 };
 
-pub const ReedSolomonCache = struct {};
-
 pub const BlockstoreInsertionMetrics = struct {
     insert_lock_elapsed_us: *Counter, // u64
     insert_shreds_elapsed_us: *Counter, // u64
@@ -1845,6 +1844,7 @@ test "insertShreds" {
     };
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     const metrics = try BlockstoreInsertionMetrics.init(&registry);
-    var rsc = ReedSolomonCache{};
+    var rsc = try ReedSolomonCache.init(allocator);
+    defer rsc.deinit();
     _ = try inserter.insertShreds(&.{}, &.{}, null, false, null, &rsc, &metrics);
 }

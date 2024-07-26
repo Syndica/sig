@@ -42,7 +42,7 @@ pub const ReferenceCounter = struct {
     pub fn acquire(self: *Self) bool {
         const prior: State = @bitCast(self.state.fetchAdd(
             @bitCast(State{ .acquirers = 1, .refs = 1 }),
-            .Acquire,
+            .acquire,
         ));
         if (prior.refs > prior.acquirers) {
             _ = self.state.fetchSub(@bitCast(State{ .acquirers = 1 }), .monotonic);
@@ -59,7 +59,7 @@ pub const ReferenceCounter = struct {
     /// - true: this was the last reference. you should now destroy the resource.
     /// - false: there are still more references. don't do anything.
     pub fn release(self: *Self) bool {
-        const prior: State = @bitCast(self.state.fetchSub(@bitCast(State{ .refs = 1 }), .AcqRel));
+        const prior: State = @bitCast(self.state.fetchSub(@bitCast(State{ .refs = 1 }), .acq_rel));
         // if this fails, the resource is already dead (analogous to double-free)
         std.debug.assert(prior.refs > prior.acquirers);
         return prior.refs == 1;
