@@ -71,14 +71,12 @@ pub fn RecyclingList(
 /// TODO consider reimplementing with something faster (e.g. binary tree)
 pub fn SortedSet(comptime T: type) type {
     return struct {
-        map: std.AutoArrayHashMap(T, void),
-        max: ?T = null,
-        is_sorted: bool = true,
+        map: SortedMap(T, void),
 
         const Self = @This();
 
         pub fn init(allocator: Allocator) Self {
-            return .{ .map = std.AutoArrayHashMap(T, void).init(allocator) };
+            return .{ .map = SortedMap(T, void).init(allocator) };
         }
 
         pub fn deinit(self: *Self) void {
@@ -86,33 +84,19 @@ pub fn SortedSet(comptime T: type) type {
         }
 
         pub fn clone(self: Self) !Self {
-            return .{
-                .map = try self.map.clone(),
-                .max = self.max,
-                .is_sorted = self.is_sorted,
-            };
+            return .{ .map = try self.map.clone() };
         }
 
         pub fn eql(self: *Self, other: *Self) bool {
-            self.sort();
-            other.sort();
-            for (self.map.keys(), other.map.keys()) |s, o| {
-                if (s != o) return false;
-            }
-            return true;
+            return self.map.eql(&other.map);
         }
 
         pub fn put(self: *Self, item: T) !void {
             try self.map.put(item, {});
-            if (self.max == null or item > self.max.?) {
-                self.max = item;
-            } else {
-                self.is_sorted = false;
-            }
         }
 
         pub fn remove(self: *Self, item: T) bool {
-            return self.map.orderedRemove(item);
+            return self.map.remove(item);
         }
 
         pub fn contains(self: Self, item: T) bool {
@@ -124,49 +108,123 @@ pub fn SortedSet(comptime T: type) type {
         }
 
         pub fn items(self: *Self) []const T {
-            self.sort();
             return self.map.keys();
         }
 
         /// subslice of items ranging from start (inclusive) to end (exclusive)
         pub fn range(self: *Self, start: ?T, end: ?T) []const T {
-            if (self.count() == 0) return &.{};
-            if (start) |s| if (end) |e| if (e <= s) return &.{};
+            return self.map.range(start, end)[0];
+        }
+    };
+}
+
+/// A HashMap that guarantees the contained items will be sorted by key
+/// whenever accessed through public methods like `keys` and `range`.
+///
+/// Only works with number keys.
+///
+/// TODO consider reimplementing with something faster (e.g. binary tree)
+pub fn SortedMap(comptime K: type, comptime V: type) type {
+    return struct {
+        inner: std.AutoArrayHashMap(K, V),
+        max: ?K = null,
+        is_sorted: bool = true,
+
+        const Self = @This();
+
+        pub fn init(allocator: Allocator) Self {
+            return .{ .inner = std.AutoArrayHashMap(K, void).init(allocator) };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.inner.deinit();
+        }
+
+        pub fn clone(self: Self) !Self {
+            return .{
+                .inner = try self.inner.clone(),
+                .max = self.max,
+                .is_sorted = self.is_sorted,
+            };
+        }
+
+        pub fn eql(self: *Self, other: *Self) bool {
             self.sort();
-            var items_ = self.items();
+            other.sort();
+            for (self.inner.keys(), self.inner.values(), other.inner.keys(), other.inner.values()) |sk, sv, ok, ov| {
+                if (sk != ok or sv != ov) return false;
+            }
+            return true;
+        }
+
+        pub fn put(self: *Self, key: K, value: V) !void {
+            try self.inner.put(key, value);
+            if (self.max == null or key > self.max.?) {
+                self.max = key;
+            } else {
+                self.is_sorted = false;
+            }
+        }
+
+        pub fn remove(self: *Self, key: K) bool {
+            return self.inner.orderedRemove(key);
+        }
+
+        pub fn contains(self: Self, key: K) bool {
+            return self.inner.contains(key);
+        }
+
+        pub fn count(self: Self) usize {
+            return self.inner.count();
+        }
+
+        pub fn keys(self: *Self) []const K {
+            self.sort();
+            return self.inner.keys();
+        }
+
+        /// subslice of items ranging from start (inclusive) to end (exclusive)
+        pub fn range(self: *Self, start: ?K, end: ?K) struct { []const K, []const V } {
+            if (self.count() == 0) return .{ &.{}, &.{} };
+            if (start) |s| if (end) |e| if (e <= s) return .{ &.{}, &.{} };
+            self.sort();
+            var keys_ = self.inner.keys();
+            var values_ = self.inner.values();
             if (start) |start_| {
                 // .any instead of .first because uniqueness is guaranteed
-                const start_index = switch (find(T, items_, start_, .any)) {
+                const start_index = switch (find(K, keys_, start_, .any)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => 0,
-                    .greater => return &.{},
+                    .greater => return .{ &.{}, &.{} },
                     .empty => unreachable, // count checked above
                 };
-                items_ = items_[start_index..];
+                keys_ = keys_[start_index..];
+                values_ = values_[start_index..];
             }
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
-                const end_index = switch (find(T, items_, end_, .any)) {
+                const end_index = switch (find(K, keys_, end_, .any)) {
                     .found => |index| index,
                     .after => |index| index + 1,
-                    .less => return &.{},
-                    .greater => items_.len,
+                    .less => return .{ &.{}, &.{} },
+                    .greater => keys_.len,
                     .empty => unreachable, // count checked above
                 };
-                items_ = items_[0..end_index];
+                keys_ = keys_[0..end_index];
+                values_ = values_[0..end_index];
             }
-            return items_;
+            return .{ keys_, values_ };
         }
 
         fn sort(self: *Self) void {
             if (self.is_sorted) return;
-            self.map.sort(struct {
-                items: std.MultiArrayList(std.AutoArrayHashMap(T, void).Unmanaged.Data).Slice,
+            self.inner.sort(struct {
+                items: std.MultiArrayList(std.AutoArrayHashMap(K, void).Unmanaged.Data).Slice,
                 pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
                     return ctx.items.get(a_index).key < ctx.items.get(b_index).key;
                 }
-            }{ .items = self.map.unmanaged.entries.slice() });
+            }{ .items = self.inner.unmanaged.entries.slice() });
             self.is_sorted = true;
         }
     };
