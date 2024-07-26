@@ -114,6 +114,9 @@ pub fn BlockRng(
     };
 }
 
+/// Downsample a random number generator to a smaller range.
+/// This implementationc is based on the implementation in the rust rand crate
+/// and ensures the same sequence is generated.
 pub fn uintLessThanRust(r: Random, comptime T: type, less_than: T) T {
     comptime std.debug.assert(@typeInfo(T).Int.signedness == .unsigned);
     const bits = @typeInfo(T).Int.bits;
