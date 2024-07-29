@@ -41,12 +41,16 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
+    if (std.mem.startsWith(u8, filter, "std_geyser") or run_all_benchmarks) {
         try benchmark(
             @import("geyser/lib.zig").BenchmarkAccountStream,
             max_time_per_bench,
             TimeUnits.milliseconds,
         );
+    }
+
+    if (std.mem.startsWith(u8, filter, "stream_geyser") or run_all_benchmarks) {
+        try @import("geyser/lib.zig").bench.main();
     }
 
     if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {
