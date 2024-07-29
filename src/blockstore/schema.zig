@@ -3,14 +3,11 @@ const sig = @import("../lib.zig");
 
 const meta = sig.blockstore.meta;
 
-const Allocator = std.mem.Allocator;
-
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const ErasureSetId = sig.shred_collector.shred.ErasureSetId;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
-const SlotMeta = sig.blockstore.meta.SlotMeta;
 
 pub const schema = struct {
     pub const slot_meta: ColumnFamily = .{

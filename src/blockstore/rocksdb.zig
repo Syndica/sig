@@ -3,7 +3,6 @@ const rocks = @import("rocksdb");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
-const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const BytesRef = sig.blockstore.database.BytesRef;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;

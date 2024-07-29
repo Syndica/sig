@@ -1,5 +1,4 @@
 const std = @import("std");
-const rocks = @import("rocksdb");
 const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
@@ -9,7 +8,6 @@ const BytesRef = sig.blockstore.database.BytesRef;
 const Database = sig.blockstore.database.Database;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
-const Return = sig.utils.types.Return;
 
 pub const SharedHashMapDB = struct {
     allocator: Allocator,
