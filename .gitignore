@@ -5,7 +5,7 @@ data/
 
 ledger/
 index_storage/
-kcov-output
+kcov-output/
 .vscode/
 
 /gossip-dumps

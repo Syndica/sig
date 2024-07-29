@@ -59,6 +59,16 @@ pub fn Channel(comptime T: type) type {
             self.has_value.signal();
         }
 
+        pub fn len(self: *Self) error{ChannelClosed}!u64 {
+            if (self.closed.load(.monotonic)) {
+                return error.ChannelClosed;
+            }
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
+
+            return buffer.get().items.len;
+        }
+
         pub fn receive(self: *Self) ?T {
             var buffer = self.buffer.lock();
             defer buffer.unlock();

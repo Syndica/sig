@@ -95,6 +95,18 @@ pub fn Mux(comptime T: type) type {
             }
         };
 
+        pub fn readWithLock(self: *Self) struct { Const(T), LockGuard } {
+            var lock_guard = self.lock();
+            const t = lock_guard.get();
+            return .{ t, lock_guard };
+        }
+
+        pub fn writeWithLock(self: *Self) struct { Mutable(T), LockGuard } {
+            var lock_guard = self.lock();
+            const t = lock_guard.mut();
+            return .{ t, lock_guard };
+        }
+
         /// `lock` returns a `LockGuard` after acquiring `Mutex` lock
         pub fn lock(self: *Self) LockGuard {
             self.private.m.lock();
