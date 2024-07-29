@@ -211,7 +211,13 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             accounts_db.largest_root_slot.store(largest_rooted_slot, .seq_cst);
         }
 
-        if (slot % 500 == 0 and slot != largest_rooted_slot) {
+        const empty_file_map = blk: {
+            const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
+            defer file_map_lg.unlock();
+            break :blk file_map.count() == 0;
+        };
+
+        if (!empty_file_map and slot % 500 == 0 and slot != largest_rooted_slot) {
             const snapshot_random_hash = Hash.random(rand);
             const snap_info: sig.accounts_db.snapshots.FullSnapshotFileInfo = .{
                 .slot = largest_rooted_slot,

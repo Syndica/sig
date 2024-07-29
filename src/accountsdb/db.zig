@@ -281,8 +281,7 @@ pub const AccountsDB = struct {
         const n_account_files: usize = file_info_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
 
-        if (n_account_files == 0) return; // TODO: workaround for fuzz testing to work, not sure if correct behaviour
-        // std.debug.assert(n_account_files > 0);
+        std.debug.assert(n_account_files > 0);
 
         const use_disk_index = self.config.use_disk_index;
         if (self.config.use_disk_index) {
