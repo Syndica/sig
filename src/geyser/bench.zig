@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
+const bincode = sig.bincode;
 const AccountsDB = sig.accounts_db.AccountsDB;
 const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
@@ -18,6 +19,7 @@ pub fn streamReader() !void {
 
     while (true) {
         const data = try reader.read();
+        defer bincode.free(allocator, data);
 
         var bytes: usize = 0;
         for (data.accounts, data.pubkeys) |*account, _| {
