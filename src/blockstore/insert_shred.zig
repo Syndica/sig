@@ -1493,9 +1493,58 @@ pub fn ShredInserter(comptime DB: type) type {
             erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
         ) !?struct { ErasureSetId, ErasureMeta } { // TODO: agave uses CoW here
             _ = self;
-            _ = erasure_set;
-            _ = erasure_metas;
-            return undefined;
+            const slot = erasure_set.slot;
+            const fec_set_index = erasure_set.fec_set_index;
+
+            // Check the previous entry from the in memory map to see if it is the consecutive
+            // set to `erasure set`
+            const id_range, const meta_range = erasure_metas.range(
+                .{ .slot = slot, .fec_set_index = 0 },
+                erasure_set,
+            );
+            if (id_range.len != 0) {
+                const i = id_range.len - 1;
+                const last_meta = meta_range[i].asRef();
+                if (@as(u32, @intCast(fec_set_index)) == last_meta.nextFecSetIndex()) {
+                    return .{ id_range[i], last_meta.* };
+                }
+            }
+            return undefined; //TODO
+
+            // Consecutive set was not found in memory, scan blockstore for a potential candidate
+
+            // let Some(((_, candidate_fec_set_index), candidate_erasure_meta)) = self
+            //     .erasure_meta_cf
+            //     .iter(IteratorMode::From(
+            //         (slot, u64::from(fec_set_index)),
+            //         IteratorDirection::Reverse,
+            //     ))?
+            //     // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
+            //     .find(|((_, candidate_fec_set_index), _)| {
+            //         *candidate_fec_set_index != u64::from(fec_set_index)
+            //     })
+            //     // Do not consider sets from the previous slot
+            //     .filter(|((candidate_slot, _), _)| *candidate_slot == slot)
+            // else {
+            //     // No potential candidates
+            //     return Ok(None);
+            // };
+            // let candidate_fec_set_index = u32::try_from(candidate_fec_set_index)
+            //     .expect("fec_set_index from a previously inserted shred should fit in u32");
+            // let candidate_erasure_set = ErasureSetId::new(slot, candidate_fec_set_index);
+            // let candidate_erasure_meta: ErasureMeta = deserialize(candidate_erasure_meta.as_ref())?;
+
+            // // Check if this is actually the consecutive erasure set
+            // let Some(next_fec_set_index) = candidate_erasure_meta.next_fec_set_index() else {
+            //     return Err(BlockstoreError::InvalidErasureConfig);
+            // };
+            // if next_fec_set_index == fec_set_index {
+            //     return Ok(Some((
+            //         candidate_erasure_set,
+            //         Cow::Owned(candidate_erasure_meta),
+            //     )));
+            // }
+            // Ok(None)
         }
 
         /// agave: check_chaining

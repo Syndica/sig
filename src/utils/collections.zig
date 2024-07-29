@@ -66,15 +66,21 @@ pub fn RecyclingList(
 /// A set that guarantees the contained items will be sorted whenever
 /// accessed through public methods like `items` and `range`.
 ///
-/// Compatible with numbers and types that have an "order" method
+/// Compatible with numbers, slices of numbers, and types that have an "order" method
 pub fn SortedSet(comptime T: type) type {
+    return SortedSetCustom(T, .{});
+}
+
+/// A set that guarantees the contained items will be sorted whenever
+/// accessed through public methods like `items` and `range`.
+pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) type {
     return struct {
-        map: SortedMap(T, void),
+        map: SortedMapCustom(T, void, config),
 
         const Self = @This();
 
         pub fn init(allocator: Allocator) Self {
-            return .{ .map = SortedMap(T, void).init(allocator) };
+            return .{ .map = SortedMapCustom(T, void, config).init(allocator) };
         }
 
         pub fn deinit(self: *Self) void {
@@ -119,17 +125,9 @@ pub fn SortedSet(comptime T: type) type {
 /// A map that guarantees the contained items will be sorted by key
 /// whenever accessed through public methods like `keys` and `range`.
 ///
-/// Compatible with numbers and types that have an "order" method
+/// Compatible with numbers, slices of numbers, and types that have an "order" method
 pub fn SortedMap(comptime K: type, comptime V: type) type {
-    return if (@typeInfo(K) == .Int or @typeInfo(K) == .Float)
-        SortedMapCustom(K, V, std.math.order)
-    else if (@hasDecl(K, "order") and @TypeOf(K.order) == fn (a: K, b: K) std.math.Order)
-        SortedMapCustom(K, V, K.order)
-    else
-        @compileError(std.fmt.comptimePrint(
-            "{} not compatible with SortedMap, implement `order` or try SortedMapCustom.",
-            .{K},
-        ));
+    return SortedMapCustom(K, V, .{});
 }
 
 /// A map that guarantees the contained items will be sorted by key
@@ -139,20 +137,25 @@ pub fn SortedMap(comptime K: type, comptime V: type) type {
 pub fn SortedMapCustom(
     comptime K: type,
     comptime V: type,
-    /// should have one of the following types:
-    /// - fn(a: T, b: T) std.math.Order
-    /// - fn(a: anytype, b: anytype) std.math.Order
-    comptime orderFn: anytype,
+    comptime config: SortedMapConfig(K),
 ) type {
     return struct {
-        inner: std.AutoArrayHashMap(K, V),
+        inner: std.ArrayHashMap(K, V, config.Context, config.store_hash),
         max: ?K = null,
         is_sorted: bool = true,
 
+        const Inner = std.ArrayHashMap(K, V, config.Context, config.store_hash);
+
         const Self = @This();
 
+        fn order(a: K, b: K) std.math.Order {
+            return config.orderFn.call(a, b);
+        }
+
         pub fn init(allocator: Allocator) Self {
-            return .{ .inner = std.AutoArrayHashMap(K, V).init(allocator) };
+            return .{
+                .inner = Inner.init(allocator),
+            };
         }
 
         pub fn deinit(self: *Self) void {
@@ -176,9 +179,21 @@ pub fn SortedMapCustom(
             return true;
         }
 
+        pub fn get(self: Self, key: K) ?V {
+            return self.inner.get(key);
+        }
+
+        pub fn getEntry(self: Self, key: K) ?Inner.Entry {
+            return self.inner.getEntry(key);
+        }
+
+        pub fn fetchSwapRemove(self: *Self, key: K) ?Inner.KV {
+            return self.inner.fetchSwapRemove(key);
+        }
+
         pub fn getOrPut(self: *Self, key: K) !std.AutoArrayHashMap(K, V).GetOrPutResult {
             const result = try self.inner.getOrPut(key);
-            if (self.max == null or orderFn(key, self.max.?) == .gt) {
+            if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
                 self.is_sorted = false;
@@ -188,7 +203,7 @@ pub fn SortedMapCustom(
 
         pub fn put(self: *Self, key: K, value: V) !void {
             try self.inner.put(key, value);
-            if (self.max == null or orderFn(key, self.max.?) == .gt) {
+            if (self.max == null or order(key, self.max.?) == .gt) {
                 self.max = key;
             } else {
                 self.is_sorted = false;
@@ -220,13 +235,14 @@ pub fn SortedMapCustom(
         /// subslice of items ranging from start (inclusive) to end (exclusive)
         pub fn range(self: *Self, start: ?K, end: ?K) struct { []const K, []const V } {
             if (self.count() == 0) return .{ &.{}, &.{} };
-            if (start) |s| if (end) |e| if (e <= s) return .{ &.{}, &.{} };
+            if (start) |s| if (end) |e| if (order(e, s) != .gt)
+                return .{ &.{}, &.{} };
             self.sort();
             var keys_ = self.inner.keys();
             var values_ = self.inner.values();
             if (start) |start_| {
                 // .any instead of .first because uniqueness is guaranteed
-                const start_index = switch (find(K, keys_, start_, .any, orderFn)) {
+                const start_index = switch (find(K, keys_, start_, .any, order)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => 0,
@@ -238,7 +254,7 @@ pub fn SortedMapCustom(
             }
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
-                const end_index = switch (find(K, keys_, end_, .any, orderFn)) {
+                const end_index = switch (find(K, keys_, end_, .any, order)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => return .{ &.{}, &.{} },
@@ -254,13 +270,63 @@ pub fn SortedMapCustom(
         fn sort(self: *Self) void {
             if (self.is_sorted) return;
             self.inner.sort(struct {
-                items: std.MultiArrayList(std.AutoArrayHashMap(K, V).Unmanaged.Data).Slice,
+                items: std.MultiArrayList(Inner.Unmanaged.Data).Slice,
                 pub fn lessThan(ctx: @This(), a_index: usize, b_index: usize) bool {
-                    return orderFn(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
+                    return order(ctx.items.get(a_index).key, ctx.items.get(b_index).key) == .lt;
                 }
             }{ .items = self.inner.unmanaged.entries.slice() });
             self.is_sorted = true;
         }
+    };
+}
+
+fn SortedMapConfig(comptime K: type) type {
+    const OrderFn = union(enum) {
+        typed: fn (a: K, b: K) std.math.Order,
+        untyped: fn (a: anytype, b: anytype) std.math.Order,
+        pub fn call(self: @This(), a: K, b: K) std.math.Order {
+            return switch (self) {
+                inline .typed, .untyped => |f| f(a, b),
+            };
+        }
+    };
+    var _orderFn: ?OrderFn = null;
+    var _Context: ?type = null;
+    var _store_hash: ?bool = null;
+    const info = @typeInfo(K);
+    if (info == .Pointer and info.Pointer.size == .Slice and
+        (@typeInfo(info.Pointer.child) == .Int or @typeInfo(info.Pointer.child) == .Float))
+    {
+        _orderFn = .{ .typed = struct {
+            fn f(a: K, b: K) std.math.Order {
+                return orderSlices(info.Pointer.child, std.math.order, a, b);
+            }
+        }.f };
+        _Context = std.array_hash_map.StringContext;
+        _store_hash = true;
+    } else {
+        _orderFn = .{ .untyped = std.math.order };
+        _Context = std.array_hash_map.AutoContext(K);
+        _store_hash = !std.array_hash_map.autoEqlIsCheap(K);
+    }
+    switch (info) {
+        inline .Struct, .Enum, .Union, .Opaque => {
+            if (@hasDecl(K, "order") and @TypeOf(K.order) == fn (a: K, b: K) std.math.Order) {
+                _orderFn = .{ .typed = K.order };
+            }
+        },
+        else => {},
+    }
+    const default_orderFn = _orderFn orelse @compileError("orderFn bug");
+    const default_Context = _Context orelse @compileError("Context bug");
+    const default_store_hash = _store_hash orelse @compileError("store_hash bug");
+
+    return struct {
+        orderFn: OrderFn = default_orderFn,
+        /// passthrough to std.ArrayHashMap
+        Context: type = default_Context,
+        /// passthrough to std.ArrayHashMap
+        store_hash: bool = default_store_hash,
     };
 }
 
@@ -311,9 +377,9 @@ fn find(
             .less
         else if (left == items.len)
             .greater
-        else if (items[left] > search_term)
+        else if (orderFn(items[left], search_term) == .gt)
             .{ .after = left - 1 }
-        else if (items[left] < search_term)
+        else if (orderFn(items[left], search_term) == .lt)
             .{ .after = left }
         else
             unreachable;
@@ -332,6 +398,27 @@ fn find(
     }
 
     return .{ .found = index };
+}
+
+pub fn orderSlices(
+    comptime T: type,
+    /// should have one of the following types:
+    /// - fn(a: T, b: T) std.math.Order
+    /// - fn(a: anytype, b: anytype) std.math.Order
+    comptime orderElem: anytype,
+    a: []const T,
+    b: []const T,
+) std.math.Order {
+    var i: usize = 0;
+    while (i < a.len and i < b.len) : (i += 1) {
+        const order = orderElem(a[i], b[i]);
+        if (order == .eq) {
+            continue;
+        } else {
+            return order;
+        }
+    }
+    return if (a.len == b.len) .eq else if (a.len > b.len) .gt else .lt;
 }
 
 const expect = std.testing.expect;
@@ -420,4 +507,25 @@ test find {
     };
     try expectEqual(find(u8, &items, 3, .first, std.math.order).found, 1);
     try expectEqual(find(u8, &items, 3, .last, std.math.order).found, 2);
+}
+
+test "order slices" {
+    const a: [3]u8 = .{ 1, 2, 3 };
+    const b: [3]u8 = .{ 2, 2, 3 };
+    const c: [3]u8 = .{ 1, 2, 4 };
+    const d: [3]u8 = .{ 1, 2, 3 };
+    const e: [4]u8 = .{ 1, 2, 3, 4 };
+    try expectEqual(orderSlices(u8, std.math.order, &a, &b), .lt);
+    try expectEqual(orderSlices(u8, std.math.order, &b, &a), .gt);
+    try expectEqual(orderSlices(u8, std.math.order, &a, &c), .lt);
+    try expectEqual(orderSlices(u8, std.math.order, &c, &a), .gt);
+    try expectEqual(orderSlices(u8, std.math.order, &a, &d), .eq);
+    try expectEqual(orderSlices(u8, std.math.order, &d, &a), .eq);
+    try expectEqual(orderSlices(u8, std.math.order, &a, &e), .lt);
+    try expectEqual(orderSlices(u8, std.math.order, &e, &a), .gt);
+
+    try expectEqual(orderSlices(u8, std.math.order, &b, &c), .gt);
+    try expectEqual(orderSlices(u8, std.math.order, &c, &b), .lt);
+    try expectEqual(orderSlices(u8, std.math.order, &b, &e), .gt);
+    try expectEqual(orderSlices(u8, std.math.order, &e, &b), .lt);
 }

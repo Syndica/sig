@@ -8,6 +8,7 @@ const BytesRef = sig.blockstore.database.BytesRef;
 const Database = sig.blockstore.database.Database;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
+const SortedMap = sig.utils.collections.SortedMap;
 
 pub const SharedHashMapDB = struct {
     allocator: Allocator,
@@ -205,22 +206,25 @@ pub const MapBatch = struct {
 
 const SharedHashMap = struct {
     allocator: Allocator,
-    map: std.StringHashMapUnmanaged([]const u8) = .{},
+    map: SortedMap([]const u8, []const u8),
     lock: DefaultRwLock = .{},
 
     const Self = @This();
 
     fn init(allocator: Allocator) Allocator.Error!Self {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .map = SortedMap([]const u8, []const u8).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Self) void {
-        var iter = self.map.iterator();
-        while (iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+        const keys, const values = self.map.items();
+        for (keys, values) |key, value| {
+            self.allocator.free(key);
+            self.allocator.free(value);
         }
-        self.map.deinit(self.allocator);
+        self.map.deinit();
     }
 
     pub fn free(self: Self, bytes: []const u8) void {
@@ -230,7 +234,7 @@ const SharedHashMap = struct {
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {
         self.lock.lock();
         defer self.lock.unlock();
-        try self.map.put(self.allocator, key, value);
+        try self.map.put(key, value);
     }
 
     /// Only call this while holding the lock
@@ -242,11 +246,8 @@ const SharedHashMap = struct {
         const key, const value = lock: {
             self.lock.lock();
             defer self.lock.unlock();
-            const entry = self.map.getEntry(key_) orelse return;
-            const key = entry.key_ptr.*;
-            const val = entry.value_ptr.*;
-            defer self.map.removeByPtr(entry.key_ptr);
-            break :lock .{ key, val };
+            const entry = self.map.fetchSwapRemove(key_) orelse return;
+            break :lock .{ entry.key, entry.value };
         };
         liberator.free(key);
         liberator.free(value);
