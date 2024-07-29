@@ -239,7 +239,8 @@ fn find(
 }
 
 const expect = std.testing.expect;
-const eql = std.mem.eql;
+const expectEqual = std.testing.expectEqual;
+const expectEqualSlices = std.testing.expectEqualSlices;
 
 test SortedSet {
     var set = SortedSet(u64).init(std.testing.allocator);
@@ -277,50 +278,50 @@ test "SortedSet range" {
     try set.put(1);
     try set.put(3);
 
-    try expect(eql(u8, &.{ 1, 3, 5 }, set.range(null, null)));
-    try expect(eql(u8, &.{}, set.range(0, 0)));
-    try expect(eql(u8, &.{}, set.range(10, 10)));
-    try expect(eql(u8, &.{}, set.range(10, 11)));
-    try expect(eql(u8, &.{}, set.range(12, 11)));
-    try expect(eql(u8, &.{1}, set.range(null, 3)));
-    try expect(eql(u8, &.{ 1, 3 }, set.range(null, 4)));
-    try expect(eql(u8, &.{ 1, 3 }, set.range(null, 5)));
-    try expect(eql(u8, &.{ 1, 3, 5 }, set.range(null, 6)));
-    try expect(eql(u8, &.{ 1, 3, 5 }, set.range(0, null)));
-    try expect(eql(u8, &.{ 1, 3, 5 }, set.range(1, null)));
-    try expect(eql(u8, &.{ 3, 5 }, set.range(2, null)));
-    try expect(eql(u8, &.{ 3, 5 }, set.range(3, null)));
-    try expect(eql(u8, &.{5}, set.range(4, null)));
-    try expect(eql(u8, &.{5}, set.range(5, null)));
-    try expect(eql(u8, &.{ 1, 3, 5 }, set.range(1, 6)));
-    try expect(eql(u8, &.{ 1, 3 }, set.range(1, 5)));
-    try expect(eql(u8, &.{ 1, 3 }, set.range(1, 4)));
-    try expect(eql(u8, &.{1}, set.range(1, 3)));
-    try expect(eql(u8, &.{1}, set.range(1, 2)));
-    try expect(eql(u8, &.{}, set.range(1, 1)));
-    try expect(eql(u8, &.{ 3, 5 }, set.range(2, 6)));
-    try expect(eql(u8, &.{ 3, 5 }, set.range(3, 6)));
-    try expect(eql(u8, &.{5}, set.range(4, 6)));
-    try expect(eql(u8, &.{5}, set.range(5, 6)));
-    try expect(eql(u8, &.{3}, set.range(3, 4)));
-    try expect(eql(u8, &.{}, set.range(3, 3)));
-    try expect(eql(u8, &.{}, set.range(2, 3)));
-    try expect(eql(u8, &.{}, set.range(2, 2)));
+    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, null));
+    try expectEqualSlices(u8, &.{}, set.range(0, 0));
+    try expectEqualSlices(u8, &.{}, set.range(10, 10));
+    try expectEqualSlices(u8, &.{}, set.range(10, 11));
+    try expectEqualSlices(u8, &.{}, set.range(12, 11));
+    try expectEqualSlices(u8, &.{1}, set.range(null, 3));
+    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(null, 4));
+    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(null, 5));
+    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(null, 6));
+    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(0, null));
+    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(1, null));
+    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(2, null));
+    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(3, null));
+    try expectEqualSlices(u8, &.{5}, set.range(4, null));
+    try expectEqualSlices(u8, &.{5}, set.range(5, null));
+    try expectEqualSlices(u8, &.{ 1, 3, 5 }, set.range(1, 6));
+    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(1, 5));
+    try expectEqualSlices(u8, &.{ 1, 3 }, set.range(1, 4));
+    try expectEqualSlices(u8, &.{1}, set.range(1, 3));
+    try expectEqualSlices(u8, &.{1}, set.range(1, 2));
+    try expectEqualSlices(u8, &.{}, set.range(1, 1));
+    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(2, 6));
+    try expectEqualSlices(u8, &.{ 3, 5 }, set.range(3, 6));
+    try expectEqualSlices(u8, &.{5}, set.range(4, 6));
+    try expectEqualSlices(u8, &.{5}, set.range(5, 6));
+    try expectEqualSlices(u8, &.{3}, set.range(3, 4));
+    try expectEqualSlices(u8, &.{}, set.range(3, 3));
+    try expectEqualSlices(u8, &.{}, set.range(2, 3));
+    try expectEqualSlices(u8, &.{}, set.range(2, 2));
 }
 
 test find {
     const items: [4]u8 = .{ 1, 3, 3, 5 };
     inline for (.{ .any, .first, .last }) |w| {
-        try expect(find(u8, &items, 0, w) == .less);
-        try expect(find(u8, &items, 1, w).found == 0);
-        try expect(find(u8, &items, 2, w).after == 0);
-        try expect(find(u8, &items, 4, w).after == 2);
-        try expect(find(u8, &items, 5, w).found == 3);
-        try expect(find(u8, &items, 6, w) == .greater);
+        try expectEqual(find(u8, &items, 0, w), .less);
+        try expectEqual(find(u8, &items, 1, w).found, 0);
+        try expectEqual(find(u8, &items, 2, w).after, 0);
+        try expectEqual(find(u8, &items, 4, w).after, 2);
+        try expectEqual(find(u8, &items, 5, w).found, 3);
+        try expectEqual(find(u8, &items, 6, w), .greater);
     }
     expect(find(u8, &items, 3, .any).found == 1) catch {
-        try expect(find(u8, &items, 3, .any).found == 2);
+        try expectEqual(find(u8, &items, 3, .any).found, 2);
     };
-    try expect(find(u8, &items, 3, .first).found == 1);
-    try expect(find(u8, &items, 3, .last).found == 2);
+    try expectEqual(find(u8, &items, 3, .first).found, 1);
+    try expectEqual(find(u8, &items, 3, .last).found, 2);
 }
