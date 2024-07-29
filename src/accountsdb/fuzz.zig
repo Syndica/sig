@@ -123,17 +123,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var random_bank_fields = try BankFields.random(gpa, rand, 1 << 8);
     defer random_bank_fields.deinit(gpa);
 
-    const random_bank_hash_info: BankHashInfo = .{
-        .accounts_delta_hash = Hash.random(rand),
-        .accounts_hash = Hash.random(rand),
-        .stats = .{
-            .num_updated_accounts = rand.int(u64),
-            .num_removed_accounts = rand.int(u64),
-            .num_lamports_stored = rand.int(u64),
-            .total_data_len = rand.int(u64),
-            .num_executable_accounts = rand.int(u64),
-        },
-    };
+    const random_bank_hash_info = BankHashInfo.random(rand);
 
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();

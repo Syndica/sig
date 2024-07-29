@@ -53,6 +53,21 @@ pub const FeeRateGovernor = struct {
     burn_percent: u8,
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
+
+    pub fn random(rand: std.Random) FeeRateGovernor {
+        return .{
+            .lamports_per_signature = rand.int(u64),
+
+            .target_lamports_per_signature = rand.int(u64),
+
+            .target_signatures_per_slot = rand.int(u64),
+
+            .min_lamports_per_signature = rand.int(u64),
+            .max_lamports_per_signature = rand.int(u64),
+
+            .burn_percent = rand.uintAtMost(u8, 100),
+        };
+    }
 };
 
 /// Analogous to [Rent](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/rent.rs#L13)
@@ -90,6 +105,21 @@ pub const Inflation = struct {
 
     /// DEPRECATED, this field is currently unused
     __unused: f64,
+
+    pub fn random(rand: std.Random) Inflation {
+        return .{
+            .initial = @floatFromInt(rand.int(u32)),
+
+            .terminal = @floatFromInt(rand.int(u32)),
+
+            .taper = @floatFromInt(rand.int(u32)),
+
+            .foundation = @floatFromInt(rand.int(u32)),
+            .foundation_term = @floatFromInt(rand.int(u32)),
+
+            .__unused = @floatFromInt(rand.int(u32)),
+        };
+    }
 };
 
 /// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/epoch_schedule.rs#L35)
