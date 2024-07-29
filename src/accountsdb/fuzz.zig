@@ -212,7 +212,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
 
         const empty_file_map = blk: {
-            const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
+            const file_map: *const AccountsDB.FileMap, var file_map_lg = accounts_db.file_map.readWithLock();
             defer file_map_lg.unlock();
             break :blk file_map.count() == 0;
         };

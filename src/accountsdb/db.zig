@@ -51,11 +51,6 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
-const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
-const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
-const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
-const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
-
 /// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
 pub const AccountsDBConfig = struct {
     /// number of threads to load snapshot
@@ -126,6 +121,11 @@ pub const AccountsDB = struct {
     config: AccountsDBConfig,
 
     const Self = @This();
+
+    pub const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
+    pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
+    pub const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
+    pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -1106,7 +1106,7 @@ pub const AccountsDB = struct {
                 self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
-                self.deleteAccountFiles(&delete_account_files);
+                self.deleteAccountFiles(delete_account_files.keys());
             }
         }
     }
@@ -1305,7 +1305,7 @@ pub const AccountsDB = struct {
                             number_dead_accounts_ptr.* = number_dead_accounts_ptr.* + 1;
                             const accounts_dead_count = number_dead_accounts_ptr.*;
 
-                            if (ref_file_id.toInt() == file_id.toInt()) {
+                            if (ref_file_id == file_id) {
                                 // read from the currently locked file
                                 break :blk .{ account_file.number_of_accounts, accounts_dead_count };
                             } else {
@@ -1362,14 +1362,14 @@ pub const AccountsDB = struct {
     /// exist in the index).
     pub fn deleteAccountFiles(
         self: *Self,
-        delete_account_files: *const std.AutoArrayHashMap(FileId, void),
+        delete_account_files: []const FileId,
     ) void {
         defer {
-            const number_of_files = delete_account_files.count();
+            const number_of_files = delete_account_files.len;
             self.stats.number_files_deleted.add(number_of_files);
         }
 
-        for (delete_account_files.keys()) |file_id| {
+        for (delete_account_files) |file_id| {
             const slot = blk: {
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
@@ -2197,7 +2197,7 @@ pub fn writeSnapshotTarWithFields(
     version: ClientVersion,
     status_cache: StatusCache,
     snapshot_fields: SnapshotFields,
-    file_map: *const FileMap,
+    file_map: *const AccountsDB.FileMap,
 ) !void {
     const slot: Slot = snapshot_fields.bank_fields.slot;
 
@@ -2857,7 +2857,7 @@ test "full clean account file works" {
         try std.testing.expect(file_map.get(delete_file_id) != null);
     }
 
-    accounts_db.deleteAccountFiles(&delete_account_files);
+    accounts_db.deleteAccountFiles(delete_account_files.keys());
 
     {
         const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
