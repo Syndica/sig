@@ -198,16 +198,13 @@ pub const MapBatch = struct {
 
 const SharedHashMap = struct {
     allocator: Allocator,
-    map: std.StringHashMap([]const u8),
+    map: std.StringHashMapUnmanaged([]const u8) = .{},
     lock: DefaultRwLock = .{},
 
     const Self = @This();
 
     fn init(allocator: Allocator) Allocator.Error!Self {
-        return .{
-            .allocator = allocator,
-            .map = std.StringHashMap([]const u8).init(allocator),
-        };
+        return .{ .allocator = allocator };
     }
 
     pub fn deinit(self: *Self) void {
@@ -216,7 +213,7 @@ const SharedHashMap = struct {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
-        self.map.deinit();
+        self.map.deinit(self.allocator);
     }
 
     pub fn free(self: Self, bytes: []const u8) void {
@@ -226,7 +223,7 @@ const SharedHashMap = struct {
     pub fn put(self: *Self, key: []const u8, value: []const u8) Allocator.Error!void {
         self.lock.lock();
         defer self.lock.unlock();
-        try self.map.put(key, value);
+        try self.map.put(self.allocator, key, value);
     }
 
     /// Only call this while holding the lock
