@@ -29,6 +29,8 @@ pub const SharedHashMapDB = struct {
         column_families: []const ColumnFamily,
     ) !SharedHashMapDB {
         var maps = try allocator.alloc(SharedHashMap, column_families.len);
+        errdefer allocator.free(maps);
+        errdefer for (maps) |*m| m.deinit();
         inline for (0..column_families.len) |i| {
             maps[i] = try SharedHashMap.init(allocator);
         }
@@ -51,7 +53,9 @@ pub const SharedHashMapDB = struct {
         value: cf.Value,
     ) !void {
         const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        errdefer self.allocator.free(key_bytes);
         const val_bytes = try cf.value().serializeAlloc(self.allocator, value);
+        errdefer self.allocator.free(val_bytes);
         self.transaction_lock.lockShared();
         defer self.transaction_lock.unlockShared();
         return try self.maps[cf_index].put(key_bytes, val_bytes);
@@ -176,11 +180,14 @@ pub const MapBatch = struct {
         key: cf.Key,
         value: cf.Value,
     ) !void {
-        return try self.instructions.append(self.allocator, .{ .put = .{
-            cf_index,
-            try cf.key().serializeAlloc(self.allocator, key),
-            try cf.value().serializeAlloc(self.allocator, value),
-        } });
+        const k_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        errdefer self.allocator.free(k_bytes);
+        const v_bytes = try cf.value().serializeAlloc(self.allocator, value);
+        errdefer self.allocator.free(v_bytes);
+        return try self.instructions.append(
+            self.allocator,
+            .{ .put = .{ cf_index, k_bytes, v_bytes } },
+        );
     }
 
     pub fn delete(
@@ -189,10 +196,12 @@ pub const MapBatch = struct {
         cf_index: usize,
         key: cf.Key,
     ) !void {
-        return try self.instructions.append(self.allocator, .{ .delete = .{
-            cf_index,
-            try cf.key().serializeAlloc(self.allocator, key),
-        } });
+        const k_bytes = try cf.key().serializeAlloc(self.allocator, key);
+        errdefer self.allocator.free(k_bytes);
+        return try self.instructions.append(
+            self.allocator,
+            .{ .delete = .{ cf_index, k_bytes } },
+        );
     }
 };
 
