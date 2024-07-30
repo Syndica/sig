@@ -114,6 +114,13 @@ pub fn BlockRng(
     };
 }
 
+pub fn errorValue(rand: std.Random, comptime ErrorSet: type) ?if (ErrorSet == anyerror) noreturn else ErrorSet {
+    if (ErrorSet == anyerror) return null;
+    return switch (rand.enumValue(std.meta.FieldEnum(ErrorSet))) {
+        inline else => |itag| @field(ErrorSet, @tagName(itag)),
+    };
+}
+
 /// Empties the provided hashmap, and then fills it with `hm_len` entries,
 /// each with a randomly generated key and value (there will be exactly `hm_len`
 /// entries, no more and no less).

@@ -80,6 +80,14 @@ pub const Rent = extern struct {
     /// Valid values are in the range [0, 100]. The remaining percentage is
     /// distributed to validators.
     burn_percent: u8,
+
+    pub fn random(rand: std.Random) Rent {
+        return .{
+            .lamports_per_byte_year = rand.int(u64),
+            .exemption_threshold = @floatFromInt(rand.int(u32)),
+            .burn_percent = rand.uintAtMost(u8, 100),
+        };
+    }
 };
 
 /// Analogous to [Inflation](https://github.com/anza-xyz/agave/blob/55aff7288e596e93d1184ba827048b1e3dc98061/sdk/src/inflation.rs#L6)
