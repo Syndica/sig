@@ -95,6 +95,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     }
 
     var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
+        .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
         .use_disk_index = use_disk,
         // TODO: other things we can fuzz (number of bins, ...)
     });

@@ -51,24 +51,6 @@ pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
 
-/// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
-pub const AccountsDBConfig = struct {
-    /// number of threads to load snapshot
-    num_threads_snapshot_load: u32 = 0,
-    /// number of threads to unpack snapshot from .tar.zstd
-    num_threads_snapshot_unpack: u16 = 0,
-    /// number of shards to use across the index
-    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
-    /// use disk based index for accounts index
-    use_disk_index: bool = false,
-    /// force unpacking a fresh snapshot even if an accounts/ dir exists
-    force_unpack_snapshot: bool = false,
-    /// minmum download speed in megabytes per second to download a snapshot from
-    min_snapshot_download_speed_mbs: usize = 20,
-    /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
-    force_new_snapshot_download: bool = false,
-};
-
 pub const AccountsDBStats = struct {
     number_files_flushed: *Counter,
     number_files_cleaned: *Counter,
@@ -118,7 +100,7 @@ pub const AccountsDB = struct {
 
     stats: AccountsDBStats,
     logger: Logger,
-    config: AccountsDBConfig,
+    config: InitConfig,
 
     const Self = @This();
 
@@ -127,11 +109,16 @@ pub const AccountsDB = struct {
     pub const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
 
+    pub const InitConfig = struct {
+        number_of_index_bins: usize,
+        use_disk_index: bool,
+    };
+
     pub fn init(
         allocator: std.mem.Allocator,
         logger: Logger,
         snapshot_dir: std.fs.Dir,
-        config: AccountsDBConfig,
+        config: InitConfig,
     ) !Self {
         const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
         const reference_allocator: std.mem.Allocator //
@@ -314,7 +301,7 @@ pub const AccountsDB = struct {
                 per_thread_allocator,
                 self.logger,
                 self.snapshot_dir,
-                .{ .number_of_index_bins = self.config.number_of_index_bins },
+                self.config,
             );
 
             // set the disk allocator after init() doesnt create a new one
@@ -2273,7 +2260,10 @@ fn testWriteSnapshotFull(
     const status_cache = try StatusCache.decodeFromBincode(allocator, status_cache_file.reader());
     defer status_cache.deinit(allocator);
 
-    var accounts_db = try AccountsDB.init(allocator, .noop, snapshot_dir, .{});
+    var accounts_db = try AccountsDB.init(allocator, .noop, snapshot_dir, .{
+        .number_of_index_bins = ACCOUNT_INDEX_BINS,
+        .use_disk_index = false,
+    });
     defer accounts_db.deinit(true);
 
     try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields.file_map, 1, allocator);
@@ -2538,6 +2528,7 @@ test "flushing slots works" {
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
+        .use_disk_index = false,
     });
     defer accounts_db.deinit(true);
 
@@ -2589,6 +2580,7 @@ test "purge accounts in cache works" {
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
+        .use_disk_index = false,
     });
     defer accounts_db.deinit(true);
 
@@ -2647,6 +2639,7 @@ test "clean to shrink account file works with zero-lamports" {
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
+        .use_disk_index = false,
     });
     defer accounts_db.deinit(true);
 
@@ -2722,6 +2715,7 @@ test "clean to shrink account file works" {
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
+        .use_disk_index = false,
     });
     defer accounts_db.deinit(true);
 
@@ -2789,6 +2783,7 @@ test "full clean account file works" {
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
+        .use_disk_index = false,
     });
     defer accounts_db.deinit(true);
 
@@ -2873,6 +2868,7 @@ test "shrink account file works" {
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
+        .use_disk_index = false,
     });
     defer accounts_db.deinit(true);
 
@@ -3234,14 +3230,10 @@ pub const BenchmarkAccountsDB = struct {
         defer snapshot_dir.close();
 
         const logger = Logger{ .noop = {} };
-        var accounts_db: AccountsDB = undefined;
-        if (bench_args.index == .disk) {
-            accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
-                .use_disk_index = true,
-            });
-        } else {
-            accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{});
-        }
+        var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
+            .number_of_index_bins = ACCOUNT_INDEX_BINS,
+            .use_disk_index = bench_args.index == .disk,
+        });
         defer accounts_db.deinit(true);
 
         var random = std.Random.DefaultPrng.init(19);
