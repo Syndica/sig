@@ -6,25 +6,26 @@ const sig = @import("../lib.zig");
 
 const bincode = sig.bincode;
 
-const ArrayList = std.ArrayList;
-const ZstdReader = zstd.Reader;
-
 const Account = sig.core.account.Account;
-const Hash = sig.core.hash.Hash;
-const Slot = sig.core.time.Slot;
 const Epoch = sig.core.time.Epoch;
+const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.pubkey.Pubkey;
-const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
-const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
-const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
-const Rent = sig.accounts_db.genesis_config.Rent;
-const Inflation = sig.accounts_db.genesis_config.Inflation;
-const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
+const Slot = sig.core.time.Slot;
+
 const FileId = sig.accounts_db.accounts_file.FileId;
 
+const EpochSchedule = sig.accounts_db.genesis_config.EpochSchedule;
+const FeeRateGovernor = sig.accounts_db.genesis_config.FeeRateGovernor;
+const Inflation = sig.accounts_db.genesis_config.Inflation;
+const Rent = sig.accounts_db.genesis_config.Rent;
+const UnixTimestamp = sig.accounts_db.genesis_config.UnixTimestamp;
+const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
+
+const Logger = sig.trace.Logger;
+
 const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
-const readDirectory = sig.utils.directory.readDirectory;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
+const readDirectory = sig.utils.directory.readDirectory;
 
 pub const MAXIMUM_ACCOUNT_FILE_SIZE: u64 = 16 * 1024 * 1024 * 1024; // 16 GiB
 pub const MAX_RECENT_BLOCKHASHES: usize = 300;
@@ -710,7 +711,7 @@ pub const StartBlockHeightAndRewards = struct {
     /// the block height of the parent of the slot at which rewards distribution began
     parent_start_block_height: u64,
     /// calculated epoch rewards pending distribution
-    calculated_epoch_stake_rewards: ArrayList(StakeReward),
+    calculated_epoch_stake_rewards: std.ArrayList(StakeReward),
 };
 
 /// Analogous to [EpochRewardStatus](https://github.com/anza-xyz/agave/blob/034cd7396a1db2db21a3305b259a17a5fdea312c/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L70)
@@ -1480,10 +1481,15 @@ pub const FullSnapshotFileInfo = struct {
     hash: Hash,
     comptime compression: CompressionMethod = .zstd,
 
-    const Self = @This();
+    const FULL_SNAPSHOT_NAME_FMT = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
+    const FULL_SNAPSHOT_NAME_MAX_LEN = sig.utils.fmt.boundedLenValue(FULL_SNAPSHOT_NAME_FMT, .{
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .extension = CompressionMethod.extension(.zstd),
+    });
 
     /// matches with the regex: r"^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
-    pub fn fromString(filename: []const u8) !Self {
+    pub fn fromString(filename: []const u8) !FullSnapshotFileInfo {
         var ext_parts = std.mem.splitSequence(u8, filename, ".");
         const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
 
@@ -1509,15 +1515,9 @@ pub const FullSnapshotFileInfo = struct {
         };
     }
 
-    const full_snapshot_name_fmt = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-    const full_snapshot_name_max_len = sig.utils.fmt.boundedLenValue(full_snapshot_name_fmt, .{
-        .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
-        .extension = CompressionMethod.extension(.zstd),
-    });
-    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, full_snapshot_name_max_len) {
+    pub fn snapshotNameStr(self: FullSnapshotFileInfo) std.BoundedArray(u8, FULL_SNAPSHOT_NAME_MAX_LEN) {
         const b58_str = self.hash.base58String();
-        return sig.utils.fmt.boundedFmt(full_snapshot_name_fmt, .{
+        return sig.utils.fmt.boundedFmt(FULL_SNAPSHOT_NAME_FMT, .{
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
             .extension = self.compression.extension(),
@@ -1541,10 +1541,16 @@ pub const IncrementalSnapshotFileInfo = struct {
     hash: Hash,
     comptime compression: CompressionMethod = .zstd,
 
-    const Self = @This();
+    const INCREMENTAL_SNAPSHOT_NAME_FMT = "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
+    const INCREMENTAL_SNAPSHOT_NAME_MAX_LEN = sig.utils.fmt.boundedLenValue(INCREMENTAL_SNAPSHOT_NAME_FMT, .{
+        .base_slot = std.math.maxInt(Slot),
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .extension = CompressionMethod.extension(.zstd),
+    });
 
     /// matches against regex: r"^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
-    pub fn fromString(filename: []const u8) !Self {
+    pub fn fromString(filename: []const u8) !IncrementalSnapshotFileInfo {
         var ext_parts = std.mem.splitSequence(u8, filename, ".");
         const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
 
@@ -1578,16 +1584,9 @@ pub const IncrementalSnapshotFileInfo = struct {
         };
     }
 
-    const incremental_snapshot_name_fmt = "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-    const incremental_snapshot_name_max_len = sig.utils.fmt.boundedLenValue(incremental_snapshot_name_fmt, .{
-        .base_slot = std.math.maxInt(Slot),
-        .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
-        .extension = CompressionMethod.extension(.zstd),
-    });
-    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, incremental_snapshot_name_max_len) {
+    pub fn snapshotNameStr(self: IncrementalSnapshotFileInfo) std.BoundedArray(u8, INCREMENTAL_SNAPSHOT_NAME_MAX_LEN) {
         const b58_str = self.hash.base58String();
-        return sig.utils.fmt.boundedFmt(incremental_snapshot_name_fmt, .{
+        return sig.utils.fmt.boundedFmt(INCREMENTAL_SNAPSHOT_NAME_FMT, .{
             .base_slot = self.base_slot,
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
@@ -1770,8 +1769,6 @@ pub const AllSnapshotFields = struct {
     }
 };
 
-const Logger = @import("../trace/log.zig").Logger;
-
 /// unpacks a .tar.zstd file into the given directory
 pub fn parallelUnpackZstdTarBall(
     allocator: std.mem.Allocator,
@@ -1792,7 +1789,7 @@ pub fn parallelUnpackZstdTarBall(
         file.handle,
         0,
     );
-    var tar_stream = try ZstdReader.init(memory);
+    var tar_stream = try zstd.Reader.init(memory);
     defer tar_stream.deinit();
     const n_files_estimate: usize = if (full_snapshot) 421_764 else 100_000; // estimate
 
