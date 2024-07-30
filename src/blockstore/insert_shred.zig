@@ -5,6 +5,7 @@ const bs = sig.blockstore;
 const meta = bs.meta;
 const schema = bs.schema.schema;
 const shred_mod = sig.shred_collector.shred;
+const shredder = sig.blockstore.shredder;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -1038,7 +1039,7 @@ pub fn ShredInserter(comptime DB: type) type {
             erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
             index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
             prev_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-            reed_solomon_cache: *const ReedSolomonCache,
+            reed_solomon_cache: *ReedSolomonCache,
         ) !ArrayList(Shred) {
             // Recovery rules:
             // 1. Only try recovery around indexes for which new data or coding shreds are received
@@ -1080,10 +1081,10 @@ pub fn ShredInserter(comptime DB: type) type {
             index: *const Index,
             erasure_meta: *const ErasureMeta,
             prev_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-            recovered_shreds: *const ArrayList(Shred),
+            recovered_shreds: *ArrayList(Shred),
             // data_cf: *const LedgerColumn(cf::ShredData),
             // code_cf: *const LedgerColumn(cf::ShredCode),
-            reed_solomon_cache: *const ReedSolomonCache,
+            reed_solomon_cache: *ReedSolomonCache,
         ) !void {
             var available_shreds = ArrayList(Shred).init(self.allocator);
 
@@ -1105,10 +1106,17 @@ pub fn ShredInserter(comptime DB: type) type {
                 prev_inserted_shreds,
                 &available_shreds,
             );
-            // TODO merkle::recover
-            self.logger.warn("skipping shred recovery");
-            _ = recovered_shreds;
-            _ = reed_solomon_cache;
+
+            if (shredder.recover(
+                self.allocator,
+                available_shreds.items,
+                reed_solomon_cache,
+            )) |shreds| {
+                defer self.allocator.free(shreds);
+                try recovered_shreds.appendSlice(shreds);
+            } else |_| {
+                // TODO: submit_metrics
+            }
         }
 
         // agave: get_recovery_data_shreds and get_recovery_coding_shreds

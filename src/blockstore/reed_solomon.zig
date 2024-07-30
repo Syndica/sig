@@ -52,7 +52,7 @@ pub const ReedSolomon = struct {
     pub fn reconstruct(
         self: *const ReedSolomon,
         allocator: Allocator,
-        shards: []?[]u8,
+        shards: []?[]const u8,
         data_only: bool,
     ) !void {
         if (shards.len > self.total_shard_count) return error.TooManyShards;
