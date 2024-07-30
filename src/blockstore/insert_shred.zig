@@ -139,7 +139,7 @@ pub fn ShredInserter(comptime DB: type) type {
             for (shreds, is_repaired) |shred, is_repair| {
                 const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
                 switch (shred) {
-                    .Data => |data_shred| {
+                    .data => |data_shred| {
                         if (self.checkInsertDataShred(
                             data_shred,
                             &erasure_metas,
@@ -173,7 +173,7 @@ pub fn ShredInserter(comptime DB: type) type {
                             else => return e, // TODO explicit
                         }
                     },
-                    .Code => |coding_shred| {
+                    .code => |coding_shred| {
                         // TODO error handling?
                         _ = try self.checkInsertCodingShred(
                             coding_shred,
@@ -204,7 +204,7 @@ pub fn ShredInserter(comptime DB: type) type {
                 );
 
                 for (recovered_shreds.items) |shred| {
-                    if (shred == .Data) {
+                    if (shred == .data) {
                         metrics.num_recovered.inc();
                     }
                     const leader = slot_leader_provider.call(shred.common().slot);
@@ -218,12 +218,12 @@ pub fn ShredInserter(comptime DB: type) type {
                     // Since the data shreds are fully recovered from the
                     // erasure batch, no need to store coding shreds in
                     // blockstore.
-                    if (shred == .Code) {
+                    if (shred == .code) {
                         try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
                         continue;
                     }
                     if (self.checkInsertDataShred(
-                        shred.Data,
+                        shred.data,
                         &erasure_metas,
                         &merkle_root_metas,
                         &index_working_set,
@@ -281,12 +281,12 @@ pub fn ShredInserter(comptime DB: type) type {
                 const shred_id = ShredId{
                     .slot = slot,
                     .index = @intCast(erasure_meta.first_received_coding_index),
-                    .shred_type = .Code,
+                    .shred_type = .code,
                 };
                 // unreachable: Erasure meta was just created, initial shred must exist
                 const shred = just_inserted_shreds.get(shred_id) orelse unreachable;
                 _ = try self.checkForwardChainedMerkleRootConsistency(
-                    shred.Code,
+                    shred.code,
                     erasure_meta,
                     &just_inserted_shreds,
                     &merkle_root_metas,
@@ -412,7 +412,7 @@ pub fn ShredInserter(comptime DB: type) type {
             if (!is_trusted) {
                 if (index_meta.code.contains(shred_index)) {
                     metrics.num_coding_shreds_exists.inc();
-                    try duplicate_shreds.append(.{ .Exists = .{ .Code = shred } });
+                    try duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
                     return false;
                 }
 
@@ -429,7 +429,7 @@ pub fn ShredInserter(comptime DB: type) type {
                         just_received_shreds,
                         slot,
                         merkle_root_meta.asRef(),
-                        &.{ .Code = shred },
+                        &.{ .code = shred },
                         duplicate_shreds,
                     )) {
                         return false;
@@ -474,7 +474,7 @@ pub fn ShredInserter(comptime DB: type) type {
                         try duplicate_shreds.append(.{
                             .ErasureConflict = .{
                                 // TODO lifetimes
-                                .original = .{ .Code = shred },
+                                .original = .{ .code = shred },
                                 .conflict = conflicting_shred,
                             },
                         });
@@ -510,7 +510,7 @@ pub fn ShredInserter(comptime DB: type) type {
                 const entry = try merkle_root_metas.getOrPut(erasure_set);
                 if (!entry.found_existing) {
                     // TODO: agave code is the same: it does nothing to an existing item. is this correct?
-                    entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(.{ .Code = shred }) };
+                    entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(.{ .code = shred }) };
                 }
                 break :blk true;
             } else |_| false;
@@ -518,7 +518,7 @@ pub fn ShredInserter(comptime DB: type) type {
             const shred_entry = try just_received_shreds.getOrPut(shred.fields.id());
             if (!shred_entry.found_existing) {
                 metrics.num_coding_shreds_inserted.inc();
-                shred_entry.value_ptr.* = .{ .Code = shred }; // TODO lifetime
+                shred_entry.value_ptr.* = .{ .code = shred }; // TODO lifetime
             }
 
             return result;
@@ -541,7 +541,7 @@ pub fn ShredInserter(comptime DB: type) type {
             // Search for the shred which set the initial erasure config, either inserted,
             // or in the current batch in just_received_shreds.
             const index: u32 = @intCast(erasure_meta.first_received_coding_index);
-            const shred_id = ShredId{ .slot = slot, .index = index, .shred_type = .Code };
+            const shred_id = ShredId{ .slot = slot, .index = index, .shred_type = .code };
             const maybe_shred = try self.getShredFromJustInsertedOrDb(just_received_shreds, shred_id);
 
             if (index != 0 or maybe_shred != null) {
@@ -585,8 +585,8 @@ pub fn ShredInserter(comptime DB: type) type {
             }
             return switch (id.shred_type) {
                 // owned by database
-                .Data => if (try self.db.getBytes(schema.data_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
-                .Code => if (try self.db.getBytes(schema.code_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
+                .data => if (try self.db.getBytes(schema.data_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
+                .code => if (try self.db.getBytes(schema.code_shred, .{ id.slot, @intCast(id.index) })) |s| s.data else null,
             };
         }
 
@@ -608,7 +608,7 @@ pub fn ShredInserter(comptime DB: type) type {
         ) !ArrayList(CompletedDataSetInfo) {
             const slot = shred.fields.common.slot;
             const shred_index: u64 = @intCast(shred.fields.common.index);
-            const shred_union = Shred{ .Data = shred };
+            const shred_union = Shred{ .data = shred };
 
             const index_meta_working_set_entry =
                 try self.getIndexMetaEntry(self.allocator, slot, index_working_set, index_meta_time_us);
@@ -811,7 +811,7 @@ pub fn ShredInserter(comptime DB: type) type {
                     const shred_id = ShredId{
                         .slot = slot,
                         .index = shred_index_u32,
-                        .shred_type = .Data,
+                        .shred_type = .data,
                     };
                     // FIXME: leak - decide how to free shred
                     const maybe_shred = try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id);
@@ -834,7 +834,7 @@ pub fn ShredInserter(comptime DB: type) type {
                     };
                     // FIXME data ownership
                     try duplicate_shreds.append(.{ .LastIndexConflict = .{
-                        .original = .{ .Data = shred },
+                        .original = .{ .data = shred },
                         .conflict = ending_shred,
                     } });
                 }
@@ -854,7 +854,7 @@ pub fn ShredInserter(comptime DB: type) type {
                     const shred_id = ShredId{
                         .slot = slot,
                         .index = shred_index_u32,
-                        .shred_type = .Data,
+                        .shred_type = .data,
                     };
                     // FIXME: leak - decide how to free shred
                     const maybe_shred = try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id);
@@ -877,7 +877,7 @@ pub fn ShredInserter(comptime DB: type) type {
                     };
                     // FIXME data ownership
                     try duplicate_shreds.append(.{ .LastIndexConflict = .{
-                        .original = .{ .Data = shred },
+                        .original = .{ .data = shred },
                         .conflict = ending_shred,
                     } });
                 }
@@ -1122,7 +1122,7 @@ pub fn ShredInserter(comptime DB: type) type {
             available_shreds: *ArrayList(Shred),
         ) !void {
             for (shred_indices[0]..shred_indices[1]) |i| {
-                const key = ShredId{ .slot = slot, .index = @intCast(i), .shred_type = .Data };
+                const key = ShredId{ .slot = slot, .index = @intCast(i), .shred_type = .data };
                 if (prev_inserted_shreds.get(key)) |shred| {
                     try available_shreds.append(shred);
                 } else if (index.contains(i)) {
@@ -1390,7 +1390,7 @@ pub fn ShredInserter(comptime DB: type) type {
                 if (!try self.hasDuplicateShredsInSlot(slot)) {
                     // TODO lifetime
                     try duplicate_shreds.append(.{ .ChainedMerkleRootConflict = .{
-                        .original = .{ .Code = shred },
+                        .original = .{ .code = shred },
                         .conflict = next_shred,
                     } });
                 }
@@ -1445,7 +1445,7 @@ pub fn ShredInserter(comptime DB: type) type {
             const prev_shred_id = ShredId{
                 .slot = slot,
                 .index = @intCast(prev_erasure_meta.first_received_coding_index),
-                .shred_type = .Code,
+                .shred_type = .code,
             };
             const prev_shred =
                 if (try self.getShredFromJustInsertedOrDb(just_inserted_shreds, prev_shred_id)) |ps| ps else {
@@ -1512,16 +1512,17 @@ pub fn ShredInserter(comptime DB: type) type {
             // Consecutive set was not found in memory, scan blockstore for a potential candidate
             var iter = try self.db.iterator(schema.erasure_meta, .reverse, erasure_set);
             const candidate_set, const candidate_meta_bytes = while (try iter.nextBytes()) |entry| {
+                // TODO: lifetime
                 if (entry[0].slot != slot) return null;
                 if (entry[0].fec_set_index != fec_set_index) break entry;
             } else return null;
-            const candidate_meta = try schema.erasure_meta.value()
+            const candidate = try schema.erasure_meta.value()
                 .deserialize(ErasureMeta, self.allocator, candidate_meta_bytes);
 
             // Check if this is actually the consecutive erasure set
-            const next = if (candidate_meta.nextFecSetIndex()) |n| n else return error.InvalidErasureConfig;
+            const next = if (candidate.nextFecSetIndex()) |n| n else return error.InvalidErasureConfig;
             return if (next == fec_set_index)
-                .{ candidate_set, candidate_meta }
+                .{ candidate_set, candidate }
             else
                 return null;
         }
@@ -1854,7 +1855,7 @@ fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
 }
 
-test "insertShreds" {
+test "insertShreds SharedHashMapDB" {
     const allocator = std.testing.allocator;
     const logger = sig.trace.Logger.init(std.testing.allocator, .warn);
     defer logger.deinit();

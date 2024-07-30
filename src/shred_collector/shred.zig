@@ -36,34 +36,34 @@ pub const data_shred = ShredConstants{
 
 /// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred.rs#L245)
 pub const Shred = union(ShredType) {
-    Code: CodingShred,
-    Data: DataShred,
+    code: CodingShred,
+    data: DataShred,
 
     const Self = @This();
 
     pub fn deinit(self: Self) void {
         return switch (self) {
-            inline .Code, .Data => |s| s.fields.deinit(),
+            inline .code, .data => |s| s.fields.deinit(),
         };
     }
 
     pub fn fromPayload(allocator: Allocator, payload_: []const u8) !Self {
         const variant = layout.getShredVariant(payload_) orelse return error.InvalidShredVariant;
         return switch (variant.shred_type) {
-            .Code => .{ .Code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload_) } },
-            .Data => .{ .Data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload_) } },
+            .code => .{ .code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload_) } },
+            .data => .{ .data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload_) } },
         };
     }
 
     pub fn payload(self: Self) []const u8 {
         return switch (self) {
-            inline .Code, .Data => |shred| shred.fields.payload,
+            inline .code, .data => |shred| shred.fields.payload,
         };
     }
 
     pub fn common(self: *const Self) *const ShredCommonHeader {
         return switch (self.*) {
-            inline .Code, .Data => |c| &c.fields.common,
+            inline .code, .data => |c| &c.fields.common,
         };
     }
 
@@ -72,13 +72,13 @@ pub const Shred = union(ShredType) {
             return error.InconsistentShredVariant;
         }
         switch (self.*) {
-            inline .Code, .Data => |s| try s.sanitize(),
+            inline .code, .data => |s| try s.sanitize(),
         }
     }
 
     pub fn merkleRoot(self: Self) !Hash {
         return switch (self) {
-            inline .Code, .Data => |s| getMerkleRoot(
+            inline .code, .data => |s| getMerkleRoot(
                 s.fields.payload,
                 @TypeOf(s.fields).constants,
                 s.fields.common.shred_variant,
@@ -88,21 +88,21 @@ pub const Shred = union(ShredType) {
 
     pub fn chainedMerkleRoot(self: Self) !Hash {
         return switch (self) {
-            inline .Code, .Data => |s| layout.getChainedMerkleRoot(s.fields.payload) orelse
+            inline .code, .data => |s| layout.getChainedMerkleRoot(s.fields.payload) orelse
                 error.InvalidPayloadSize,
         };
     }
 
     pub fn isLastInSlot(self: *const Self) bool {
         return switch (self.*) {
-            .Code => false,
-            .Data => |data| data.fields.custom.flags.isSet(.last_shred_in_slot),
+            .code => false,
+            .data => |data| data.fields.custom.flags.isSet(.last_shred_in_slot),
         };
     }
 
     pub fn verify(self: Self, signer: sig.core.Pubkey) bool {
         return switch (self) {
-            inline .Data, .Code => |s| s.fields.verify(signer),
+            inline .data, .code => |s| s.fields.verify(signer),
         };
     }
 };
@@ -341,8 +341,8 @@ fn getMerkleRoot(
     variant: ShredVariant,
 ) !Hash {
     const index = switch (variant.shred_type) {
-        .Code => codeIndex(shred) orelse return error.InvalidErasureShardIndex,
-        .Data => dataIndex(shred) orelse return error.InvalidErasureShardIndex,
+        .code => codeIndex(shred) orelse return error.InvalidErasureShardIndex,
+        .data => dataIndex(shred) orelse return error.InvalidErasureShardIndex,
     };
     const proof = try getMerkleProof(shred, constants, variant);
     const offset = try proofOffset(constants, variant);
@@ -521,13 +521,13 @@ pub const CodingShredHeader = struct {
 };
 
 pub const ShredType = enum(u8) {
-    Code = 0b0101_1010,
-    Data = 0b1010_0101,
+    code = 0b0101_1010,
+    data = 0b1010_0101,
 
     fn constants(self: @This()) ShredConstants {
         return switch (self) {
-            .Code => coding_shred,
-            .Data => data_shred,
+            .code => coding_shred,
+            .data => data_shred,
         };
     }
 };
@@ -543,43 +543,43 @@ pub const ShredVariant = struct {
     fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
         return switch (byte & 0xF0) {
             0x40 => .{
-                .shred_type = .Code,
+                .shred_type = .code,
                 .proof_size = byte & 0x0F,
                 .chained = false,
                 .resigned = false,
             },
             0x60 => .{
-                .shred_type = .Code,
+                .shred_type = .code,
                 .proof_size = byte & 0x0F,
                 .chained = true,
                 .resigned = false,
             },
             0x70 => .{
-                .shred_type = .Code,
+                .shred_type = .code,
                 .proof_size = byte & 0x0F,
                 .chained = true,
                 .resigned = true,
             },
             0x80 => .{
-                .shred_type = .Data,
+                .shred_type = .data,
                 .proof_size = byte & 0x0F,
                 .chained = false,
                 .resigned = false,
             },
             0x90 => .{
-                .shred_type = .Data,
+                .shred_type = .data,
                 .proof_size = byte & 0x0F,
                 .chained = true,
                 .resigned = false,
             },
             0xb0 => .{
-                .shred_type = .Data,
+                .shred_type = .data,
                 .proof_size = byte & 0x0F,
                 .chained = true,
                 .resigned = true,
             },
-            @intFromEnum(ShredType.Code) => error.LegacyShredVariant,
-            @intFromEnum(ShredType.Data) => error.LegacyShredVariant,
+            @intFromEnum(ShredType.code) => error.LegacyShredVariant,
+            @intFromEnum(ShredType.data) => error.LegacyShredVariant,
             else => error.UnknownShredVariant,
         };
     }
@@ -587,27 +587,27 @@ pub const ShredVariant = struct {
     fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
         if (self.proof_size & 0xF0 != 0) return error.IllegalProof;
         const big_end: u8 =
-            if (self.shred_type == .Code and
+            if (self.shred_type == .code and
             self.chained == false and
             self.resigned == false)
             0x40
-        else if (self.shred_type == .Code and
+        else if (self.shred_type == .code and
             self.chained == true and
             self.resigned == false)
             0x60
-        else if (self.shred_type == .Code and
+        else if (self.shred_type == .code and
             self.chained == true and
             self.resigned == true)
             0x70
-        else if (self.shred_type == .Data and
+        else if (self.shred_type == .data and
             self.chained == false and
             self.resigned == false)
             0x80
-        else if (self.shred_type == .Data and
+        else if (self.shred_type == .data and
             self.chained == true and
             self.resigned == false)
             0x90
-        else if (self.shred_type == .Data and
+        else if (self.shred_type == .data and
             self.chained == true and
             self.resigned == true)
             0xb0
@@ -701,15 +701,15 @@ pub const layout = struct {
     pub fn getSignedData(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const constants = switch (variant.shred_type) {
-            .Code => coding_shred,
-            .Data => data_shred,
+            .code => coding_shred,
+            .data => data_shred,
         };
         return getMerkleRoot(shred, constants, variant) catch null;
     }
 
     /// must be a data shred, otherwise the return value will be corrupted and meaningless
     pub fn getParentOffset(shred: []const u8) ?u16 {
-        std.debug.assert(getShredVariant(shred).?.shred_type == .Data);
+        std.debug.assert(getShredVariant(shred).?.shred_type == .data);
         return getInt(u16, shred, 83);
     }
 
@@ -738,7 +738,7 @@ fn getInt(
 
 test "basic shred variant round trip" {
     try testShredVariantRoundTrip(0x4C, .{
-        .shred_type = .Code,
+        .shred_type = .code,
         .proof_size = 0x0C,
         .chained = false,
         .resigned = false,
@@ -759,7 +759,7 @@ fn testShredVariantRoundTrip(expected_byte: u8, start_variant: ShredVariant) !vo
 
 test "getShredVariant" {
     const variant = layout.getShredVariant(&test_data_shred).?;
-    try std.testing.expect(.Data == variant.shred_type);
+    try std.testing.expect(.data == variant.shred_type);
     try std.testing.expect(!variant.chained);
     try std.testing.expect(!variant.resigned);
     try std.testing.expect(6 == variant.proof_size);
