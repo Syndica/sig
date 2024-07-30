@@ -4,6 +4,11 @@ const sig = @import("../lib.zig");
 /// Returns the maximum length applicable for the format string and `Args` tuple,
 /// such that it would be the equivalent to the length of the bounded array returned
 /// by `boundedFmt`.
+/// ```zig
+/// try expectEqual("255-1".len, boundedLen("{d}-{d}", struct { u8, u1 }));
+/// // comptime field values in the struct/tuple are reflected appropriately
+/// try expectEqual("foo-255".len, boundedLen("{[a]s}-{[b]d}", struct { comptime a: []const u8 = "foo", b: u8 }));
+/// ```
 pub inline fn boundedLen(
     comptime fmt_str: []const u8,
     comptime Args: type,
@@ -14,6 +19,12 @@ pub inline fn boundedLen(
 /// Same as `boundedLen`, but takes a value instead of a type.
 /// The values should posses the maximum values applicable for each
 /// element type, in order to match the actual bounded length.
+/// For example:
+/// ```zig
+/// try expectEqual("255-255".len, boundedLenValue("{d}-{d}", .{ std.math.maxInt(u8), std.math.maxInt(u8) }));
+/// // comptime field values in the struct/tuple are reflected appropriately
+/// try expectEqual("foo-255".len, boundedLenValue("{[a]s}-{[b]d}", .{ .a = "foo", .b = 255 }));
+/// ```
 pub inline fn boundedLenValue(
     comptime fmt_str: []const u8,
     comptime value: anytype,
@@ -22,6 +33,10 @@ pub inline fn boundedLenValue(
 }
 
 /// Returns a bounded array string, guaranteed to be able to represent the formatted result.
+/// For example:
+/// ```zig
+/// try expectEqualStrings("fizz.buzz", boundedFmt("{s}.{s}", .{ "foo", "buzz" }).constSlice());
+/// ```
 pub inline fn boundedFmt(
     comptime fmt_str: []const u8,
     args: anytype,
@@ -34,6 +49,10 @@ pub inline fn boundedFmt(
 /// Returns an instance of the tuple of type `Args`, wherein each
 /// element of the tuple possesses the maximum value applicable
 /// to the type of the element.
+/// For example:
+/// ```zig
+/// try expectEqual();
+/// ```
 pub inline fn maxArgs(comptime Args: type) Args {
     comptime {
         var max_args: Args = undefined;
