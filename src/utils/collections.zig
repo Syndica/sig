@@ -148,10 +148,6 @@ pub fn SortedMapCustom(
 
         const Self = @This();
 
-        fn order(a: K, b: K) std.math.Order {
-            return config.orderFn.call(a, b);
-        }
-
         pub fn init(allocator: Allocator) Self {
             return .{
                 .inner = Inner.init(allocator),
@@ -234,16 +230,46 @@ pub fn SortedMapCustom(
 
         /// subslice of items ranging from start (inclusive) to end (exclusive)
         pub fn range(self: *Self, start: ?K, end: ?K) struct { []const K, []const V } {
-            if (self.count() == 0) return .{ &.{}, &.{} };
-            if (start) |s| if (end) |e| if (order(e, s) != .gt)
-                return .{ &.{}, &.{} };
+            return self.rangeCustom(
+                if (start) |b| .{ .inclusive = b } else null,
+                if (end) |b| .{ .exclusive = b } else null,
+            );
+        }
+
+        /// subslice of items ranging from start to end
+        pub fn rangeCustom(
+            self: *Self,
+            start_bound: ?Bound(K),
+            end_bound: ?Bound(K),
+        ) struct { []const K, []const V } {
+            // TODO: can the code in this fn be simplified while retaining identical logic?
+            const len = self.count();
+            if (len == 0) return .{ &.{}, &.{} };
+
+            // extract relevant info from bounds
+            const start, const incl_start = if (start_bound) |b|
+                .{ b.val(), b == .inclusive }
+            else
+                .{ null, false };
+            const end, const excl_end = if (end_bound) |b|
+                .{ b.val(), b == .exclusive }
+            else
+                .{ null, false };
+
+            // edge case: check if bounds could permit any items
+            if (start) |s| if (end) |e| {
+                if (incl_start and !excl_end) {
+                    if (order(e, s) == .lt) return .{ &.{}, &.{} };
+                } else if (order(e, s) != .gt) return .{ &.{}, &.{} };
+            };
+
             self.sort();
             var keys_ = self.inner.keys();
             var values_ = self.inner.values();
             if (start) |start_| {
                 // .any instead of .first because uniqueness is guaranteed
                 const start_index = switch (find(K, keys_, start_, .any, order)) {
-                    .found => |index| index,
+                    .found => |index| if (incl_start) index else @min(len - 1, index + 1),
                     .after => |index| index + 1,
                     .less => 0,
                     .greater => return .{ &.{}, &.{} },
@@ -255,7 +281,7 @@ pub fn SortedMapCustom(
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
                 const end_index = switch (find(K, keys_, end_, .any, order)) {
-                    .found => |index| index,
+                    .found => |index| if (excl_end) index else if (index == 0) 0 else index - 1,
                     .after => |index| index + 1,
                     .less => return .{ &.{}, &.{} },
                     .greater => keys_.len,
@@ -280,49 +306,27 @@ pub fn SortedMapCustom(
     };
 }
 
-fn SortedMapConfig(comptime K: type) type {
-    const OrderFn = union(enum) {
-        typed: fn (a: K, b: K) std.math.Order,
-        untyped: fn (a: anytype, b: anytype) std.math.Order,
-        pub fn call(self: @This(), a: K, b: K) std.math.Order {
+pub fn Bound(comptime T: type) type {
+    return union(enum) {
+        inclusive: T,
+        exclusive: T,
+
+        pub fn val(self: @This()) T {
             return switch (self) {
-                inline .typed, .untyped => |f| f(a, b),
+                inline .inclusive, .exclusive => |x| x,
             };
         }
     };
-    var _orderFn: ?OrderFn = null;
-    var _Context: ?type = null;
-    var _store_hash: ?bool = null;
-    const info = @typeInfo(K);
-    if (info == .Pointer and info.Pointer.size == .Slice and
-        (@typeInfo(info.Pointer.child) == .Int or @typeInfo(info.Pointer.child) == .Float))
-    {
-        _orderFn = .{ .typed = struct {
-            fn f(a: K, b: K) std.math.Order {
-                return orderSlices(info.Pointer.child, std.math.order, a, b);
-            }
-        }.f };
-        _Context = std.array_hash_map.StringContext;
-        _store_hash = true;
-    } else {
-        _orderFn = .{ .untyped = std.math.order };
-        _Context = std.array_hash_map.AutoContext(K);
-        _store_hash = !std.array_hash_map.autoEqlIsCheap(K);
-    }
-    switch (info) {
-        inline .Struct, .Enum, .Union, .Opaque => {
-            if (@hasDecl(K, "order") and @TypeOf(K.order) == fn (a: K, b: K) std.math.Order) {
-                _orderFn = .{ .typed = K.order };
-            }
-        },
-        else => {},
-    }
-    const default_orderFn = _orderFn orelse @compileError("orderFn bug");
-    const default_Context = _Context orelse @compileError("Context bug");
-    const default_store_hash = _store_hash orelse @compileError("store_hash bug");
+}
+
+pub fn SortedMapConfig(comptime K: type) type {
+    const default_Context, const default_store_hash = if (K == []const u8 or K == []u8)
+        .{ std.array_hash_map.StringContext, true }
+    else
+        .{ std.array_hash_map.AutoContext(K), !std.array_hash_map.autoEqlIsCheap(K) };
 
     return struct {
-        orderFn: OrderFn = default_orderFn,
+        orderFn: fn (a: anytype, b: anytype) std.math.Order = order,
         /// passthrough to std.ArrayHashMap
         Context: type = default_Context,
         /// passthrough to std.ArrayHashMap
@@ -330,9 +334,34 @@ fn SortedMapConfig(comptime K: type) type {
     };
 }
 
+pub fn order(a: anytype, b: anytype) std.math.Order {
+    const T: type = @TypeOf(a);
+    if (T != @TypeOf(b)) @compileError("types do not match");
+    const info = @typeInfo(T);
+    switch (info) {
+        .Int, .Float => return std.math.order(a, b),
+        .Struct, .Enum, .Union, .Opaque => {
+            if (@hasDecl(T, "order") and
+                (@TypeOf(T.order) == fn (a: T, b: T) std.math.Order or
+                @TypeOf(T.order) == fn (a: anytype, b: anytype) std.math.Order))
+            {
+                return T.order(a, b);
+            }
+        },
+        .Pointer => {
+            const child = @typeInfo(info.Pointer.child);
+            if (info.Pointer.size == .Slice and (child == .Int or child == .Float)) {
+                return orderSlices(info.Pointer.child, std.math.order, a, b);
+            }
+        },
+        else => {},
+    }
+    @compileError(std.fmt.comptimePrint("`order` not supported for {}", .{T}));
+}
+
 /// binary search that is very specific about the outcome.
 /// only works with numbers
-fn find(
+pub fn find(
     comptime T: type,
     /// slice to look for the item
     items: []const T,
@@ -411,11 +440,11 @@ pub fn orderSlices(
 ) std.math.Order {
     var i: usize = 0;
     while (i < a.len and i < b.len) : (i += 1) {
-        const order = orderElem(a[i], b[i]);
-        if (order == .eq) {
+        const order_ = orderElem(a[i], b[i]);
+        if (order_ == .eq) {
             continue;
         } else {
-            return order;
+            return order_;
         }
     }
     return if (a.len == b.len) .eq else if (a.len > b.len) .gt else .lt;

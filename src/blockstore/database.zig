@@ -69,6 +69,20 @@ pub fn Database(
             return self.impl.commit(batch.impl);
         }
 
+        pub fn iterator(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            comptime direction: IteratorDirection,
+            start: ?cf.Key,
+        ) !Iterator(Impl.Iterator(cf, direction), cf) {
+            return .{ .impl = try self.impl.iterator(
+                cf,
+                comptime cf.find(column_families),
+                direction,
+                start,
+            ) };
+        }
+
         pub fn runTest() !void {
             const Value = struct { hello: u16 };
             const cf1 = ColumnFamily{
@@ -122,6 +136,18 @@ pub fn BatchImpl(
 
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) !void {
             return try self.impl.delete(cf, comptime cf.find(column_families), key);
+        }
+    };
+}
+
+pub const IteratorDirection = enum { forward, reverse };
+
+pub fn Iterator(comptime Impl: type, comptime column_family: ColumnFamily) type {
+    return struct {
+        impl: Impl,
+
+        pub fn nextBytes(self: *@This()) !?struct { column_family.Key, []const u8 } {
+            return try self.impl.nextBytes();
         }
     };
 }
@@ -196,7 +222,12 @@ pub fn Serializer(comptime S: type) type {
             return S.serializedSize(item);
         }
 
-        pub inline fn deserialize(comptime _: Self, comptime T: type, allocator: Allocator, bytes: []const u8) !T {
+        pub inline fn deserialize(
+            comptime _: Self,
+            comptime T: type,
+            allocator: Allocator,
+            bytes: []const u8,
+        ) !T {
             return S.deserialize(T, allocator, bytes);
         }
     };

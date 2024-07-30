@@ -5,10 +5,13 @@ const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const BytesRef = sig.blockstore.database.BytesRef;
-const Database = sig.blockstore.database.Database;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
+const Database = sig.blockstore.database.Database;
+const IteratorDirection = sig.blockstore.database.IteratorDirection;
 const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
+
+const find = sig.utils.collections.find;
 
 pub const SharedHashMapDB = struct {
     allocator: Allocator,
@@ -20,6 +23,7 @@ pub const SharedHashMapDB = struct {
     const Self = @This();
 
     pub const Batch = MapBatch;
+    pub const Iterator = MapIterator;
 
     pub fn open(
         allocator: Allocator,
@@ -148,6 +152,33 @@ pub const SharedHashMapDB = struct {
             }
         }
     }
+
+    pub fn iterator(
+        self: *Self,
+        comptime cf: ColumnFamily,
+        cf_index: usize,
+        comptime direction: IteratorDirection,
+        start: ?cf.Key,
+    ) !Iterator(cf, direction) {
+        const map = &self.maps[cf_index].map;
+        const keys, const values = if (start) |start_| b: {
+            const search_bytes = try cf.key().serializeAlloc(self.allocator, start_);
+            defer self.allocator.free(search_bytes);
+            break :b switch (direction) {
+                .forward => map.rangeCustom(.{ .inclusive = search_bytes }, null),
+                .reverse => map.rangeCustom(null, .{ .inclusive = search_bytes }),
+            };
+        } else map.items();
+        std.debug.assert(keys.len == values.len);
+
+        return .{
+            .allocator = self.allocator,
+            .keys = keys,
+            .vals = values,
+            .cursor = 0,
+            .size = keys.len,
+        };
+    }
 };
 
 pub const MapBatch = struct {
@@ -203,6 +234,40 @@ pub const MapBatch = struct {
         );
     }
 };
+
+fn MapIterator(
+    cf: ColumnFamily,
+    direction: IteratorDirection,
+) type {
+    return struct {
+        allocator: Allocator,
+        keys: []const []const u8,
+        vals: []const []const u8,
+        cursor: usize = 0,
+        size: usize,
+
+        pub fn nextBytes(self: *@This()) !?struct { cf.Key, []const u8 } {
+            const index = try self.nextIndex() orelse return null;
+            return .{
+                try cf.key().deserialize(cf.Key, self.allocator, self.keys[index]),
+                self.vals[index],
+            };
+        }
+
+        fn nextIndex(self: *@This()) !?usize {
+            switch (direction) {
+                .forward => if (self.cursor >= self.size) return null,
+                .reverse => if (self.cursor == 0) return null else {
+                    self.cursor -= 1;
+                },
+            }
+            defer if (direction == .forward) {
+                self.cursor += 1;
+            };
+            return self.cursor;
+        }
+    };
+}
 
 const SharedHashMap = struct {
     allocator: Allocator,

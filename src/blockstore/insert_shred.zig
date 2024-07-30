@@ -1488,11 +1488,10 @@ pub fn ShredInserter(comptime DB: type) type {
 
         /// agave: previous_erasure_set
         fn previousErasureSet(
-            self: *const Self,
+            self: *Self,
             erasure_set: ErasureSetId,
             erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)),
         ) !?struct { ErasureSetId, ErasureMeta } { // TODO: agave uses CoW here
-            _ = self;
             const slot = erasure_set.slot;
             const fec_set_index = erasure_set.fec_set_index;
 
@@ -1509,42 +1508,22 @@ pub fn ShredInserter(comptime DB: type) type {
                     return .{ id_range[i], last_meta.* };
                 }
             }
-            return undefined; //TODO
 
             // Consecutive set was not found in memory, scan blockstore for a potential candidate
+            var iter = try self.db.iterator(schema.erasure_meta, .reverse, erasure_set);
+            const candidate_set, const candidate_meta_bytes = while (try iter.nextBytes()) |entry| {
+                if (entry[0].slot != slot) return null;
+                if (entry[0].fec_set_index != fec_set_index) break entry;
+            } else return null;
+            const candidate_meta = try schema.erasure_meta.value()
+                .deserialize(ErasureMeta, self.allocator, candidate_meta_bytes);
 
-            // let Some(((_, candidate_fec_set_index), candidate_erasure_meta)) = self
-            //     .erasure_meta_cf
-            //     .iter(IteratorMode::From(
-            //         (slot, u64::from(fec_set_index)),
-            //         IteratorDirection::Reverse,
-            //     ))?
-            //     // `find` here, to skip the first element in case the erasure meta for fec_set_index is already present
-            //     .find(|((_, candidate_fec_set_index), _)| {
-            //         *candidate_fec_set_index != u64::from(fec_set_index)
-            //     })
-            //     // Do not consider sets from the previous slot
-            //     .filter(|((candidate_slot, _), _)| *candidate_slot == slot)
-            // else {
-            //     // No potential candidates
-            //     return Ok(None);
-            // };
-            // let candidate_fec_set_index = u32::try_from(candidate_fec_set_index)
-            //     .expect("fec_set_index from a previously inserted shred should fit in u32");
-            // let candidate_erasure_set = ErasureSetId::new(slot, candidate_fec_set_index);
-            // let candidate_erasure_meta: ErasureMeta = deserialize(candidate_erasure_meta.as_ref())?;
-
-            // // Check if this is actually the consecutive erasure set
-            // let Some(next_fec_set_index) = candidate_erasure_meta.next_fec_set_index() else {
-            //     return Err(BlockstoreError::InvalidErasureConfig);
-            // };
-            // if next_fec_set_index == fec_set_index {
-            //     return Ok(Some((
-            //         candidate_erasure_set,
-            //         Cow::Owned(candidate_erasure_meta),
-            //     )));
-            // }
-            // Ok(None)
+            // Check if this is actually the consecutive erasure set
+            const next = if (candidate_meta.nextFecSetIndex()) |n| n else return error.InvalidErasureConfig;
+            return if (next == fec_set_index)
+                .{ candidate_set, candidate_meta }
+            else
+                return null;
         }
 
         /// agave: check_chaining
