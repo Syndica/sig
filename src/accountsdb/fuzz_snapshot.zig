@@ -239,11 +239,8 @@ fn randomAccountsDbFields(
 
     return .{
         .file_map = file_map,
-
         .stored_meta_write_version = rand.uintAtMost(u64, params.stored_meta_write_version_max),
-
         .slot = max_slot,
-
         .bank_hash_info = .{
             .accounts_delta_hash = Hash.random(rand),
             .accounts_hash = Hash.random(rand),
@@ -255,7 +252,6 @@ fn randomAccountsDbFields(
                 .num_executable_accounts = rand.intRangeAtMost(u64, params.file_map_len.min, params.file_map_len.max),
             },
         },
-
         // NOTE: see field comment about these always being empty
         .rooted_slots = .{},
         .rooted_slot_hashes = .{},

@@ -33,23 +33,23 @@ pub const PohConfig = struct {
 
 /// Analogous to [FeeRateGovernor](https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L55)
 pub const FeeRateGovernor = struct {
-    // The current cost of a signature  This amount may increase/decrease over time based on
-    // cluster processing load.
+    /// The current cost of a signature  This amount may increase/decrease over time based on
+    /// cluster processing load.
     lamports_per_signature: u64 = 0,
 
-    // The target cost of a signature when the cluster is operating around target_signatures_per_slot
-    // signatures
+    /// The target cost of a signature when the cluster is operating around target_signatures_per_slot
+    /// signatures.
     target_lamports_per_signature: u64,
 
-    // Used to estimate the desired processing capacity of the cluster.  As the signatures for
-    // recent slots are fewer/greater than this value, lamports_per_signature will decrease/increase
-    // for the next slot.  A value of 0 disables lamports_per_signature fee adjustments
+    /// Used to estimate the desired processing capacity of the cluster.  As the signatures for
+    /// recent slots are fewer/greater than this value, lamports_per_signature will decrease/increase
+    /// for the next slot.  A value of 0 disables lamports_per_signature fee adjustments.
     target_signatures_per_slot: u64,
 
     min_lamports_per_signature: u64,
     max_lamports_per_signature: u64,
 
-    // What portion of collected fees are to be destroyed, as a fraction of std::u8::MAX
+    /// What portion of collected fees are to be destroyed, as a fraction of std::u8::MAX.
     burn_percent: u8,
 
     pub const @"!bincode-config:lamports_per_signature" = bincode.FieldConfig(u64){ .skip = true };
@@ -57,14 +57,10 @@ pub const FeeRateGovernor = struct {
     pub fn random(rand: std.Random) FeeRateGovernor {
         return .{
             .lamports_per_signature = rand.int(u64),
-
             .target_lamports_per_signature = rand.int(u64),
-
             .target_signatures_per_slot = rand.int(u64),
-
             .min_lamports_per_signature = rand.int(u64),
             .max_lamports_per_signature = rand.int(u64),
-
             .burn_percent = rand.uintAtMost(u8, 100),
         };
     }
@@ -109,14 +105,10 @@ pub const Inflation = struct {
     pub fn random(rand: std.Random) Inflation {
         return .{
             .initial = @floatFromInt(rand.int(u32)),
-
             .terminal = @floatFromInt(rand.int(u32)),
-
             .taper = @floatFromInt(rand.int(u32)),
-
             .foundation = @floatFromInt(rand.int(u32)),
             .foundation_term = @floatFromInt(rand.int(u32)),
-
             .__unused = @floatFromInt(rand.int(u32)),
         };
     }
@@ -234,10 +226,7 @@ pub const GenesisConfig = struct {
     ) !GenesisConfig {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
-
-        const config = try bincode.read(allocator, GenesisConfig, file.reader(), .{});
-
-        return config;
+        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
     }
 
     pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {

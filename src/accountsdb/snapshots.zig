@@ -139,7 +139,6 @@ pub const Stakes = struct {
 
         return .{
             .vote_accounts = vote_accounts,
-
             .stake_delegations = stake_delegations,
             .unused = rand.int(u64),
             .epoch = rand.int(Epoch),
@@ -330,9 +329,7 @@ pub const RentCollector = struct {
             .slots_per_year = params.rent.slots_per_year,
             .rent = .{
                 .lamports_per_byte_year = rand.int(u64),
-
                 .exemption_threshold = @floatFromInt(rand.int(u32)),
-
                 .burn_percent = rand.uintAtMost(u8, 100),
             },
         };
@@ -410,10 +407,8 @@ pub const BlockhashQueue = struct {
 
         return .{
             .last_hash_index = rand.int(u64),
-
             .last_hash = if (rand.boolean()) Hash.random(rand) else null,
             .ages = ages,
-
             .max_age = rand.int(usize),
         };
     }
@@ -471,6 +466,7 @@ pub const UnusedAccounts = struct {
 
 /// Analogous to [AncestorsForSerialization](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/accounts-db/src/ancestors.rs#L8)
 pub const Ancestors = std.AutoArrayHashMapUnmanaged(Slot, usize);
+
 pub fn ancestorsRandom(
     rand: std.Random,
     allocator: std.mem.Allocator,
@@ -546,6 +542,7 @@ pub const NodeVoteAccounts = struct {
 };
 
 pub const NodeIdToVoteAccountsMap = std.AutoArrayHashMapUnmanaged(Pubkey, NodeVoteAccounts);
+
 pub fn nodeIdToVoteAccountsMapDeinit(map: NodeIdToVoteAccountsMap, allocator: std.mem.Allocator) void {
     for (map.values()) |*node_vote_accounts| {
         node_vote_accounts.deinit(allocator);
@@ -582,6 +579,7 @@ pub fn nodeIdToVoteAccountsMapRandom(
 }
 
 pub const EpochAuthorizedVoters = std.AutoArrayHashMapUnmanaged(Pubkey, Pubkey);
+
 pub fn epochAuthorizedVotersRandom(
     rand: std.Random,
     allocator: std.mem.Allocator,
