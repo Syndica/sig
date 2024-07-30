@@ -8,6 +8,13 @@ pub inline fn boundedLen(
     comptime return std.fmt.count(fmt_str, maxArgs(Args));
 }
 
+pub inline fn boundedLenValue(
+    comptime fmt_str: []const u8,
+    comptime value: anytype,
+) usize {
+    comptime return boundedLen(fmt_str, @TypeOf(value));
+}
+
 /// Returns a bounded array string, guaranteed to be able to represent the formatted result.
 pub inline fn boundedFmt(
     comptime fmt_str: []const u8,

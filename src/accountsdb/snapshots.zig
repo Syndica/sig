@@ -1506,14 +1506,12 @@ pub const FullSnapshotFileInfo = struct {
     }
 
     const full_snapshot_name_fmt = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
-        full_snapshot_name_fmt,
-        @TypeOf(.{
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&self.hash.base58String()),
-            .extension = self.compression.extension(),
-        }),
-    )) {
+    const full_snapshot_name_max_len = sig.utils.fmt.boundedLenValue(full_snapshot_name_fmt, .{
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .extension = CompressionMethod.extension(.zstd),
+    });
+    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, full_snapshot_name_max_len) {
         const b58_str = self.hash.base58String();
         return sig.utils.fmt.boundedFmt(full_snapshot_name_fmt, .{
             .slot = self.slot,
@@ -1534,14 +1532,14 @@ pub const FullSnapshotFileInfo = struct {
 ///
 /// Analogous to [IncrementalSnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L103)
 pub const IncrementalSnapshotFileInfo = struct {
-    base: Slot,
+    base_slot: Slot,
     slot: Slot,
     hash: Hash,
     comptime compression: CompressionMethod = .zstd,
 
     const Self = @This();
 
-    /// matches against regex: r"^incremental-snapshot-(?P<base>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
+    /// matches against regex: r"^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$";
     pub fn fromString(filename: []const u8) !Self {
         var ext_parts = std.mem.splitSequence(u8, filename, ".");
         const stem = ext_parts.next() orelse return error.InvalidSnapshotPath;
@@ -1570,25 +1568,23 @@ pub const IncrementalSnapshotFileInfo = struct {
         const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
 
         return .{
-            .base = base_slot,
+            .base_slot = base_slot,
             .slot = slot,
             .hash = hash,
         };
     }
 
-    const incremental_snapshot_name_fmt = "incremental-snapshot-{[base]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
-    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, sig.utils.fmt.boundedLen(
-        incremental_snapshot_name_fmt,
-        @TypeOf(.{
-            .base = self.base,
-            .slot = self.slot,
-            .hash = sig.utils.fmt.boundedString(&self.hash.base58String()),
-            .extension = self.compression.extension(),
-        }),
-    )) {
+    const incremental_snapshot_name_fmt = "incremental-snapshot-{[base_slot]d}-{[slot]d}-{[hash]s}.tar.{[extension]s}";
+    const incremental_snapshot_name_max_len = sig.utils.fmt.boundedLenValue(incremental_snapshot_name_fmt, .{
+        .base_slot = std.math.maxInt(Slot),
+        .slot = std.math.maxInt(Slot),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .extension = CompressionMethod.extension(.zstd),
+    });
+    pub fn snapshotNameStr(self: Self) std.BoundedArray(u8, incremental_snapshot_name_max_len) {
         const b58_str = self.hash.base58String();
         return sig.utils.fmt.boundedFmt(incremental_snapshot_name_fmt, .{
-            .base = self.base,
+            .base_slot = self.base_slot,
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
             .extension = self.compression.extension(),
@@ -1598,7 +1594,7 @@ pub const IncrementalSnapshotFileInfo = struct {
     test snapshotNameStr {
         try std.testing.expectEqualStrings(
             "incremental-snapshot-10-25-11111111111111111111111111111111.tar.zst",
-            snapshotNameStr(.{ .base = 10, .slot = 25, .hash = Hash.default() }).constSlice(),
+            snapshotNameStr(.{ .base_slot = 10, .slot = 25, .hash = Hash.default() }).constSlice(),
         );
     }
 };
@@ -1637,7 +1633,7 @@ pub const SnapshotFiles = struct {
         for (filenames.items) |filename| {
             const snapshot = IncrementalSnapshotFileInfo.fromString(filename) catch continue;
             // need to match the base slot
-            if (snapshot.base == latest_full_snapshot.slot and (count == 0 or
+            if (snapshot.base_slot == latest_full_snapshot.slot and (count == 0 or
                 // this unwrap is safe because count > 0
                 snapshot.slot > maybe_latest_incremental_snapshot.?.slot))
             {
@@ -1819,7 +1815,7 @@ test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
     const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotFileInfo.fromString(path);
 
-    try std.testing.expectEqual(269, snapshot_info.base);
+    try std.testing.expectEqual(269, snapshot_info.base_slot);
     try std.testing.expectEqual(307, snapshot_info.slot);
     try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.base58String().constSlice());
     try std.testing.expectEqual(.zstd, snapshot_info.compression);
