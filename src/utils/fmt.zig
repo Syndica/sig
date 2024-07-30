@@ -1,6 +1,9 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
+/// Returns the maximum length applicable for the format string and `Args` tuple,
+/// such that it would be the equivalent to the length of the bounded array returned
+/// by `boundedFmt`.
 pub inline fn boundedLen(
     comptime fmt_str: []const u8,
     comptime Args: type,
@@ -8,6 +11,9 @@ pub inline fn boundedLen(
     comptime return std.fmt.count(fmt_str, maxArgs(Args));
 }
 
+/// Same as `boundedLen`, but takes a value instead of a type.
+/// The values should posses the maximum values applicable for each
+/// element type, in order to match the actual bounded length.
 pub inline fn boundedLenValue(
     comptime fmt_str: []const u8,
     comptime value: anytype,
@@ -25,6 +31,9 @@ pub inline fn boundedFmt(
     return result;
 }
 
+/// Returns an instance of the tuple of type `Args`, wherein each
+/// element of the tuple possesses the maximum value applicable
+/// to the type of the element.
 pub inline fn maxArgs(comptime Args: type) Args {
     comptime {
         var max_args: Args = undefined;
@@ -37,7 +46,12 @@ pub inline fn maxArgs(comptime Args: type) Args {
     }
 }
 
-pub inline fn boundedString(bounded: anytype) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info| BoundedString(ba_info.capacity) else noreturn {
+/// Returns a wrapper around the bounded array which will be usable as an argument
+/// to `boundedFmt` and `boundedLenValue`.
+pub inline fn boundedString(
+    /// `*const std.BoundedArray(u8, capacity)`
+    bounded: anytype,
+) if (sig.utils.types.boundedArrayInfo(@TypeOf(bounded.*))) |ba_info| BoundedString(ba_info.capacity) else noreturn {
     const lazy = struct {
         const compile_err: noreturn = @compileError("Expected `std.BoundedArray(u8, capacity)`, got " ++ @typeName(@TypeOf(bounded.*)));
     };
@@ -46,6 +60,8 @@ pub inline fn boundedString(bounded: anytype) if (sig.utils.types.boundedArrayIn
     return .{ .bounded = bounded };
 }
 
+/// A wrapper around a `*const std.BoundedArray(u8, capacity)`, which is
+/// usable as an argument type by `boundedLen`.
 pub fn BoundedString(comptime capacity: usize) type {
     return struct {
         bounded: *const std.BoundedArray(u8, capacity),

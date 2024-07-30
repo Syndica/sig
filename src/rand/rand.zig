@@ -114,6 +114,9 @@ pub fn BlockRng(
     };
 }
 
+/// Empties the provided hashmap, and then fills it with `hm_len` entries,
+/// each with a randomly generated key and value (there will be exactly `hm_len`
+/// entries, no more and no less).
 pub fn fillHashmapWithRng(
     /// `*std.ArrayHashMap(Key, Value, _, _)`
     /// `*std.HashMap(Key, Value, _, _)`
