@@ -142,9 +142,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         }
         defer slot += 1;
 
-        const Action = enum { put, get };
-        const action: Action = rand.enumValue(Action);
-
+        const action = rand.enumValue(enum { put, get });
         switch (action) {
             .put => {
                 const N_ACCOUNTS_PER_SLOT = 10;

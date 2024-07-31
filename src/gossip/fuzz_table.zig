@@ -98,8 +98,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             total_action_count += 1;
         }
 
-        const Action = enum { put, get };
-        const action = rand.enumValue(Action);
+        const action = rand.enumValue(enum { put, get });
         switch (action) {
             .put => {
                 defer put_count += 1;

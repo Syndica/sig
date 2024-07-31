@@ -379,15 +379,14 @@ pub fn fuzz(
             }
         }
 
-        const Action = enum {
+        const action = rng.enumValue(enum {
             ping,
             pong,
             push,
             pull_request,
             pull_response,
-        };
-        const command = rng.enumValue(Action);
-        const packet = switch (command) {
+        });
+        const packet = switch (action) {
             .ping => blk: {
                 // send ping message
                 const packet = randomPingPacket(rng, keypair, to_endpoint);
