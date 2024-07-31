@@ -185,6 +185,7 @@ pub const TryRealPathFmt = struct {
     }
 };
 
+/// The format string is of the form `key_fmt|value_fmt`, wherein the `|` character can be escaped in the `key_fmt` as `||`.
 pub inline fn hashMapFmt(hash_map: anytype, sep: []const u8) if (sig.utils.types.hashMapInfo(@TypeOf(hash_map.*))) |hm_info| HashMapFmt(hm_info) else noreturn {
     const Hm = @TypeOf(hash_map.*);
     if (sig.utils.types.hashMapInfo(Hm) == null) @compileError("Expected pointer to hash map, got " ++ @typeName(Hm));
@@ -207,23 +208,25 @@ pub fn HashMapFmt(comptime hm_info: sig.utils.types.HashMapInfo) type {
             writer: anytype,
         ) @TypeOf(writer).Error!void {
             const key_fmt, const val_fmt = comptime blk: {
+                if (combo_fmt_str.len == 0) break :blk .{ "", "" };
                 var key_fmt: []const u8 = "";
 
-                var i = 0;
+                var i: usize = 0;
                 while (std.mem.indexOfScalarPos(u8, combo_fmt_str, i, '|')) |pipe_idx| {
-                    const start = i;
-                    i = pipe_idx + 1;
-
-                    if (!std.mem.startsWith(u8, combo_fmt_str[start + 1 ..], "|")) {
-                        if (i == 0) break;
-                        break :blk .{ key_fmt, combo_fmt_str[start + 1 ..] };
+                    if (pipe_idx + 1 != combo_fmt_str.len and
+                        combo_fmt_str[pipe_idx + 1] == '|' //
+                    ) {
+                        key_fmt = key_fmt ++ combo_fmt_str[i .. pipe_idx + 1];
+                        i = pipe_idx + 2;
+                        continue;
                     }
 
-                    key_fmt = key_fmt ++ combo_fmt_str[0..i];
-                    i += 1;
+                    key_fmt = key_fmt ++ combo_fmt_str[i..pipe_idx];
+                    i = pipe_idx + 1;
+                    break;
                 }
 
-                break :blk .{ combo_fmt_str[0..i], combo_fmt_str[i + 1 ..] };
+                break :blk .{ key_fmt, combo_fmt_str[i..] };
             };
 
             var i: usize = 0;
@@ -237,4 +240,39 @@ pub fn HashMapFmt(comptime hm_info: sig.utils.types.HashMapInfo) type {
             }
         }
     };
+}
+
+test hashMapFmt {
+    var hm1 = std.AutoArrayHashMap(u32, i32).init(std.testing.allocator);
+    defer hm1.deinit();
+
+    try std.testing.expectFmt("", "{}", .{hashMapFmt(&hm1, ", ")});
+    try std.testing.expectFmt("", "{|}", .{hashMapFmt(&hm1, ", ")});
+
+    try hm1.put(255, -1);
+    try std.testing.expectFmt("{ FF, -1 }", "{X|d}", .{hashMapFmt(&hm1, ", ")});
+
+    try hm1.put(1, -255);
+    try std.testing.expectFmt("{ 255, -1 }, { 1, -255 }", "{d|d}", .{hashMapFmt(&hm1, ", ")});
+
+    const TestFmt = struct {
+        a: u32,
+
+        pub fn format(
+            _: @This(),
+            comptime fmt_str: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            try writer.writeAll(fmt_str);
+        }
+    };
+
+    var hm2 = std.AutoArrayHashMap(TestFmt, TestFmt).init(std.testing.allocator);
+    defer hm2.deinit();
+
+    // || escapes into | for the key fmt
+    try hm2.put(.{ .a = 2 }, .{ .a = 1 });
+    try hm2.put(.{ .a = 1 }, .{ .a = 2 });
+    try std.testing.expectFmt("{ |-, -| }, { |-, -| }", "{||-|-|}", .{hashMapFmt(&hm2, ", ")});
 }
