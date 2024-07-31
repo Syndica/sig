@@ -4,6 +4,7 @@ pub const varint = @import("varint.zig");
 pub const optional = @import("optional.zig");
 pub const list = @import("list.zig");
 pub const int = @import("int.zig");
+pub const slice = @import("slice.zig");
 
 const std = @import("std");
 const sig = @import("../lib.zig");
@@ -35,13 +36,13 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     return @as(usize, @intCast(stream.bytes_written));
 }
 
-pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
-    var stream = std.io.fixedBufferStream(slice);
+pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, buf: []const u8, params: bincode.Params) !T {
+    var stream = std.io.fixedBufferStream(buf);
     return bincode.read(allocator, T, stream.reader(), params);
 }
 
-pub fn writeToSlice(slice: []u8, data: anytype, params: bincode.Params) ![]u8 {
-    var stream = std.io.fixedBufferStream(slice);
+pub fn writeToSlice(buf: []u8, data: anytype, params: bincode.Params) ![]u8 {
+    var stream = std.io.fixedBufferStream(buf);
     try bincode.write(stream.writer(), data, params);
     return stream.getWritten();
 }
@@ -721,8 +722,8 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
     }
 }
 
-pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !usize {
-    const ser_slice = try writeToSlice(slice, data, params);
+pub fn getSerializedSizeWithSlice(buf: []u8, data: anytype, params: Params) !usize {
+    const ser_slice = try writeToSlice(buf, data, params);
     return ser_slice.len;
 }
 
@@ -803,12 +804,12 @@ test "bincode: default on eof" {
     try std.testing.expect(r.value == 1);
 
     var buf2: [1024]u8 = undefined;
-    const slice = try writeToSlice(&buf2, Foo{
+    const buf3 = try writeToSlice(&buf2, Foo{
         .value = 10,
         .accounts = std.ArrayList(u64).init(std.testing.allocator),
     }, .{});
 
-    const r2 = try readFromSlice(std.testing.allocator, Foo, slice, .{});
+    const r2 = try readFromSlice(std.testing.allocator, Foo, buf3, .{});
     try std.testing.expect(r2.value == 10);
 }
 

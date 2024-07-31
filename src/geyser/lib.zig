@@ -3,4 +3,4 @@ pub const GeyserReader = core.GeyserReader;
 pub const GeyserWriter = core.GeyserWriter;
 pub const BenchmarkAccountStream = core.BenchmarkAccountStream;
 
-pub const bench = @import("bench.zig");
+pub const benchmark = @import("benchmark.zig");

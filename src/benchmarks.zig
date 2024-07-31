@@ -50,7 +50,8 @@ pub fn main() !void {
     }
 
     if (std.mem.startsWith(u8, filter, "stream_geyser") or run_all_benchmarks) {
-        try @import("geyser/lib.zig").bench.main();
+        std.debug.print("Geyser Streaming Benchmark:\n", .{});
+        try @import("geyser/lib.zig").benchmark.runBenchmark();
     }
 
     if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {

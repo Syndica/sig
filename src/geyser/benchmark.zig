@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const geyser = sig.geyser;
 
 const bincode = sig.bincode;
 const AccountsDB = sig.accounts_db.AccountsDB;
@@ -9,7 +10,9 @@ const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
-pub fn streamReader() !void {
+const MEASURE_RATE = sig.time.Duration.fromSecs(2);
+
+pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
     var reader = try sig.geyser.GeyserReader.init(allocator, "../sig/test_data/accountsdb_fuzz.pipe");
     defer reader.deinit();
@@ -17,18 +20,18 @@ pub fn streamReader() !void {
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 
-    while (true) {
-        const data = try reader.read();
-        defer bincode.free(allocator, data);
+    while (!exit.load(.unordered)) {
+        const n, const payload = try reader.readPayload();
+        bytes_read += n;
 
-        var bytes: usize = 0;
-        for (data.accounts, data.pubkeys) |*account, _| {
-            bytes += account.data.len;
-        }
-        bytes_read += bytes;
+        // just drop the data
+        // NOTE: bincode.free doesnt work with FBA since alloc and dealloc occurs as (field1 -> fieldN)
+        // so we would need dealloc to happen as (fieldN -> field1)
+        std.mem.doNotOptimizeAway(payload);
+        reader.resetMemory();
 
         // mb/sec reading
-        if (timer.read().asSecs() > 5) {
+        if (timer.read().asNanos() > MEASURE_RATE.asNanos()) {
             // print mb/sec
             const elapsed = timer.read().asSecs();
             const bytes_per_sec = bytes_read / elapsed;
@@ -42,11 +45,11 @@ pub fn streamReader() !void {
     }
 }
 
-pub fn streamWriter() !void {
+pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
 
-    var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe");
-    defer geyser.deinit();
+    var geyser_writer = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe");
+    defer geyser_writer.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -55,24 +58,19 @@ pub fn streamWriter() !void {
     const N_ACCOUNTS_PER_SLOT = 100;
     const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
     const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);
-
-    var bytes_per_batch: u64 = 0;
     for (0..N_ACCOUNTS_PER_SLOT) |i| {
         accounts[i] = try Account.random(allocator, rng, 32);
         pubkeys[i] = Pubkey.random(rng);
-
-        bytes_per_batch += accounts[i].data.len;
     }
+    var slot: Slot = 0;
 
     var timer = try sig.time.Timer.start();
     var bytes_written: u64 = 0;
-    var slot: Slot = 0;
+    while (!exit.load(.unordered)) {
+        const n = try geyser_writer.write(slot, accounts, pubkeys);
+        bytes_written += n;
 
-    while (true) {
-        try geyser.write(slot, accounts, pubkeys);
-        bytes_written += bytes_per_batch;
-
-        if (timer.read().asSecs() > 5) {
+        if (timer.read().asNanos() > MEASURE_RATE.asNanos()) {
             // print mb/sec
             const elapsed = timer.read().asSecs();
             const bytes_per_sec = bytes_written / elapsed;
@@ -87,9 +85,21 @@ pub fn streamWriter() !void {
     }
 }
 
-pub fn main() !void {
-    const reader_handle = try std.Thread.spawn(.{}, streamReader, .{});
-    reader_handle.detach();
+pub fn runBenchmark() !void {
+    const allocator = std.heap.page_allocator;
 
-    try streamWriter();
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+
+    exit.* = std.atomic.Value(bool).init(false);
+
+    const reader_handle = try std.Thread.spawn(.{}, streamReader, .{exit});
+    const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
+
+    // let it run for ~4 measurements
+    std.time.sleep(MEASURE_RATE.asNanos() * 4);
+    exit.store(true, .unordered);
+
+    reader_handle.join();
+    writer_handle.join();
 }
