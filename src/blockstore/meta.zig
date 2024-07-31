@@ -169,9 +169,7 @@ pub const ConnectedFlags = BitFlags(enum(u8) {
 });
 
 pub const DuplicateSlotProof = struct {
-    // #[serde(with = "serde_bytes")]
     shred1: []const u8,
-    // #[serde(with = "serde_bytes")]
     shred2: []const u8,
 };
 
