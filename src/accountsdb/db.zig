@@ -2588,7 +2588,6 @@ test "purge accounts in cache works" {
     const rng = random.random();
     const n_accounts = 3;
 
-    // we dont defer deinit to make sure that they are cleared on purge
     var pubkeys: [n_accounts]Pubkey = undefined;
     var accounts: [n_accounts]Account = undefined;
 
