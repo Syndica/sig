@@ -41,10 +41,11 @@ pub const Hash = extern struct {
     }
 
     pub fn base58String(self: Hash) std.BoundedArray(u8, 44) {
-        var result_data: [44]u8 = undefined;
+        var result: std.BoundedArray(u8, 44) = .{};
         const b58_encoder = comptime base58.Encoder.init(.{});
-        const encoded_len = b58_encoder.encode(&self.data, &result_data) catch unreachable;
-        return std.BoundedArray(u8, 44).fromSlice(result_data[0..encoded_len]) catch unreachable;
+        const encoded_len = b58_encoder.encode(&self.data, &result.buffer) catch unreachable; // this is unreachable because '44' is exactly the maximum encoded length for a 32 byte string.
+        result.len = @intCast(encoded_len);
+        return result;
     }
 
     pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
