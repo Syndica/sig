@@ -7,8 +7,6 @@ pub const HASH_SIZE: usize = 32;
 pub const Hash = extern struct {
     data: [HASH_SIZE]u8,
 
-    pub const MAX_VALUE: Hash = .{ .data = .{255} ** HASH_SIZE };
-
     pub fn default() Hash {
         return .{ .data = .{0} ** HASH_SIZE };
     }

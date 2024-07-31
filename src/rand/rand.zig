@@ -114,8 +114,8 @@ pub fn BlockRng(
     };
 }
 
-pub fn errorValue(rand: std.Random, comptime ErrorSet: type) ?if (ErrorSet == anyerror) noreturn else ErrorSet {
-    if (ErrorSet == anyerror) return null;
+pub fn errorValue(rand: std.Random, comptime ErrorSet: type) ErrorSet {
+    if (ErrorSet == anyerror) @compileError("Can't return a random instance of " ++ @typeName(anyerror));
     return switch (rand.enumValue(std.meta.FieldEnum(ErrorSet))) {
         inline else => |itag| @field(ErrorSet, @tagName(itag)),
     };

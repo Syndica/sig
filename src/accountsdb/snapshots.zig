@@ -274,7 +274,7 @@ pub const VoteAccount = struct {
 
         const vote_state: ?anyerror!VoteState = switch (rand.enumValue(enum { null, err, value })) {
             .null => null,
-            .err => sig.rand.errorValue(rand, RandomErrorSet) orelse error.RandomError,
+            .err => sig.rand.errorValue(rand, RandomErrorSet),
             .value => VoteState.random(rand),
         };
 
