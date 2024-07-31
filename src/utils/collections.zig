@@ -136,7 +136,7 @@ pub fn SortedSet(comptime T: type) type {
             var items_ = self.items();
             if (start) |start_| {
                 // .any instead of .first because uniqueness is guaranteed
-                const start_index = switch (find(T, items_, start_, .any)) {
+                const start_index = switch (binarySearch(T, items_, start_, .any)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => 0,
@@ -147,7 +147,7 @@ pub fn SortedSet(comptime T: type) type {
             }
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
-                const end_index = switch (find(T, items_, end_, .any)) {
+                const end_index = switch (binarySearch(T, items_, end_, .any)) {
                     .found => |index| index,
                     .after => |index| index + 1,
                     .less => return &.{},
@@ -174,7 +174,7 @@ pub fn SortedSet(comptime T: type) type {
 
 /// binary search that is very specific about the outcome.
 /// only works with numbers
-fn find(
+fn binarySearch(
     comptime T: type,
     /// slice to look for the item
     items: []const T,
@@ -309,19 +309,19 @@ test "SortedSet range" {
     try expectEqualSlices(u8, &.{}, set.range(2, 2));
 }
 
-test find {
+test binarySearch {
     const items: [4]u8 = .{ 1, 3, 3, 5 };
     inline for (.{ .any, .first, .last }) |w| {
-        try expectEqual(find(u8, &items, 0, w), .less);
-        try expectEqual(find(u8, &items, 1, w).found, 0);
-        try expectEqual(find(u8, &items, 2, w).after, 0);
-        try expectEqual(find(u8, &items, 4, w).after, 2);
-        try expectEqual(find(u8, &items, 5, w).found, 3);
-        try expectEqual(find(u8, &items, 6, w), .greater);
+        try expectEqual(binarySearch(u8, &items, 0, w), .less);
+        try expectEqual(binarySearch(u8, &items, 1, w).found, 0);
+        try expectEqual(binarySearch(u8, &items, 2, w).after, 0);
+        try expectEqual(binarySearch(u8, &items, 4, w).after, 2);
+        try expectEqual(binarySearch(u8, &items, 5, w).found, 3);
+        try expectEqual(binarySearch(u8, &items, 6, w), .greater);
     }
-    expect(find(u8, &items, 3, .any).found == 1) catch {
-        try expectEqual(find(u8, &items, 3, .any).found, 2);
+    expect(binarySearch(u8, &items, 3, .any).found == 1) catch {
+        try expectEqual(binarySearch(u8, &items, 3, .any).found, 2);
     };
-    try expectEqual(find(u8, &items, 3, .first).found, 1);
-    try expectEqual(find(u8, &items, 3, .last).found, 2);
+    try expectEqual(binarySearch(u8, &items, 3, .first).found, 1);
+    try expectEqual(binarySearch(u8, &items, 3, .last).found, 2);
 }
