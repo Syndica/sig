@@ -1918,12 +1918,12 @@ pub const AccountsDB = struct {
         if (accounts.len == 0) return;
 
         {
-            const accounts_duped = try self.allocator.dupe(Account, accounts);
+            const accounts_duped = try self.allocator.alloc(Account, accounts.len);
             errdefer self.allocator.free(accounts_duped);
 
-            for (accounts_duped, 0..) |*account, i| {
+            for (accounts_duped, accounts, 0..) |*account, original, i| {
                 errdefer for (accounts_duped[0..i]) |prev| prev.deinit(self.allocator);
-                account.* = try account.clone(self.allocator);
+                account.* = try original.clone(self.allocator);
             }
 
             const pubkeys_duped = try self.allocator.dupe(Pubkey, pubkeys);
