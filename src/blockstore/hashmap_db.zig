@@ -27,8 +27,10 @@ pub const SharedHashMapDB = struct {
         column_families: []const ColumnFamily,
     ) !SharedHashMapDB {
         var maps = try allocator.alloc(SharedHashMap, column_families.len);
-        errdefer allocator.free(maps);
-        errdefer for (maps) |*m| m.deinit();
+        errdefer {
+            for (maps) |*m| m.deinit();
+            allocator.free(maps);
+        }
         inline for (0..column_families.len) |i| {
             maps[i] = try SharedHashMap.init(allocator);
         }
