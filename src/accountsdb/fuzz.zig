@@ -97,7 +97,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const Actions = enum { put, get };
 
-    var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe");
+    var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe", null);
     defer geyser.deinit();
 
     // get/put a bunch of accounts

@@ -14,7 +14,7 @@ const MEASURE_RATE = sig.time.Duration.fromSecs(2);
 
 pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
-    var reader = try sig.geyser.GeyserReader.init(allocator, "../sig/test_data/accountsdb_fuzz.pipe");
+    var reader = try sig.geyser.GeyserReader.init(allocator, "../sig/test_data/accountsdb_fuzz.pipe", exit);
     defer reader.deinit();
 
     var bytes_read: usize = 0;
@@ -48,7 +48,7 @@ pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
 pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
 
-    var geyser_writer = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe");
+    var geyser_writer = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe", exit);
     defer geyser_writer.deinit();
 
     var random = std.rand.DefaultPrng.init(19);

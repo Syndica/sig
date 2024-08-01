@@ -6,6 +6,8 @@ const bincode = sig.bincode;
 const c = @cImport({
     @cInclude("sys/types.h");
     @cInclude("sys/stat.h");
+
+    @cInclude("fcntl.h");
 });
 
 const Account = sig.core.Account;
@@ -28,14 +30,15 @@ pub const GeyserWriter = struct {
     allocator: std.mem.Allocator,
     file: std.fs.File,
     buf: []u8,
+    exit: ?*std.atomic.Value(bool),
 
     const Self = @This();
 
     /// initializes a linux pipe to stream data to
-    pub fn init(allocator: std.mem.Allocator, pipe_path: []const u8) !Self {
+    pub fn init(allocator: std.mem.Allocator, pipe_path: []const u8, exit: ?*std.atomic.Value(bool)) !Self {
         const file = try openPipe(pipe_path);
         const buf = try allocator.alloc(u8, 1 << 30); // 1GB
-        return .{ .file = file, .allocator = allocator, .buf = buf };
+        return .{ .file = file, .allocator = allocator, .buf = buf, .exit = exit };
     }
 
     pub fn deinit(self: Self) void {
@@ -45,6 +48,7 @@ pub const GeyserWriter = struct {
 
     /// streams a batch of accounts to the pipe using bincode serialization.
     /// returns the number of bytes wrote.
+    /// NOTE: this will block if the pipe is not big enough
     pub fn write(
         self: *Self,
         slot: Slot,
@@ -64,7 +68,27 @@ pub const GeyserWriter = struct {
         }
 
         const written_buf = try bincode.writeToSlice(self.buf, payload, .{});
-        _ = try self.file.writeAll(written_buf);
+
+        var i: u64 = 0;
+        while (i < written_buf.len) {
+            const n = self.file.write(written_buf[i..written_buf.len]) catch |err| {
+                if (err == std.posix.WriteError.WouldBlock) {
+                    if (self.exit != null and self.exit.?.load(.unordered)) {
+                        return error.BlockWithExit;
+                    } else {
+                        // pipe is full but we dont need to exit, so we try again
+                        continue;
+                    }
+                } else {
+                    return err;
+                }
+            };
+
+            if (n == 0) {
+                return error.PipeClosed;
+            }
+            i += n;
+        }
 
         return written_buf.len;
     }
@@ -79,11 +103,14 @@ pub const GeyserReader = struct {
     bincode_buf: []u8,
     // NOTE: not thread-safe
     bincode_allocator: std.heap.FixedBufferAllocator,
+    exit: ?*std.atomic.Value(bool),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, pipe_path: []const u8) !Self {
+    pub fn init(allocator: std.mem.Allocator, pipe_path: []const u8, exit: ?*std.atomic.Value(bool)) !Self {
         const file = try openPipe(pipe_path);
+        errdefer file.close();
+
         // TODO(x19): make config
         const io_buf = try allocator.alloc(u8, 1 << 18); // 256kb
         errdefer allocator.free(io_buf);
@@ -98,6 +125,7 @@ pub const GeyserReader = struct {
             .io_buf = io_buf,
             .bincode_buf = bincode_buf,
             .bincode_allocator = fb_allocator,
+            .exit = exit,
         };
     }
 
@@ -133,15 +161,27 @@ pub const GeyserReader = struct {
             self.io_buf = new_buf;
         }
 
-        const bytes_read = try self.file.readAll(self.io_buf[0..size]);
-        if (bytes_read != size) {
-            if (bytes_read == 0) {
+        var i: u64 = 0;
+        while (i < size) {
+            const n = self.file.read(self.io_buf[i..size]) catch |err| {
+                if (err == std.posix.ReadError.WouldBlock) {
+                    if (self.exit != null and self.exit.?.load(.unordered)) {
+                        return error.BlockWithExit;
+                    } else {
+                        // pipe is empty but we dont need to exit, so we try again
+                        continue;
+                    }
+                } else {
+                    return err;
+                }
+            };
+
+            if (n == 0) {
                 return error.PipeClosed;
-            } else {
-                std.debug.print("read {} bytes, expected {}\n", .{ bytes_read, size });
-                return error.ReadPipeFailed;
             }
+            i += n;
         }
+
         const data = try bincode.readFromSlice(self.bincode_allocator.allocator(), T, self.io_buf[0..size], .{});
         return data;
     }
@@ -163,6 +203,13 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     }
 
     const file = try std.fs.cwd().openFile(pipe_path, .{ .mode = .read_write });
+
+    // set to nonblocking
+    const r = c.fcntl(@intCast(file.handle), c.O_NONBLOCK);
+    if (r == -1) {
+        return error.FailedToSetNonBlocking;
+    }
+
     return file;
 }
 
@@ -188,11 +235,11 @@ test "streaming accounts" {
     }
 
     // setup writer
-    var stream_writer = try GeyserWriter.init(allocator, "test_data/stream_test.pipe");
+    var stream_writer = try GeyserWriter.init(allocator, "test_data/stream_test.pipe", null);
     defer stream_writer.deinit();
 
     // setup reader
-    var stream_reader = try GeyserReader.init(allocator, "test_data/stream_test.pipe");
+    var stream_reader = try GeyserReader.init(allocator, "test_data/stream_test.pipe", null);
     defer stream_reader.deinit();
 
     // write to the pipe
@@ -315,12 +362,12 @@ pub const BenchmarkAccountStream = struct {
         }
 
         // setup writer
-        var stream_writer = try GeyserWriter.init(allocator, "test_data/bench_test.pipe");
+        var stream_writer = try GeyserWriter.init(allocator, "test_data/bench_test.pipe", null);
         defer stream_writer.deinit();
 
         // setup reader
         const stream_reader = try allocator.create(GeyserReader);
-        stream_reader.* = try GeyserReader.init(allocator, "test_data/bench_test.pipe");
+        stream_reader.* = try GeyserReader.init(allocator, "test_data/bench_test.pipe", null);
         defer {
             stream_reader.deinit();
             allocator.destroy(stream_reader);
