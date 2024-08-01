@@ -205,8 +205,10 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     const file = try std.fs.cwd().openFile(pipe_path, .{ .mode = .read_write });
 
     // set to nonblocking
-    const r = c.fcntl(@intCast(file.handle), c.O_NONBLOCK);
-    if (r == -1) {
+    // TODO(x19): use F_GETFL | NON_BLOCK
+    const rc2 = c.fcntl(@intCast(file.handle), c.F_SETFL, c.O_NONBLOCK);
+    if (rc2 == -1) {
+        std.log.warn("Failed to set pipe to non-blocking: errno={}\n", .{std.posix.errno(rc2)});
         return error.FailedToSetNonBlocking;
     }
 
