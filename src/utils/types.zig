@@ -206,3 +206,215 @@ pub inline fn comptimeZeroSizePtrCast(comptime T: type, comptime ptr: *const any
         return dummy.value;
     }
 }
+
+/// Throws compile error if T and U do not share the same interface.
+///
+/// This is a stricter version of assertImplements that requires each
+/// type to mutually implement the other. They are required to have
+/// the exact same set of decl names and types.
+pub fn assertSameInterface(comptime T: type, comptime U: type) void {
+    assertImplements(T, U);
+    assertImplements(U, T);
+}
+
+/// Throws compile error if `Impl` does not implement the interface
+/// defined by `Trait`.
+///
+/// Implementing an interface means:
+///   For each pub decl in `Trait`, `Impl` has a decl with the same
+///   name and the same type. The decls do *not* need to have the
+///   same value, only the same type.
+///
+/// This can be useful when implementing a pattern analogous to
+/// trait (rust), interface (go/java), or typeclass (haskell).
+pub fn assertImplements(comptime Trait: type, comptime Impl: type) void {
+    const errors = comptime checkImplements(Trait, Impl);
+    if (errors.len != 0) {
+        @compileError(errors);
+    }
+}
+
+/// backend for assertImplements that just returns an error string
+/// instead of throwing a compile error. If string.len > 0, there
+/// was an error.
+fn checkImplements(comptime Trait: type, comptime Impl: type) []const u8 {
+    const trait_decls, _ = comptime declTypes(Trait);
+    _, const impl_decls = comptime declTypes(Impl);
+    comptime var errors = ComptimeStringBuilder{};
+
+    // check that Impl contains type definitions for each type in Trait
+    // also track the mapping from Trait type to Impl type
+    comptime var types_buf: [trait_decls.len][2]type = undefined;
+    comptime var types_num = 0;
+    inline for (trait_decls) |trait_decl| if (trait_decl.type == type) {
+        if (impl_decls.get(trait_decl.name)) |ImplDeclType| {
+            if (type == ImplDeclType) {
+                types_buf[types_num] = .{
+                    @field(Trait, trait_decl.name),
+                    @field(Impl, trait_decl.name),
+                };
+                types_num += 1;
+            } else comptime errors.print(
+                "{}.{s} must be a type for compatibility with {}, but it is a {}\n\n",
+                .{ Impl, trait_decl.name, Trait, ImplDeclType },
+            );
+        } else comptime errors.print(
+            "{} is missing the type definition '{s}' required for compatibility with {}\n\n",
+            .{ Impl, trait_decl.name, Trait },
+        );
+    };
+    const types = types_buf[0..types_num];
+
+    // check that Impl contains decls for each non-type decl in Trait
+    inline for (trait_decls) |trait_decl| if (trait_decl.type != type) {
+        const ExpectedType = switch (@typeInfo(trait_decl.type)) {
+            .Fn => |fun| blk: {
+                // any types found in a function signature that are defined
+                // by the trait should be swapped with the version that is
+                // defined by the impl.
+                comptime var params: [fun.params.len]std.builtin.Type.Fn.Param = .{
+                    std.builtin.Type.Fn.Param{
+                        .is_generic = false,
+                        .is_noalias = false,
+                        .type = null,
+                    },
+                } ** fun.params.len;
+                inline for (fun.params, 0..) |old, i| {
+                    if (get(types, old.type.?)) |new| {
+                        params[i].type = new;
+                    } else {
+                        params[i].type = old.type.?;
+                    }
+                }
+                comptime var new_fun: std.builtin.Type.Fn = fun;
+                if (get(types, new_fun.return_type.?)) |new_ret| {
+                    new_fun.return_type = new_ret;
+                }
+                new_fun.params = &params;
+                break :blk @Type(std.builtin.Type{ .Fn = new_fun });
+            },
+            else => trait_decl.type,
+        };
+        if (impl_decls.get(trait_decl.name)) |ImplDeclType| {
+            if (ExpectedType != ImplDeclType) {
+                comptime errors.print(
+                    \\{}.{s} is not compatible with {}:
+                    \\    required: {}
+                    \\      actual: {}
+                    \\
+                    \\
+                , .{ Impl, trait_decl.name, Trait, ExpectedType, ImplDeclType });
+            }
+        } else comptime errors.print(
+            "{} does not implement {}.{s}: {}\n\n",
+            .{ Impl, Trait, trait_decl.name, ExpectedType },
+        );
+    };
+
+    return errors.string;
+}
+
+pub const ComptimeStringBuilder = struct {
+    string: []const u8 = "",
+
+    pub fn print(comptime self: *@This(), comptime fmt: []const u8, comptime args: anytype) void {
+        const message = std.fmt.comptimePrint(fmt, args);
+        self.string = std.fmt.comptimePrint("{s}{s}", .{ self.string, message });
+    }
+};
+
+fn get(comptime map: []const [2]type, comptime T: type) ?type {
+    inline for (map) |pair| {
+        if (pair[0] == T) return pair[1];
+    }
+    return null;
+}
+
+fn compileError(comptime fmt: []const u8, comptime args: anytype) noreturn {
+    @compileError(std.fmt.comptimePrint(fmt, args));
+}
+
+const DeclType = struct { name: []const u8, type: type };
+
+fn declTypes(comptime T: type) struct {
+    [std.meta.declarations(T).len]DeclType,
+    std.StaticStringMap(type),
+} {
+    const decls = std.meta.declarations(T);
+    var decl_types: [decls.len]DeclType = undefined;
+    var tuples: [decls.len]struct { []const u8, type } = undefined;
+    for (decls, 0..) |decl, i| {
+        decl_types[i] = .{ .name = decl.name, .type = @TypeOf(@field(T, decl.name)) };
+        tuples[i] = .{ decl.name, @TypeOf(@field(T, decl.name)) };
+    }
+    const map = std.StaticStringMap(type).initComptime(tuples);
+    return .{ decl_types, map };
+}
+
+test "assertImplements happy path" {
+    const MyTrait = struct {
+        pub const Hello = struct {};
+        pub fn hello(_: Hello) Hello {
+            unreachable;
+        }
+    };
+    const MyImpl = struct {
+        pub const Hello = struct {};
+        pub fn hello(_: Hello) Hello {
+            unreachable;
+        }
+    };
+    assertImplements(MyTrait, MyImpl);
+}
+
+test "assertImplements catches: missing type" {
+    const MyTrait = struct {
+        pub const Hello = struct {};
+    };
+    const MyImpl = struct {};
+    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+}
+
+test "assertImplements catches: type not a type" {
+    const MyTrait = struct {
+        pub const Hello = struct {};
+    };
+    const MyImpl = struct {
+        pub const Hello = 0;
+    };
+    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+}
+
+test "assertImplements catches: wrong function signature" {
+    const MyTrait = struct {
+        pub const Hello = struct {};
+        pub fn hello(_: Hello) Hello {
+            unreachable;
+        }
+    };
+    const MyImpl = struct {
+        pub const Hello = struct {};
+        pub fn hello(_: Hello) MyTrait.Hello {
+            unreachable;
+        }
+    };
+    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+}
+
+test "assertImplements catches: missing function" {
+    const MyTrait = struct {
+        pub fn hello(_: usize) usize {
+            unreachable;
+        }
+    };
+    const MyImpl = struct {};
+    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+}
+
+test "assertImplements catches: missing const" {
+    const MyTrait = struct {
+        pub const number = 1;
+    };
+    const MyImpl = struct {};
+    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+}
