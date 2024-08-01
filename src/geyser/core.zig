@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 const bincode = sig.bincode;
+const builtin = @import("builtin");
 
 // needed for mkfifo syscall
 const c = @cImport({
@@ -14,6 +15,16 @@ const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
+const MAX_PIPE_SIZE: ?u64 = null; // if on linux you can set this
+comptime {
+    if (builtin.os.tag == .linux) {
+        const sys_path = "/proc/sys/fs/pipe-max-size";
+        const pipe_size = std.fs.cwd().readFile(sys_path) catch unreachable;
+        const pipe_size_str = std.mem.toString(pipe_size) catch unreachable;
+        const pipe_size_int = std.fmt.parseInt(u64, pipe_size_str, 10) catch unreachable;
+        MAX_PIPE_SIZE = pipe_size_int;
+    }
+}
 pub const Payload = struct {
     data_len: u64,
     data: Data,
@@ -210,6 +221,10 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     if (rc2 == -1) {
         std.log.warn("Failed to set pipe to non-blocking: errno={}\n", .{std.posix.errno(rc2)});
         return error.FailedToSetNonBlocking;
+    }
+
+    if (builtin.os.tag == .linux) {
+        c.fcntl(@intCast(file.handle), c.F_SETPIPE_SZ, MAX_PIPE_SIZE);
     }
 
     return file;
