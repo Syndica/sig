@@ -721,8 +721,8 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
     }
 }
 
-pub fn getSerializedSizeWithSlice(buf: []u8, data: anytype, params: Params) !usize {
-    const ser_slice = try writeToSlice(buf, data, params);
+pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !usize {
+    const ser_slice = try writeToSlice(slice, data, params);
     return ser_slice.len;
 }
 
