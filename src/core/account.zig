@@ -5,7 +5,7 @@ const Pubkey = sig.core.Pubkey;
 const Epoch = sig.core.Epoch;
 const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 
-const U8SliceConfig = bincode.slice.U8SliceConfig;
+const U8SliceConfig = bincode.int.U8SliceConfig;
 
 pub const Account = struct {
     lamports: u64,

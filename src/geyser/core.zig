@@ -3,14 +3,14 @@ const sig = @import("../lib.zig");
 const bincode = sig.bincode;
 const builtin = @import("builtin");
 
-// needed for mkfifo syscall
 const c = @cImport({
+    // used to set/modify the pipe size
     @cDefine("_GNU_SOURCE", {});
+    @cInclude("fcntl.h");
 
+    // used for mkfifo syscall
     @cInclude("sys/types.h");
     @cInclude("sys/stat.h");
-
-    @cInclude("fcntl.h");
 });
 
 const Account = sig.core.Account;
@@ -18,6 +18,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
 pub const Payload = struct {
+    // used to know how much to allocate to read the full data slice
     data_len: u64,
     data: Data,
 
@@ -229,7 +230,6 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
             end_index -= 1;
         }
         const pipe_size_int = std.fmt.parseInt(u64, pipe_size[0..end_index], 10) catch unreachable;
-        std.debug.print("setting pipe size: {d}\n", .{pipe_size_int});
 
         const rc3 = c.fcntl(@intCast(file.handle), c.F_SETPIPE_SZ, pipe_size_int);
         if (rc3 == -1) {

@@ -4,7 +4,6 @@ pub const varint = @import("varint.zig");
 pub const optional = @import("optional.zig");
 pub const list = @import("list.zig");
 pub const int = @import("int.zig");
-pub const slice = @import("slice.zig");
 
 const std = @import("std");
 const sig = @import("../lib.zig");
@@ -36,13 +35,13 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     return @as(usize, @intCast(stream.bytes_written));
 }
 
-pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, buf: []const u8, params: bincode.Params) !T {
-    var stream = std.io.fixedBufferStream(buf);
+pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
+    var stream = std.io.fixedBufferStream(slice);
     return bincode.read(allocator, T, stream.reader(), params);
 }
 
-pub fn writeToSlice(buf: []u8, data: anytype, params: bincode.Params) ![]u8 {
-    var stream = std.io.fixedBufferStream(buf);
+pub fn writeToSlice(slice: []u8, data: anytype, params: bincode.Params) ![]u8 {
+    var stream = std.io.fixedBufferStream(slice);
     try bincode.write(stream.writer(), data, params);
     return stream.getWritten();
 }

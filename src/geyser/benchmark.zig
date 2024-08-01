@@ -11,10 +11,11 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const GeyserWriter = sig.geyser.GeyserWriter;
 
 const MEASURE_RATE = sig.time.Duration.fromSecs(2);
+const PIPE_PATH = "../sig/test_data/accountsdb_fuzz.pipe";
 
 pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
-    var reader = try sig.geyser.GeyserReader.init(allocator, "../sig/test_data/accountsdb_fuzz.pipe", exit);
+    var reader = try sig.geyser.GeyserReader.init(allocator, PIPE_PATH, exit);
     defer reader.deinit();
 
     var bytes_read: usize = 0;
@@ -48,7 +49,7 @@ pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
 pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
 
-    var geyser_writer = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe", exit);
+    var geyser_writer = try GeyserWriter.init(allocator, PIPE_PATH, exit);
     defer geyser_writer.deinit();
 
     var random = std.rand.DefaultPrng.init(19);
@@ -97,7 +98,7 @@ pub fn runBenchmark() !void {
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
 
     // let it run for ~4 measurements
-    std.time.sleep(MEASURE_RATE.asNanos() * 4);
+    std.time.sleep(MEASURE_RATE.asNanos() * 100);
     exit.store(true, .unordered);
 
     reader_handle.join();
