@@ -5,6 +5,8 @@ const builtin = @import("builtin");
 
 // needed for mkfifo syscall
 const c = @cImport({
+    @cDefine("_GNU_SOURCE", {});
+
     @cInclude("sys/types.h");
     @cInclude("sys/stat.h");
 
@@ -15,16 +17,6 @@ const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
-const MAX_PIPE_SIZE: ?u64 = null; // if on linux you can set this
-comptime {
-    if (builtin.os.tag == .linux) {
-        const sys_path = "/proc/sys/fs/pipe-max-size";
-        const pipe_size = std.fs.cwd().readFile(sys_path) catch unreachable;
-        const pipe_size_str = std.mem.toString(pipe_size) catch unreachable;
-        const pipe_size_int = std.fmt.parseInt(u64, pipe_size_str, 10) catch unreachable;
-        MAX_PIPE_SIZE = pipe_size_int;
-    }
-}
 pub const Payload = struct {
     data_len: u64,
     data: Data,
@@ -223,8 +215,26 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
         return error.FailedToSetNonBlocking;
     }
 
-    if (builtin.os.tag == .linux) {
-        c.fcntl(@intCast(file.handle), c.F_SETPIPE_SZ, MAX_PIPE_SIZE);
+    if (builtin.os.tag == .linux) blk: {
+        const sys_path = "/proc/sys/fs/pipe-max-size";
+        var buf: [512]u8 = undefined;
+        const pipe_size = std.fs.cwd().readFile(sys_path, &buf) catch {
+            std.debug.print("could not read {s}...\n", .{sys_path});
+            break :blk;
+        };
+        // remove last character if new line
+        var end_index = pipe_size.len;
+        if (pipe_size[pipe_size.len - 1] == '\n') {
+            end_index -= 1;
+        }
+        const pipe_size_int = std.fmt.parseInt(u64, pipe_size[0..end_index], 10) catch unreachable;
+        std.debug.print("setting pipe size: {d}\n", .{pipe_size_int});
+
+        const rc3 = c.fcntl(@intCast(file.handle), c.F_SETPIPE_SZ, pipe_size_int);
+        if (rc3 == -1) {
+            std.log.warn("Failed to set pipe size: errno={}\n", .{std.posix.errno(rc3)});
+            return error.FailedToSetPipeSize;
+        }
     }
 
     return file;
