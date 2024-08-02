@@ -130,7 +130,7 @@ pub fn parallelUntarToFileSystem(
                             &timer,
                             total_n_files,
                             file_count,
-                            "untar files to disk",
+                            "untar",
                             null,
                         );
                         progress_timer.reset();
