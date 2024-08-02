@@ -130,7 +130,7 @@ pub const serializer = struct {
 
     /// Returned data may or may not be owned by the caller.
     /// Do both:
-    ///  - Assume the data is owned by the scope where `item` originated, 
+    ///  - Assume the data is owned by the scope where `item` originated,
     ///    so finish using the slice before returning from the caller (do not store slice as-is)
     ///  - Call BytesRef.deinit before returning from the caller (as if you own it).
     ///
