@@ -1040,9 +1040,20 @@ fn getOrDownloadSnapshots(
     std.fs.cwd().access(accounts_path, .{}) catch {
         accounts_path_exists = false;
     };
-    const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
+
+    var should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
     if (!should_unpack_snapshot) {
-        logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+        // number of files in accounts/
+        var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{});
+        defer accounts_dir.close();
+
+        const dir_size = (try accounts_dir.stat()).size;
+        if (dir_size <= 100) {
+            should_unpack_snapshot = true;
+            logger.infof("empty accounts/ directory found, will unpack snapshot...", .{});
+        } else {
+            logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+        }
     }
 
     var timer = try std.time.Timer.start();
