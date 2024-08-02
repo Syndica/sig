@@ -37,10 +37,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             return .{ .allocator = allocator, .maps = maps };
         }
 
-        pub fn deinit(self_: Self) void {
-            var self = self_;
-            for (self.maps) |*map_| {
-                map_.deinit();
+        pub fn deinit(self: *Self) void {
+            for (self.maps) |*map| {
+                map.deinit();
             }
             self.allocator.free(self.maps);
         }

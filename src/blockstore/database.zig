@@ -35,7 +35,7 @@ pub fn Database(comptime Impl: type) type {
             };
         }
 
-        pub fn deinit(self: Self) void {
+        pub fn deinit(self: *Self) void {
             self.impl.deinit();
         }
 

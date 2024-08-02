@@ -69,7 +69,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn deinit(self: Self) void {
+        pub fn deinit(self: *Self) void {
             self.allocator.free(self.cf_handles);
             self.db.deinit();
         }
