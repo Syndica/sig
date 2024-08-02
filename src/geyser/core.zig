@@ -27,6 +27,9 @@ pub const Payload = struct {
     pub const Data = struct {
         slot: Slot,
         pubkeys: []Pubkey,
+        // PERF: the data slice per account is the biggest to read,
+        // we can probably put it into its own field (data: [][]u8)
+        // and read it all in on i/o
         accounts: []Account,
     };
 };
@@ -207,12 +210,18 @@ pub const GeyserReader = struct {
             const data = bincode.readFromSlice(self.bincode_allocator.allocator(), T, self.io_buf[0..size], .{}) catch |err| {
                 if (err == std.mem.Allocator.Error.OutOfMemory) {
                     // resize the bincode allocator and try again
+                    const new_size = self.bincode_buf.len * 2;
+                    const new_buf = try self.allocator.alloc(u8, new_size);
+                    self.allocator.free(self.bincode_buf);
+                    self.bincode_buf = new_buf;
+                    self.bincode_allocator = std.heap.FixedBufferAllocator.init(self.bincode_buf);
                     continue;
                 } else {
                     return err;
                 }
             };
 
+            // return the data
             return data;
         }
     }
@@ -373,6 +382,67 @@ test "streaming accounts" {
     };
     try std.testing.expectEqualDeep(expected_data3, data3);
     stream_reader.resetMemory();
+}
+
+test "buf resizing" {
+    const allocator = std.testing.allocator;
+    const batch_len = 2;
+
+    var random = std.rand.DefaultPrng.init(19);
+    const rng = random.random();
+
+    // generate some data
+    const accounts = try allocator.alloc(Account, batch_len);
+    defer {
+        for (accounts) |*account| account.deinit(allocator);
+        allocator.free(accounts);
+    }
+    const pubkeys = try allocator.alloc(Pubkey, batch_len);
+    defer allocator.free(pubkeys);
+
+    for (0..batch_len) |i| {
+        accounts[i] = try Account.random(allocator, rng, 10);
+        pubkeys[i] = Pubkey.random(rng);
+    }
+
+    // setup writer
+    var stream_writer = try GeyserWriter.init(
+        allocator,
+        "test_data/stream_test.pipe",
+        null,
+        .{ .io_buf_len = 1 },
+    );
+    defer stream_writer.deinit();
+
+    // setup reader
+    var stream_reader = try GeyserReader.init(
+        allocator,
+        "test_data/stream_test.pipe",
+        null,
+        .{
+            .bincode_buf_len = 1,
+            .io_buf_len = 1,
+        },
+    );
+    defer stream_reader.deinit();
+
+    // write to the pipe
+    _ = try stream_writer.write(100, accounts, pubkeys);
+
+    // read from the pipe
+    _, const data = try stream_reader.readPayload();
+
+    const expected_data = Payload.Data{
+        .accounts = accounts,
+        .pubkeys = pubkeys,
+        .slot = 100,
+    };
+    try std.testing.expectEqualDeep(expected_data, data);
+    stream_reader.resetMemory();
+
+    try std.testing.expect(stream_writer.io_buf.len > 1);
+    try std.testing.expect(stream_reader.io_buf.len > 1);
+    try std.testing.expect(stream_reader.bincode_buf.len > 1);
 }
 
 pub const BenchmarkAccountStream = struct {

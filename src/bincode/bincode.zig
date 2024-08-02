@@ -116,7 +116,8 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
 
                     if (field.is_comptime) continue;
                     const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
-                        errdefer std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                        // TODO(x19): use a logger - sometimes we want to recover from failed deser and not print anything
+                        // errdefer std.debug.print("failed to deserialize field {s}\n", .{field.name});
                         @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
                         continue;
                     };
