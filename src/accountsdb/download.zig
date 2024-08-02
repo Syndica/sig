@@ -209,9 +209,7 @@ pub fn downloadSnapshotsFromGossip(
                     i += r.len;
                 }
             }
-            if (i > 0) {
-                logger.infof("searched for peers to downlod from: {s}", .{write_buf[0..i]});
-            }
+            logger.infof("searched for snapshot peers: {s}", .{write_buf[0..i]});
         }
 
         for (available_snapshot_peers.items) |peer| {
