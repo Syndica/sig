@@ -212,9 +212,15 @@ pub inline fn comptimeZeroSizePtrCast(comptime T: type, comptime ptr: *const any
 /// This is a stricter version of assertImplements that requires each
 /// type to mutually implement the other. They are required to have
 /// the exact same set of decl names and types.
-pub fn assertSameInterface(comptime T: type, comptime U: type) void {
-    assertImplements(T, U);
-    assertImplements(U, T);
+pub fn assertSameInterface(
+    comptime T: type,
+    comptime U: type,
+    comptime U_errors_must_be: SetRelationship,
+) void {
+    comptime {
+        assertImplements(T, U, U_errors_must_be);
+        assertImplements(U, T, U_errors_must_be.invert());
+    }
 }
 
 /// Throws compile error if `Impl` does not implement the interface
@@ -227,25 +233,35 @@ pub fn assertSameInterface(comptime T: type, comptime U: type) void {
 ///
 /// This can be useful when implementing a pattern analogous to
 /// trait (rust), interface (go/java), or typeclass (haskell).
-pub fn assertImplements(comptime Trait: type, comptime Impl: type) void {
-    const errors = comptime checkImplements(Trait, Impl);
+pub fn assertImplements(
+    comptime Trait: type,
+    comptime Impl: type,
+    /// Decide whether to allow Impl functions to return different errors.
+    comptime impl_errors_must_be: SetRelationship,
+) void {
+    const errors = comptime checkImplements(Trait, Impl, impl_errors_must_be);
     if (errors.len != 0) {
         @compileError(errors);
     }
 }
 
-/// backend for assertImplements that just returns an error string
+/// implementation for assertImplements that just returns an error string
 /// instead of throwing a compile error. If string.len > 0, there
 /// was an error.
-fn checkImplements(comptime Trait: type, comptime Impl: type) []const u8 {
+fn checkImplements(
+    comptime Trait: type,
+    comptime Impl: type,
+    comptime impl_errors_must_be: SetRelationship,
+) []const u8 {
     const trait_decls, _ = comptime declTypes(Trait);
     _, const impl_decls = comptime declTypes(Impl);
     comptime var errors = ComptimeStringBuilder{};
 
     // check that Impl contains type definitions for each type in Trait
     // also track the mapping from Trait type to Impl type
-    comptime var types_buf: [trait_decls.len][2]type = undefined;
-    comptime var types_num = 0;
+    comptime var types_buf: [1 + trait_decls.len][2]type = undefined;
+    types_buf[0] = .{ Trait, Impl };
+    comptime var types_num = 1;
     inline for (trait_decls) |trait_decl| if (trait_decl.type == type) {
         if (impl_decls.get(trait_decl.name)) |ImplDeclType| {
             if (type == ImplDeclType) {
@@ -267,52 +283,138 @@ fn checkImplements(comptime Trait: type, comptime Impl: type) []const u8 {
 
     // check that Impl contains decls for each non-type decl in Trait
     inline for (trait_decls) |trait_decl| if (trait_decl.type != type) {
-        const ExpectedType = switch (@typeInfo(trait_decl.type)) {
-            .Fn => |fun| blk: {
-                // any types found in a function signature that are defined
-                // by the trait should be swapped with the version that is
-                // defined by the impl.
-                comptime var params: [fun.params.len]std.builtin.Type.Fn.Param = .{
-                    std.builtin.Type.Fn.Param{
-                        .is_generic = false,
-                        .is_noalias = false,
-                        .type = null,
-                    },
-                } ** fun.params.len;
-                inline for (fun.params, 0..) |old, i| {
-                    if (get(types, old.type.?)) |new| {
-                        params[i].type = new;
-                    } else {
-                        params[i].type = old.type.?;
-                    }
-                }
-                comptime var new_fun: std.builtin.Type.Fn = fun;
-                if (get(types, new_fun.return_type.?)) |new_ret| {
-                    new_fun.return_type = new_ret;
-                }
-                new_fun.params = &params;
-                break :blk @Type(std.builtin.Type{ .Fn = new_fun });
-            },
-            else => trait_decl.type,
-        };
         if (impl_decls.get(trait_decl.name)) |ImplDeclType| {
-            if (ExpectedType != ImplDeclType) {
-                comptime errors.print(
-                    \\{}.{s} is not compatible with {}:
-                    \\    required: {}
-                    \\      actual: {}
-                    \\
-                    \\
-                , .{ Impl, trait_decl.name, Trait, ExpectedType, ImplDeclType });
+            const fmt = .{
+                \\{}.{s} is not compatible with {}.{s}:
+                \\    required: {}
+                \\      actual: {}
+                \\
+                \\
+                ,
+                .{ Impl, trait_decl.name, Trait, trait_decl.name },
+            };
+            switch (@typeInfo(trait_decl.type)) {
+                .Fn => |trait_fn| {
+                    if (@typeInfo(ImplDeclType) != .Fn) {
+                        comptime errors.print(
+                            "{}.{s} is a {} but it must be a function to be compatible with {}\n\n",
+                            .{ Impl, trait_decl.name, ImplDeclType, Trait },
+                        );
+                    }
+                    const required = FunctionSignature.init(trait_fn).convertTypes(types);
+                    const actual = FunctionSignature.init(@typeInfo(ImplDeclType).Fn);
+                    comptime if (!actual.eql(required, impl_errors_must_be)) {
+                        errors.print(fmt[0], fmt[1] ++ .{ required, actual });
+                    };
+                },
+                else => if (false) {
+                    comptime errors.print(fmt[0], fmt[1] ++ .{ trait_decl.type, ImplDeclType });
+                },
             }
         } else comptime errors.print(
-            "{} does not implement {}.{s}: {}\n\n",
-            .{ Impl, Trait, trait_decl.name, ExpectedType },
+            "{} does not implement {}.{s}\n    required: {}\n\n",
+            .{ Impl, Trait, trait_decl.name, trait_decl.type },
         );
     };
 
     return errors.string;
 }
+
+const SetRelationship = enum {
+    identical,
+    any,
+    subset,
+    superset,
+
+    fn invert(self: SetRelationship) SetRelationship {
+        return switch (self) {
+            .subset => .superset,
+            .superset => .subset,
+            else => self,
+        };
+    }
+};
+
+/// This can be used to determine if two functions are interchangeable
+/// when comparing the actual function types would be too strict.
+const FunctionSignature = struct {
+    params: []?type,
+    Return: ?type,
+
+    pub fn init(fun: std.builtin.Type.Fn) FunctionSignature {
+        var params: [fun.params.len]?type = undefined;
+        inline for (fun.params, 0..) |param, i| {
+            params[i] = param.type;
+        }
+        return .{
+            .params = &params,
+            .Return = fun.return_type,
+        };
+    }
+
+    pub fn eql(
+        self: FunctionSignature,
+        other: FunctionSignature,
+        self_errors_must_be: SetRelationship,
+    ) bool {
+        for (self.params, other.params) |SelfParam, OtherParam| {
+            if (SelfParam != OtherParam) {
+                return false;
+            }
+        }
+        if (self.Return != null and other.Return != null and
+            @typeInfo(self.Return.?) == .ErrorUnion and @typeInfo(other.Return.?) == .ErrorUnion)
+        {
+            const self_union = @typeInfo(self.Return.?).ErrorUnion;
+            const other_union = @typeInfo(other.Return.?).ErrorUnion;
+            if (self_union.payload != other_union.payload) {
+                return false;
+            }
+            const super, const sub = switch (self_errors_must_be) {
+                .identical => return self.Return == other.Return,
+                .any => .{ error{}, error{} },
+                .subset => .{ other_union.error_set, self_union.error_set },
+                .superset => .{ self_union.error_set, other_union.error_set },
+            };
+            if (@typeInfo(sub).ErrorSet) |sub_set| if (@typeInfo(super).ErrorSet) |super_set| {
+                sub: for (sub_set) |sub_err| {
+                    for (super_set) |super_err| {
+                        if (std.mem.eql(sub_err.name, super_err.name)) {
+                            continue :sub;
+                        }
+                    }
+                    return false;
+                }
+            };
+            return self_union.payload == other_union.payload;
+        }
+        return self.Return == other.Return;
+    }
+
+    pub fn convertTypes(comptime self: FunctionSignature, comptime map: []const [2]type) FunctionSignature {
+        var ret = self;
+        ret.Return = if (self.Return) |R| convertType(R, map) else null;
+        for (ret.params) |*maybe_param| if (maybe_param.*) |*param| {
+            param.* = convertType(param.*, map);
+        };
+        return ret;
+    }
+
+    pub fn format(
+        self: FunctionSignature,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try writer.print("fn (", .{});
+        for (self.params, 0..) |param, i| {
+            if (param) |P| try writer.print("{}", .{P}) else try writer.print("???", .{});
+            if (i + 1 != self.params.len) try writer.print(", ", .{});
+        }
+        try writer.print(") ", .{});
+        if (self.Return) |R| try writer.print("{}", .{R}) else try writer.print("???", .{});
+    }
+};
 
 pub const ComptimeStringBuilder = struct {
     string: []const u8 = "",
@@ -323,11 +425,39 @@ pub const ComptimeStringBuilder = struct {
     }
 };
 
+/// Replaces T with its associated type in map if found, otherwise recursively
+/// inspects T for nested types that can be found in map, and replaces those.
+fn convertType(comptime T: type, comptime map: []const [2]type) type {
+    return if (get(map, T)) |NewT|
+        NewT
+    else switch (@typeInfo(T)) {
+        .Pointer => |ptr| {
+            var new_ptr = ptr;
+            new_ptr.child = convertType(new_ptr.child, map);
+            return @Type(.{ .Pointer = new_ptr });
+        },
+        .ErrorUnion => |eu| {
+            var new_eu = eu;
+            new_eu.payload = convertType(eu.payload, map);
+            new_eu.error_set = convertType(eu.error_set, map);
+            return @Type(.{ .ErrorUnion = new_eu });
+        },
+        else => T,
+    };
+}
+
 fn get(comptime map: []const [2]type, comptime T: type) ?type {
     inline for (map) |pair| {
         if (pair[0] == T) return pair[1];
     }
     return null;
+}
+
+test {
+    try std.testing.expectEqual(*u64, convertType(*usize, &.{.{ usize, u64 }}));
+    try std.testing.expectEqual(anyerror!u64, convertType(anyerror!usize, &.{.{ usize, u64 }}));
+    try std.testing.expectEqual(anyerror!*u64, convertType(anyerror!*usize, &.{.{ usize, u64 }}));
+    try std.testing.expectEqual(*anyerror!u64, convertType(*anyerror!usize, &.{.{ usize, u64 }}));
 }
 
 fn compileError(comptime fmt: []const u8, comptime args: anytype) noreturn {
@@ -364,7 +494,7 @@ test "assertImplements happy path" {
             unreachable;
         }
     };
-    assertImplements(MyTrait, MyImpl);
+    assertImplements(MyTrait, MyImpl, .identical);
 }
 
 test "assertImplements catches: missing type" {
@@ -372,7 +502,7 @@ test "assertImplements catches: missing type" {
         pub const Hello = struct {};
     };
     const MyImpl = struct {};
-    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+    try std.testing.expect(checkImplements(MyTrait, MyImpl, .identical).len > 0);
 }
 
 test "assertImplements catches: type not a type" {
@@ -382,7 +512,7 @@ test "assertImplements catches: type not a type" {
     const MyImpl = struct {
         pub const Hello = 0;
     };
-    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+    try std.testing.expect(checkImplements(MyTrait, MyImpl, .identical).len > 0);
 }
 
 test "assertImplements catches: wrong function signature" {
@@ -398,7 +528,7 @@ test "assertImplements catches: wrong function signature" {
             unreachable;
         }
     };
-    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+    try std.testing.expect(checkImplements(MyTrait, MyImpl, .identical).len > 0);
 }
 
 test "assertImplements catches: missing function" {
@@ -408,7 +538,7 @@ test "assertImplements catches: missing function" {
         }
     };
     const MyImpl = struct {};
-    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+    try std.testing.expect(checkImplements(MyTrait, MyImpl, .identical).len > 0);
 }
 
 test "assertImplements catches: missing const" {
@@ -416,5 +546,5 @@ test "assertImplements catches: missing const" {
         pub const number = 1;
     };
     const MyImpl = struct {};
-    try std.testing.expect(checkImplements(MyTrait, MyImpl).len > 0);
+    try std.testing.expect(checkImplements(MyTrait, MyImpl, .identical).len > 0);
 }

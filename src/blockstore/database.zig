@@ -5,25 +5,33 @@ const Allocator = std.mem.Allocator;
 
 const Logger = sig.trace.Logger;
 
+pub fn assertIsDatabase(comptime Impl: type) void {
+    sig.utils.types.assertSameInterface(Database(Impl), Impl, .subset);
+    sig.utils.types.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
+}
+
+/// Runs all tests in `tests`
+pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) void {
+    assertIsDatabase(Impl(&.{}));
+    for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
+        try @call(.auto, @field(tests(Impl), decl.name), .{});
+    }
+}
+
 /// Interface defining the blockstore's dependency on a database
-pub fn Database(
-    comptime Impl: type,
-    comptime column_families: []const ColumnFamily,
-) type {
+pub fn Database(comptime Impl: type) type {
     return struct {
         impl: Impl,
 
         const Self = @This();
 
-        pub const Batch = BatchImpl(Impl.Batch, column_families);
-
         pub fn open(
             allocator: Allocator,
             logger: Logger,
             path: []const u8,
-        ) !Database(Impl, column_families) {
+        ) anyerror!Database(Impl) {
             return .{
-                .impl = try Impl.open(allocator, logger, path, column_families),
+                .impl = try Impl.open(allocator, logger, path),
             };
         }
 
@@ -31,12 +39,12 @@ pub fn Database(
             self.impl.deinit();
         }
 
-        pub fn put(self: *Self, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) !void {
-            return try self.impl.put(cf, comptime cf.find(column_families), key, value);
+        pub fn put(self: *Self, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) anyerror!void {
+            return try self.impl.put(cf, key, value);
         }
 
-        pub fn get(self: *Self, comptime cf: ColumnFamily, key: cf.Key) !?cf.Value {
-            return try self.impl.get(cf, comptime cf.find(column_families), key);
+        pub fn get(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?cf.Value {
+            return try self.impl.get(cf, key);
         }
 
         /// Returns a reference to the serialized bytes.
@@ -53,76 +61,33 @@ pub fn Database(
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) !?BytesRef {
-            return try self.impl.getBytes(cf, comptime cf.find(column_families), key);
+        ) anyerror!?BytesRef {
+            return try self.impl.getBytes(cf, key);
         }
 
-        pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) !void {
-            return try self.impl.delete(cf, comptime cf.find(column_families), key);
+        pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
+            return try self.impl.delete(cf, key);
         }
 
-        pub fn initBatch(self: *Self) !Batch {
+        pub fn writeBatch(self: *Self) anyerror!WriteBatch {
             return .{ .impl = self.impl.initBatch() };
         }
 
-        pub fn commit(self: *Self, batch: Batch) !void {
+        pub fn commit(self: *Self, batch: WriteBatch) anyerror!void {
             return self.impl.commit(batch.impl);
         }
 
-        pub fn runTest() !void {
-            const Value = struct { hello: u16 };
-            const cf1 = ColumnFamily{
-                .name = "one",
-                .Key = u64,
-                .Value = Value,
-            };
-            const cf2 = ColumnFamily{
-                .name = "two",
-                .Key = u64,
-                .Value = Value,
-            };
-            const allocator = std.testing.allocator;
-            const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-            defer logger.deinit();
-            var db = try Database(Impl, &.{ cf1, cf2 }).open(
-                allocator,
-                logger,
-                "test_data/bsdb",
-            );
-            defer db.deinit();
-            try db.put(cf1, 123, .{ .hello = 345 });
-            const got = try db.get(cf1, 123);
-            try std.testing.expect(345 == got.?.hello);
-            const not = try db.get(cf2, 123);
-            try std.testing.expect(null == not);
-            const wrong_was_deleted = try db.delete(cf2, 123);
-            _ = wrong_was_deleted;
-            // try std.testing.expect(!wrong_was_deleted); // FIXME
-            const was_deleted = try db.delete(cf1, 123);
-            _ = was_deleted;
-            // try std.testing.expect(was_deleted);
-            const not_now = try db.get(cf1, 123);
-            try std.testing.expect(null == not_now);
-        }
-    };
-}
+        pub const WriteBatch = struct {
+            impl: Impl.WriteBatch,
 
-pub fn BatchImpl(
-    comptime Impl: type,
-    comptime column_families: []const ColumnFamily,
-) type {
-    return struct {
-        impl: Impl,
+            pub fn put(self: *WriteBatch, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) anyerror!void {
+                return try self.impl.put(cf, key, value);
+            }
 
-        const Self = @This();
-
-        pub fn put(self: *Self, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) !void {
-            return try self.impl.put(cf, comptime cf.find(column_families), key, value);
-        }
-
-        pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) !void {
-            return try self.impl.delete(cf, comptime cf.find(column_families), key);
-        }
+            pub fn delete(self: *WriteBatch, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
+                return try self.impl.delete(cf, key);
+            }
+        };
     };
 }
 
@@ -246,3 +211,44 @@ pub const BytesRef = struct {
         if (self.allocator) |a| a.free(self.data);
     }
 };
+
+/// Test cases that can be applied to any implementation of Database
+fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
+    return struct {
+        fn basic() !void {
+            const Value = struct { hello: u16 };
+            const cf1 = ColumnFamily{
+                .name = "one",
+                .Key = u64,
+                .Value = Value,
+            };
+            const cf2 = ColumnFamily{
+                .name = "two",
+                .Key = u64,
+                .Value = Value,
+            };
+            const allocator = std.testing.allocator;
+            const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
+            defer logger.deinit();
+            var db = try Database(Impl(&.{ cf1, cf2 })).open(
+                allocator,
+                logger,
+                "test_data/bsdb",
+            );
+            defer db.deinit();
+            try db.put(cf1, 123, .{ .hello = 345 });
+            const got = try db.get(cf1, 123);
+            try std.testing.expect(345 == got.?.hello);
+            const not = try db.get(cf2, 123);
+            try std.testing.expect(null == not);
+            const wrong_was_deleted = try db.delete(cf2, 123);
+            _ = wrong_was_deleted;
+            // try std.testing.expect(!wrong_was_deleted); // FIXME
+            const was_deleted = try db.delete(cf1, 123);
+            _ = was_deleted;
+            // try std.testing.expect(was_deleted);
+            const not_now = try db.get(cf1, 123);
+            try std.testing.expect(null == not_now);
+        }
+    };
+}
