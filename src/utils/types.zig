@@ -391,7 +391,10 @@ const FunctionSignature = struct {
         return self.Return == other.Return;
     }
 
-    pub fn convertTypes(comptime self: FunctionSignature, comptime map: []const [2]type) FunctionSignature {
+    pub fn convertTypes(
+        comptime self: FunctionSignature,
+        comptime map: []const [2]type,
+    ) FunctionSignature {
         var ret = self;
         ret.Return = if (self.Return) |R| convertType(R, map) else null;
         for (ret.params) |*maybe_param| if (maybe_param.*) |*param| {

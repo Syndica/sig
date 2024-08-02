@@ -72,7 +72,12 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             self.db.deinit();
         }
 
-        pub fn put(self: *Self, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) Error!void {
+        pub fn put(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            key: cf.Key,
+            value: cf.Value,
+        ) Error!void {
             const key_bytes = try cf.key().serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
             const val_bytes = try cf.value().serializeToRef(self.allocator, value);
@@ -144,7 +149,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 defer key_bytes.deinit();
                 const val_bytes = try cf.value().serializeToRef(self.allocator, value);
                 defer val_bytes.deinit();
-                self.inner.put(self.cf_handles[cf.find(column_families)], key_bytes.data, val_bytes.data);
+                self.inner.put(
+                    self.cf_handles[cf.find(column_families)],
+                    key_bytes.data,
+                    val_bytes.data,
+                );
             }
 
             pub fn delete(

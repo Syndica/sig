@@ -39,7 +39,12 @@ pub fn Database(comptime Impl: type) type {
             self.impl.deinit();
         }
 
-        pub fn put(self: *Self, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) anyerror!void {
+        pub fn put(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            key: cf.Key,
+            value: cf.Value,
+        ) anyerror!void {
             return try self.impl.put(cf, key, value);
         }
 
@@ -80,7 +85,12 @@ pub fn Database(comptime Impl: type) type {
         pub const WriteBatch = struct {
             impl: Impl.WriteBatch,
 
-            pub fn put(self: *WriteBatch, comptime cf: ColumnFamily, key: cf.Key, value: cf.Value) anyerror!void {
+            pub fn put(
+                self: *WriteBatch,
+                comptime cf: ColumnFamily,
+                key: cf.Key,
+                value: cf.Value,
+            ) anyerror!void {
                 return try self.impl.put(cf, key, value);
             }
 
@@ -142,7 +152,11 @@ pub fn Serializer(comptime S: type) type {
             }
         }
 
-        pub fn serializeAlloc(comptime self: Self, allocator: Allocator, item: anytype) ![]const u8 {
+        pub fn serializeAlloc(
+            comptime self: Self,
+            allocator: Allocator,
+            item: anytype,
+        ) ![]const u8 {
             const buf = try allocator.alloc(u8, try self.serializedSize(item));
             return self.serializeToSlice(item, buf);
         }
@@ -161,7 +175,12 @@ pub fn Serializer(comptime S: type) type {
             return S.serializedSize(item);
         }
 
-        pub inline fn deserialize(comptime _: Self, comptime T: type, allocator: Allocator, bytes: []const u8) !T {
+        pub inline fn deserialize(
+            comptime _: Self,
+            comptime T: type,
+            allocator: Allocator,
+            bytes: []const u8,
+        ) !T {
             return S.deserialize(T, allocator, bytes);
         }
     };
