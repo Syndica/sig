@@ -26,7 +26,6 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFieldsAndPaths = sig.accounts_db.snapshots.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
-const ValidateAccountFileError = AccountIndex.ValidateAccountFileError;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
@@ -43,6 +42,7 @@ const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
+const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
 
 const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
@@ -255,8 +255,7 @@ pub const AccountsDB = struct {
         // used to merge thread results
         const n_combine_threads = n_threads;
 
-        var timer = std.time.Timer.start() catch unreachable;
-        timer.reset();
+        var timer = try sig.time.Timer.start();
 
         const n_account_files: usize = file_info_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
@@ -344,12 +343,12 @@ pub const AccountsDB = struct {
             );
         }
 
-        self.logger.infof("total time: {s}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("total time: {s}", .{timer.read()});
         timer.reset();
 
         self.logger.infof("combining thread accounts...", .{});
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        self.logger.debugf("combining thread indexes took: {s}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.debugf("combining thread indexes took: {s}", .{timer.read()});
         timer.reset();
     }
 
@@ -459,7 +458,12 @@ pub const AccountsDB = struct {
             };
             errdefer accounts_file.deinit();
 
-            self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
+            indexAndValidateAccountFile(
+                &accounts_file,
+                self.account_index.pubkey_bin_calculator,
+                bin_counts,
+                &references,
+            ) catch |err| {
                 switch (err) {
                     error.OutOfReferenceMemory => {
                         // TODO: support retry - error for now
@@ -1860,7 +1864,13 @@ pub const AccountsDB = struct {
             self.account_index.reference_allocator,
             n_accounts,
         );
-        try self.account_index.validateAccountFile(account_file, bin_counts, &references);
+
+        try indexAndValidateAccountFile(
+            account_file,
+            self.account_index.pubkey_bin_calculator,
+            bin_counts,
+            &references,
+        );
         try self.account_index.putReferenceBlock(account_file.slot, references);
 
         {
@@ -2104,6 +2114,59 @@ pub const AccountsDB = struct {
         return lessThanIf(slot, max_slot) and greaterThanIf(slot, min_slot);
     }
 };
+
+pub const ValidateAccountFileError = error{
+    BinCountMismatch,
+    InvalidAccountFileLength,
+    OutOfReferenceMemory,
+} || AccountInFile.ValidateError;
+
+pub fn indexAndValidateAccountFile(
+    accounts_file: *AccountFile,
+    pubkey_bin_calculator: PubkeyBinCalculator,
+    bin_counts: []usize,
+    account_refs: *ArrayList(AccountRef),
+) ValidateAccountFileError!void {
+    var offset: usize = 0;
+    var number_of_accounts: usize = 0;
+
+    if (bin_counts.len != pubkey_bin_calculator.n_bins) {
+        return error.BinCountMismatch;
+    }
+
+    while (true) {
+        const account = accounts_file.readAccount(offset) catch break;
+        try account.validate();
+
+        // clone + stream out of validator here -- channel to geyser writer
+
+        account_refs.append(.{
+            .pubkey = account.store_info.pubkey,
+            .slot = accounts_file.slot,
+            .location = .{
+                .File = .{
+                    .file_id = accounts_file.id,
+                    .offset = offset,
+                },
+            },
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfReferenceMemory,
+        };
+
+        const pubkey = &account.store_info.pubkey;
+        const bin_index = pubkey_bin_calculator.binIndex(pubkey);
+        bin_counts[bin_index] += 1;
+
+        offset = offset + account.len;
+        number_of_accounts += 1;
+    }
+
+    if (offset != std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64))) {
+        return error.InvalidAccountFileLength;
+    }
+
+    accounts_file.number_of_accounts = number_of_accounts;
+}
 
 /// allocator which frees the underlying arraylist after multiple free calls.
 /// useful for when you want to allocate a large Arraylist and split it across

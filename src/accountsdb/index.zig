@@ -75,7 +75,7 @@ pub const AccountIndex = struct {
     reference_allocator: std.mem.Allocator,
     reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
-    calculator: PubkeyBinCalculator,
+    pubkey_bin_calculator: PubkeyBinCalculator,
 
     pub const ReferenceMemory = std.AutoHashMap(Slot, ArrayList(AccountRef));
     pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
@@ -100,7 +100,7 @@ pub const AccountIndex = struct {
             .allocator = allocator,
             .reference_allocator = reference_allocator,
             .bins = bins,
-            .calculator = calculator,
+            .pubkey_bin_calculator = calculator,
             .reference_memory = RwMux(ReferenceMemory).init(ReferenceMemory.init(allocator)),
         };
     }
@@ -360,59 +360,8 @@ pub const AccountIndex = struct {
         }
     }
 
-    pub const ValidateAccountFileError = error{
-        BinCountMismatch,
-        InvalidAccountFileLength,
-        OutOfReferenceMemory,
-    } || AccountInFile.ValidateError;
-
-    pub fn validateAccountFile(
-        self: *Self,
-        accounts_file: *AccountFile,
-        bin_counts: []usize,
-        account_refs: *ArrayList(AccountRef),
-    ) ValidateAccountFileError!void {
-        var offset: usize = 0;
-        var number_of_accounts: usize = 0;
-
-        if (bin_counts.len != self.numberOfBins()) {
-            return error.BinCountMismatch;
-        }
-
-        while (true) {
-            const account = accounts_file.readAccount(offset) catch break;
-            try account.validate();
-
-            account_refs.append(.{
-                .pubkey = account.store_info.pubkey,
-                .slot = accounts_file.slot,
-                .location = .{
-                    .File = .{
-                        .file_id = accounts_file.id,
-                        .offset = offset,
-                    },
-                },
-            }) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfReferenceMemory,
-            };
-
-            const pubkey = &account.store_info.pubkey;
-            const bin_index = self.getBinIndex(pubkey);
-            bin_counts[bin_index] += 1;
-
-            offset = offset + account.len;
-            number_of_accounts += 1;
-        }
-
-        if (offset != std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64))) {
-            return error.InvalidAccountFileLength;
-        }
-
-        accounts_file.number_of_accounts = number_of_accounts;
-    }
-
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
-        return self.calculator.binIndex(pubkey);
+        return self.pubkey_bin_calculator.binIndex(pubkey);
     }
 
     pub inline fn getBin(self: *const Self, index: usize) *RwMux(RefMap) {
@@ -423,7 +372,7 @@ pub const AccountIndex = struct {
         self: *const Self,
         pubkey: *const Pubkey,
     ) *RwMux(RefMap) {
-        const bin_index = self.calculator.binIndex(pubkey);
+        const bin_index = self.pubkey_bin_calculator.binIndex(pubkey);
         return self.getBin(bin_index);
     }
 
@@ -891,6 +840,7 @@ pub const RamMemoryConfig = struct {
 ///
 /// Analogous to [PubkeyBinCalculator24](https://github.com/anza-xyz/agave/blob/c87f9cdfc98e80077f68a3d86aefbc404a1cb4d6/accounts-db/src/pubkey_bins.rs#L4)
 pub const PubkeyBinCalculator = struct {
+    n_bins: usize,
     shift_bits: u6,
 
     pub fn init(n_bins: usize) PubkeyBinCalculator {
@@ -915,6 +865,7 @@ pub const PubkeyBinCalculator = struct {
         const shift_bits = @as(u6, @intCast(MAX_BITS - (32 - @clz(@as(u32, @intCast(n_bins))) - 1)));
 
         return PubkeyBinCalculator{
+            .n_bins = n_bins,
             .shift_bits = shift_bits,
         };
     }
