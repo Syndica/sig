@@ -49,13 +49,11 @@ pub const schema = struct {
         .name = "data_shred",
         .Key = struct { Slot, u64 },
         .Value = []const u8,
-        .ValueSerializer = sig.blockstore.database.BytesSerializer,
     };
     pub const code_shred: ColumnFamily = .{
         .name = "code_shred",
         .Key = struct { Slot, u64 },
         .Value = []const u8,
-        .ValueSerializer = sig.blockstore.database.BytesSerializer,
     };
     pub const transaction_status: ColumnFamily = .{
         .name = "transaction_status",

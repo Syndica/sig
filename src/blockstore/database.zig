@@ -105,8 +105,6 @@ pub const ColumnFamily = struct {
     name: []const u8,
     Key: type,
     Value: type,
-    KeySerializer: type = BincodeSerializer(.{ .endian = .big }),
-    ValueSerializer: type = BincodeSerializer(.{}),
 
     const Self = @This();
 
@@ -120,105 +118,36 @@ pub const ColumnFamily = struct {
         }
         @compileError("not found");
     }
-
-    pub fn key(comptime self: Self) Serializer(self.KeySerializer) {
-        return .{};
-    }
-
-    pub fn value(comptime self: Self) Serializer(self.ValueSerializer) {
-        return .{};
-    }
 };
 
-pub fn Serializer(comptime S: type) type {
-    return struct {
-        const Self = @This();
-
-        /// Returns data that is not owned by the current scope.
-        /// The slice should be immediately copied and deinitialized.
-        /// Use this if the database backend accepts a pointer and calls memcpy.
-        pub fn serializeToRef(
-            comptime self: Self,
-            allocator: Allocator,
-            item: anytype,
-        ) !BytesRef {
-            if (@hasDecl(S, "serializeToRef")) {
-                return S.serializeToRef(allocator, item);
-            } else {
-                return .{
-                    .allocator = allocator,
-                    .data = try self.serializeAlloc(allocator, item),
-                };
-            }
-        }
-
-        pub fn serializeAlloc(
-            comptime self: Self,
-            allocator: Allocator,
-            item: anytype,
-        ) ![]const u8 {
-            const buf = try allocator.alloc(u8, try self.serializedSize(item));
-            return self.serializeToSlice(item, buf);
-        }
-
-        pub fn serializeToSlice(comptime self: Self, item: anytype, buf: []u8) ![]const u8 {
-            var stream = std.io.fixedBufferStream(buf);
-            try self.serialize(stream.writer(), item);
-            return stream.getWritten();
-        }
-
-        pub inline fn serialize(comptime _: Self, writer: anytype, item: anytype) !void {
-            return S.serialize(writer, item);
-        }
-
-        pub inline fn serializedSize(comptime _: Self, item: anytype) !usize {
-            return S.serializedSize(item);
-        }
-
-        pub inline fn deserialize(
-            comptime _: Self,
-            comptime T: type,
-            allocator: Allocator,
-            bytes: []const u8,
-        ) !T {
-            return S.deserialize(T, allocator, bytes);
-        }
-    };
-}
-
-pub fn BincodeSerializer(params: sig.bincode.Params) type {
-    return struct {
-        pub fn serialize(writer: anytype, item: anytype) !void {
-            return sig.bincode.write(writer, item, params);
-        }
-
-        pub fn serializedSize(item: anytype) usize {
-            return sig.bincode.sizeOf(item, params);
-        }
-
-        pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
-            return try sig.bincode.readFromSlice(allocator, T, bytes, params);
-        }
-    };
-}
-
-pub const BytesSerializer = struct {
-    pub fn serialize(writer: anytype, item: []const u8) !void {
-        return writer.writeAll(item);
+/// Bincode-based serializer that should be usable by database implementations.
+pub const serializer = struct {
+    /// Returned slice is owned by the caller. Free with `allocator.free`.
+    pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
+        const buf = try allocator.alloc(u8, try sig.bincode.sizeOf(item, .{}));
+        return sig.bincode.writeToSlice(item, buf);
     }
 
-    pub fn serializeToRef(item: []const u8) !BytesRef {
-        return .{ .data = item };
+    /// Returned data may or may not be owned by the caller.
+    /// Do both:
+    ///  - Assume the data is owned by the scope where `item` originated, 
+    ///    so finish using the slice before returning from the caller (do not store slice as-is)
+    ///  - Call BytesRef.deinit before returning from the caller (as if you own it).
+    ///
+    /// Use this if the database backend accepts a pointer and immediately calls memcpy.
+    pub fn serializeToRef(allocator: Allocator, item: anytype) !BytesRef {
+        return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) .{
+            .allocator = null,
+            .data = item,
+        } else .{
+            .allocator = allocator,
+            .data = serializeAlloc(allocator, item),
+        };
     }
 
-    pub fn serializedSize(item: anytype) usize {
-        return item.len;
-    }
-
+    /// Returned data is owned by the caller. Free with `allocator.free`.
     pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
-        const ret = try allocator.alloc(u8, bytes.len);
-        @memcpy(ret, bytes);
-        return ret;
+        return try sig.bincode.readFromSlice(allocator, T, bytes, .{});
     }
 };
 

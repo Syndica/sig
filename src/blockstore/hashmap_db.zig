@@ -9,6 +9,9 @@ const Database = sig.blockstore.database.Database;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
 
+const serializeAlloc = sig.blockstore.database.serializer.serializeAlloc;
+const deserialize = sig.blockstore.database.serializer.deserialize;
+
 pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
@@ -49,9 +52,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             key: cf.Key,
             value: cf.Value,
         ) Allocator.Error!void {
-            const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+            const key_bytes = try serializeAlloc(self.allocator, key);
             errdefer self.allocator.free(key_bytes);
-            const val_bytes = try cf.value().serializeAlloc(self.allocator, value);
+            const val_bytes = try serializeAlloc(self.allocator, value);
             errdefer self.allocator.free(val_bytes);
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
@@ -63,7 +66,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             key: cf.Key,
         ) Allocator.Error!?cf.Value {
-            const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+            const key_bytes = try serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
             const map = &self.maps[cf.find(column_families)];
 
@@ -74,7 +77,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
 
             const val_bytes = map.getPreLocked(key_bytes) orelse return null;
 
-            return try cf.value().deserialize(cf.Value, self.allocator, val_bytes);
+            return try deserialize(cf.Value, self.allocator, val_bytes);
         }
 
         pub fn getBytes(
@@ -82,7 +85,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             key: cf.Key,
         ) Allocator.Error!?BytesRef {
-            const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+            const key_bytes = try serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
             var map = self.maps[cf.find(column_families)];
 
@@ -106,7 +109,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             key: cf.Key,
         ) Allocator.Error!void {
-            const key_bytes = try cf.key().serializeAlloc(self.allocator, key);
+            const key_bytes = try serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
@@ -159,9 +162,9 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 key: cf.Key,
                 value: cf.Value,
             ) Allocator.Error!void {
-                const k_bytes = try cf.key().serializeAlloc(self.allocator, key);
+                const k_bytes = try serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
-                const v_bytes = try cf.value().serializeAlloc(self.allocator, value);
+                const v_bytes = try serializeAlloc(self.allocator, value);
                 errdefer self.allocator.free(v_bytes);
                 return try self.instructions.append(
                     self.allocator,
@@ -174,7 +177,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
             ) Allocator.Error!void {
-                const k_bytes = try cf.key().serializeAlloc(self.allocator, key);
+                const k_bytes = try serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 return try self.instructions.append(
                     self.allocator,
