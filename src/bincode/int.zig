@@ -65,7 +65,7 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
 pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
-            if (params.include_fixed_array_length) { 
+            if (params.include_fixed_array_length) {
                 try bincode.write(writer, @as(u64, data.len), .{});
             }
 
@@ -73,7 +73,7 @@ pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
         }
 
         pub fn deserialize(allocator: std.mem.Allocator, reader: anytype, params: bincode.Params) ![size]u8 {
-            if (params.include_fixed_array_length) { 
+            if (params.include_fixed_array_length) {
                 _ = try bincode.read(allocator, u64, reader, .{});
             }
             const data = try reader.readBytesNoEof(size);
