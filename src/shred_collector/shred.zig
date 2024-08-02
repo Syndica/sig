@@ -166,12 +166,7 @@ pub const DataShred = struct {
 
     pub fn sanitize(self: *const Self) !void {
         try self.fields.sanitize();
-        const flags = self.fields.custom.flags;
-        if (flags.intersects(.last_shred_in_slot) and // TODO redundant
-            !flags.isSet(.data_complete_shred))
-        {
-            return error.InvalidShredFlags;
-        }
+        // see ShredFlags comptime block for omitted check that is guaranteed at comptime.
         _ = try self.data();
         _ = try self.parent();
     }
@@ -629,6 +624,16 @@ pub const ShredFlags = BitFlags(enum(u8) {
     shred_tick_reference_mask = 0b0011_1111,
     data_complete_shred = 0b0100_0000,
     last_shred_in_slot = 0b1100_0000,
+
+    comptime {
+        // This replaces a check that would otherwise
+        // be ported from agave into DataShred.sanitize.
+        std.testing.expect(
+            @intFromEnum(ShredFlags.Flag.data_complete_shred) ==
+                @intFromEnum(ShredFlags.Flag.last_shred_in_slot) &
+                @intFromEnum(ShredFlags.Flag.data_complete_shred),
+        ) catch unreachable;
+    }
 });
 
 pub const ShredConstants = struct {
