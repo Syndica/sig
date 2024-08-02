@@ -215,26 +215,24 @@ pub const AccountsDB = struct {
         var accounts_dir = try snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
-        var timer = try std.time.Timer.start();
         self.logger.infof("loading from snapshot...", .{});
-        try self.loadFromSnapshot(
+        const load_duration = try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields.file_map,
             accounts_dir,
             n_threads,
             std.heap.page_allocator,
         );
-        self.logger.infof("loaded from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
-            timer.reset();
             const full_snapshot = snapshot_fields_and_paths.all_fields.full;
-            try self.validateLoadFromSnapshot(
+            const validate_duration = try self.validateLoadFromSnapshot(
                 snapshot_fields.bank_fields_inc.snapshot_persistence,
                 full_snapshot.bank_fields.slot,
                 full_snapshot.bank_fields.capitalization,
                 snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
             );
-            self.logger.infof("validated from snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
+            self.logger.infof("validated from snapshot in {s}", .{validate_duration});
         }
 
         return snapshot_fields;
@@ -249,7 +247,7 @@ pub const AccountsDB = struct {
         accounts_dir: std.fs.Dir,
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
-    ) !void {
+    ) !sig.time.Duration {
         // used to read account files
         const n_parse_threads = n_threads;
         // used to merge thread results
@@ -278,7 +276,8 @@ pub const AccountsDB = struct {
                 file_info_map.count(),
                 true,
             );
-            return;
+
+            return timer.read();
         }
 
         // setup the parallel indexing
@@ -322,7 +321,6 @@ pub const AccountsDB = struct {
         }
 
         self.logger.infof("reading and indexing accounts...", .{});
-
         {
             var handles = std.ArrayList(std.Thread).init(self.allocator);
             defer {
@@ -342,14 +340,14 @@ pub const AccountsDB = struct {
                 n_parse_threads,
             );
         }
-
         self.logger.infof("total time: {s}", .{timer.read()});
-        timer.reset();
 
         self.logger.infof("combining thread accounts...", .{});
+        var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        self.logger.debugf("combining thread indexes took: {s}", .{timer.read()});
-        timer.reset();
+        self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
+
+        return timer.read();
     }
 
     /// multithread entrypoint into parseAndBinAccountFiles.
@@ -780,7 +778,9 @@ pub const AccountsDB = struct {
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
         expected_accounts_hash: Hash,
-    ) !void {
+    ) !sig.time.Duration {
+        var timer = try sig.time.Timer.start();
+
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
         const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
@@ -808,7 +808,10 @@ pub const AccountsDB = struct {
         }
 
         // validate the incremental snapshot
-        if (incremental_snapshot_persistence == null) return;
+        if (incremental_snapshot_persistence == null) {
+            return timer.read();
+        }
+
         self.logger.infof("validating the incremental snapshot", .{});
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
@@ -836,6 +839,8 @@ pub const AccountsDB = struct {
             , .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
+
+        return timer.read();
     }
 
     /// multithread entrypoint for getHashesFromIndex
@@ -2320,7 +2325,7 @@ fn testWriteSnapshotFull(
     {
         var accounts_dir = try snapshot_dir.openDir("accounts", .{ .iterate = true });
         defer accounts_dir.close();
-        try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields.file_map, accounts_dir, 1, allocator);
+        _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields.file_map, accounts_dir, 1, allocator);
     }
 
     var tmp_dir_root = std.testing.tmpDir(.{});
@@ -2432,7 +2437,8 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
 
     var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
     defer accounts_dir.close();
-    try accounts_db.loadFromSnapshot(
+
+    _ = try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields.file_map,
         accounts_dir,
         n_threads,
@@ -2491,7 +2497,7 @@ test "load and validate from test snapshot using disk index" {
         snapshots.deinit(allocator);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
@@ -2508,7 +2514,7 @@ test "load and validate from test snapshot parallel" {
         snapshots.deinit(allocator);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
@@ -2525,7 +2531,7 @@ test "load and validate from test snapshot" {
         snapshots.deinit(allocator);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
@@ -3053,15 +3059,15 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
     pub const args = [_]BenchArgs{
         BenchArgs{
+            .name = "RAM index",
             .use_disk = false,
-            .n_threads = 2,
-            .name = "RAM (2 threads)",
+            .n_threads = 10,
         },
-        BenchArgs{
-            .use_disk = true,
-            .n_threads = 2,
-            .name = "DISK (2 threads)",
-        },
+        // BenchArgs{
+        //     .use_disk = true,
+        //     .n_threads = 2,
+        //     .name = "DISK (2 threads)",
+        // },
     };
 
     pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
@@ -3112,19 +3118,17 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             .use_disk_index = bench_args.use_disk,
             .snapshot_dir = dir_path,
         });
-        // defer accounts_db.deinit(false);
+        defer accounts_db.deinit(false);
 
         var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
 
-        var timer = try std.time.Timer.start();
-        try accounts_db.loadFromSnapshot(
+        const duration = try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields.file_map,
             accounts_dir,
             bench_args.n_threads,
             allocator,
         );
-        const elapsed = timer.read();
 
         // sanity check
         const r = try accounts_db.computeAccountHashesAndLamports(.{ .FullAccountHash = .{
@@ -3132,7 +3136,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         } });
         std.debug.print("r: {any}\n", .{r});
 
-        return elapsed;
+        return duration.asNanos();
     }
 };
 
