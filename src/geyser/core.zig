@@ -185,6 +185,7 @@ pub const GeyserReader = struct {
             i += n;
         }
 
+        // TODO(x19): this might run OOM
         const data = try bincode.readFromSlice(self.bincode_allocator.allocator(), T, self.io_buf[0..size], .{});
         return data;
     }
