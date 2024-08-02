@@ -142,7 +142,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }
 
                 // send through geyser
-                _ = try geyser.write(slot, accounts, pubkeys);
+                _ = try geyser.writePayload(.{ .AccountPayloadV1 = .{
+                    .accounts = accounts,
+                    .pubkeys = pubkeys,
+                    .slot = slot,
+                } });
 
                 // write to accounts_db
                 try accounts_db.putAccountSlice(

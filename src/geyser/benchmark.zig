@@ -9,6 +9,7 @@ const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const GeyserWriter = sig.geyser.GeyserWriter;
+const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 
 const MEASURE_RATE = sig.time.Duration.fromSecs(2);
 const PIPE_PATH = "../sig/test_data/accountsdb_fuzz.pipe";
@@ -68,7 +69,15 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     var timer = try sig.time.Timer.start();
     var bytes_written: u64 = 0;
     while (!exit.load(.unordered)) {
-        const n = try geyser_writer.write(slot, accounts, pubkeys);
+        const n = try geyser_writer.writePayload(
+            VersionedAccountPayload{
+                .AccountPayloadV1 = .{
+                    .accounts = accounts,
+                    .pubkeys = pubkeys,
+                    .slot = slot,
+                },
+            },
+        );
         bytes_written += n;
 
         if (timer.read().asNanos() > MEASURE_RATE.asNanos()) {

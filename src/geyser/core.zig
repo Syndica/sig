@@ -19,19 +19,23 @@ const Slot = sig.core.Slot;
 
 const PIPE_MAX_SIZE_PATH = "/proc/sys/fs/pipe-max-size";
 
-pub const Payload = struct {
+pub const AccountPayload = struct {
     // used to know how much to allocate to read the full data slice
-    data_len: u64,
-    data: Data,
+    len: u64,
+    payload: VersionedAccountPayload,
+};
 
-    pub const Data = struct {
-        slot: Slot,
-        pubkeys: []Pubkey,
-        // PERF: the data slice per account is the biggest to read,
-        // we can probably put it into its own field (data: [][]u8)
-        // and read it all in on i/o
-        accounts: []Account,
-    };
+pub const VersionedAccountPayload = union(enum(u8)) {
+    AccountPayloadV1: AccountPayloadV1,
+};
+
+pub const AccountPayloadV1 = struct {
+    slot: Slot,
+    pubkeys: []Pubkey,
+    // PERF: the data slice per account is the biggest to read,
+    // we can probably put it into its own field (data: [][]u8)
+    // and read it all in on i/o
+    accounts: []Account,
 };
 
 pub const GeyserWriter = struct {
@@ -68,15 +72,12 @@ pub const GeyserWriter = struct {
     /// streams a batch of accounts to the pipe using bincode serialization.
     /// returns the number of bytes wrote.
     /// NOTE: this will block if the pipe is not big enough
-    pub fn write(
+    pub fn writePayload(
         self: *Self,
-        slot: Slot,
-        accounts: []Account,
-        pubkeys: []Pubkey,
+        versioned_payload: VersionedAccountPayload,
     ) !u64 {
-        const data = Payload.Data{ .slot = slot, .pubkeys = pubkeys, .accounts = accounts };
-        const data_len = bincode.sizeOf(data, .{});
-        const payload = Payload{ .data_len = data_len, .data = data };
+        const len = bincode.sizeOf(versioned_payload, .{});
+        const payload = AccountPayload{ .len = len, .payload = versioned_payload };
 
         // ensure we have enough space in the buffer
         const size = bincode.sizeOf(payload, .{});
@@ -169,10 +170,10 @@ pub const GeyserReader = struct {
     }
 
     /// reads a payload from the pipe and returns the total bytes read with the data
-    pub fn readPayload(self: *Self) !struct { u64, Payload.Data } {
-        const data_size = try self.readType(u64, 8);
-        const data = try self.readType(Payload.Data, data_size);
-        return .{ 8 + data_size, data };
+    pub fn readPayload(self: *Self) !struct { u64, VersionedAccountPayload } {
+        const len = try self.readType(u64, 8);
+        const versioned_payload = try self.readType(VersionedAccountPayload, len);
+        return .{ 8 + len, versioned_payload };
     }
 
     /// reads size number of bytes from the pipe and deserializes it into T.
@@ -332,22 +333,24 @@ test "streaming accounts" {
     defer stream_reader.deinit();
 
     // write to the pipe
-    _ = try stream_writer.write(100, accounts, pubkeys);
+    const v_payload = VersionedAccountPayload{
+        .AccountPayloadV1 = .{
+            .accounts = accounts,
+            .pubkeys = pubkeys,
+            .slot = 100,
+        },
+    };
+    _ = try stream_writer.writePayload(v_payload);
 
     // read from the pipe
     _, const data = try stream_reader.readPayload();
 
-    const expected_data = Payload.Data{
-        .accounts = accounts,
-        .pubkeys = pubkeys,
-        .slot = 100,
-    };
-    try std.testing.expectEqualDeep(expected_data, data);
+    try std.testing.expectEqualDeep(v_payload, data);
     stream_reader.resetMemory();
 
     // write to the pipe twice
     // #1
-    _ = try stream_writer.write(100, accounts, pubkeys);
+    _ = try stream_writer.writePayload(v_payload);
 
     const accounts2 = try allocator.alloc(Account, batch_len);
     defer {
@@ -360,27 +363,25 @@ test "streaming accounts" {
         accounts2[i] = try Account.random(allocator, rng, 10);
         pubkeys2[i] = Pubkey.random(rng);
     }
+
     // #2
-    _ = try stream_writer.write(100, accounts2, pubkeys2);
+    const v_payload2 = VersionedAccountPayload{
+        .AccountPayloadV1 = .{
+            .accounts = accounts2,
+            .pubkeys = pubkeys2,
+            .slot = 100,
+        },
+    };
+    _ = try stream_writer.writePayload(v_payload2);
 
     // first payload matches
     _, const data2 = try stream_reader.readPayload();
-    const expected_data2 = Payload.Data{
-        .accounts = accounts,
-        .pubkeys = pubkeys,
-        .slot = 100,
-    };
-    try std.testing.expectEqualDeep(expected_data2, data2);
+    try std.testing.expectEqualDeep(v_payload, data2);
     stream_reader.resetMemory();
 
     // second payload matches
     _, const data3 = try stream_reader.readPayload();
-    const expected_data3 = Payload.Data{
-        .accounts = accounts2,
-        .pubkeys = pubkeys2,
-        .slot = 100,
-    };
-    try std.testing.expectEqualDeep(expected_data3, data3);
+    try std.testing.expectEqualDeep(v_payload2, data3);
     stream_reader.resetMemory();
 }
 
@@ -426,18 +427,21 @@ test "buf resizing" {
     );
     defer stream_reader.deinit();
 
+    const v_payload = VersionedAccountPayload{
+        .AccountPayloadV1 = .{
+            .accounts = accounts,
+            .pubkeys = pubkeys,
+            .slot = 100,
+        },
+    };
+
     // write to the pipe
-    _ = try stream_writer.write(100, accounts, pubkeys);
+    _ = try stream_writer.writePayload(v_payload);
 
     // read from the pipe
     _, const data = try stream_reader.readPayload();
 
-    const expected_data = Payload.Data{
-        .accounts = accounts,
-        .pubkeys = pubkeys,
-        .slot = 100,
-    };
-    try std.testing.expectEqualDeep(expected_data, data);
+    try std.testing.expectEqualDeep(v_payload, data);
     stream_reader.resetMemory();
 
     try std.testing.expect(stream_writer.io_buf.len > 1);
@@ -527,7 +531,13 @@ pub const BenchmarkAccountStream = struct {
 
         var start = try sig.time.Timer.start();
         for (0..bench_args.slots) |slot| {
-            _ = try stream_writer.write(slot, accounts, pubkeys);
+            _ = try stream_writer.writePayload(.{
+                .AccountPayloadV1 = .{
+                    .accounts = accounts,
+                    .pubkeys = pubkeys,
+                    .slot = slot,
+                },
+            });
         }
         // when reader is done reading, we can stop the timer
         read_handle.join();
