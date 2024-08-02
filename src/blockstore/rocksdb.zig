@@ -6,9 +6,8 @@ const Allocator = std.mem.Allocator;
 
 const BytesRef = sig.blockstore.database.BytesRef;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
-const Database = sig.blockstore.database.Database;
 const Logger = sig.trace.Logger;
-const Return = sig.utils.types.Return;
+const Return = sig.utils.types.ReturnType;
 
 const serializeToRef = sig.blockstore.database.serializer.serializeToRef;
 const deserialize = sig.blockstore.database.serializer.deserialize;

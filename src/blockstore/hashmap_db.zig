@@ -5,7 +5,6 @@ const Allocator = std.mem.Allocator;
 const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const BytesRef = sig.blockstore.database.BytesRef;
-const Database = sig.blockstore.database.Database;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
 

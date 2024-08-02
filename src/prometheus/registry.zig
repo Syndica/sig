@@ -16,7 +16,7 @@ const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
 const Histogram = @import("histogram.zig").Histogram;
 const default_buckets = @import("histogram.zig").default_buckets;
 
-const Return = sig.utils.types.Return;
+const Return = sig.utils.types.ReturnType;
 
 pub const GetMetricError = error{
     /// Returned when trying to add a metric to an already full registry.
