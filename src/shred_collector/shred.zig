@@ -107,6 +107,7 @@ pub const Shred = union(ShredType) {
     }
 };
 
+/// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
 pub const CodingShred = struct {
     fields: Fields,
     const Fields = GenericShred(CodingShredHeader, coding_shred);
@@ -157,6 +158,7 @@ pub const CodingShred = struct {
     }
 };
 
+/// Analogous to [ShredData](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L61)
 pub const DataShred = struct {
     fields: Fields,
     const Fields = GenericShred(DataShredHeader, data_shred);
