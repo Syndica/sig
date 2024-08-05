@@ -396,7 +396,7 @@ fn proofOffset(constants: ShredConstants, variant: ShredVariant) !usize {
         if (variant.chained) SIZE_OF_MERKLE_ROOT else 0;
 }
 
-/// agave: get_chained_merkle_root_offset
+/// Analogous to [get_chained_merkle_root_offset](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L364)
 pub fn getChainedMerkleRootOffset(variant: ShredVariant) !usize {
     const constants = variant.shred_type.constants();
     if (!variant.chained) {
@@ -706,7 +706,7 @@ pub const layout = struct {
         return getInt(u16, shred, 83);
     }
 
-    /// agave: get_chained_merkle_root
+    /// Analogous to [get_chained_merkle_root](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred.rs#L740)
     pub fn getChainedMerkleRoot(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const offset = getChainedMerkleRootOffset(variant) catch return null;
