@@ -229,9 +229,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             random_bank_fields.slot = largest_rooted_slot;
             const lamports_per_signature = rand.int(u64);
 
-            try accounts_db.writeSnapshotTarFull(
+            _ = try accounts_db.writeSnapshotTarFull(
                 zstd_write_ctx.writer(),
-                .{ .bank_slot_deltas = &.{} },
                 random_bank_fields,
                 lamports_per_signature,
                 random_bank_hash_info,
