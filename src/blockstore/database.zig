@@ -6,8 +6,8 @@ const Allocator = std.mem.Allocator;
 const Logger = sig.trace.Logger;
 
 pub fn assertIsDatabase(comptime Impl: type) void {
-    sig.utils.types.assertSameInterface(Database(Impl), Impl, .subset);
-    sig.utils.types.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
+    sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
+    sig.utils.interface.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
 }
 
 /// Runs all tests in `tests`
