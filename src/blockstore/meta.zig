@@ -337,7 +337,7 @@ pub const MerkleRootMeta = struct {
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
             .merkle_root = shred.merkleRoot() catch null,
-            .first_received_shred_index = shred.common().index,
+            .first_received_shred_index = shred.commonHeader().index,
             .first_received_shred_type = shred,
         };
     }

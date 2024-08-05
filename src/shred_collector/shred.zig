@@ -61,14 +61,14 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn common(self: *const Self) *const ShredCommonHeader {
+    pub fn commonHeader(self: *const Self) *const CommonHeader {
         return switch (self.*) {
             inline .Code, .Data => |c| &c.fields.common,
         };
     }
 
     pub fn sanitize(self: *const Self) !void {
-        if (self.common().shred_variant.shred_type != self) {
+        if (self.commonHeader().shred_variant.shred_type != self) {
             return error.InconsistentShredVariant;
         }
         switch (self.*) {
@@ -216,7 +216,7 @@ pub fn GenericShred(
     constants_: ShredConstants,
 ) type {
     return struct {
-        common: ShredCommonHeader,
+        common: CommonHeader,
         custom: CustomHeader,
         allocator: Allocator,
         payload: []const u8,
@@ -244,7 +244,7 @@ pub fn GenericShred(
             var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
             const self = Self{
                 .allocator = allocator,
-                .common = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{}),
+                .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
                 .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
                 .payload = owned_payload,
             };
@@ -472,7 +472,7 @@ const MerkleProofEntryList = struct {
     }
 };
 
-pub const ShredCommonHeader = struct {
+pub const CommonHeader = struct {
     signature: Signature,
     shred_variant: ShredVariant,
     slot: Slot,
