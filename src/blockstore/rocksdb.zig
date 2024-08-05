@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const BytesRef = sig.blockstore.database.BytesRef;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
 const Logger = sig.trace.Logger;
-const Return = sig.utils.types.ReturnType;
+const ReturnType = sig.utils.types.ReturnType;
 
 const serializeToRef = sig.blockstore.database.serializer.serializeToRef;
 const deserialize = sig.blockstore.database.serializer.deserialize;
@@ -180,7 +180,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     };
 }
 
-fn callRocks(logger: Logger, comptime func: anytype, args: anytype) Return(@TypeOf(func)) {
+fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@TypeOf(func)) {
     var err_str: ?rocks.Data = null;
     return @call(.auto, func, args ++ .{&err_str}) catch |e| {
         logger.errf("{} - {s}", .{ e, err_str.? });
