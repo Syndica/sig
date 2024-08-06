@@ -366,6 +366,11 @@ fn convertType(comptime T: type, comptime map: []const [2]type) type {
             new_eu.error_set = convertType(eu.error_set, map);
             return @Type(.{ .ErrorUnion = new_eu });
         },
+        .Optional => |opt| {
+            var new_opt = opt;
+            new_opt.child = convertType(opt.child, map);
+            return @Type(.{ .Optional = new_opt });
+        },
         else => T,
     };
 }

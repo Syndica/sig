@@ -6,12 +6,9 @@ const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 const BytesRef = sig.blockstore.database.BytesRef;
 const ColumnFamily = sig.blockstore.database.ColumnFamily;
-const Database = sig.blockstore.database.Database;
 const IteratorDirection = sig.blockstore.database.IteratorDirection;
 const Logger = sig.trace.Logger;
 const SortedMap = sig.utils.collections.SortedMap;
-
-const find = sig.utils.collections.find;
 
 const serializeAlloc = sig.blockstore.database.serializer.serializeAlloc;
 const deserialize = sig.blockstore.database.serializer.deserialize;
@@ -54,7 +51,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             key: cf.Key,
             value: cf.Value,
-        ) Allocator.Error!void {
+        ) anyerror!void {
             const key_bytes = try serializeAlloc(self.allocator, key);
             errdefer self.allocator.free(key_bytes);
             const val_bytes = try serializeAlloc(self.allocator, value);
@@ -68,7 +65,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) Allocator.Error!?cf.Value {
+        ) anyerror!?cf.Value {
             const key_bytes = try serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
             const map = &self.maps[cf.find(column_families)];
@@ -87,7 +84,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) Allocator.Error!?BytesRef {
+        ) anyerror!?BytesRef {
             const key_bytes = try serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
             var map = self.maps[cf.find(column_families)];
@@ -111,7 +108,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             self: *Self,
             comptime cf: ColumnFamily,
             key: cf.Key,
-        ) Allocator.Error!void {
+        ) anyerror!void {
             const key_bytes = try serializeAlloc(self.allocator, key);
             defer self.allocator.free(key_bytes);
             self.transaction_lock.lockShared();
@@ -164,7 +161,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
                 value: cf.Value,
-            ) Allocator.Error!void {
+            ) anyerror!void {
                 const k_bytes = try serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 const v_bytes = try serializeAlloc(self.allocator, value);
@@ -179,7 +176,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 self: *WriteBatch,
                 comptime cf: ColumnFamily,
                 key: cf.Key,
-            ) Allocator.Error!void {
+            ) anyerror!void {
                 const k_bytes = try serializeAlloc(self.allocator, key);
                 errdefer self.allocator.free(k_bytes);
                 return try self.instructions.append(
@@ -192,34 +189,43 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         pub fn iterator(
             self: *Self,
             comptime cf: ColumnFamily,
-            cf_index: usize,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) !Iterator(cf, direction) {
-            const map = &self.maps[cf_index].map;
-            const keys, const values = if (start) |start_| b: {
-                const search_bytes = try cf.key().serializeAlloc(self.allocator, start_);
+        ) anyerror!Iterator(direction) {
+            const shared_map = &self.maps[cf.find(column_families)];
+            const map = &shared_map.map;
+
+            shared_map.lock.lockShared();
+            defer shared_map.lock.unlockShared();
+
+            const keys, const vals = if (start) |start_| b: {
+                const search_bytes = try serializeAlloc(self.allocator, start_);
                 defer self.allocator.free(search_bytes);
                 break :b switch (direction) {
                     .forward => map.rangeCustom(.{ .inclusive = search_bytes }, null),
                     .reverse => map.rangeCustom(null, .{ .inclusive = search_bytes }),
                 };
             } else map.items();
-            std.debug.assert(keys.len == values.len);
+            std.debug.assert(keys.len == vals.len);
+
+            // TODO perf: reduce copying, e.g. copy-on-write or reference counting
+            const copied_keys = self.allocator.alloc([]const u8, keys.len);
+            const copied_vals = self.allocator.alloc([]const u8, vals.len);
+            for (0..keys.len) |i| {
+                copied_keys[i] = self.allocator.dupe(u8, keys[i]);
+                copied_vals[i] = self.allocator.dupe(u8, vals[i]);
+            }
 
             return .{
                 .allocator = self.allocator,
-                .keys = keys,
-                .vals = values,
+                .keys = copied_keys,
+                .vals = copied_vals,
                 .cursor = 0,
                 .size = keys.len,
             };
         }
 
-        pub fn Iterator(
-            cf: ColumnFamily,
-            direction: IteratorDirection,
-        ) type {
+        pub fn Iterator(direction: IteratorDirection) type {
             return struct {
                 allocator: Allocator,
                 keys: []const []const u8,
@@ -227,15 +233,19 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 cursor: usize = 0,
                 size: usize,
 
-                pub fn nextBytes(self: *@This()) !?struct { cf.Key, []const u8 } {
-                    const index = try self.nextIndex() orelse return null;
+                pub fn deinit(_: *@This()) void {
+                    // TODO
+                }
+
+                pub fn nextBytes(self: *@This()) error{}!?[2]BytesRef {
+                    const index = self.nextIndex() orelse return null;
                     return .{
-                        try cf.key().deserialize(cf.Key, self.allocator, self.keys[index]),
-                        self.vals[index],
+                        .{ .allocator = null, .data = self.keys[index] },
+                        .{ .allocator = null, .data = self.vals[index] },
                     };
                 }
 
-                fn nextIndex(self: *@This()) !?usize {
+                fn nextIndex(self: *@This()) ?usize {
                     switch (direction) {
                         .forward => if (self.cursor >= self.size) return null,
                         .reverse => if (self.cursor == 0) return null else {

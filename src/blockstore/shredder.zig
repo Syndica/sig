@@ -8,15 +8,12 @@ const DataShred = sig.shred_collector.shred.DataShred;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 const Hash = sig.core.Hash;
 const Lru = sig.common.lru.LruCacheCustom;
-const MerkleProofEntry = sig.shred_collector.shred.MerkleProofEntry;
 const ReedSolomon = sig.blockstore.reed_solomon.ReedSolomon;
 const Shred = sig.shred_collector.shred.Shred;
 const CommonHeader = sig.shred_collector.shred.CommonHeader;
-const ShredVariant = sig.shred_collector.shred.ShredVariant;
 const Signature = sig.core.Signature;
 
 const checkedSub = sig.utils.math.checkedSub;
-const eql = sig.utils.types.eql;
 const makeMerkleTree = sig.shred_collector.shred.makeMerkleTree;
 const makeMerkleProof = sig.shred_collector.shred.makeMerkleProof;
 
@@ -213,7 +210,7 @@ fn verifyErasureBatch(
     shreds: []const Shred,
 ) bool {
     for (shreds) |shred| {
-        const actual = shred.common();
+        const actual = shred.commonHeader();
         if (!(expect.signature.eql(&actual.signature) and
             expect.slot == actual.slot and
             expect.version == actual.version and
