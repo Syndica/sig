@@ -129,11 +129,11 @@ pub fn fillHashmapWithRng(
     /// `*std.HashMap(Key, Value, _, _)`
     hashmap: anytype,
     rand: std.Random,
+    /// The length to set the hashmap to.
+    hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
     /// Expected to provide methods & fields/decls:
     /// * `fn randomKey(context, rand: std.Random) Key`
     /// * `fn randomValue(context, rand: std.Random) Value`
-    /// The length to set the hashmap to.
-    hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
     context: anytype,
 ) !void {
     const Hm = @TypeOf(hashmap.*);
