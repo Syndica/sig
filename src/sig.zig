@@ -17,3 +17,4 @@ pub const version = @import("version/version.zig");
 pub const time = @import("time/lib.zig");
 pub const common = @import("common/lib.zig");
 pub const geyser = @import("geyser/lib.zig");
+pub const transaction_forwarding_service = @import("transaction_forwarding_service/service.zig");

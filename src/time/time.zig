@@ -530,6 +530,10 @@ pub const Duration = struct {
     pub fn asNanos(self: Duration) u64 {
         return self.ns;
     }
+
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
+        return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
+    }
 };
 
 pub const Instant = struct {
