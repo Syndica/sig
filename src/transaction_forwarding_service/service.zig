@@ -177,7 +177,7 @@ fn receiveTransactionsThread(
             try sendTransactions(
                 allocator,
                 service_info_rw,
-                &transaction_batch,
+                transaction_batch.values(),
             );
             last_batch_sent = try Instant.now();
 
@@ -225,7 +225,7 @@ fn processTransactionsThread(
 fn sendTransactions(
     allocator: Allocator,
     service_info_rw: *RwMux(ServiceInfo),
-    transactions: *PendingTransactions,
+    transactions: []TransactionInfo,
 ) !void {
     const leader_addresses = blk: {
         var service_info_lock = service_info_rw.read();
@@ -235,10 +235,10 @@ fn sendTransactions(
     };
     defer allocator.free(leader_addresses);
 
-    const wire_transactions = try allocator.alloc([]u8, transactions.count());
+    const wire_transactions = try allocator.alloc([]u8, transactions.len);
     defer allocator.free(wire_transactions);
 
-    for (transactions.values(), 0..) |tx, i| {
+    for (transactions, 0..) |tx, i| {
         wire_transactions[i] = tx.wire_transaction;
     }
 
@@ -266,6 +266,9 @@ fn processTransactions(
     service_info_rw: *RwMux(ServiceInfo),
     pending_transactions: *PendingTransactions,
 ) !void {
+    var retry_signatures = std.ArrayList(Signature).init(allocator);
+    defer retry_signatures.deinit();
+
     var drop_signatures = std.ArrayList(Signature).init(allocator);
     defer drop_signatures.deinit();
 
@@ -274,40 +277,81 @@ fn processTransactions(
     const service_info: *ServiceInfo = service_info_lock.mut();
 
     const block_height = try service_info.rpc_client.getBlockHeight(allocator);
-
     const signatures = pending_transactions.keys();
     const signature_statuses = try service_info.rpc_client.getSignatureStatuses(allocator, .{
         .signatures = signatures,
         .searchTransactionHistory = false,
     });
 
-    for (signatures, signature_statuses.value, pending_transactions.values()) |
-        signature,
-        signature_status,
-        transaction_info,
-    | {
-        // If transaction is rooted, drop it
-        if (signature_status == null) {
-            try drop_signatures.append(signature);
-            continue;
-        }
+    var pending_transactions_iter = pending_transactions.iterator();
 
-        // If transaction last valid block height is less than current block height, drop it
-        if (transaction_info.last_valid_block_height < block_height) {
-            try drop_signatures.append(signature);
-            continue;
-        }
+    for (signature_statuses.value) |maybe_signature_status| {
+        const entry = pending_transactions_iter.next().?;
+        const signature = entry.key_ptr.*;
+        var transaction_info = entry.value_ptr;
 
-        // If transaction has used max retries, drop it
-        const unbounded_max_retries = transaction_info.max_retries orelse DEFAULT_MAX_RETRIES;
-        if (unbounded_max_retries) |max_retries| {
-            if (transaction_info.retries >= @min(max_retries, DEFAULT_SERVICE_MAX_RETRIES)) {
+        if (maybe_signature_status) |signature_status| {
+            // If transaction is rooted, drop it
+            if (signature_status.confirmations == null) {
                 try drop_signatures.append(signature);
                 continue;
             }
+
+            // If transaction failed, drop it
+            if (signature_status.err) {
+                try drop_signatures.append(signature);
+                continue;
+            }
+
+            // If transaction last valid block height is less than current block height, drop it
+            if (transaction_info.last_valid_block_height < block_height) {
+                try drop_signatures.append(signature);
+                continue;
+            }
+        } else {
+            // If transaction max retries exceeded, drop it
+            const maybe_max_retries = transaction_info.max_retries orelse DEFAULT_MAX_RETRIES;
+            if (maybe_max_retries) |max_retries| {
+                if (transaction_info.retries >= max_retries) {
+                    try drop_signatures.append(signature);
+                    continue;
+                }
+            }
+
+            // If transaction last sent time is greater than the retry sleep time, retry it
+            const now = try Instant.now();
+            const resend_transaction = if (transaction_info.last_sent_time) |lst| blk: {
+                break :blk now.elapsed_since(lst).asNanos() >= DEFAULT_PROCESS_TRANSACTIONS_RATE.asNanos();
+            } else true;
+            if (resend_transaction) {
+                if (transaction_info.last_sent_time) |_| {
+                    transaction_info.retries += 1;
+                }
+                transaction_info.last_sent_time = now;
+                try retry_signatures.append(signature);
+            }
+        }
+    }
+
+    if (retry_signatures.items.len > 0) {
+        var retry_transactions = try allocator.alloc(TransactionInfo, retry_signatures.items.len);
+        defer allocator.free(retry_transactions);
+
+        for (retry_signatures.items, 0..) |signature, i| {
+            retry_transactions[i] = pending_transactions.get(signature).?;
         }
 
-        //
+        var start_index: usize = 0;
+        while (start_index < retry_transactions.len) {
+            const end_index = @min(start_index + DEFAULT_BATCH_SIZE, retry_transactions.len);
+            const batch = retry_transactions[start_index..end_index];
+            try sendTransactions(allocator, service_info_rw, batch);
+            start_index = end_index;
+        }
+    }
+
+    for (drop_signatures.items) |signature| {
+        _ = pending_transactions.swapRemove(signature);
     }
 }
 

@@ -8,7 +8,7 @@ const Signature = sig.core.Signature;
 
 pub const Client = struct {
     http_client: std.http.Client,
-    http_endpoint: []const u8 = "https://api.mainnet-beta.solana.com",
+    http_endpoint: []const u8,
 
     const JSON_RPC_ID = 1;
     const JSON_RPC_VERSION = "2.0";
@@ -245,6 +245,7 @@ pub const Client = struct {
     }
 
     pub const SignatureStatuses = struct {
+        allocator: std.mem.Allocator,
         context: Context,
         value: []const ?Status,
 
@@ -256,9 +257,19 @@ pub const Client = struct {
         pub const Status = struct {
             slot: Slot,
             confirmations: ?usize,
-            err: ?[]const u8,
+            err: bool, // TODO: Deserialse to TransactionError
             confirmationStatus: ?[]const u8,
         };
+
+        pub fn deinit(self: SignatureStatuses) void {
+            self.allocator.free(self.context.apiVersion);
+            for (self.value) |maybe_status| {
+                if (maybe_status) |status| {
+                    if (status.confirmationStatus) |confirmationStatus| self.allocator.free(confirmationStatus);
+                }
+            }
+            self.allocator.free(self.value);
+        }
     };
 
     pub const SignatureStatusesParams = struct {
@@ -278,10 +289,17 @@ pub const Client = struct {
             defer array.deinit();
 
             var signatures_array = try std.ArrayList(std.json.Value).initCapacity(allocator, self.signatures.len);
-            defer signatures_array.deinit();
+            defer {
+                for (signatures_array.items) |signature| {
+                    allocator.free(signature.string);
+                }
+                signatures_array.deinit();
+            }
 
             for (self.signatures) |signature| {
-                try signatures_array.append(.{ .string = &(try signature.toBase58EncodedString()) });
+                const stack_base58 = try signature.toBase58EncodedString();
+                const heap_base58 = try allocator.dupe(u8, &stack_base58);
+                try signatures_array.append(.{ .string = heap_base58 });
             }
 
             try array.insert(0, .{ .array = signatures_array });
@@ -308,7 +326,7 @@ pub const Client = struct {
         const json_values = json_object.get("value").?.array;
 
         const context = SignatureStatuses.Context{
-            .apiVersion = json_context.get("slot").?.string,
+            .apiVersion = try allocator.dupe(u8, json_context.get("apiVersion").?.string),
             .slot = @intCast(json_context.get("slot").?.integer),
         };
 
@@ -318,16 +336,21 @@ pub const Client = struct {
                 statuses[i] = null;
             } else {
                 const obj = json_value.object;
+                const slot = obj.get("slot").?;
+                const confirmations = obj.get("confirmations").?;
+                const err = obj.get("err").?;
+                const confirmationStatus = obj.get("confirmationStatus").?;
                 statuses[i] = SignatureStatuses.Status{
-                    .slot = @intCast(obj.get("slot").?.integer),
-                    .confirmations = @intCast(obj.get("confirmations").?.integer),
-                    .err = obj.get("err").?.string,
-                    .confirmationStatus = obj.get("confirmationStatus").?.string,
+                    .slot = @intCast(slot.integer),
+                    .confirmations = if (confirmations == .null) null else @intCast(confirmations.integer),
+                    .err = if (err == .null) false else true,
+                    .confirmationStatus = if (confirmationStatus == .null) null else try allocator.dupe(u8, confirmationStatus.string),
                 };
             }
         }
 
         return .{
+            .allocator = allocator,
             .context = context,
             .value = statuses,
         };
@@ -339,6 +362,7 @@ pub const Client = struct {
             .http_client = std.http.Client{
                 .allocator = std.heap.page_allocator,
             },
+            .http_endpoint = "https://api.testnet.solana.com",
         };
         defer client.http_client.deinit();
         _ = try client.getBlockHeight(allocator);
@@ -350,6 +374,7 @@ pub const Client = struct {
             .http_client = std.http.Client{
                 .allocator = std.heap.page_allocator,
             },
+            .http_endpoint = "https://api.testnet.solana.com",
         };
         defer client.http_client.deinit();
         _ = try client.getSlot(allocator);
@@ -361,6 +386,7 @@ pub const Client = struct {
             .http_client = std.http.Client{
                 .allocator = std.heap.page_allocator,
             },
+            .http_endpoint = "https://api.testnet.solana.com",
         };
         defer client.http_client.deinit();
         _ = try client.getIdentity(allocator);
@@ -372,6 +398,7 @@ pub const Client = struct {
             .http_client = std.http.Client{
                 .allocator = std.heap.page_allocator,
             },
+            .http_endpoint = "https://api.testnet.solana.com",
         };
         defer client.http_client.deinit();
         const params = EpochInfoParams{};
@@ -384,6 +411,7 @@ pub const Client = struct {
             .http_client = std.http.Client{
                 .allocator = std.heap.page_allocator,
             },
+            .http_endpoint = "https://api.testnet.solana.com",
         };
         defer client.http_client.deinit();
         var leader_schedule = try client.getLeaderSchedule(allocator, .{});
@@ -401,15 +429,30 @@ pub const Client = struct {
             .http_client = std.http.Client{
                 .allocator = std.heap.page_allocator,
             },
+            .http_endpoint = "https://api.testnet.solana.com",
         };
         defer client.http_client.deinit();
         var signatures = try allocator.alloc(Signature, 2);
         defer allocator.free(signatures);
-        signatures[0] = Signature.init([_]u8{'A'} ** 64);
-        signatures[1] = Signature.init([_]u8{'A'} ** 64);
-        _ = try client.getSignatureStatuses(allocator, .{
+        signatures[0] = try Signature.fromBase58EncodedString(
+            "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
+        );
+        signatures[1] = try Signature.fromBase58EncodedString(
+            "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
+        );
+
+        const params = SignatureStatusesParams{
+            .signatures = signatures,
+            .searchTransactionHistory = true,
+        };
+
+        const params_json = try params.toJsonString(allocator);
+        defer allocator.free(params_json);
+
+        var signature_statuses = try client.getSignatureStatuses(allocator, .{
             .signatures = signatures,
             .searchTransactionHistory = true,
         });
+        defer signature_statuses.deinit();
     }
 };
