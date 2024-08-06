@@ -6,7 +6,6 @@ const sig = @import("../lib.zig");
 
 const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
 const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;

@@ -15,19 +15,17 @@ const GossipKey = sig.gossip.data.GossipKey;
 const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ContactInfo = sig.gossip.data.ContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
-const Vote = sig.gossip.data.Vote;
 const ThreadPool = sig.sync.ThreadPool;
 const Task = sig.sync.ThreadPool.Task;
 const Batch = sig.sync.ThreadPool.Batch;
 const Hash = sig.core.hash.Hash;
-const Transaction = sig.core.transaction.Transaction;
 const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 
-pub const UNIQUE_PUBKEY_CAPACITY: usize = 8192;
-pub const MAX_TABLE_SIZE: usize = 1_000_000; // TODO: better value for this
+pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
+pub const MAX_TABLE_SIZE: usize = 100_000; // TODO: better value for this
 
 pub const HashAndTime = struct { hash: Hash, timestamp: u64 };
 
@@ -714,11 +712,11 @@ pub const GossipTable = struct {
     }
 
     /// removes pubkeys and their associated values until the pubkey count is less than max_pubkey_capacity.
-    /// returns true if any values were removed.
+    /// returns the number of pubkeys removed.
     ///
     /// NOTE: the `now` parameter is used to populate the purged field with the timestamp of the removal.
-    pub fn attemptTrim(self: *Self, now: u64, max_pubkey_capacity: usize) error{OutOfMemory}!bool {
-        if (!self.shouldTrim(max_pubkey_capacity)) return false;
+    pub fn attemptTrim(self: *Self, now: u64, max_pubkey_capacity: usize) error{OutOfMemory}!u64 {
+        if (!self.shouldTrim(max_pubkey_capacity)) return 0;
 
         const n_pubkeys = self.pubkey_to_values.count();
         const drop_size = n_pubkeys -| max_pubkey_capacity;
@@ -743,14 +741,14 @@ pub const GossipTable = struct {
             self.remove(label, now) catch unreachable;
         }
 
-        return true;
+        return drop_pubkeys.len;
     }
 
     pub fn removeOldLabels(
         self: *Self,
         now: u64,
         timeout: u64,
-    ) error{OutOfMemory}!void {
+    ) error{OutOfMemory}!u64 {
         const old_labels = try self.getOldLabels(now, timeout);
         defer old_labels.deinit();
 
@@ -758,6 +756,8 @@ pub const GossipTable = struct {
             // unreachable: label should always exist in store
             self.remove(old_label, now) catch unreachable;
         }
+
+        return old_labels.items.len;
     }
 
     const GetOldLabelsTask = struct {

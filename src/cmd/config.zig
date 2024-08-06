@@ -10,6 +10,7 @@ pub const Config = struct {
     shred_collector: ShredCollectorConfig = shred_collector_defaults,
     accounts_db: AccountsDBConfig = .{},
     leader_schedule_path: ?[]const u8 = null,
+    genesis_file_path: ?[]const u8 = null,
     // general config
     log_level: LogLevel = .debug,
     metrics_port: u16 = 12345,

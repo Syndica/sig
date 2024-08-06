@@ -22,7 +22,6 @@ const Inflation = sig.accounts_db.genesis_config.Inflation;
 const SlotHistory = sig.accounts_db.sysvars.SlotHistory;
 const FileId = sig.accounts_db.accounts_file.FileId;
 
-const defaultArrayListOnEOFConfig = bincode.arraylist.defaultArrayListOnEOFConfig;
 const defaultArrayListUnmanagedOnEOFConfig = bincode.arraylist.defaultArrayListUnmanagedOnEOFConfig;
 const readDirectory = sig.utils.directory.readDirectory;
 const parallelUntarToFileSystem = sig.utils.tar.parallelUntarToFileSystem;
@@ -81,6 +80,7 @@ pub const VoteAccounts = struct {
         var staked_nodes = std.AutoArrayHashMap(Pubkey, u64).init(allocator);
         var iter = vote_accounts.iterator();
         while (iter.next()) |vote_entry| {
+            if (vote_entry.value_ptr[0] == 0) continue;
             const vote_state = try vote_entry.value_ptr[1].voteState();
             const node_entry = try staked_nodes.getOrPut(vote_state.node_pubkey);
             if (!node_entry.found_existing) {

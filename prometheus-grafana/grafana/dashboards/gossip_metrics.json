@@ -88,8 +88,137 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
+        "y": 0
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "incoming_channel_length",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "incoming_channel_length",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "verified_channel_length",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "verified_channel_length",
+          "range": true,
+          "refId": "B",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus"
+          },
+          "disableTextWrap": false,
+          "editorMode": "builder",
+          "expr": "outgoing_channel_length",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "legendFormat": "outgoing_channel_length",
+          "range": true,
+          "refId": "C",
+          "useBackend": false
+        }
+      ],
+      "title": "Channel Lengths",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
         "y": 0
       },
       "id": 2,
@@ -196,8 +325,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 16,
         "y": 0
       },
       "id": 12,
@@ -271,27 +400,16 @@
             "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
+            "fillOpacity": 80,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
             "lineWidth": 1,
-            "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
             },
             "thresholdsStyle": {
               "mode": "off"
@@ -322,16 +440,25 @@
       },
       "id": 6,
       "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
         "legend": {
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
         "tooltip": {
           "mode": "single",
           "sort": "none"
-        }
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
       "targets": [
         {
@@ -413,7 +540,7 @@
         }
       ],
       "title": "Message Type Recv",
-      "type": "timeseries"
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -430,27 +557,16 @@
             "axisColorMode": "text",
             "axisLabel": "",
             "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
+            "fillOpacity": 80,
             "gradientMode": "none",
             "hideFrom": {
               "legend": false,
               "tooltip": false,
               "viz": false
             },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
             "lineWidth": 1,
-            "pointSize": 5,
             "scaleDistribution": {
               "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
             },
             "thresholdsStyle": {
               "mode": "off"
@@ -481,17 +597,27 @@
       },
       "id": 4,
       "options": {
+        "barRadius": 0,
+        "barWidth": 0.97,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
         "legend": {
           "calcs": [],
           "displayMode": "list",
           "placement": "bottom",
           "showLegend": true
         },
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
         "tooltip": {
           "mode": "single",
           "sort": "none"
-        }
+        },
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0
       },
+      "pluginVersion": "10.4.1",
       "targets": [
         {
           "datasource": {},
@@ -572,7 +698,7 @@
         }
       ],
       "title": "Message Type Send",
-      "type": "timeseries"
+      "type": "barchart"
     },
     {
       "datasource": {
@@ -638,7 +764,7 @@
         "x": 0,
         "y": 16
       },
-      "id": 10,
+      "id": 16,
       "options": {
         "legend": {
           "calcs": [],
@@ -653,97 +779,70 @@
       },
       "targets": [
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(handle_batch_ping_time[$__interval])",
+          "expr": "table_pubkeys_dropped",
           "fullMetaSearch": false,
           "includeNullMetadata": true,
-          "legendFormat": "handle_batch_ping_time",
+          "instant": false,
+          "legendFormat": "table_pubkeys_dropped",
           "range": true,
           "refId": "A",
           "useBackend": false
         },
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(handle_batch_pong_time[$__interval])",
+          "expr": "table_old_values_removed",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
-          "legendFormat": "handle_batch_pong_time",
+          "instant": false,
+          "legendFormat": "table_old_values_removed",
           "range": true,
           "refId": "B",
           "useBackend": false
         },
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(handle_batch_prune_time[$__interval])",
+          "expr": "table_trim_call_count",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
-          "legendFormat": "handle_batch_prune_time",
+          "instant": false,
+          "legendFormat": "trim_call_count",
           "range": true,
           "refId": "C",
           "useBackend": false
         },
         {
-          "datasource": {},
+          "datasource": {
+            "type": "prometheus"
+          },
           "disableTextWrap": false,
           "editorMode": "builder",
-          "expr": "idelta(handle_batch_pull_req_time[$__interval])",
+          "expr": "table_remove_old_values_call_count",
           "fullMetaSearch": false,
           "hide": false,
           "includeNullMetadata": true,
-          "legendFormat": "handle_batch_pull_req_time",
+          "instant": false,
+          "legendFormat": "remove_old_values_call_count",
           "range": true,
           "refId": "D",
           "useBackend": false
-        },
-        {
-          "datasource": {},
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "idelta(handle_batch_pull_resp_time[$__interval])",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": true,
-          "legendFormat": "handle_batch_pull_resp_time",
-          "range": true,
-          "refId": "E",
-          "useBackend": false
-        },
-        {
-          "datasource": {},
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "idelta(handle_batch_push_time[$__interval])",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": true,
-          "legendFormat": "handle_batch_push_time",
-          "range": true,
-          "refId": "F",
-          "useBackend": false
-        },
-        {
-          "datasource": {},
-          "disableTextWrap": false,
-          "editorMode": "builder",
-          "expr": "idelta(handle_trim_table_time[$__interval])",
-          "fullMetaSearch": false,
-          "hide": false,
-          "includeNullMetadata": true,
-          "legendFormat": "handle_trim_table_time",
-          "range": true,
-          "refId": "G",
-          "useBackend": false
         }
       ],
-      "title": "Handle Messages Time",
+      "title": "Table Trim Metrics",
       "type": "timeseries"
     },
     {
@@ -800,7 +899,8 @@
                 "value": 80
               }
             ]
-          }
+          },
+          "unit": "none"
         },
         "overrides": []
       },
@@ -826,20 +926,28 @@
       "targets": [
         {
           "datasource": {},
+          "disableTextWrap": false,
           "editorMode": "builder",
           "expr": "table_n_values",
+          "fullMetaSearch": false,
+          "includeNullMetadata": true,
           "legendFormat": "n_values",
           "range": true,
-          "refId": "A"
+          "refId": "A",
+          "useBackend": false
         },
         {
           "datasource": {},
+          "disableTextWrap": false,
           "editorMode": "builder",
           "expr": "table_n_pubkeys",
+          "fullMetaSearch": false,
           "hide": false,
+          "includeNullMetadata": true,
           "legendFormat": "n_pubkeys",
           "range": true,
-          "refId": "B"
+          "refId": "B",
+          "useBackend": false
         }
       ],
       "title": "Gossip Table",
@@ -891,8 +999,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               },
               {
                 "color": "red",
@@ -1020,8 +1127,7 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
-                "value": null
+                "color": "green"
               },
               {
                 "color": "red",
@@ -1089,6 +1195,7 @@
       "type": "timeseries"
     }
   ],
+  "refresh": "",
   "revision": 1,
   "schemaVersion": 39,
   "tags": [],
@@ -1101,8 +1208,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "sig",
+  "title": "Gossip Metrics",
   "uid": "jBuN47BVz",
-  "version": 15,
+  "version": 13,
   "weekStart": ""
 }

@@ -30,7 +30,6 @@ const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
-const readDirectory = sig.utils.directory.readDirectory;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
