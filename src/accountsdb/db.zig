@@ -704,11 +704,11 @@ pub const AccountsDB = struct {
     }
 
     pub const AccountHashesConfig = union(enum) {
-        // compute hash from (..., max_slot]
+        /// compute hash from `(..., max_slot]`
         FullAccountHash: struct {
             max_slot: Slot,
         },
-        // compute hash from (min_slot, ...)
+        /// compute hash from `(min_slot, ...]`
         IncrementalAccountHash: struct {
             min_slot: Slot,
         },
@@ -2115,7 +2115,7 @@ pub const AccountsDB = struct {
         defer serializable_file_map.deinit();
         try serializable_file_map.ensureTotalCapacity(file_map.count());
 
-        var full_capiltaization: switch (snap_kind) {
+        var full_capitalization: switch (snap_kind) {
             .full => u64,
             .incremental => u0,
         } = 0;
@@ -2130,7 +2130,7 @@ pub const AccountsDB = struct {
 
                     var iter = account_file.iterator();
                     while (iter.next()) |account_in_file| {
-                        full_capiltaization += account_in_file.lamports().*;
+                        full_capitalization += account_in_file.lamports().*;
                     }
                 },
                 .incremental => {
@@ -2200,7 +2200,7 @@ pub const AccountsDB = struct {
 
         return switch (snap_kind) {
             .full => .{
-                .full_capitalization = full_capiltaization,
+                .full_capitalization = full_capitalization,
             },
             .incremental => {},
         };
