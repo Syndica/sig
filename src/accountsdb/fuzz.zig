@@ -72,7 +72,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         .use_disk_index = use_disk,
         .snapshot_dir = snapshot_dir,
         // TODO: other things we can fuzz (number of bins, ...)
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     const exit = try allocator.create(std.atomic.Value(bool));

@@ -44,6 +44,9 @@ const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
 
+const GeyserWriter = sig.geyser.GeyserWriter;
+const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
+
 const AccountsDBConfig = @import("../cmd/config.zig").AccountsDBConfig;
 
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
@@ -95,6 +98,8 @@ pub const AccountsDB = struct {
     account_cache: RwMux(AccountCache),
     file_map: RwMux(FileMap),
 
+    geyser_writer: ?GeyserWriter,
+
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
     // used for filenames when flushing accounts to disk
@@ -115,6 +120,7 @@ pub const AccountsDB = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         config: AccountsDBConfig,
+        geyser_writer: ?GeyserWriter,
     ) !Self {
         const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
         const reference_allocator: std.mem.Allocator //
@@ -170,6 +176,7 @@ pub const AccountsDB = struct {
             .file_map = RwMux(FileMap).init(FileMap.init(allocator)),
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .stats = stats,
+            .geyser_writer = geyser_writer,
         };
     }
 
@@ -291,6 +298,7 @@ pub const AccountsDB = struct {
                 per_thread_allocator,
                 self.logger,
                 .{ .number_of_index_bins = self.config.number_of_index_bins },
+                self.geyser_writer,
             );
 
             // set the disk allocator after init() doesnt create a new one
@@ -373,6 +381,31 @@ pub const AccountsDB = struct {
         );
     }
 
+    pub const GeyserTmpStorage = struct {
+        memory_allocator: std.mem.Allocator,
+        memory: []u8,
+        fba: std.heap.FixedBufferAllocator,
+        accounts: ArrayList(Account),
+        pubkeys: ArrayList(Pubkey),
+
+        pub fn deinit(self: *GeyserTmpStorage) void {
+            self.accounts.deinit();
+            self.pubkeys.deinit();
+            self.memory_allocator.free(self.memory);
+        }
+
+        pub fn reset(self: *GeyserTmpStorage) void {
+            self.accounts.clearRetainingCapacity();
+            self.pubkeys.clearRetainingCapacity();
+            self.fba.reset();
+        }
+
+        pub fn track(self: *GeyserTmpStorage, account: Account, pubkey: Pubkey) !void {
+            try self.accounts.append(account);
+            try self.pubkeys.append(pubkey);
+        }
+    };
+
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
     /// Assumes `self.fields != null`.
@@ -401,9 +434,10 @@ pub const AccountsDB = struct {
 
         // allocate all the references in one shot with a wrapper allocator
         // without this large allocation, snapshot loading is very slow
+        const n_accounts_estimate = n_account_files * accounts_per_file_est;
         var references = try ArrayList(AccountRef).initCapacity(
             self.account_index.reference_allocator,
-            n_account_files * accounts_per_file_est,
+            n_accounts_estimate,
         );
 
         const references_ptr = references.items.ptr;
@@ -437,6 +471,25 @@ pub const AccountsDB = struct {
         defer reference_memory_lg.unlock();
         try reference_memory.ensureTotalCapacity(@intCast(n_account_files));
 
+        // init storage which holds tmp account data per slot to eventually
+        // be written to geyser
+        const geyser_is_enabled = self.geyser_writer != null;
+        var geyser_tmp_storage: ?*GeyserTmpStorage = null;
+        if (geyser_is_enabled) {
+            // TODO: make config value
+            const memory = try self.allocator.alloc(u8, 1 << 30); // 1GB
+            const fba = std.heap.FixedBufferAllocator.init(memory);
+
+            geyser_tmp_storage = try self.allocator.create(GeyserTmpStorage);
+            geyser_tmp_storage.?.* = GeyserTmpStorage{
+                .memory = memory,
+                .fba = fba,
+                .memory_allocator = self.allocator,
+                .accounts = try ArrayList(Account).initCapacity(self.allocator, n_accounts_estimate),
+                .pubkeys = try ArrayList(Pubkey).initCapacity(self.allocator, n_accounts_estimate),
+            };
+        }
+
         for (
             file_info_map.keys()[file_map_start_index..file_map_end_index],
             file_info_map.values()[file_map_start_index..file_map_end_index],
@@ -445,6 +498,7 @@ pub const AccountsDB = struct {
             // read accounts file
             var accounts_file = blk: {
                 const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
+                errdefer std.debug.print("failed to open file: {s}\n", .{file_name_bounded.constSlice()});
 
                 const accounts_file_file = try accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write });
                 errdefer accounts_file_file.close();
@@ -461,6 +515,7 @@ pub const AccountsDB = struct {
                 self.account_index.pubkey_bin_calculator,
                 bin_counts,
                 &references,
+                geyser_tmp_storage,
             ) catch |err| {
                 switch (err) {
                     error.OutOfReferenceMemory => {
@@ -477,6 +532,31 @@ pub const AccountsDB = struct {
                 }
                 return err;
             };
+
+            if (geyser_is_enabled) {
+                const geyser_storage = geyser_tmp_storage.?;
+                const geyser_writer = &self.geyser_writer.?;
+
+                const payload = VersionedAccountPayload{
+                    .AccountPayloadV1 = .{
+                        .accounts = geyser_storage.accounts.items,
+                        .pubkeys = geyser_storage.pubkeys.items,
+                        .slot = slot,
+                    },
+                };
+                // defer: reset the preallocated memory (for account data slices)
+                defer geyser_storage.reset();
+
+                std.debug.assert(geyser_storage.accounts.items.len == geyser_storage.pubkeys.items.len);
+
+                // write to geyser (with lock since this is a shared resource with
+                // multi-thread loading)
+                if (geyser_storage.accounts.items.len > 0) {
+                    geyser_writer.mux.lock();
+                    defer geyser_writer.mux.unlock();
+                    _ = try geyser_writer.writePayload(payload);
+                }
+            }
 
             if (accounts_file.number_of_accounts > 0) {
                 // the last `number_of_accounts` is associated with this file
@@ -549,7 +629,7 @@ pub const AccountsDB = struct {
                     total_accounts,
                     ref_count,
                     "building index",
-                    null,
+                    "thread0",
                 );
                 progress_timer.reset();
             }
@@ -1875,6 +1955,7 @@ pub const AccountsDB = struct {
             self.account_index.pubkey_bin_calculator,
             bin_counts,
             &references,
+            null,
         );
         try self.account_index.putReferenceBlock(account_file.slot, references);
 
@@ -2124,6 +2205,8 @@ pub const ValidateAccountFileError = error{
     BinCountMismatch,
     InvalidAccountFileLength,
     OutOfReferenceMemory,
+    OutOfGeyserFBAMemory,
+    OutOfGeyserArrayMemory,
 } || AccountInFile.ValidateError;
 
 pub fn indexAndValidateAccountFile(
@@ -2131,6 +2214,7 @@ pub fn indexAndValidateAccountFile(
     pubkey_bin_calculator: PubkeyBinCalculator,
     bin_counts: []usize,
     account_refs: *ArrayList(AccountRef),
+    geyser_storage: ?*AccountsDB.GeyserTmpStorage,
 ) ValidateAccountFileError!void {
     var offset: usize = 0;
     var number_of_accounts: usize = 0;
@@ -2143,7 +2227,22 @@ pub fn indexAndValidateAccountFile(
         const account = accounts_file.readAccount(offset) catch break;
         try account.validate();
 
-        // clone + stream out of validator here -- channel to geyser writer
+        _ = geyser_storage;
+        // if (geyser_storage) |storage| {
+        //     var account_clone = account.toOwnedAccount(storage.fba.allocator()) catch {
+        //         // preallocated FBA is not enough for account data slice clone
+        //         return ValidateAccountFileError.OutOfGeyserFBAMemory;
+        //     };
+        //     errdefer account_clone.deinit(storage.fba.allocator());
+
+        //     storage.track(
+        //         account_clone,
+        //         account.pubkey().*,
+        //     ) catch {
+        //         // arraylist memory is not enough
+        //         return ValidateAccountFileError.OutOfGeyserArrayMemory;
+        //     };
+        // }
 
         account_refs.append(.{
             .pubkey = account.store_info.pubkey,
@@ -2166,7 +2265,9 @@ pub fn indexAndValidateAccountFile(
         number_of_accounts += 1;
     }
 
-    if (offset != std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64))) {
+    // std.debug.print("file id: {} offset vs length = {} vs {}\n", .{accounts_file.id.toInt(), offset, accounts_file.length});
+    const aligned_length = std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64));
+    if (offset != aligned_length) {
         return error.InvalidAccountFileLength;
     }
 
@@ -2319,7 +2420,7 @@ fn testWriteSnapshotFull(
     const status_cache = try StatusCache.decodeFromBincode(allocator, status_cache_file.reader());
     defer status_cache.deinit(allocator);
 
-    var accounts_db = try AccountsDB.init(allocator, .noop, .{});
+    var accounts_db = try AccountsDB.init(allocator, .noop, .{}, null);
     defer accounts_db.deinit(true);
 
     {
@@ -2433,7 +2534,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
         .snapshot_dir = "test_data/tmp",
-    });
+    }, null);
 
     var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
     defer accounts_dir.close();
@@ -2588,7 +2689,7 @@ test "flushing slots works" {
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .snapshot_dir = "test_data",
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -2639,7 +2740,7 @@ test "purge accounts in cache works" {
     const logger = Logger{ .noop = {} };
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -2700,7 +2801,7 @@ test "clean to shrink account file works with zero-lamports" {
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .snapshot_dir = "test_data",
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -2777,7 +2878,7 @@ test "clean to shrink account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .snapshot_dir = "test_data",
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -2846,7 +2947,7 @@ test "full clean account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .snapshot_dir = "test_data",
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -2932,7 +3033,7 @@ test "shrink account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, .{
         .number_of_index_bins = 4,
         .snapshot_dir = "test_data",
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3117,7 +3218,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             .number_of_index_bins = 32,
             .use_disk_index = bench_args.use_disk,
             .snapshot_dir = dir_path,
-        });
+        }, null);
         defer accounts_db.deinit(false);
 
         var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
@@ -3297,9 +3398,9 @@ pub const BenchmarkAccountsDB = struct {
         if (bench_args.index == .disk) {
             accounts_db = try AccountsDB.init(allocator, logger, .{
                 .use_disk_index = true,
-            });
+            }, null);
         } else {
-            accounts_db = try AccountsDB.init(allocator, logger, .{});
+            accounts_db = try AccountsDB.init(allocator, logger, .{}, null);
         }
         defer accounts_db.deinit(true);
 

@@ -451,6 +451,8 @@ fn validator() !void {
         gossip_service,
         true,
         false,
+        // TODO(geyser) : add geyser writer
+        null,
     );
 
     // leader schedule
@@ -481,6 +483,8 @@ fn validator() !void {
     shred_collector_manager.join();
 }
 
+const GeyserWriter = sig.geyser.GeyserWriter;
+
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
     const app_base = try AppBase.init(allocator);
@@ -489,12 +493,38 @@ fn validateSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
+    const geyser_exit = try allocator.create(Atomic(bool));
+    defer allocator.destroy(geyser_exit);
+    geyser_exit.* = Atomic(bool).init(false);
+
+    // TMP CONFIG
+    const geyser_enabled = false;
+    const geyser_io_buf_len = 1 << 19; // 512kb
+    const geyser_pipe_path = "ledger/accounts_db/geyser.pipe";
+
+    var geyser_writer: ?GeyserWriter = null;
+    if (geyser_enabled) {
+        geyser_writer = try GeyserWriter.init(
+            allocator,
+            geyser_pipe_path,
+            geyser_exit,
+            .{ .io_buf_len = geyser_io_buf_len },
+        );
+    }
+    defer {
+        if (geyser_writer) |geyser| {
+            geyser_exit.store(true, .unordered);
+            geyser.deinit();
+        }
+    }
+
     const snapshot_result = try loadSnapshot(
         allocator,
         app_base.logger,
         null,
         true,
         false,
+        geyser_writer,
     );
     defer snapshot_result.deinit();
 }
@@ -512,6 +542,7 @@ fn printLeaderSchedule() !void {
             null,
             true,
             false,
+            null,
         ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
                 app_base.logger.err(
@@ -797,9 +828,13 @@ fn loadSnapshot(
     validate_snapshot: bool,
     /// whether to validate the genesis config against the bank (to remove when genesis validation works on all clusters)
     validate_genesis: bool,
+    /// optional geyser to write snapshot data to
+    geyser_writer: ?GeyserWriter,
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
+
+    result.allocator = allocator;
 
     var snapshots = try getOrDownloadSnapshots(
         allocator,
@@ -830,6 +865,7 @@ fn loadSnapshot(
         allocator,
         logger,
         config.current.accounts_db,
+        geyser_writer,
     );
     errdefer result.accounts_db.deinit(false);
 

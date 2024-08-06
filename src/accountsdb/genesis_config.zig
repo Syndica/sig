@@ -194,9 +194,8 @@ pub const GenesisConfig = struct {
     ) !GenesisConfig {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
-        const config = try bincode.read(allocator, GenesisConfig, file.reader(), .{});
 
-        return config;
+        return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
     }
 
     pub fn deinit(self: GenesisConfig, allocator: std.mem.Allocator) void {

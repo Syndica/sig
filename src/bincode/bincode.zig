@@ -6,6 +6,7 @@ pub const list = @import("list.zig");
 pub const int = @import("int.zig");
 
 const std = @import("std");
+const builtin = @import("builtin");
 const sig = @import("../lib.zig");
 
 const testing = std.testing;
@@ -116,8 +117,13 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
 
                     if (field.is_comptime) continue;
                     const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
-                        // TODO(x19): use a logger - sometimes we want to recover from failed deser and not print anything
-                        // errdefer std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                        errdefer {
+                            // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
+                            // and so we don't want to print)
+                            if (builtin.mode == .Debug) {
+                                std.debug.print("failed to deserialize field {s}\n", .{field.name});
+                            }
+                        }
                         @field(data, field.name) = try bincode.read(allocator, field.type, reader, params);
                         continue;
                     };

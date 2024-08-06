@@ -45,6 +45,12 @@ pub const GeyserWriter = struct {
     io_buf: []u8,
     exit: ?*std.atomic.Value(bool),
 
+    // optional mutex to ensure we dont write to the io_buf concurrently
+    // NOTE: this will be used during parallel snapshot loading (/startup)
+    // but normal account writes are single-threaded (only on thread should
+    // be calling AccountsDB.putAccountSlice .
+    mux: std.Thread.Mutex = .{},
+
     const Self = @This();
 
     /// initializes a linux pipe to stream data to
@@ -71,7 +77,9 @@ pub const GeyserWriter = struct {
 
     /// streams a batch of accounts to the pipe using bincode serialization.
     /// returns the number of bytes wrote.
-    /// NOTE: this will block if the pipe is not big enough
+    ///
+    /// NOTE: this will block if the pipe is not big enough, which is why we
+    /// have the exit flag to signal to stop writing.
     pub fn writePayload(
         self: *Self,
         versioned_payload: VersionedAccountPayload,
@@ -82,6 +90,7 @@ pub const GeyserWriter = struct {
         // ensure we have enough space in the buffer
         const size = bincode.sizeOf(payload, .{});
         if (size > self.io_buf.len) {
+            std.debug.print("resizing io_buf: {} -> {}\n", .{ self.io_buf.len, size });
             const new_buf = try self.allocator.alloc(u8, size);
             self.allocator.free(self.io_buf);
             self.io_buf = new_buf;
@@ -89,21 +98,31 @@ pub const GeyserWriter = struct {
 
         const written_buf = try bincode.writeToSlice(self.io_buf, payload, .{});
 
+        var empty_loop_count: usize = 0;
         var i: u64 = 0;
         while (i < written_buf.len) {
+            if (empty_loop_count > 0 and empty_loop_count % 500 == 0) {
+                std.debug.print("WARNING: writePayload looped too many times (is the reader alive?)\n", .{});
+                std.time.sleep(std.time.ns_per_s * 3);
+                // TODO: figure out reasonable limit in prod
+                if (empty_loop_count >= 2_000) {
+                    return error.WriterIsBlocked;
+                }
+            }
+
             const n = self.file.write(written_buf[i..written_buf.len]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
                     if (self.exit != null and self.exit.?.load(.unordered)) {
                         return error.BlockWithExit;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
+                        empty_loop_count += 1;
                         continue;
                     }
                 } else {
                     return err;
                 }
             };
-
             if (n == 0) {
                 return error.PipeClosed;
             }
@@ -178,17 +197,19 @@ pub const GeyserReader = struct {
 
     /// reads size number of bytes from the pipe and deserializes it into T.
     /// size is required to ensure we read unknown-length data slices into our buf.
-    pub fn readType(self: *Self, comptime T: type, size: u64) !T {
+    pub fn readType(self: *Self, comptime T: type, expected_n_bytes: u64) !T {
         // make sure we have enough space in the buffer
-        if (size > self.io_buf.len) {
-            const new_buf = try self.allocator.alloc(u8, size);
+        if (expected_n_bytes > self.io_buf.len) {
+            // TODO: use logger instead
+            std.debug.print("resizing io_buf: {} -> {}\n", .{ self.io_buf.len, expected_n_bytes });
+            const new_buf = try self.allocator.alloc(u8, expected_n_bytes);
             self.allocator.free(self.io_buf);
             self.io_buf = new_buf;
         }
 
-        var i: u64 = 0;
-        while (i < size) {
-            const n = self.file.read(self.io_buf[i..size]) catch |err| {
+        var total_bytes_read: u64 = 0;
+        while (total_bytes_read < expected_n_bytes) {
+            const n_bytes_read = self.file.read(self.io_buf[total_bytes_read..expected_n_bytes]) catch |err| {
                 if (err == std.posix.ReadError.WouldBlock) {
                     if (self.exit != null and self.exit.?.load(.unordered)) {
                         return error.BlockWithExit;
@@ -201,17 +222,24 @@ pub const GeyserReader = struct {
                 }
             };
 
-            if (n == 0) {
+            if (n_bytes_read == 0) {
                 return error.PipeClosed;
             }
-            i += n;
+            total_bytes_read += n_bytes_read;
         }
 
         while (true) {
-            const data = bincode.readFromSlice(self.bincode_allocator.allocator(), T, self.io_buf[0..size], .{}) catch |err| {
+            const data = bincode.readFromSlice(
+                self.bincode_allocator.allocator(),
+                T,
+                self.io_buf[0..expected_n_bytes],
+                .{},
+            ) catch |err| {
                 if (err == std.mem.Allocator.Error.OutOfMemory) {
                     // resize the bincode allocator and try again
                     const new_size = self.bincode_buf.len * 2;
+                    // TODO: use logger instead
+                    std.debug.print("resizing bincode_buf: {} -> {}\n", .{ self.bincode_buf.len, new_size });
                     const new_buf = try self.allocator.alloc(u8, new_size);
                     self.allocator.free(self.bincode_buf);
                     self.bincode_buf = new_buf;
@@ -222,7 +250,6 @@ pub const GeyserReader = struct {
                 }
             };
 
-            // return the data
             return data;
         }
     }
