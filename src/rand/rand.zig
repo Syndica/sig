@@ -114,6 +114,45 @@ pub fn BlockRng(
     };
 }
 
+pub fn errorValue(rand: std.Random, comptime ErrorSet: type) ErrorSet {
+    if (ErrorSet == anyerror) @compileError("Can't return a random instance of " ++ @typeName(anyerror));
+    return switch (rand.enumValue(std.meta.FieldEnum(ErrorSet))) {
+        inline else => |itag| @field(ErrorSet, @tagName(itag)),
+    };
+}
+
+/// Empties the provided hashmap, and then fills it with `hm_len` entries,
+/// each with a randomly generated key and value (there will be exactly `hm_len`
+/// entries, no more and no less).
+pub fn fillHashmapWithRng(
+    /// `*std.ArrayHashMap(Key, Value, _, _)`
+    /// `*std.HashMap(Key, Value, _, _)`
+    hashmap: anytype,
+    rand: std.Random,
+    /// The length to set the hashmap to.
+    hm_len: if (sig.utils.types.hashMapInfo(@TypeOf(hashmap.*))) |hm_info| hm_info.Size() else usize,
+    /// Expected to provide methods & fields/decls:
+    /// * `fn randomKey(context, rand: std.Random) Key`
+    /// * `fn randomValue(context, rand: std.Random) Value`
+    context: anytype,
+) !void {
+    const Hm = @TypeOf(hashmap.*);
+    const hm_info = sig.utils.types.hashMapInfo(Hm).?;
+
+    hashmap.clearRetainingCapacity();
+    try hashmap.ensureTotalCapacity(hm_len);
+
+    for (0..hm_len) |_| {
+        while (true) {
+            const new_key: hm_info.Key = try context.randomKey(rand);
+            const gop = hashmap.getOrPutAssumeCapacity(new_key);
+            if (gop.found_existing) continue;
+            gop.value_ptr.* = try context.randomValue(rand);
+            break;
+        }
+    }
+}
+
 /// Downsample a random number generator to a smaller range.
 /// This implementationc is based on the implementation in the rust rand crate
 /// and ensures the same sequence is generated.

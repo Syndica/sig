@@ -32,15 +32,29 @@ pub const Hash = extern struct {
         return .eq;
     }
 
+    pub fn parseBase58String(str: []const u8) error{InvalidHash}!Hash {
+        var result_data: [HASH_SIZE]u8 = undefined;
+        const b58_decoder = comptime base58.Decoder.init(.{});
+        const encoded_len = b58_decoder.decode(str, &result_data) catch return error.InvalidHash;
+        if (encoded_len != HASH_SIZE) return error.InvalidHash;
+        return .{ .data = result_data };
+    }
+
+    pub fn base58String(self: Hash) std.BoundedArray(u8, 44) {
+        var result: std.BoundedArray(u8, 44) = .{};
+        const b58_encoder = comptime base58.Encoder.init(.{});
+        const encoded_len = b58_encoder.encode(&self.data, &result.buffer) catch unreachable; // this is unreachable because '44' is exactly the maximum encoded length for a 32 byte string.
+        result.len = @intCast(encoded_len);
+        return result;
+    }
+
     pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const b58_encoder = base58.Encoder.init(.{});
-        var buf: [44]u8 = undefined;
-        const size = b58_encoder.encode(&self.data, &buf) catch unreachable;
-        return writer.print("{s}", .{buf[0..size]});
+        const b58_str_bounded = self.base58String();
+        return writer.writeAll(b58_str_bounded.constSlice());
     }
 
     /// Intended to be used in tests.
-    pub fn random(rand: std.rand.Random) Hash {
+    pub fn random(rand: std.Random) Hash {
         var data: [HASH_SIZE]u8 = undefined;
         rand.bytes(&data);
         return .{ .data = data };

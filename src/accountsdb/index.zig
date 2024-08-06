@@ -1284,7 +1284,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     []AccountRef,
     []Pubkey,
 } {
-    var random = std.rand.DefaultPrng.init(0);
+    var random = std.Random.DefaultPrng.init(0);
     const rng = random.random();
 
     const accounts = try allocator.alloc(AccountRef, n_accounts);
