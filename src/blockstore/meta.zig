@@ -169,9 +169,7 @@ pub const ConnectedFlags = BitFlags(enum(u8) {
 });
 
 pub const DuplicateSlotProof = struct {
-    // #[serde(with = "serde_bytes")]
     shred1: []const u8,
-    // #[serde(with = "serde_bytes")]
     shred2: []const u8,
 };
 
@@ -209,7 +207,7 @@ pub const ErasureMeta = struct {
         return sig.utils.types.eql(self, other);
     }
 
-    /// agave: status
+    /// Analogous to [status](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L442)
     pub fn status(self: Self, index: *Index) union(enum) {
         can_recover,
         data_full,
@@ -231,19 +229,19 @@ pub const ErasureMeta = struct {
             .{ .still_need = num_needed };
     }
 
-    /// agave: data_shreds_indices
+    /// Analogous to [data_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L422)
     pub fn dataShredsIndices(self: Self) [2]u64 {
         const num_data = self.config.num_data;
         return .{ self.fec_set_index, self.fec_set_index + num_data };
     }
 
-    /// agave: coding_shreds_indices
+    /// Analogous to [coding_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L428)
     pub fn codingShredsIndices(self: Self) [2]u64 {
         const num_coding = self.config.num_coding;
         return .{ self.first_coding_index, self.first_coding_index + num_coding };
     }
 
-    /// agave: next_fec_set_index
+    /// Analogous to [next_fec_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
     pub fn nextFecSetIndex(self: Self) ?u32 {
         const num_data: u32 = @intCast(self.config.num_data);
         return sig.utils.math.checkedSub(@as(u32, @intCast(self.fec_set_index)), num_data) catch null;
@@ -339,7 +337,7 @@ pub const MerkleRootMeta = struct {
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
             .merkle_root = shred.merkleRoot() catch null,
-            .first_received_shred_index = shred.common().index,
+            .first_received_shred_index = shred.commonHeader().index,
             .first_received_shred_type = shred,
         };
     }

@@ -11,7 +11,7 @@ const Lru = sig.common.lru.LruCacheCustom;
 const MerkleProofEntry = sig.shred_collector.shred.MerkleProofEntry;
 const ReedSolomon = sig.blockstore.reed_solomon.ReedSolomon;
 const Shred = sig.shred_collector.shred.Shred;
-const ShredCommonHeader = sig.shred_collector.shred.ShredCommonHeader;
+const CommonHeader = sig.shred_collector.shred.CommonHeader;
 const ShredVariant = sig.shred_collector.shred.ShredVariant;
 const Signature = sig.core.Signature;
 
@@ -69,7 +69,7 @@ pub fn recover(
     // Incoming shreds are resigned immediately after signature verification,
     // so we can just grab the retransmitter signature from one of the
     // available shreds and attach it to the recovered shreds.
-    const common_header: ShredCommonHeader, //
+    const common_header: CommonHeader, //
     const coding_header: CodingShredHeader, //
     const chained_merkle_root: ?Hash, //
     const retransmitter_signature: ?Signature =
@@ -208,7 +208,7 @@ pub fn recover(
 /// Verify that shreds belong to the same erasure batch
 /// and have consistent headers.
 fn verifyErasureBatch(
-    expect: ShredCommonHeader,
+    expect: CommonHeader,
     code: CodingShredHeader,
     shreds: []const Shred,
 ) bool {

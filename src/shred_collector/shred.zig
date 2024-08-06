@@ -61,14 +61,14 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn common(self: *const Self) *const ShredCommonHeader {
+    pub fn commonHeader(self: *const Self) *const CommonHeader {
         return switch (self.*) {
             inline .code, .data => |c| &c.fields.common,
         };
     }
 
     pub fn sanitize(self: *const Self) !void {
-        if (self.common().shred_variant.shred_type != @as(ShredType, self.*)) {
+        if (self.commonHeader().shred_variant.shred_type != @as(ShredType, self.*)) {
             return error.InconsistentShredVariant;
         }
         switch (self.*) {
@@ -137,6 +137,7 @@ pub const Shred = union(ShredType) {
     }
 };
 
+/// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
 pub const CodingShred = struct {
     fields: Fields,
     const Fields = GenericShred(CodingShredHeader, coding_shred);
@@ -147,7 +148,7 @@ pub const CodingShred = struct {
     /// agave: ShredCode::from_recovered_shard
     pub fn fromRecoveredShard(
         allocator: Allocator,
-        common_header: ShredCommonHeader,
+        common_header: CommonHeader,
         coding_header: CodingShredHeader,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
@@ -223,6 +224,7 @@ pub const CodingShred = struct {
     }
 };
 
+/// Analogous to [ShredData](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L61)
 pub const DataShred = struct {
     fields: Fields,
     const Fields = GenericShred(DataShredHeader, data_shred);
@@ -257,12 +259,7 @@ pub const DataShred = struct {
 
     pub fn sanitize(self: *const Self) !void {
         try self.fields.sanitize();
-        const flags = self.fields.custom.flags;
-        if (flags.intersects(.last_shred_in_slot) and // TODO redundant
-            !flags.isSet(.data_complete_shred))
-        {
-            return error.InvalidShredFlags;
-        }
+        // see ShredFlags comptime block for omitted check that is guaranteed at comptime.
         _ = try self.data();
         _ = try self.parent();
     }
@@ -312,7 +309,7 @@ pub fn GenericShred(
     constants_: ShredConstants,
 ) type {
     return struct {
-        common: ShredCommonHeader,
+        common: CommonHeader,
         custom: CustomHeader,
         allocator: Allocator,
         payload: []u8,
@@ -347,7 +344,7 @@ pub fn GenericShred(
             var buf = std.io.fixedBufferStream(payload[0..constants.payload_size]);
             const self = Self{
                 .allocator = allocator,
-                .common = try bincode.read(allocator, ShredCommonHeader, buf.reader(), .{}),
+                .common = try bincode.read(allocator, CommonHeader, buf.reader(), .{}),
                 .custom = try bincode.read(allocator, CustomHeader, buf.reader(), .{}),
                 .payload = payload,
             };
@@ -623,7 +620,7 @@ fn proofOffset(constants: ShredConstants, variant: ShredVariant) !usize {
         if (variant.chained) SIZE_OF_MERKLE_ROOT else 0;
 }
 
-/// agave: get_chained_merkle_root_offset
+/// Analogous to [get_chained_merkle_root_offset](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L364)
 pub fn getChainedMerkleRootOffset(variant: ShredVariant) !usize {
     const constants = variant.shred_type.constants();
     if (!variant.chained) {
@@ -718,7 +715,7 @@ const MerkleProofEntryList = struct {
     }
 };
 
-pub const ShredCommonHeader = struct {
+pub const CommonHeader = struct {
     signature: Signature,
     shred_variant: ShredVariant,
     slot: Slot,
@@ -870,6 +867,16 @@ pub const ShredFlags = BitFlags(enum(u8) {
     shred_tick_reference_mask = 0b0011_1111,
     data_complete_shred = 0b0100_0000,
     last_shred_in_slot = 0b1100_0000,
+
+    comptime {
+        // This replaces a check that would otherwise
+        // be ported from agave into DataShred.sanitize.
+        std.testing.expect(
+            @intFromEnum(ShredFlags.Flag.data_complete_shred) ==
+                @intFromEnum(ShredFlags.Flag.last_shred_in_slot) &
+                @intFromEnum(ShredFlags.Flag.data_complete_shred),
+        ) catch unreachable;
+    }
 });
 
 pub const ShredConstants = struct {
@@ -942,7 +949,7 @@ pub const layout = struct {
         return getInt(u16, shred, 83);
     }
 
-    /// agave: get_chained_merkle_root
+    /// Analogous to [get_chained_merkle_root](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred.rs#L740)
     pub fn getChainedMerkleRoot(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const offset = getChainedMerkleRootOffset(variant) catch return null;

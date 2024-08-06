@@ -268,7 +268,7 @@ pub fn SortedMapCustom(
             var values_ = self.inner.values();
             if (start) |start_| {
                 // .any instead of .first because uniqueness is guaranteed
-                const start_index = switch (find(K, keys_, start_, .any, order)) {
+                const start_index = switch (binarySearch(K, keys_, start_, .any, order)) {
                     .found => |index| if (incl_start) index else @min(len - 1, index + 1),
                     .after => |index| index + 1,
                     .less => 0,
@@ -280,7 +280,7 @@ pub fn SortedMapCustom(
             }
             if (end) |end_| {
                 // .any instead of .last because uniqueness is guaranteed
-                const end_index = switch (find(K, keys_, end_, .any, order)) {
+                const end_index = switch (binarySearch(K, keys_, end_, .any, order)) {
                     .found => |index| if (excl_end) index else if (index == 0) 0 else index - 1,
                     .after => |index| index + 1,
                     .less => return .{ &.{}, &.{} },
@@ -361,7 +361,7 @@ pub fn order(a: anytype, b: anytype) std.math.Order {
 
 /// binary search that is very specific about the outcome.
 /// only works with numbers
-pub fn find(
+pub fn binarySearch(
     comptime T: type,
     /// slice to look for the item
     items: []const T,
@@ -521,21 +521,21 @@ test "SortedSet range" {
     try expectEqualSlices(u8, &.{}, set.range(2, 2));
 }
 
-test find {
+test binarySearch {
     const items: [4]u8 = .{ 1, 3, 3, 5 };
     inline for (.{ .any, .first, .last }) |w| {
-        try expectEqual(find(u8, &items, 0, w, std.math.order), .less);
-        try expectEqual(find(u8, &items, 1, w, std.math.order).found, 0);
-        try expectEqual(find(u8, &items, 2, w, std.math.order).after, 0);
-        try expectEqual(find(u8, &items, 4, w, std.math.order).after, 2);
-        try expectEqual(find(u8, &items, 5, w, std.math.order).found, 3);
-        try expectEqual(find(u8, &items, 6, w, std.math.order), .greater);
+        try expectEqual(binarySearch(u8, &items, 0, w, std.math.order), .less);
+        try expectEqual(binarySearch(u8, &items, 1, w, std.math.order).found, 0);
+        try expectEqual(binarySearch(u8, &items, 2, w, std.math.order).after, 0);
+        try expectEqual(binarySearch(u8, &items, 4, w, std.math.order).after, 2);
+        try expectEqual(binarySearch(u8, &items, 5, w, std.math.order).found, 3);
+        try expectEqual(binarySearch(u8, &items, 6, w, std.math.order), .greater);
     }
-    expect(find(u8, &items, 3, .any, std.math.order).found == 1) catch {
-        try expectEqual(find(u8, &items, 3, .any, std.math.order).found, 2);
+    expect(binarySearch(u8, &items, 3, .any, std.math.order).found == 1) catch {
+        try expectEqual(binarySearch(u8, &items, 3, .any, std.math.order).found, 2);
     };
-    try expectEqual(find(u8, &items, 3, .first, std.math.order).found, 1);
-    try expectEqual(find(u8, &items, 3, .last, std.math.order).found, 2);
+    try expectEqual(binarySearch(u8, &items, 3, .first, std.math.order).found, 1);
+    try expectEqual(binarySearch(u8, &items, 3, .last, std.math.order).found, 2);
 }
 
 test "order slices" {

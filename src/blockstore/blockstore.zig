@@ -1,6 +1,7 @@
 const sig = @import("../lib.zig");
 
-pub fn BlockstoreDB(comptime DB: type) type {
-    return sig.blockstore.database
-        .Database(DB, &sig.blockstore.schema.list);
+pub const BlockstoreDB = sig.blockstore.rocksdb.RocksDB(&sig.blockstore.schema.list);
+
+test BlockstoreDB {
+    sig.blockstore.database.assertIsDatabase(BlockstoreDB);
 }

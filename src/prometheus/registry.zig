@@ -16,7 +16,7 @@ const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
 const Histogram = @import("histogram.zig").Histogram;
 const default_buckets = @import("histogram.zig").default_buckets;
 
-const Return = sig.utils.types.Return;
+const ReturnType = sig.utils.types.ReturnType;
 
 pub const GetMetricError = error{
     /// Returned when trying to add a metric to an already full registry.
@@ -90,10 +90,10 @@ pub fn Registry(comptime options: RegistryOptions) type {
             name: []const u8,
             state: anytype,
             callFn: GaugeCallFnType(@TypeOf(state), f64),
-        ) GetMetricError!*GaugeFn(@TypeOf(state), Return(@TypeOf(callFn))) {
+        ) GetMetricError!*GaugeFn(@TypeOf(state), ReturnType(@TypeOf(callFn))) {
             return self.getOrCreateMetric(
                 name,
-                GaugeFn(@TypeOf(state), Return(@TypeOf(callFn))),
+                GaugeFn(@TypeOf(state), ReturnType(@TypeOf(callFn))),
                 .{ callFn, state },
             );
         }
