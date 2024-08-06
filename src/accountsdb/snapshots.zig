@@ -329,7 +329,7 @@ pub const Delegation = struct {
             .stake = rand.int(u64),
             .activation_epoch = rand.int(Epoch),
             .deactivation_epoch = rand.int(Epoch),
-            .warmup_cooldown_rate = @floatFromInt(rand.int(u32)),
+            .warmup_cooldown_rate = @bitCast(rand.int(u64)),
         };
     }
 };
@@ -345,7 +345,7 @@ pub const RentCollector = struct {
         return .{
             .epoch = rand.int(Epoch),
             .epoch_schedule = EpochSchedule.random(rand),
-            .slots_per_year = @floatFromInt(rand.int(u32)),
+            .slots_per_year = @bitCast(rand.int(u64)),
             .rent = Rent.random(rand),
         };
     }
@@ -870,7 +870,7 @@ pub const BankFields = struct {
             .ticks_per_slot = rand.int(u64),
             .ns_per_slot = rand.int(u128),
             .genesis_creation_time = rand.int(sig.accounts_db.genesis_config.UnixTimestamp),
-            .slots_per_year = @floatFromInt(rand.int(u32)),
+            .slots_per_year = @bitCast(rand.int(u64)),
             .accounts_data_len = rand.int(u64),
             .slot = rand.int(Slot),
             .epoch = rand.int(Epoch),
