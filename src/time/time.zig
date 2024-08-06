@@ -530,25 +530,21 @@ pub const Duration = struct {
     pub fn asNanos(self: Duration) u64 {
         return self.ns;
     }
+};
 
-    pub fn gt(self: Duration, other: Duration) bool {
-        return self.ns > other.ns;
+pub const Instant = struct {
+    inner: std.time.Instant,
+
+    pub fn now() !Instant {
+        return .{ .inner = try std.time.Instant.now() };
     }
 
-    pub fn gte(self: Duration, other: Duration) bool {
-        return self.ns >= other.ns;
+    pub fn elapsed(self: Instant) !Duration {
+        return Duration.fromNanos((try std.time.Instant.now()).since(self.inner));
     }
 
-    pub fn lt(self: Duration, other: Duration) bool {
-        return self.ns < other.ns;
-    }
-
-    pub fn lte(self: Duration, other: Duration) bool {
-        return self.ns <= other.ns;
-    }
-
-    pub fn eql(self: Duration, other: Duration) bool {
-        return self.ns == other.ns;
+    pub fn elapsed_since(self: Instant, earlier: Instant) Duration {
+        return Duration.fromNanos(self.inner.since(earlier.inner));
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
