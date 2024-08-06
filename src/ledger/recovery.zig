@@ -459,7 +459,7 @@ const expected_metadata = blk: {
     @setEvalBranchQuota(10_000);
     break :blk RecoveryMetadata{
         .common_header = CommonHeader{
-            .signature = Signature.fromString(
+            .signature = Signature.fromBase58String(
                 "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
             ) catch unreachable,
             .variant = .{

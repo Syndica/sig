@@ -78,8 +78,8 @@ pub fn serializeRepairRequest(
 
     var signer = try keypair.signer(null); // TODO noise
     signer.update(serialized[0..4]);
-    signer.update(serialized[4 + Signature.size ..]);
-    @memcpy(serialized[4 .. 4 + Signature.size], &signer.finalize().toBytes());
+    signer.update(serialized[4 + Signature.SIZE ..]);
+    @memcpy(serialized[4 .. 4 + Signature.SIZE], &signer.finalize().toBytes());
 
     return serialized;
 }
@@ -164,14 +164,14 @@ pub const RepairMessage = union(enum(u8)) {
                 }
 
                 // signature is valid
-                if (serialized.len < 4 + Signature.size) {
+                if (serialized.len < 4 + Signature.SIZE) {
                     return error.Malformed;
                 }
                 var verifier = header.signature.verifier(header.sender) catch {
                     return error.InvalidSignature;
                 };
                 verifier.update(serialized[0..4]);
-                verifier.update(serialized[4 + Signature.size ..]);
+                verifier.update(serialized[4 + Signature.SIZE ..]);
                 verifier.verify() catch {
                     return error.InvalidSignature;
                 };
@@ -236,7 +236,7 @@ test "signed/serialized RepairRequest is valid" {
 
 test "RepairRequestHeader serialization round trip" {
     var rng = std.rand.DefaultPrng.init(5224);
-    var signature: [Signature.size]u8 = undefined;
+    var signature: [Signature.SIZE]u8 = undefined;
     rng.fill(&signature);
 
     const header = RepairRequestHeader{
@@ -403,7 +403,7 @@ const testHelpers = struct {
     }
 
     fn randomRepairRequestHeader(rng: std.rand.Random) RepairRequestHeader {
-        var signature: [Signature.size]u8 = undefined;
+        var signature: [Signature.SIZE]u8 = undefined;
         rng.bytes(&signature);
 
         return RepairRequestHeader{

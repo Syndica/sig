@@ -257,14 +257,14 @@ pub const DataShred = struct {
         shard: []const u8,
     ) !Self {
         const shard_size = shard.len;
-        if (shard_size + Signature.size > constants.payload_size) {
+        if (shard_size + Signature.SIZE > constants.payload_size) {
             return error.InvalidShardSize;
         }
         const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
-        @memcpy(payload[0..Signature.size], &signature.data);
-        @memcpy(payload[Signature.size..][0..shard_size], shard);
-        @memset(payload[Signature.size + shard_size ..], 0);
+        @memcpy(payload[0..Signature.SIZE], &signature.data);
+        @memcpy(payload[Signature.SIZE..][0..shard_size], shard);
+        @memset(payload[Signature.SIZE + shard_size ..], 0);
         var shred = try Fields.fromPayloadOwned(allocator, payload);
         if (shard_size != try capacity(code_shred_constants, shred.common.variant)) {
             return error.InvalidShardSize;
@@ -425,7 +425,7 @@ pub fn GenericShred(
 
         pub fn merkleNode(self: Self) !Hash {
             const offset = try proofOffset(constants, self.common.variant);
-            return getMerkleNode(self.payload, Signature.size, offset);
+            return getMerkleNode(self.payload, Signature.SIZE, offset);
         }
 
         fn erasureShardAsSlice(self: *const Self) ![]const u8 {
@@ -438,7 +438,7 @@ pub fn GenericShred(
                 return error.InsufficientPayloadSize;
             }
             const start = switch (self.common.variant.shred_type) {
-                .data => Signature.size,
+                .data => Signature.SIZE,
                 .code => constants.headers_size,
             };
             return self.payload[start..end];
@@ -493,11 +493,11 @@ pub fn GenericShred(
         /// agave: retransmitter_signature
         pub fn retransmitterSignature(self: Self) !Signature {
             const offset = try retransmitterSignatureOffset(self.common.variant);
-            const end = offset + Signature.size;
+            const end = offset + Signature.SIZE;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
             }
-            var sig_bytes: [Signature.size]u8 = undefined;
+            var sig_bytes: [Signature.SIZE]u8 = undefined;
             @memcpy(&sig_bytes, self.payload[offset..end]);
             return .{ .data = sig_bytes };
         }
@@ -505,7 +505,7 @@ pub fn GenericShred(
         /// agave: setRetransmitterSignature
         pub fn setRetransmitterSignature(self: *Self, signature: Signature) !void {
             const offset = try retransmitterSignatureOffset(self.common.variant);
-            const end = offset + Signature.size;
+            const end = offset + Signature.SIZE;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
             }
@@ -548,7 +548,7 @@ fn getMerkleRoot(
     };
     const proof = try getMerkleProof(shred, constants, variant);
     const offset = try proofOffset(constants, variant);
-    const node = try getMerkleNode(shred, Signature.size, offset);
+    const node = try getMerkleNode(shred, Signature.SIZE, offset);
     return calculateMerkleRoot(index, node, proof);
 }
 
@@ -703,7 +703,7 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
         constants.headers_size +
             (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
             variant.proof_size * merkle_proof_entry_size +
-            (if (variant.resigned) Signature.size else 0),
+            (if (variant.resigned) Signature.SIZE else 0),
     ) catch error.InvalidProofSize;
 }
 
@@ -995,7 +995,7 @@ pub const layout = struct {
     pub const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
     pub const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
     pub const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
-    pub const SIZE_OF_SIGNATURE: usize = sig.core.Signature.size;
+    pub const SIZE_OF_SIGNATURE: usize = sig.core.Signature.SIZE;
     pub const SIZE_OF_SHRED_VARIANT: usize = 1;
     pub const SIZE_OF_SHRED_SLOT: usize = 8;
 
@@ -1034,7 +1034,7 @@ pub const layout = struct {
     }
 
     pub fn getSignature(shred: []const u8) ?Signature {
-        if (shred.len < Signature.size) {
+        if (shred.len < SIZE_OF_SIGNATURE) {
             return null;
         }
         return Signature.init(shred[0..SIZE_OF_SIGNATURE].*);
@@ -1070,7 +1070,7 @@ pub const layout = struct {
     ) !void {
         const variant = getShredVariant(shred) orelse return error.UnknownVariant;
         const offset = try retransmitterSignatureOffset(variant);
-        const end = offset + Signature.size;
+        const end = offset + Signature.SIZE;
         if (shred.len < end) {
             return error.InvalidPayloadSize;
         }
