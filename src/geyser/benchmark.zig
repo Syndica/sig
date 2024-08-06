@@ -27,8 +27,6 @@ pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
         bytes_read += n;
 
         // just drop the data
-        // NOTE: bincode.free doesnt work with FBA since alloc and dealloc occurs as (field1 -> fieldN)
-        // so we would need dealloc to happen as (fieldN -> field1)
         std.mem.doNotOptimizeAway(payload);
         reader.resetMemory();
 
@@ -57,11 +55,21 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const rng = random.random();
 
     // PERF: one allocation slice
+    // const N_ACCOUNTS_PER_SLOT = 10_000_000; // based on testnet data
     const N_ACCOUNTS_PER_SLOT = 100;
     const accounts = try allocator.alloc(Account, N_ACCOUNTS_PER_SLOT);
     const pubkeys = try allocator.alloc(Pubkey, N_ACCOUNTS_PER_SLOT);
     for (0..N_ACCOUNTS_PER_SLOT) |i| {
-        accounts[i] = try Account.random(allocator, rng, 32);
+        // const data_len = rng.intRangeAtMost(u64, 2000, 10_000_000); // based on testnet data
+        // const data_len = 10_000_000;
+        // const data_len = 1;
+        const data_len = rng.intRangeAtMost(u64, 2000, 10_000);
+        // const is_large = rng.intRangeAtMost(u8, 0, 10) < 1; // 10% chance of large data
+        // if (is_large) {
+        //     data_len = rng.intRangeAtMost(u64, 2000, 10_000_000);
+        // }
+        // const data_len = 32;
+        accounts[i] = try Account.random(allocator, rng, data_len);
         pubkeys[i] = Pubkey.random(rng);
     }
     var slot: Slot = 0;

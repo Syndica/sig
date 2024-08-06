@@ -23,10 +23,24 @@ pub const AccountPayload = struct {
     // used to know how much to allocate to read the full data slice
     len: u64,
     payload: VersionedAccountPayload,
+
+    const Self = @This();
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.payload.deinit(allocator);
+    }
 };
 
 pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
+
+    const Self = @This();
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .AccountPayloadV1 => self.AccountPayloadV1.deinit(allocator),
+        }
+    }
 };
 
 pub const AccountPayloadV1 = struct {
@@ -36,6 +50,16 @@ pub const AccountPayloadV1 = struct {
     // we can probably put it into its own field (data: [][]u8)
     // and read it all in on i/o
     accounts: []Account,
+
+    const Self = @This();
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        for (self.accounts) |*account| {
+            account.deinit(allocator);
+        }
+        allocator.free(self.accounts);
+        allocator.free(self.pubkeys);
+    }
 };
 
 pub const GeyserWriter = struct {
@@ -44,6 +68,10 @@ pub const GeyserWriter = struct {
     file: std.fs.File,
     io_buf: []u8,
     exit: ?*std.atomic.Value(bool),
+
+    // TODO: probably dont want everything in this struct but its fine for now
+    // to test to see if the performance improves
+    thread_channel: *sig.sync.Channel(VersionedAccountPayload),
 
     // optional mutex to ensure we dont write to the io_buf concurrently
     // NOTE: this will be used during parallel snapshot loading (/startup)
@@ -62,10 +90,14 @@ pub const GeyserWriter = struct {
     ) !Self {
         const file = try openPipe(pipe_path);
         const io_buf = try allocator.alloc(u8, allocator_config.io_buf_len);
+
+        const thread_channel = sig.sync.Channel(VersionedAccountPayload).init(allocator, 1_000);
+
         return .{
             .file = file,
             .allocator = allocator,
             .io_buf = io_buf,
+            .thread_channel = thread_channel,
             .exit = exit,
         };
     }
@@ -73,6 +105,15 @@ pub const GeyserWriter = struct {
     pub fn deinit(self: Self) void {
         self.file.close();
         self.allocator.free(self.io_buf);
+    }
+
+    pub fn IOStreamLoop(self: *Self) !void {
+        while (!self.exit.load(.unordered)) {
+            const maybe_payload = self.thread_channel.receive();
+            if (maybe_payload) |payload| {
+                _ = try self.writePayload(payload);
+            }
+        }
     }
 
     /// streams a batch of accounts to the pipe using bincode serialization.
@@ -99,10 +140,12 @@ pub const GeyserWriter = struct {
         const written_buf = try bincode.writeToSlice(self.io_buf, payload, .{});
 
         var empty_loop_count: usize = 0;
-        var i: u64 = 0;
-        while (i < written_buf.len) {
-            if (empty_loop_count > 0 and empty_loop_count % 500 == 0) {
-                std.debug.print("WARNING: writePayload looped too many times (is the reader alive?)\n", .{});
+
+        const expected_n_bytes = written_buf.len;
+        var n_bytes_written_total: u64 = 0;
+        while (n_bytes_written_total < expected_n_bytes) {
+            if (empty_loop_count % 1_000 == 0 and empty_loop_count > 0) {
+                std.debug.print("WARNING: writePayload pipe is full (is the reader alive?)\n", .{});
                 std.time.sleep(std.time.ns_per_s * 3);
                 // TODO: figure out reasonable limit in prod
                 if (empty_loop_count >= 2_000) {
@@ -110,7 +153,7 @@ pub const GeyserWriter = struct {
                 }
             }
 
-            const n = self.file.write(written_buf[i..written_buf.len]) catch |err| {
+            const n_bytes_written = self.file.write(written_buf[n_bytes_written_total..expected_n_bytes]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
                     if (self.exit != null and self.exit.?.load(.unordered)) {
                         return error.BlockWithExit;
@@ -123,10 +166,14 @@ pub const GeyserWriter = struct {
                     return err;
                 }
             };
-            if (n == 0) {
+
+            if (n_bytes_written == 0) {
                 return error.PipeClosed;
             }
-            i += n;
+            n_bytes_written_total += n_bytes_written;
+            empty_loop_count = 0;
+
+            // std.debug.print("write {}/{} bytes\n", .{n_bytes_written_total, expected_n_bytes});
         }
 
         return written_buf.len;
@@ -191,6 +238,7 @@ pub const GeyserReader = struct {
     /// reads a payload from the pipe and returns the total bytes read with the data
     pub fn readPayload(self: *Self) !struct { u64, VersionedAccountPayload } {
         const len = try self.readType(u64, 8);
+        // std.debug.print("reading {} bytes from pipe\n", .{len});
         const versioned_payload = try self.readType(VersionedAccountPayload, len);
         return .{ 8 + len, versioned_payload };
     }
@@ -207,6 +255,7 @@ pub const GeyserReader = struct {
             self.io_buf = new_buf;
         }
 
+        // std.debug.print("reading from pipe...\n", .{});
         var total_bytes_read: u64 = 0;
         while (total_bytes_read < expected_n_bytes) {
             const n_bytes_read = self.file.read(self.io_buf[total_bytes_read..expected_n_bytes]) catch |err| {
@@ -226,8 +275,10 @@ pub const GeyserReader = struct {
                 return error.PipeClosed;
             }
             total_bytes_read += n_bytes_read;
+            // std.debug.print("read {}/{} bytes\n", .{total_bytes_read, expected_n_bytes});
         }
 
+        // std.debug.print("bincode reading from slice...\n", .{});
         while (true) {
             const data = bincode.readFromSlice(
                 self.bincode_allocator.allocator(),

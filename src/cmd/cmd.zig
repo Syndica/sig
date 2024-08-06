@@ -509,13 +509,16 @@ fn validateSnapshot() !void {
     geyser_exit.* = Atomic(bool).init(false);
 
     // TMP CONFIG
-    const geyser_enabled = false;
+    const geyser_enabled = true;
     const geyser_io_buf_len = 1 << 19; // 512kb
     const geyser_pipe_path = "ledger/accounts_db/geyser.pipe";
 
-    var geyser_writer: ?GeyserWriter = null;
+    var geyser_writer: ?*GeyserWriter = null;
     if (geyser_enabled) {
-        geyser_writer = try GeyserWriter.init(
+        app_base.logger.info("geyser enabled");
+
+        geyser_writer = try allocator.create(GeyserWriter);
+        geyser_writer.?.* = try GeyserWriter.init(
             allocator,
             geyser_pipe_path,
             geyser_exit,
@@ -596,6 +599,7 @@ const AppBase = struct {
 
     fn init(allocator: Allocator) !AppBase {
         var logger = try spawnLogger();
+        // var logger: Logger = .noop;
         errdefer logger.deinit();
 
         const metrics_thread = try spawnMetrics(logger);
@@ -840,7 +844,7 @@ fn loadSnapshot(
     /// whether to validate the genesis config against the bank (to remove when genesis validation works on all clusters)
     validate_genesis: bool,
     /// optional geyser to write snapshot data to
-    geyser_writer: ?GeyserWriter,
+    geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);

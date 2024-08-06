@@ -97,7 +97,7 @@ pub const AccountsDB = struct {
     account_cache: RwMux(AccountCache),
     file_map: RwMux(FileMap),
 
-    geyser_writer: ?GeyserWriter,
+    geyser_writer: ?*GeyserWriter,
 
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
@@ -119,7 +119,7 @@ pub const AccountsDB = struct {
         allocator: std.mem.Allocator,
         logger: Logger,
         config: AccountsDBConfig,
-        geyser_writer: ?GeyserWriter,
+        geyser_writer: ?*GeyserWriter,
     ) !Self {
         const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
         const reference_allocator: std.mem.Allocator //
@@ -228,7 +228,8 @@ pub const AccountsDB = struct {
             n_threads,
             std.heap.page_allocator,
         );
-        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
+        std.debug.print("loaded from snapshot in {s}", .{load_duration});
+        // self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.all_fields.full;
@@ -534,7 +535,7 @@ pub const AccountsDB = struct {
 
             if (geyser_is_enabled) {
                 const geyser_storage = geyser_tmp_storage.?;
-                const geyser_writer = &self.geyser_writer.?;
+                const geyser_writer = self.geyser_writer.?;
 
                 const payload = VersionedAccountPayload{
                     .AccountPayloadV1 = .{
@@ -546,15 +547,21 @@ pub const AccountsDB = struct {
                 // defer: reset the preallocated memory (for account data slices)
                 defer geyser_storage.reset();
 
+                // std.debug.print("n accounts: {d}\n", .{ geyser_storage.accounts.items.len });
+                // for (geyser_storage.accounts.items) |account| {
+                //     if (account.data.len > 200) {
+                //         std.debug.print("data_len: {d}\n", .{ account.data.len });
+                //     }
+                // }
+                // _ = payload;
+                // _ = geyser_writer;
                 std.debug.assert(geyser_storage.accounts.items.len == geyser_storage.pubkeys.items.len);
 
                 // write to geyser (with lock since this is a shared resource with
                 // multi-thread loading)
-                if (geyser_storage.accounts.items.len > 0) {
-                    geyser_writer.mux.lock();
-                    defer geyser_writer.mux.unlock();
-                    _ = try geyser_writer.writePayload(payload);
-                }
+                geyser_writer.mux.lock();
+                defer geyser_writer.mux.unlock();
+                _ = try geyser_writer.writePayload(payload);
             }
 
             if (accounts_file.number_of_accounts > 0) {
@@ -2226,22 +2233,21 @@ pub fn indexAndValidateAccountFile(
         const account = accounts_file.readAccount(offset) catch break;
         try account.validate();
 
-        _ = geyser_storage;
-        // if (geyser_storage) |storage| {
-        //     var account_clone = account.toOwnedAccount(storage.fba.allocator()) catch {
-        //         // preallocated FBA is not enough for account data slice clone
-        //         return ValidateAccountFileError.OutOfGeyserFBAMemory;
-        //     };
-        //     errdefer account_clone.deinit(storage.fba.allocator());
+        if (geyser_storage) |storage| {
+            var account_clone = account.toOwnedAccount(storage.fba.allocator()) catch {
+                // preallocated FBA is not enough for account data slice clone
+                return ValidateAccountFileError.OutOfGeyserFBAMemory;
+            };
+            errdefer account_clone.deinit(storage.fba.allocator());
 
-        //     storage.track(
-        //         account_clone,
-        //         account.pubkey().*,
-        //     ) catch {
-        //         // arraylist memory is not enough
-        //         return ValidateAccountFileError.OutOfGeyserArrayMemory;
-        //     };
-        // }
+            storage.track(
+                account_clone,
+                account.pubkey().*,
+            ) catch {
+                // arraylist memory is not enough
+                return ValidateAccountFileError.OutOfGeyserArrayMemory;
+            };
+        }
 
         account_refs.append(.{
             .pubkey = account.store_info.pubkey,
