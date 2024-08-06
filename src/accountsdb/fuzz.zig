@@ -129,6 +129,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
 
+    var maybe_full_snapshot_gen_result: ?AccountsDB.FullSnapshotGenResult = null;
+
     var largest_rooted_slot: Slot = 0;
     var slot: Slot = 0;
 
@@ -217,7 +219,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 .hash = snapshot_random_hash,
             };
 
-            std.debug.print("Generating snapshot for slot {}...\n", .{largest_rooted_slot});
+            std.debug.print("Generating full snapshot for slot {}...\n", .{largest_rooted_slot});
 
             const archive_file = try alternative_snapshot_dir.createFile(snap_info.snapshotNameStr().constSlice(), .{ .read = true });
             defer archive_file.close();
@@ -229,7 +231,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             random_bank_fields.slot = largest_rooted_slot;
             const lamports_per_signature = rand.int(u64);
 
-            _ = try accounts_db.writeSnapshotTarFull(
+            maybe_full_snapshot_gen_result = try accounts_db.writeSnapshotTarFull(
                 zstd_write_ctx.writer(),
                 random_bank_fields,
                 lamports_per_signature,
@@ -239,7 +241,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             try zstd_write_ctx.finish();
 
-            std.debug.print("Unpacking snapshot for slot {}...\n", .{largest_rooted_slot});
+            std.debug.print("Unpacking full snapshot for slot {}...\n", .{largest_rooted_slot});
             try archive_file.seekTo(0);
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                 gpa,
@@ -261,15 +263,20 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             var alternative_accounts_db = try AccountsDB.init(gpa, logger, alternative_snapshot_dir, accounts_db.config);
             defer alternative_accounts_db.deinit(false);
 
-            std.debug.print("Validating snapshot for slot {}...\n", .{largest_rooted_slot});
+            std.debug.print("Validating full snapshot for slot {}...\n", .{largest_rooted_slot});
 
             try alternative_accounts_db.loadFromSnapshot(
                 snap_fields_and_paths.full.accounts_db_fields.file_map,
                 1,
                 gpa,
             );
-            std.debug.print("Validated snapshot for slot {d}\n", .{largest_rooted_slot});
+            std.debug.print("Validated full snapshot for slot {d}\n", .{largest_rooted_slot});
         }
+
+        if (slot > 500 and slot % 100 == 0) if (maybe_full_snapshot_gen_result) |full_snapshot_gen_result| {
+            _ = full_snapshot_gen_result; // autofix
+
+        };
     }
 
     std.debug.print("fuzzing complete\n", .{});
