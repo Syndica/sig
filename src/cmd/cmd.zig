@@ -496,7 +496,7 @@ fn validator() !void {
 
 const GeyserWriter = sig.geyser.GeyserWriter;
 const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
-const RecycleFBA = sig.geyser.core.RecycleFBA;
+const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
@@ -512,35 +512,24 @@ fn validateSnapshot() !void {
 
     // TMP CONFIG
     const geyser_enabled = true;
-    const geyser_io_buf_len = 1 << 19; // 512kb
     const geyser_pipe_path = "ledger/accounts_db/geyser.pipe";
 
     var geyser_writer: ?*GeyserWriter = null;
     if (geyser_enabled) {
         app_base.logger.info("geyser enabled");
 
-        const recycle_fba = try allocator.create(RecycleFBA);
-        recycle_fba.* = try RecycleFBA.init(allocator, 1 << 32); // 4GB
-
         geyser_writer = try allocator.create(GeyserWriter);
         geyser_writer.?.* = try GeyserWriter.init(
             allocator,
             geyser_pipe_path,
             geyser_exit,
-            .{ .io_buf_len = geyser_io_buf_len },
-            recycle_fba,
+            1 << 32,
         );
 
-        // spawn thread to do i/o
-        const handle = try std.Thread.spawn(.{}, GeyserWriter.IOStreamLoop, .{geyser_writer.?});
-        handle.detach();
+        // start the geyser writer
+        try geyser_writer.?.spawnIOLoop();
     }
-    defer {
-        if (geyser_writer) |geyser| {
-            geyser_exit.store(true, .unordered);
-            geyser.deinit();
-        }
-    }
+    defer if (geyser_writer) |geyser| geyser.deinit();
 
     const snapshot_result = try loadSnapshot(
         allocator,

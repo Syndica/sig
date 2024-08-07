@@ -17,6 +17,7 @@ const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const AccountWithoutData = sig.core.account.AccountWithoutData;
+const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 const PIPE_MAX_SIZE_PATH = "/proc/sys/fs/pipe-max-size";
 
@@ -34,30 +35,13 @@ pub const AccountPayload = struct {
 
 pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
-    AccountPayloadV2: AccountPayloadV2,
 
     const Self = @This();
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .AccountPayloadV1 => self.AccountPayloadV1.deinit(allocator),
-            .AccountPayloadV2 => self.AccountPayloadV2.deinit(allocator),
         }
-    }
-};
-
-pub const AccountPayloadV2 = struct {
-    slot: Slot,
-    pubkeys: []Pubkey, // PERF: this can just be []u8
-    account_data: []u8,
-    accounts: []AccountWithoutData,
-
-    const Self = @This();
-
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.account_data);
-        allocator.free(self.accounts);
-        allocator.free(self.pubkeys);
     }
 };
 
@@ -83,20 +67,16 @@ pub const AccountPayloadV1 = struct {
 pub const GeyserWriter = struct {
     // used to allocate a buf for serialization
     allocator: std.mem.Allocator,
+    // allocator to free memory from
+    recycle_fba: RecycleFBA,
+    // pipe to write to
     file: std.fs.File,
-    io_buf: []u8,
-    exit: ?*std.atomic.Value(bool),
-    recycle_fba: *RecycleFBA,
+    // channel which data is streamed into and then written to the pipe
+    io_channel: *sig.sync.Channel([]u8),
+    exit: *std.atomic.Value(bool),
 
-    // TODO: probably dont want everything in this struct but its fine for now
-    // to test to see if the performance improves
-    thread_channel: *sig.sync.Channel([]u8),
-
-    // optional mutex to ensure we dont write to the io_buf concurrently
-    // NOTE: this will be used during parallel snapshot loading (/startup)
-    // but normal account writes are single-threaded (only on thread should
-    // be calling AccountsDB.putAccountSlice .
-    mux: std.Thread.Mutex = .{},
+    // set when the writer thread is running
+    io_handle: ?std.Thread = null,
 
     const Self = @This();
 
@@ -104,96 +84,109 @@ pub const GeyserWriter = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         pipe_path: []const u8,
-        exit: ?*std.atomic.Value(bool),
-        allocator_config: WriterAllocatorConfig,
-        recycle_fba: *RecycleFBA,
+        exit: *std.atomic.Value(bool),
+        recycle_fba_bytes: u64,
     ) !Self {
         const file = try openPipe(pipe_path);
-        const io_buf = try allocator.alloc(u8, allocator_config.io_buf_len);
-
-        const thread_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
+        const io_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
+        const recycle_fba = try RecycleFBA.init(allocator, recycle_fba_bytes);
 
         return .{
-            .file = file,
             .allocator = allocator,
-            .io_buf = io_buf,
-            .thread_channel = thread_channel,
-            .exit = exit,
             .recycle_fba = recycle_fba,
+            .io_channel = io_channel,
+            .file = file,
+            .exit = exit,
         };
     }
 
     pub fn deinit(self: Self) void {
+        self.exit.store(true, .unordered);
+        if (self.io_handle) |*handle| handle.join();
+
         self.file.close();
-        self.allocator.free(self.io_buf);
+        self.io_channel.close();
+        self.io_channel.deinit();
+    }
+
+    pub fn spawnIOLoop(self: *Self) !void {
+        const handle = try std.Thread.spawn(.{}, IOStreamLoop, .{self});
+        self.io_handle = handle;
     }
 
     pub fn IOStreamLoop(self: *Self) !void {
-        // TODO: fix this optional unwrap
-        while (!self.exit.?.load(.unordered)) {
-            const payloads = self.thread_channel.drain() orelse continue;
+        while (!self.exit.load(.unordered)) {
+            const payloads = self.io_channel.drain() orelse continue;
 
             for (payloads) |payload| {
-                _ = try self.writePayloadIO(payload);
+                _ = try self.writeToPipe(payload);
 
                 self.recycle_fba.mux.lock();
                 self.recycle_fba.allocator().free(payload);
                 self.recycle_fba.mux.unlock();
             }
-
-            // {
-            //     self.recycle_fba.mux.lock();
-            //     for (payloads) |payload| {
-            //         self.recycle_fba.allocator().free(payload);
-            //     }
-            //     self.recycle_fba.mux.unlock();
-            // }
         }
     }
 
-    /// streams a batch of accounts to the pipe using bincode serialization.
-    /// returns the number of bytes wrote.
+    /// serializes the payload into a recycled buffer to be eventually written to
+    /// the pipe. NOTE: this is thread safe.
+    pub fn writePayloadToSlice(
+        self: *Self,
+        versioned_payload: VersionedAccountPayload,
+    ) ![]u8 {
+        const len = bincode.sizeOf(versioned_payload, .{});
+        const payload = sig.geyser.core.AccountPayload{
+            .len = len,
+            .payload = versioned_payload,
+        };
+        const total_len = bincode.sizeOf(payload, .{});
+
+        // obtain a memory to write to
+        self.recycle_fba.mux.lock();
+        const buf = blk: while (true) {
+            const buf = self.recycle_fba.allocator().alloc(u8, total_len) catch {
+                // no memory available rn - unlock and wait
+                self.recycle_fba.mux.unlock();
+                std.time.sleep(std.time.ns_per_ms);
+                self.recycle_fba.mux.lock();
+                continue;
+            };
+            break :blk buf;
+        };
+        self.recycle_fba.mux.unlock();
+
+        // serialize the payload
+        const data = try bincode.writeToSlice(buf, payload, .{});
+        return data;
+    }
+
+    /// streams a buffer of bytes to the pipe and returns the number of bytes wrote.
     ///
     /// NOTE: this will block if the pipe is not big enough, which is why we
     /// have the exit flag to signal to stop writing.
-    pub fn writePayloadIO(
+    pub fn writeToPipe(
         self: *Self,
-        // versioned_payload: VersionedAccountPayload,
-        written_buf: []u8,
+        buf: []u8,
     ) !u64 {
-        // const len = bincode.sizeOf(versioned_payload, .{});
-        // const payload = AccountPayload{ .len = len, .payload = versioned_payload };
+        var pipe_full_count: usize = 0;
 
-        // // ensure we have enough space in the buffer
-        // const size = bincode.sizeOf(payload, .{});
-        // if (size > self.io_buf.len) {
-        //     std.debug.print("resizing io_buf: {} -> {}\n", .{ self.io_buf.len, size });
-        //     const new_buf = try self.allocator.alloc(u8, size);
-        //     self.allocator.free(self.io_buf);
-        //     self.io_buf = new_buf;
-        // }
-        // const written_buf = try bincode.writeToSlice(self.io_buf, payload, .{});
-
-        var empty_loop_count: usize = 0;
-        const expected_n_bytes = written_buf.len;
         var n_bytes_written_total: u64 = 0;
-        while (n_bytes_written_total < expected_n_bytes) {
-            // if (empty_loop_count % 1_000 == 0 and empty_loop_count > 0) {
-            // std.debug.print("WARNING: writePayload pipe is full (is the reader alive?)\n", .{});
-            // std.time.sleep(std.time.ns_per_s * 3);
-            // TODO: figure out reasonable limit in prod
-            // if (empty_loop_count >= 2_000) {
-            //     return error.WriterIsBlocked;
-            // }
+        while (n_bytes_written_total < buf.len) {
+            // // TODO: decide on these metrics
+            // if (pipe_full_count % 1_000 == 0 and pipe_full_count > 0) {
+            //     TODO: figure out reasonable limit in prod
+            //     if (pipe_full_count >= 2_000) {
+            //          std.debug.print("WARNING: writePayload pipe is full (is the reader alive?)\n", .{});
+            //     }
             // }
 
-            const n_bytes_written = self.file.write(written_buf[n_bytes_written_total..expected_n_bytes]) catch |err| {
+            const n_bytes_written = self.file.write(buf[n_bytes_written_total..]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
-                    if (self.exit != null and self.exit.?.load(.unordered)) {
-                        return error.BlockWithExit;
+                    if (self.exit.load(.unordered)) {
+                        return error.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
-                        empty_loop_count += 1;
+                        pipe_full_count += 1;
                         continue;
                     }
                 } else {
@@ -205,115 +198,11 @@ pub const GeyserWriter = struct {
                 return error.PipeClosed;
             }
             n_bytes_written_total += n_bytes_written;
-            empty_loop_count = 0;
-
-            // std.debug.print("write {}/{} bytes\n", .{n_bytes_written_total, expected_n_bytes});
+            pipe_full_count = 0;
         }
 
-        return written_buf.len;
-    }
-};
-
-pub const RecycleFBA = struct {
-    // this allocates the underlying memory + dynamic expansions
-    // (only used on init/deinit + arraylist expansion)
-    a: std.mem.Allocator,
-    // this does the data allocations (data is returned from alloc)
-    fba_allocator: std.heap.FixedBufferAllocator,
-    data: Data,
-
-    // for thread safety
-    mux: std.Thread.Mutex = .{},
-
-    // TODO: better name
-    const Data = std.ArrayList(struct { is_free: bool, buf: []u8 });
-    const Self = @This();
-
-    pub fn init(a: std.mem.Allocator, max_capacity: u64) !Self {
-        const buffer = try a.alloc(u8, max_capacity);
-        const fba = std.heap.FixedBufferAllocator.init(buffer);
-        const data = Data.init(a);
-
-        return .{
-            .a = a,
-            .fba_allocator = fba,
-            .data = data,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.a.free(self.fba_allocator.buffer);
-        self.data.deinit();
-    }
-
-    pub fn allocator(self: *Self) std.mem.Allocator {
-        return std.mem.Allocator{
-            .ptr = self,
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .free = free,
-            },
-        };
-    }
-
-    /// creates a new file with size aligned to page_size and returns a pointer to it
-    pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
-        _ = log2_align;
-        _ = return_address;
-        const self: *Self = @ptrCast(@alignCast(ctx));
-
-        // check for a buf to recycle
-        for (self.data.items) |*item| {
-            if (item.is_free and item.buf.len >= n) {
-                item.is_free = false;
-                return item.buf.ptr;
-            }
-        }
-
-        // otherwise, allocate a new one
-        const buf = self.fba_allocator.allocator().alloc(u8, n) catch {
-            // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
-            return null;
-        };
-
-        self.data.append(.{ .is_free = false, .buf = buf }) catch {
-            // std.debug.print("RecycleFBA append error: {}\n", .{ err });
-            return null;
-        };
-
-        return buf.ptr;
-    }
-
-    pub fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
-        _ = log2_align;
-        _ = return_address;
-        const self: *Self = @ptrCast(@alignCast(ctx));
-
-        for (self.data.items) |*item| {
-            if (item.buf.ptr == buf.ptr) {
-                item.is_free = true;
-                return;
-            }
-        }
-
-        @panic("RecycleFBA.free: could not find buf to free");
-    }
-
-    /// not supported rn
-    fn resize(
-        _: *anyopaque,
-        buf_unaligned: []u8,
-        log2_buf_align: u8,
-        new_size: usize,
-        return_address: usize,
-    ) bool {
-        // not supported
-        _ = buf_unaligned;
-        _ = log2_buf_align;
-        _ = new_size;
-        _ = return_address;
-        return false;
+        std.debug.assert(n_bytes_written_total == buf.len);
+        return n_bytes_written_total;
     }
 };
 
@@ -441,11 +330,6 @@ pub const GeyserReader = struct {
             return data;
         }
     }
-};
-
-pub const WriterAllocatorConfig = struct {
-    // - bincode.writeToSlice -> io_buf - io.write -> pipe
-    io_buf_len: u64 = 1 << 19, // 512kb
 };
 
 pub const ReaderAllocatorConfig = struct {

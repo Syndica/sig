@@ -229,7 +229,6 @@ pub const AccountsDB = struct {
             std.heap.page_allocator,
         );
         std.debug.print("loaded from snapshot in {s}", .{load_duration});
-        // self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.all_fields.full;
@@ -381,26 +380,40 @@ pub const AccountsDB = struct {
         );
     }
 
-    pub const GeyserTmpStorage = struct {
+    pub const GeyserSlotStorage = struct {
         memory_allocator: std.mem.Allocator,
+        fb_allocator: std.heap.FixedBufferAllocator,
         memory: []u8,
-        fba: std.heap.FixedBufferAllocator,
+
         accounts: ArrayList(Account),
         pubkeys: ArrayList(Pubkey),
 
-        pub fn deinit(self: *GeyserTmpStorage) void {
+        pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize, fb_size: u64) !GeyserSlotStorage {
+            const memory = try allocator.alloc(u8, fb_size);
+            const fb_allocator = std.heap.FixedBufferAllocator.init(memory);
+
+            return .{
+                .memory_allocator = allocator,
+                .fb_allocator = fb_allocator,
+                .memory = memory,
+                .accounts = try ArrayList(Account).initCapacity(allocator, n_accounts_estimate),
+                .pubkeys = try ArrayList(Pubkey).initCapacity(allocator, n_accounts_estimate),
+            };
+        }
+
+        pub fn deinit(self: *GeyserSlotStorage) void {
             self.accounts.deinit();
             self.pubkeys.deinit();
             self.memory_allocator.free(self.memory);
         }
 
-        pub fn reset(self: *GeyserTmpStorage) void {
+        pub fn reset(self: *GeyserSlotStorage) void {
             self.accounts.clearRetainingCapacity();
             self.pubkeys.clearRetainingCapacity();
-            self.fba.reset();
+            self.fb_allocator.reset();
         }
 
-        pub fn track(self: *GeyserTmpStorage, account: Account, pubkey: Pubkey) !void {
+        pub fn track(self: *GeyserSlotStorage, account: Account, pubkey: Pubkey) !void {
             try self.accounts.append(account);
             try self.pubkeys.append(pubkey);
         }
@@ -446,17 +459,8 @@ pub const AccountsDB = struct {
             std.debug.assert(references.items.ptr == references_ptr);
         }
 
-        const counting_alloc_ptr = try self.allocator.create(CountingAllocator);
-        defer {
-            if (counting_alloc_ptr.alloc_count == 0) {
-                self.allocator.destroy(counting_alloc_ptr);
-            }
-        }
-        counting_alloc_ptr.* = .{
-            .self_allocator = self.allocator,
-            .references = references,
-            .alloc_count = 0,
-        };
+        const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
+        defer counting_alloc.deinitIfSafe();
 
         const ref_timer = try std.time.Timer.start();
         var timer = ref_timer;
@@ -471,23 +475,13 @@ pub const AccountsDB = struct {
         defer reference_memory_lg.unlock();
         try reference_memory.ensureTotalCapacity(@intCast(n_account_files));
 
-        // init storage which holds tmp account data per slot to eventually
-        // be written to geyser
+        // init storage which holds temporary account data per slot
+        // which is eventually written to geyser
+        var geyser_slot_storage: ?GeyserSlotStorage = null;
         const geyser_is_enabled = self.geyser_writer != null;
-        var geyser_tmp_storage: ?*GeyserTmpStorage = null;
         if (geyser_is_enabled) {
             // TODO: make config value
-            const memory = try self.allocator.alloc(u8, 1 << 30); // 1GB
-            const fba = std.heap.FixedBufferAllocator.init(memory);
-
-            geyser_tmp_storage = try self.allocator.create(GeyserTmpStorage);
-            geyser_tmp_storage.?.* = GeyserTmpStorage{
-                .memory = memory,
-                .fba = fba,
-                .memory_allocator = self.allocator,
-                .accounts = try ArrayList(Account).initCapacity(self.allocator, n_accounts_estimate),
-                .pubkeys = try ArrayList(Pubkey).initCapacity(self.allocator, n_accounts_estimate),
-            };
+            geyser_slot_storage = try GeyserSlotStorage.init(self.allocator, n_accounts_estimate, 1 << 30);
         }
 
         for (
@@ -515,7 +509,7 @@ pub const AccountsDB = struct {
                 self.account_index.pubkey_bin_calculator,
                 bin_counts,
                 &references,
-                geyser_tmp_storage,
+                &geyser_slot_storage,
             ) catch |err| {
                 switch (err) {
                     error.OutOfReferenceMemory => {
@@ -534,44 +528,21 @@ pub const AccountsDB = struct {
             };
 
             if (geyser_is_enabled) {
-                const geyser_storage = geyser_tmp_storage.?;
+                var geyser_storage = geyser_slot_storage.?; // SAFE: will always be set if geyser_is_enabled
+                const geyser_writer = self.geyser_writer.?; // SAFE: will always be set if geyser_is_enabled
+
+                // ! reset memory for the next slot
                 defer geyser_storage.reset();
 
-                const geyser_writer = self.geyser_writer.?;
-
-                {
-                    const data_v1 = sig.geyser.core.AccountPayloadV1{
+                const data_versioned = sig.geyser.core.VersionedAccountPayload{
+                    .AccountPayloadV1 = .{
                         .accounts = geyser_storage.accounts.items,
                         .pubkeys = geyser_storage.pubkeys.items,
                         .slot = slot,
-                    };
-                    const data_versioned = sig.geyser.core.VersionedAccountPayload{
-                        .AccountPayloadV1 = data_v1,
-                    };
-                    const len = bincode.sizeOf(data_versioned, .{});
-                    const payload = sig.geyser.core.AccountPayload{
-                        .len = len,
-                        .payload = data_versioned,
-                    };
-                    const total_len = bincode.sizeOf(payload, .{});
-
-                    geyser_writer.recycle_fba.mux.lock();
-                    const buf = blk: while (true) {
-                        const buf = geyser_writer.recycle_fba.allocator().alloc(u8, total_len) catch {
-                            // wait for free memory
-                            geyser_writer.recycle_fba.mux.unlock();
-                            // std.debug.print("waiting for free memory\n", .{});
-                            std.time.sleep(std.time.ns_per_ms);
-                            geyser_writer.recycle_fba.mux.lock();
-                            continue;
-                        };
-                        break :blk buf;
-                    };
-                    geyser_writer.recycle_fba.mux.unlock();
-
-                    const written_buf = try bincode.writeToSlice(buf, payload, .{});
-                    try geyser_writer.thread_channel.send(written_buf);
-                }
+                    },
+                };
+                const buf = try geyser_writer.writePayloadToSlice(data_versioned);
+                try geyser_writer.io_channel.send(buf);
             }
 
             if (accounts_file.number_of_accounts > 0) {
@@ -581,10 +552,10 @@ pub const AccountsDB = struct {
                 const ref_slice = references.items[start_index..end_index];
                 const ref_list = ArrayList(AccountRef).fromOwnedSlice(
                     // deinit allocator uses the counting allocator
-                    counting_alloc_ptr.allocator(),
+                    counting_alloc.allocator(),
                     ref_slice,
                 );
-                counting_alloc_ptr.alloc_count += 1;
+                counting_alloc.count += 1;
 
                 try reference_memory.putNoClobber(slot, ref_list);
             }
@@ -1966,12 +1937,13 @@ pub const AccountsDB = struct {
             n_accounts,
         );
 
+        var geyser_storage: ?GeyserSlotStorage = null;
         try indexAndValidateAccountFile(
             account_file,
             self.account_index.pubkey_bin_calculator,
             bin_counts,
             &references,
-            null,
+            &geyser_storage,
         );
         try self.account_index.putReferenceBlock(account_file.slot, references);
 
@@ -2230,7 +2202,7 @@ pub fn indexAndValidateAccountFile(
     pubkey_bin_calculator: PubkeyBinCalculator,
     bin_counts: []usize,
     account_refs: *ArrayList(AccountRef),
-    geyser_storage: ?*AccountsDB.GeyserTmpStorage,
+    geyser_storage: *?AccountsDB.GeyserSlotStorage,
 ) ValidateAccountFileError!void {
     var offset: usize = 0;
     var number_of_accounts: usize = 0;
@@ -2243,12 +2215,12 @@ pub fn indexAndValidateAccountFile(
         const account = accounts_file.readAccount(offset) catch break;
         try account.validate();
 
-        if (geyser_storage) |storage| {
-            var account_clone = account.toOwnedAccount(storage.fba.allocator()) catch {
+        if (geyser_storage.*) |*storage| {
+            var account_clone = account.toOwnedAccount(storage.fb_allocator.allocator()) catch {
                 // preallocated FBA is not enough for account data slice clone
                 return ValidateAccountFileError.OutOfGeyserFBAMemory;
             };
-            errdefer account_clone.deinit(storage.fba.allocator());
+            errdefer account_clone.deinit(storage.fb_allocator.allocator());
 
             storage.track(
                 account_clone,
@@ -2288,16 +2260,31 @@ pub fn indexAndValidateAccountFile(
     accounts_file.number_of_accounts = number_of_accounts;
 }
 
-/// allocator which frees the underlying arraylist after multiple free calls.
-/// useful for when you want to allocate a large Arraylist and split it across
-/// multiple different ArrayLists -- alloc and resize are not implemented.
-const CountingAllocator = struct {
+/// allocator which counts the number of times free is called. when count
+/// reaches 0, it will deinit the full arraylist. useful for when you want
+/// to allocate a large Arraylist and split it across multiple different
+/// ArrayLists -- alloc and resize are not implemented.
+///
+/// see `loadAndVerifyAccountsFiles` for an example of how to use this allocator
+const FreeCounterAllocator = struct {
     /// optional heap allocator to deinit the ptr on deinit
     self_allocator: std.mem.Allocator,
     references: ArrayList(AccountRef),
-    alloc_count: usize,
+    count: usize,
 
-    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
+    const Self = @This();
+
+    pub fn init(self_allocator: std.mem.Allocator, references: ArrayList(AccountRef)) !*Self {
+        const self = try self_allocator.create(Self);
+        self.* = .{
+            .self_allocator = self_allocator,
+            .references = references,
+            .count = 0,
+        };
+        return self;
+    }
+
+    pub fn allocator(self: *Self) std.mem.Allocator {
         return std.mem.Allocator{
             .ptr = self,
             .vtable = &.{
@@ -2308,12 +2295,18 @@ const CountingAllocator = struct {
         };
     }
 
-    pub fn deinit(self: *CountingAllocator) void {
+    pub fn deinitIfSafe(self: *Self) void {
+        if (self.count == 0) {
+            self.deinit();
+        }
+    }
+
+    pub fn deinit(self: *Self) void {
         // this shouldnt happen often but just in case
-        if (self.alloc_count != 0) {
+        if (self.count != 0) {
             std.debug.print(
-                "Reference Counting Allocator deinit with count = {}\n",
-                .{self.alloc_count},
+                "Reference Counting Allocator deinit with count = {} (!= 0)\n",
+                .{self.count},
             );
         }
         self.references.deinit();
@@ -2343,11 +2336,9 @@ const CountingAllocator = struct {
         _ = log2_align;
         _ = return_address;
 
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.alloc_count -|= 1;
-        if (self.alloc_count == 0) {
-            self.deinit();
-        }
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.count -|= 1;
+        self.deinitIfSafe();
     }
 };
 
