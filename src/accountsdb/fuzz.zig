@@ -71,7 +71,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer {
         // NOTE: sometimes this can take a long time so we print when we start and finish
         std.debug.print("deleting snapshot dir...\n", .{});
-        test_data_dir.deleteTree(snapshot_dir_name) catch |err| {
+        test_data_dir.deleteTreeMinStackSize(snapshot_dir_name) catch |err| {
             std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err });
         };
         std.debug.print("deleted snapshot dir\n", .{});
@@ -88,7 +88,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     defer {
         // NOTE: sometimes this can take a long time so we print when we start and finish
         std.debug.print("deleting snapshot dir...\n", .{});
-        test_data_dir.deleteTree(alternative_snapshot_dir_name) catch |err| {
+        test_data_dir.deleteTreeMinStackSize(alternative_snapshot_dir_name) catch |err| {
             std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err });
         };
         std.debug.print("deleted snapshot dir\n", .{});
@@ -129,7 +129,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const zstd_compressor = try zstd.Compressor.init(.{});
     defer zstd_compressor.deinit();
 
-    var maybe_full_snapshot_gen_result: ?AccountsDB.FullSnapshotGenResult = null;
+    var maybe_full_snapshot_gen_result: ?AccountsDB.SnapshotGenResult = null;
 
     var largest_rooted_slot: Slot = 0;
     var slot: Slot = 0;
@@ -248,7 +248,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 logger,
                 archive_file,
                 alternative_snapshot_dir,
-                std.Thread.getCpuCount() catch 1,
+                1,
                 true,
             );
 
