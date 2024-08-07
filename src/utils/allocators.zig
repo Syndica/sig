@@ -5,7 +5,7 @@ pub const RecycleFBA = struct {
     // (only used on init/deinit + arraylist expansion)
     backing_allocator: std.mem.Allocator,
     // this does the data allocations (data is returned from alloc)
-    fb_allocator: std.heap.FixedBufferAllocator,
+    alloc_allocator: std.heap.FixedBufferAllocator,
     // recycling depot
     records: std.ArrayList(Record),
 
@@ -17,18 +17,18 @@ pub const RecycleFBA = struct {
 
     pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
         const buf = try backing_allocator.alloc(u8, n_bytes);
-        const fba = std.heap.FixedBufferAllocator.init(buf);
+        const alloc_allocator = std.heap.FixedBufferAllocator.init(buf);
         const records = std.ArrayList(Record).init(backing_allocator);
 
         return .{
             .backing_allocator = backing_allocator,
-            .fb_allocator = fba,
+            .alloc_allocator = alloc_allocator,
             .records = records,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.backing_allocator.free(self.fb_allocator.buffer);
+        self.backing_allocator.free(self.alloc_allocator.buffer);
         self.records.deinit();
     }
 
@@ -58,7 +58,7 @@ pub const RecycleFBA = struct {
         }
 
         // otherwise, allocate a new one
-        const buf = self.fb_allocator.allocator().alloc(u8, n) catch {
+        const buf = self.alloc_allocator.allocator().alloc(u8, n) catch {
             // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
             return null;
         };

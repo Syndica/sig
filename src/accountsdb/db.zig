@@ -553,8 +553,7 @@ pub const AccountsDB = struct {
                         .slot = slot,
                     },
                 };
-                const buf = try geyser_writer.writePayloadToSlice(data_versioned);
-                try geyser_writer.io_channel.send(buf);
+                try geyser_writer.writePayloadToPipe(data_versioned);
             }
 
             if (accounts_file.number_of_accounts > 0) {
