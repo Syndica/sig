@@ -22,6 +22,7 @@ const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
 const RpcEpochInfo = sig.rpc.Client.EpochInfo;
 const RpcLeaderSchedule = sig.rpc.Client.LeaderSchedule;
+const RpcLatestBlockhash = sig.rpc.Client.LatestBlockhash;
 const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
 
 const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
@@ -71,7 +72,7 @@ const PendingTransactions = AutoArrayHashMap(Signature, TransactionInfo);
 
 pub fn run(
     gossip_table_rw: *RwMux(GossipTable),
-    receiver: *Channel(TransactionInfo),
+    channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
 ) !void {
     const allocator = std.heap.page_allocator;
@@ -97,7 +98,7 @@ pub fn run(
         receiveTransactionsThread,
         .{
             allocator,
-            receiver,
+            channel,
             &service_info_rw,
             &pending_transactions_rw,
             exit,
@@ -115,9 +116,21 @@ pub fn run(
         },
     );
 
+    const mock_transaction_generator_handle = try Thread.spawn(
+        .{},
+        mockTransactionGenerator,
+        .{
+            allocator,
+            channel,
+            &service_info_rw,
+            exit,
+        },
+    );
+
     refresh_service_info_handle.join();
     receive_transactions_handle.join();
     process_transactions_handle.join();
+    mock_transaction_generator_handle.join();
 }
 
 fn refreshServiceInfoThread(
@@ -362,6 +375,7 @@ const ServiceInfo = struct {
     rpc_client: RpcClient,
     epoch_info: RpcEpochInfo,
     epoch_info_instant: Instant,
+    latest_blockhash: RpcLatestBlockhash,
     leader_schedule: LeaderSchedule,
     leader_addresses: AutoArrayHashMap(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
@@ -377,6 +391,7 @@ const ServiceInfo = struct {
 
         const epoch_info_instant = try Instant.now();
         const epoch_info = try rpc_client.getEpochInfo(allocator, .{});
+        const latest_blockhash = try rpc_client.getLatestBlockhash(allocator, .{});
         const leader_schedule = try fetchLeaderSchedule(allocator, &rpc_client);
         const leader_addresses = try fetchLeaderAddresses(allocator, leader_schedule.slot_leaders, gossip_table_rw);
 
@@ -384,6 +399,7 @@ const ServiceInfo = struct {
             .rpc_client = rpc_client,
             .epoch_info = epoch_info,
             .epoch_info_instant = epoch_info_instant,
+            .latest_blockhash = latest_blockhash,
             .leader_schedule = leader_schedule,
             .leader_addresses = leader_addresses,
             .gossip_table_rw = gossip_table_rw,
@@ -399,6 +415,7 @@ const ServiceInfo = struct {
     pub fn refresh(self: *ServiceInfo, allocator: Allocator) !void {
         self.epoch_info_instant = try Instant.now();
         self.epoch_info = try self.rpc_client.getEpochInfo(allocator, .{});
+        self.latest_blockhash = try self.rpc_client.getLatestBlockhash(allocator, .{});
         self.leader_schedule = try fetchLeaderSchedule(allocator, &self.rpc_client);
         self.leader_addresses = try fetchLeaderAddresses(allocator, self.leader_schedule.slot_leaders, self.gossip_table_rw);
     }
@@ -448,7 +465,7 @@ const ServiceInfo = struct {
 
         var rpc_leader_iter = rpc_leader_schedule.iterator();
         while (rpc_leader_iter.next()) |entry| {
-            const key = try Pubkey.fromString(entry.key_ptr.*);
+            const key = try Pubkey.fromBase58String(entry.key_ptr.*);
             for (entry.value_ptr.*) |slot| {
                 leaders[leaders_index] = .{
                     .slot = slot,
@@ -526,17 +543,44 @@ pub const TransactionInfo = struct {
 };
 
 const Transaction = sig.core.transaction.Transaction;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 pub fn mockTransactionGenerator(
     allocator: Allocator,
     sender: *Channel(TransactionInfo),
+    service_info_rw: *RwMux(ServiceInfo),
     exit: *AtomicBool,
 ) !void {
     errdefer exit.store(true, .unordered);
 
+    const from_pubkey = try Pubkey.fromBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    const from_keypair = KeyPair{
+        .public_key = .{ .bytes = from_pubkey.data },
+        .secret_key = .{ .bytes = [_]u8{ 76, 196, 192, 17, 40, 245, 120, 49, 64, 133, 213, 227, 12, 42, 183, 70, 235, 64, 235, 96, 246, 205, 78, 13, 173, 111, 254, 96, 210, 208, 121, 240, 159, 193, 185, 89, 227, 77, 234, 91, 232, 234, 253, 119, 162, 105, 200, 227, 123, 90, 111, 105, 72, 53, 60, 147, 76, 154, 44, 72, 29, 165, 2, 246 } },
+    };
+    const to_pubkey = try Pubkey.fromBase58String("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
+    const lamports: u64 = 100;
+
     while (!exit.load(.unordered)) {
         std.time.sleep(Duration.fromSecs(10).asNanos());
-        const transaction = Transaction.default();
+
+        const recent_blockhash = blk: {
+            var service_info_lock = service_info_rw.read();
+            defer service_info_lock.unlock();
+            const service_info: *const ServiceInfo = service_info_lock.get();
+
+            break :blk service_info.latest_blockhash.value.blockhash;
+        };
+
+        const transaction = try sig.core.transaction.buildTransferTansaction(
+            allocator,
+            from_keypair,
+            from_pubkey,
+            to_pubkey,
+            lamports,
+            recent_blockhash,
+        );
+
         const transaction_info = TransactionInfo.new(
             transaction.signatures[0],
             try transaction.serialize(allocator),
@@ -547,4 +591,37 @@ pub fn mockTransactionGenerator(
         std.debug.print("Sending transaction: {any}\n", .{transaction_info.signature});
         try sender.send(transaction_info);
     }
+}
+
+test "mockTransaction" {
+    const allocator = std.heap.page_allocator;
+
+    var client = RpcClient{
+        .http_client = std.http.Client{
+            .allocator = std.heap.page_allocator,
+        },
+        .http_endpoint = "https://api.testnet.solana.com",
+    };
+    defer client.http_client.deinit();
+    const params = sig.rpc.Client.LatestBlockhashParams{};
+    const latest_blockhash = try client.getLatestBlockhash(allocator, params);
+
+    const from_pubkey = try Pubkey.fromBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    const from_keypair = KeyPair{
+        .public_key = .{ .bytes = from_pubkey.data },
+        .secret_key = .{ .bytes = [_]u8{ 76, 196, 192, 17, 40, 245, 120, 49, 64, 133, 213, 227, 12, 42, 183, 70, 235, 64, 235, 96, 246, 205, 78, 13, 173, 111, 254, 96, 210, 208, 121, 240, 159, 193, 185, 89, 227, 77, 234, 91, 232, 234, 253, 119, 162, 105, 200, 227, 123, 90, 111, 105, 72, 53, 60, 147, 76, 154, 44, 72, 29, 165, 2, 246 } },
+    };
+    const to_pubkey = try Pubkey.fromBase58String("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
+    const lamports: u64 = 100;
+
+    const transaction = try sig.core.transaction.buildTransferTansaction(
+        allocator,
+        from_keypair,
+        from_pubkey,
+        to_pubkey,
+        lamports,
+        latest_blockhash.value.blockhash,
+    );
+
+    std.debug.print("{any}\n", .{transaction});
 }

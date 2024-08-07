@@ -145,7 +145,7 @@ pub fn parseLeaderSchedule(
             start_slot = slot;
         }
         const node_str = nextNonEmpty(&word_iter) orelse return error.MissingPubkey;
-        try slot_leaders.append(try Pubkey.fromString(node_str));
+        try slot_leaders.append(try Pubkey.fromBase58String(node_str));
     }
     return .{
         .allocator = allocator,
@@ -177,7 +177,7 @@ test "leaderSchedule calculation matches agave" {
     const slot_leaders = try leaderSchedule(std.testing.allocator, &staked_nodes.unmanaged, 321, 123);
     defer std.testing.allocator.free(slot_leaders);
     for (slot_leaders, 0..) |slot_leader, i| {
-        try std.testing.expect((try Pubkey.fromString(generated_leader_schedule[i])).eql(&slot_leader));
+        try std.testing.expect((try Pubkey.fromBase58String(generated_leader_schedule[i])).eql(&slot_leader));
     }
 }
 
@@ -198,17 +198,17 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
         \\
     ;
     const expected_nodes = [_]Pubkey{
-        try Pubkey.fromString("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.fromString("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.fromString("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.fromString("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
-        try Pubkey.fromString("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.fromString("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.fromString("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.fromString("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
-        try Pubkey.fromString("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
-        try Pubkey.fromString("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
-        try Pubkey.fromString("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
+        try Pubkey.fromBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        try Pubkey.fromBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        try Pubkey.fromBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        try Pubkey.fromBase58String("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk"),
+        try Pubkey.fromBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        try Pubkey.fromBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        try Pubkey.fromBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        try Pubkey.fromBase58String("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8"),
+        try Pubkey.fromBase58String("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
+        try Pubkey.fromBase58String("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
+        try Pubkey.fromBase58String("DWvDTSh3qfn88UoQTEKRV2JnLt5jtJAVoiCo3ivtMwXP"),
     };
     const expected_start = 270864000;
 

@@ -1,6 +1,8 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+
 const Signature = sig.core.Signature;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -152,10 +154,16 @@ pub const Message = struct {
         };
     }
 
-    pub fn new(instructions: []CompiledInstruction, payer: Pubkey) !Message {
-        _ = instructions;
-        _ = payer;
-        unreachable;
+    pub fn new(allocator: std.mem.Allocator, instructions: []Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
+        var compiled_keys = try CompiledKeys.compile(allocator, instructions, payer);
+        const header, const account_keys = try compiled_keys.into_message_header_and_account_keys(allocator);
+        const compiled_instructions = try compile_instructions(instructions, account_keys);
+        return .{
+            .header = header,
+            .account_keys = account_keys,
+            .recent_blockhash = recent_blockhash,
+            .instructions = compiled_instructions,
+        };
     }
 
     pub fn clone(self: *const Message, allocator: std.mem.Allocator) error{OutOfMemory}!Message {
@@ -305,8 +313,8 @@ pub const CompiledKeys = struct {
                 if (!account_meta_gopr.found_existing) {
                     account_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
                 }
-                account_meta_gopr.value_ptr.*.is_signer |= account_meta.is_signer;
-                account_meta_gopr.value_ptr.*.is_writable |= account_meta.is_writable;
+                account_meta_gopr.value_ptr.*.is_signer = account_meta_gopr.value_ptr.*.is_signer or account_meta.is_signer;
+                account_meta_gopr.value_ptr.*.is_writable = account_meta_gopr.value_ptr.*.is_writable or account_meta.is_writable;
             }
 
             if (maybe_payer) |payer| {
@@ -356,16 +364,16 @@ pub const CompiledKeys = struct {
         }
 
         const header = MessageHeader{
-            .num_required_signatures = writable_signer_keys.len + readonly_signer_keys.len,
-            .num_readonly_signed_accounts = readonly_signer_keys.len,
-            .num_readonly_unsigned_accounts = readonly_non_signer_keys.len,
+            .num_required_signatures = @truncate(writable_signer_keys.items.len + readonly_signer_keys.items.len),
+            .num_readonly_signed_accounts = @truncate(readonly_signer_keys.items.len),
+            .num_readonly_unsigned_accounts = @truncate(readonly_non_signer_keys.items.len),
         };
 
         const account_keys_len =
-            writable_signer_keys.len +
-            readonly_signer_keys.len +
-            writable_non_signer_keys.len +
-            readonly_non_signer_keys.len;
+            writable_signer_keys.items.len +
+            readonly_signer_keys.items.len +
+            writable_non_signer_keys.items.len +
+            readonly_non_signer_keys.items.len;
 
         var account_keys = try std.ArrayList(Pubkey).initCapacity(allocator, account_keys_len);
         try account_keys.appendSlice(writable_signer_keys.items);
@@ -397,7 +405,7 @@ pub const CompileError = error{
     UnknownInstructionKey,
 };
 
-const SYSTEM_PROGRAM_ID = Pubkey.init([_]u8{1} ** Pubkey.BYTES_LENGTH);
+const SYSTEM_PROGRAM_ID = Pubkey.init([_]u8{1} ** Pubkey.SIZE);
 
 const SystemInstruction = union(enum(u8)) {
     CreateAccount,
@@ -407,11 +415,62 @@ const SystemInstruction = union(enum(u8)) {
     },
 };
 
+pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPair, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64, recent_blockhash: Hash) !Transaction {
+    const instructions = try allocator.alloc(Instruction, 1);
+    instructions[0] = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+
+    const message = try Message.new(allocator, instructions, from_pubkey, recent_blockhash);
+    const message_bytes = try sig.bincode.writeAlloc(allocator, message, .{});
+    defer allocator.free(message_bytes);
+
+    var signatures = try allocator.alloc(Signature, 1);
+    signatures[0] = Signature.init((try from_keypair.sign(message_bytes, null)).toBytes());
+
+    return .{
+        .signatures = signatures,
+        .message = message,
+    };
+}
+
 pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
     var account_metas = try allocator.alloc(AccountMeta, 2);
     account_metas[0] = AccountMeta.new_mutable(from_pubkey, true);
     account_metas[1] = AccountMeta.new_mutable(to_pubkey, false);
     return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
+}
+
+pub fn compile_instructions(instructions: []Instruction, account_keys: []Pubkey) ![]CompiledInstruction {
+    // var compiled_instructions = try std.ArrayList(CompiledInstruction).initCapacity(std.heap.page_allocator, instructions.len);
+    // defer compiled_instructions.deinit();
+
+    // for (instructions) |instruction| {
+    //     const program_id_index = try account_keys.find(instruction.program_id);
+    //     if (program_id_index == null) {
+    //         return error.UnknownInstructionKey;
+    //     }
+
+    //     var accounts = try std.ArrayList(u8).init(std.heap.page_allocator);
+    //     defer accounts.deinit();
+
+    //     for (instruction.accounts) |account_meta| {
+    //         const account_index = try account_keys.find(account_meta.pubkey);
+    //         if (account_index == null) {
+    //             return error.UnknownInstructionKey;
+    //         }
+    //         try accounts.append(u8, account_index);
+    //     }
+
+    //     try compiled_instructions.append(.{
+    //         .program_id_index = program_id_index.*,
+    //         .accounts = accounts.items,
+    //         .data = instruction.data,
+    //     });
+    // }
+
+    // return compiled_instructions.items;
+    _ = instructions;
+    _ = account_keys;
+    return &[_]CompiledInstruction{};
 }
 
 test "core.transfer" {
@@ -420,7 +479,7 @@ test "core.transfer" {
     const to_pubkey = Pubkey.default();
     const lamports: u64 = 100;
     const instruction = try transfer(allocator, from_pubkey, to_pubkey, lamports);
-    std.debug.print("{any}", .{instruction});
+    std.debug.print("{any}\n", .{instruction});
 }
 
 test "core.transaction: tmp" {

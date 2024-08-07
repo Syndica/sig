@@ -8,7 +8,7 @@ const e = std.crypto.errors;
 const Pubkey = sig.core.Pubkey;
 
 pub const Signature = struct {
-    data: [SIZE]u8 = [_]u8{0} ** SIZE,
+    data: [SIZE]u8,
 
     pub const SIZE: usize = 64;
     pub const BASE58_MAX_LENGTH: usize = 88;
@@ -16,12 +16,12 @@ pub const Signature = struct {
     const base58 = sig.crypto.base58.Base58Sized(SIZE);
     const Self = @This();
 
-    pub fn default() Self {
-        return .{ .data = [_]u8{0} ** SIZE };
-    }
-
     pub fn init(bytes: [SIZE]u8) Self {
         return .{ .data = bytes };
+    }
+
+    pub fn default() Self {
+        return .{ .data = [_]u8{0} ** SIZE };
     }
 
     pub fn verify(self: Self, pubkey: Pubkey, msg: []const u8) bool {

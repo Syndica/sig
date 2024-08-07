@@ -1,6 +1,7 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
+const Hash = sig.core.Hash;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
@@ -143,8 +144,8 @@ pub const Client = struct {
         return response.result(); // TODO: handle error
     }
 
-    pub fn getSlot(self: *Client, allocator: std.mem.Allocator) !Slot {
-        const response = try self.sendFetchRequest(allocator, Slot, "getSlot", null);
+    pub fn getSlot(self: *Client, allocator: std.mem.Allocator) !u64 {
+        const response = try self.sendFetchRequest(allocator, u64, "getSlot", null);
         defer response.deinit();
         return response.result(); // TODO: handle error
     }
@@ -152,7 +153,7 @@ pub const Client = struct {
     pub fn getIdentity(self: *Client, allocator: std.mem.Allocator) !Pubkey {
         const response = try self.sendFetchRequest(allocator, std.json.Value, "getIdentity", null);
         defer response.deinit();
-        return Pubkey.fromString(response.result().object.get("identity").?.string); // TODO: handle error
+        return Pubkey.fromBase58String(response.result().object.get("identity").?.string); // TODO: handle error
     }
 
     pub const EpochInfo = struct {
@@ -195,6 +196,74 @@ pub const Client = struct {
         defer response.deinit();
 
         return response.result(); // TODO: handle error
+    }
+
+    pub const LatestBlockhash = struct {
+        context: Context,
+        value: Value,
+
+        pub const Context = struct {
+            slot: Slot,
+        };
+
+        pub const Value = struct {
+            blockhash: Hash,
+            lastValidBlockHeight: u64,
+        };
+
+        pub fn init(value: std.json.Value) !LatestBlockhash {
+            const json_object = value.object;
+            const json_context = json_object.get("context").?.object;
+            const json_value = json_object.get("value").?.object;
+
+            const context = Context{
+                .slot = @intCast(json_context.get("slot").?.integer),
+            };
+
+            const blockhash = try Hash.fromBase58String(json_value.get("blockhash").?.string);
+            const lastValidBlockHeight: u64 = @intCast(json_value.get("lastValidBlockHeight").?.integer);
+
+            return .{
+                .context = context,
+                .value = Value{
+                    .blockhash = blockhash,
+                    .lastValidBlockHeight = lastValidBlockHeight,
+                },
+            };
+        }
+    };
+
+    pub const LatestBlockhashParams = struct {
+        commitment: ?Commitment = null,
+        minContextSlot: ?Slot = null,
+
+        pub fn toJsonString(self: LatestBlockhashParams, allocator: std.mem.Allocator) ![]const u8 {
+            var config = std.json.ObjectMap.init(allocator);
+            defer config.deinit();
+            if (self.commitment != null)
+                try config.put("commitment", .{ .string = self.commitment.?.asString() });
+            if (self.minContextSlot != null)
+                try config.put("minContextSlot", .{ .integer = @intCast(self.minContextSlot.?) });
+            var array = try std.ArrayList(std.json.Value).initCapacity(allocator, 2);
+            defer array.deinit();
+            try array.insert(0, .{ .object = config });
+            return try std.json.stringifyAlloc(allocator, std.json.Value{ .array = array }, .{});
+        }
+    };
+
+    pub fn getLatestBlockhash(self: *Client, allocator: std.mem.Allocator, params: LatestBlockhashParams) !LatestBlockhash {
+        const params_json = try params.toJsonString(allocator);
+        defer allocator.free(params_json);
+
+        const response = try self.sendFetchRequest(
+            allocator,
+            std.json.Value,
+            "getLatestBlockhash",
+            params_json,
+        );
+        defer response.deinit();
+
+        return try LatestBlockhash.init(response.result()); // TODO: handle error
     }
 
     pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
@@ -261,6 +330,42 @@ pub const Client = struct {
             confirmationStatus: ?[]const u8,
         };
 
+        pub fn init(allocator: std.mem.Allocator, value: std.json.Value) !SignatureStatuses {
+            const json_object = value.object;
+            const json_context = json_object.get("context").?.object;
+            const json_values = json_object.get("value").?.array;
+
+            const context = SignatureStatuses.Context{
+                .apiVersion = try allocator.dupe(u8, json_context.get("apiVersion").?.string),
+                .slot = @intCast(json_context.get("slot").?.integer),
+            };
+
+            var statuses = try allocator.alloc(?SignatureStatuses.Status, json_values.items.len);
+            for (json_values.items, 0..) |json_value, i| {
+                if (json_value == .null) {
+                    statuses[i] = null;
+                } else {
+                    const obj = json_value.object;
+                    const slot = obj.get("slot").?;
+                    const confirmations = obj.get("confirmations").?;
+                    const err = obj.get("err").?;
+                    const confirmationStatus = obj.get("confirmationStatus").?;
+                    statuses[i] = SignatureStatuses.Status{
+                        .slot = @intCast(slot.integer),
+                        .confirmations = if (confirmations == .null) null else @intCast(confirmations.integer),
+                        .err = if (err == .null) false else true,
+                        .confirmationStatus = if (confirmationStatus == .null) null else try allocator.dupe(u8, confirmationStatus.string),
+                    };
+                }
+            }
+
+            return .{
+                .allocator = allocator,
+                .context = context,
+                .value = statuses,
+            };
+        }
+
         pub fn deinit(self: SignatureStatuses) void {
             self.allocator.free(self.context.apiVersion);
             for (self.value) |maybe_status| {
@@ -321,39 +426,7 @@ pub const Client = struct {
         );
         defer response.deinit();
 
-        const json_object = response.result().object;
-        const json_context = json_object.get("context").?.object;
-        const json_values = json_object.get("value").?.array;
-
-        const context = SignatureStatuses.Context{
-            .apiVersion = try allocator.dupe(u8, json_context.get("apiVersion").?.string),
-            .slot = @intCast(json_context.get("slot").?.integer),
-        };
-
-        var statuses = try allocator.alloc(?SignatureStatuses.Status, json_values.items.len);
-        for (json_values.items, 0..) |json_value, i| {
-            if (json_value == .null) {
-                statuses[i] = null;
-            } else {
-                const obj = json_value.object;
-                const slot = obj.get("slot").?;
-                const confirmations = obj.get("confirmations").?;
-                const err = obj.get("err").?;
-                const confirmationStatus = obj.get("confirmationStatus").?;
-                statuses[i] = SignatureStatuses.Status{
-                    .slot = @intCast(slot.integer),
-                    .confirmations = if (confirmations == .null) null else @intCast(confirmations.integer),
-                    .err = if (err == .null) false else true,
-                    .confirmationStatus = if (confirmationStatus == .null) null else try allocator.dupe(u8, confirmationStatus.string),
-                };
-            }
-        }
-
-        return .{
-            .allocator = allocator,
-            .context = context,
-            .value = statuses,
-        };
+        return try SignatureStatuses.init(allocator, response.result());
     }
 
     test "rpc.Client.getBlockHeight" {
@@ -403,6 +476,19 @@ pub const Client = struct {
         defer client.http_client.deinit();
         const params = EpochInfoParams{};
         _ = try client.getEpochInfo(allocator, params);
+    }
+
+    test "rpc.Client.getLatestBlockhash" {
+        const allocator = std.testing.allocator;
+        var client = Client{
+            .http_client = std.http.Client{
+                .allocator = std.heap.page_allocator,
+            },
+            .http_endpoint = "https://api.testnet.solana.com",
+        };
+        defer client.http_client.deinit();
+        const params = LatestBlockhashParams{};
+        _ = try client.getLatestBlockhash(allocator, params);
     }
 
     test "rpc.Client.getLeaderSchedule" {

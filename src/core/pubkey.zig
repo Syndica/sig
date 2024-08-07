@@ -7,38 +7,13 @@ pub const Pubkey = extern struct {
     data: [SIZE]u8,
 
     pub const SIZE = 32;
+    pub const BASE58_MAX_LENGTH = 44;
     pub const @"!bincode-config:data" = U8ArrayConfig(SIZE);
 
-    const Self = @This();
     const base58 = sig.crypto.base58.Base58Sized(SIZE);
+    const Self = @This();
 
-    pub fn fromString(str: []const u8) !Self {
-        return .{ .data = try base58.decode(str) };
-    }
-
-    /// ***fromBytes*** will automatically base58 decode the value. It will also cache the decoded string
-    /// for future calls to string() method.
-    ///
-    /// Options:
-    /// - `skip_encoding`: If (in the unlikely scenario) you will never call the string() method, you can
-    /// set this option to true and it will not decode & cache the encoded value. This can be helpful in
-    /// scenarios where you plan to only use the bytes and want to save on expensive base58 encoding.
-    ///
-    pub fn fromBytes(bytes: []const u8) !Self {
-        if (bytes.len != SIZE) {
-            return Error.InvalidBytesLength;
-        }
-        return .{ .data = bytes[0..SIZE].* };
-    }
-
-    pub fn string(self: Self) base58.String {
-        return base58.encode(self.data);
-    }
-
-    /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
-    pub fn random(rng: std.Random) Self {
-        var bytes: [SIZE]u8 = undefined;
-        rng.bytes(&bytes);
+    pub fn init(bytes: [SIZE]u8) Self {
         return .{ .data = bytes };
     }
 
@@ -46,15 +21,22 @@ pub const Pubkey = extern struct {
         return .{ .data = [_]u8{0} ** SIZE };
     }
 
-    pub fn equals(self: *const Self, other: *const Pubkey) bool {
-        const xx: @Vector(SIZE, u8) = self.data;
-        const yy: @Vector(SIZE, u8) = other.data;
-        const r = @reduce(.And, xx == yy);
-        return r;
+    pub fn random(rng: std.Random) Self {
+        var bytes: [SIZE]u8 = undefined;
+        rng.bytes(&bytes);
+        return .{ .data = bytes };
     }
 
     pub fn fromKeyPair(keypair: *const Ed25519.KeyPair) Self {
-        return Self.fromBytes(&keypair.public_key.bytes) catch unreachable;
+        return Self.init(keypair.public_key.bytes);
+    }
+
+    pub fn fromBase58String(str: []const u8) !Self {
+        return .{ .data = try base58.decode(str) };
+    }
+
+    pub fn toBase58String(self: Self) std.BoundedArray(u8, BASE58_MAX_LENGTH) {
+        return base58.encode(self.data);
     }
 
     pub fn format(

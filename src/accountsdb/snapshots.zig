@@ -305,7 +305,7 @@ test "deserialize VoteState.node_pubkey" {
         90, 174, 158, 6, 199, 179, 134, 194, 112, 248, 166, 232, 144, 253, 128, 249, 67, 118,
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
-    const expected_pubkey = try Pubkey.fromString("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
+    const expected_pubkey = try Pubkey.fromBase58String("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
     try std.testing.expect(expected_pubkey.eql(&vote_state.node_pubkey));
 }
 
@@ -1525,7 +1525,7 @@ pub const FullSnapshotFileInfo = struct {
     const FULL_SNAPSHOT_NAME_FMT = "snapshot-{[slot]d}-{[hash]s}.tar.{[extension]s}";
     const FULL_SNAPSHOT_NAME_MAX_LEN = sig.utils.fmt.boundedLenValue(FULL_SNAPSHOT_NAME_FMT, .{
         .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).toBase58String()),
         .extension = CompressionMethod.extension(.zstd),
     });
 
@@ -1548,7 +1548,7 @@ pub const FullSnapshotFileInfo = struct {
         const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
 
         const hash_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
+        const hash = Hash.fromBase58String(hash_str) catch return error.InvalidSnapshotPath;
 
         return .{
             .slot = slot,
@@ -1557,7 +1557,7 @@ pub const FullSnapshotFileInfo = struct {
     }
 
     pub fn snapshotNameStr(self: FullSnapshotFileInfo) std.BoundedArray(u8, FULL_SNAPSHOT_NAME_MAX_LEN) {
-        const b58_str = self.hash.base58String();
+        const b58_str = self.hash.toBase58String();
         return sig.utils.fmt.boundedFmt(FULL_SNAPSHOT_NAME_FMT, .{
             .slot = self.slot,
             .hash = sig.utils.fmt.boundedString(&b58_str),
@@ -1586,7 +1586,7 @@ pub const IncrementalSnapshotFileInfo = struct {
     const INCREMENTAL_SNAPSHOT_NAME_MAX_LEN = sig.utils.fmt.boundedLenValue(INCREMENTAL_SNAPSHOT_NAME_FMT, .{
         .base_slot = std.math.maxInt(Slot),
         .slot = std.math.maxInt(Slot),
-        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).base58String()),
+        .hash = sig.utils.fmt.boundedString(&(Hash{ .data = .{255} ** 32 }).toBase58String()),
         .extension = CompressionMethod.extension(.zstd),
     });
 
@@ -1616,7 +1616,7 @@ pub const IncrementalSnapshotFileInfo = struct {
         const slot = std.fmt.parseInt(Slot, slot_str, 10) catch return error.InvalidSnapshotPath;
 
         const hash_str = parts.next() orelse return error.InvalidSnapshotPath;
-        const hash = Hash.parseBase58String(hash_str) catch return error.InvalidSnapshotPath;
+        const hash = Hash.fromBase58String(hash_str) catch return error.InvalidSnapshotPath;
 
         return .{
             .base_slot = base_slot,
@@ -1626,7 +1626,7 @@ pub const IncrementalSnapshotFileInfo = struct {
     }
 
     pub fn snapshotNameStr(self: IncrementalSnapshotFileInfo) std.BoundedArray(u8, INCREMENTAL_SNAPSHOT_NAME_MAX_LEN) {
-        const b58_str = self.hash.base58String();
+        const b58_str = self.hash.toBase58String();
         return sig.utils.fmt.boundedFmt(INCREMENTAL_SNAPSHOT_NAME_FMT, .{
             .base_slot = self.base_slot,
             .slot = self.slot,
@@ -1859,7 +1859,7 @@ test "core.accounts_db.snapshots: test full snapshot path parsing" {
     const snapshot_info = try FullSnapshotFileInfo.fromString(full_snapshot_path);
 
     try std.testing.expectEqual(269, snapshot_info.slot);
-    try std.testing.expectEqualStrings("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqualStrings("EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn", snapshot_info.hash.toBase58String().constSlice());
     try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 
@@ -1869,7 +1869,7 @@ test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
 
     try std.testing.expectEqual(269, snapshot_info.base_slot);
     try std.testing.expectEqual(307, snapshot_info.slot);
-    try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.base58String().constSlice());
+    try std.testing.expectEqualStrings("4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB", snapshot_info.hash.toBase58String().constSlice());
     try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 

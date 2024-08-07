@@ -243,7 +243,7 @@ pub const BytesRef = struct {
 /// Test cases that can be applied to any implementation of Database
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     @setEvalBranchQuota(10_000);
-    const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
+    const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).toBase58String();
     const test_dir = std.fmt.comptimePrint("test_data/blockstore/database/{s}", .{impl_id.buffer});
 
     return struct {
