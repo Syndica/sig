@@ -70,7 +70,6 @@ const SEND_TRANSACTION_METRICS_REPORT_RATE = Duration.fromSecs(5);
 const PendingTransactions = AutoArrayHashMap(Signature, TransactionInfo);
 
 pub fn run(
-    my_contact_info: *RwMux(ContactInfo),
     gossip_table_rw: *RwMux(GossipTable),
     receiver: *Channel(TransactionInfo),
     exit: *AtomicBool,
@@ -80,7 +79,7 @@ pub fn run(
     const pending_transactions = PendingTransactions.init(allocator);
     var pending_transactions_rw = RwMux(PendingTransactions).init(pending_transactions);
 
-    const service_info = try ServiceInfo.init(allocator, my_contact_info, gossip_table_rw);
+    const service_info = try ServiceInfo.init(allocator, gossip_table_rw);
     var service_info_rw = RwMux(ServiceInfo).init(service_info);
 
     const refresh_service_info_handle = try Thread.spawn(
@@ -257,8 +256,10 @@ fn sendWireTransactions(
     // TODO: Implement
     // var conn = connection_cache.get_connection(tpu_address);
     // conn.send_data_async(transactions);
-    _ = address;
-    _ = transactions;
+    std.debug.print("Sending transactions to {}\n", .{address});
+    for (transactions.*, 0..) |tx, i| {
+        std.debug.print("Transaction {}: {s}\n", .{ i, tx });
+    }
 }
 
 fn processTransactions(
@@ -283,8 +284,8 @@ fn processTransactions(
         .searchTransactionHistory = false,
     });
 
+    // Populate retry_signatures and drop_signatures
     var pending_transactions_iter = pending_transactions.iterator();
-
     for (signature_statuses.value) |maybe_signature_status| {
         const entry = pending_transactions_iter.next().?;
         const signature = entry.key_ptr.*;
@@ -333,6 +334,7 @@ fn processTransactions(
         }
     }
 
+    // Retry transactions
     if (retry_signatures.items.len > 0) {
         var retry_transactions = try allocator.alloc(TransactionInfo, retry_signatures.items.len);
         defer allocator.free(retry_transactions);
@@ -350,6 +352,7 @@ fn processTransactions(
         }
     }
 
+    // Remove transactions
     for (drop_signatures.items) |signature| {
         _ = pending_transactions.swapRemove(signature);
     }
@@ -361,7 +364,6 @@ const ServiceInfo = struct {
     epoch_info_instant: Instant,
     leader_schedule: LeaderSchedule,
     leader_addresses: AutoArrayHashMap(Pubkey, SocketAddr),
-    my_contact_info_rw: *RwMux(ContactInfo),
     gossip_table_rw: *RwMux(GossipTable),
 
     const REFERENCE_SLOT_REFRESH_RATE = Duration.fromSecs(60);
@@ -369,7 +371,6 @@ const ServiceInfo = struct {
 
     pub fn init(
         allocator: Allocator,
-        my_contact_info_rw: *RwMux(ContactInfo),
         gossip_table_rw: *RwMux(GossipTable),
     ) !ServiceInfo {
         var rpc_client = RpcClient.init(allocator, "https://api.mainnet-beta.solana.com");
@@ -385,7 +386,6 @@ const ServiceInfo = struct {
             .epoch_info_instant = epoch_info_instant,
             .leader_schedule = leader_schedule,
             .leader_addresses = leader_addresses,
-            .my_contact_info_rw = my_contact_info_rw,
             .gossip_table_rw = gossip_table_rw,
         };
     }
@@ -497,7 +497,7 @@ const ServiceInfo = struct {
     }
 };
 
-const TransactionInfo = struct {
+pub const TransactionInfo = struct {
     signature: Signature,
     wire_transaction: []u8,
     last_valid_block_height: u64,
@@ -524,3 +524,27 @@ const TransactionInfo = struct {
         };
     }
 };
+
+const Transaction = sig.core.transaction.Transaction;
+
+pub fn mockTransactionGenerator(
+    allocator: Allocator,
+    sender: *Channel(TransactionInfo),
+    exit: *AtomicBool,
+) !void {
+    errdefer exit.store(true, .unordered);
+
+    while (!exit.load(.unordered)) {
+        std.time.sleep(Duration.fromSecs(10).asNanos());
+        const transaction = Transaction.default();
+        const transaction_info = TransactionInfo.new(
+            transaction.signatures[0],
+            try transaction.serialize(allocator),
+            0,
+            null,
+            null,
+        );
+        std.debug.print("Sending transaction: {any}\n", .{transaction_info.signature});
+        try sender.send(transaction_info);
+    }
+}

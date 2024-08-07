@@ -107,7 +107,7 @@ pub const Client = struct {
         );
         defer allocator.free(request_payload);
 
-        std.debug.print("Request={s}\n", .{request_payload});
+        // std.debug.print("Request={s}\n", .{request_payload});
 
         const result = try self.http_client.fetch(.{
             .location = .{ .url = self.http_endpoint },
@@ -123,7 +123,7 @@ pub const Client = struct {
 
         std.debug.assert(result.status == std.http.Status.ok); // TODO: handle error
 
-        std.debug.print("Response={s}\n", .{response_payload.items});
+        // std.debug.print("Response={s}\n", .{response_payload.items});
 
         const parsed = try std.json.parseFromSlice(
             Response(R),

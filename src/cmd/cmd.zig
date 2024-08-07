@@ -24,6 +24,8 @@ const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSche
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
+const Channel = sig.sync.Channel;
+const TransactionInfo = sig.transaction_forwarding_service.TransactionInfo;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -539,6 +541,29 @@ pub fn run() !void {
                             },
                         },
                     },
+
+                    &cli.Command{
+                        .name = "test-tfs",
+                        .description = .{
+                            .one_line = "Run transaction forwarding service test",
+                            .detailed =
+                            \\Starts a transaction forwarding service test.
+                            ,
+                        },
+                        .options = &.{
+                            // gossip
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = transactionForwardingServiceTest,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -965,6 +990,41 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
             try parseLeaderSchedule(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
     else
         null;
+}
+
+pub fn transactionForwardingServiceTest() !void {
+    var app_base = try AppBase.init(gpa_allocator);
+
+    const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
+    defer gossip_manager.deinit();
+
+    const channel = Channel(TransactionInfo).init(gpa_allocator, 100);
+
+    const transaction_generator_thread = try std.Thread.spawn(
+        .{},
+        sig.transaction_forwarding_service.mockTransactionGenerator,
+        .{
+            gpa_allocator,
+            channel,
+            &app_base.exit,
+        },
+    );
+
+    // const transaction_forwarding_thread = try std.Thread.spawn(
+    //     .{},
+    //     sig.transaction_forwarding_service.run,
+    //     .{
+    //         &gossip_service.gossip_table_rw,
+    //         channel,
+    //         &app_base.exit,
+    //     },
+    // );
+
+    transaction_generator_thread.join();
+    // transaction_forwarding_thread.join();
+    gossip_manager.join();
+
+    _ = gossip_service;
 }
 
 /// State that typically needs to be initialized at the start of the app,

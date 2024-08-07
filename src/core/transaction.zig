@@ -81,6 +81,8 @@ pub const Transaction = struct {
 
     pub const @"!bincode-config:signatures" = ShortVecConfig(Signature);
 
+    pub const MAX_BYTES: usize = 1232;
+
     // used in tests
     pub fn default() Transaction {
         return Transaction{
@@ -113,6 +115,12 @@ pub const Transaction = struct {
             return error.TooManySignatures;
         }
         try self.message.sanitize();
+    }
+
+    pub fn serialize(self: *const Transaction, allocator: std.mem.Allocator) ![]u8 {
+        var buf = [_](u8){0} ** Transaction.MAX_BYTES;
+        const serialized = try sig.bincode.writeToSlice(&buf, self, .{});
+        return try allocator.dupe(u8, serialized);
     }
 };
 
