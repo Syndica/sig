@@ -52,8 +52,8 @@ pub fn serializeRepairRequest(
     nonce: Nonce,
 ) ![]u8 {
     const header = RepairRequestHeader{
-        .signature = Signature.init(undefined),
-        .sender = try Pubkey.fromBytes(&keypair.public_key.bytes),
+        .signature = Signature.default(),
+        .sender = Pubkey.fromKeyPair(keypair),
         .recipient = recipient,
         .timestamp = timestamp,
         .nonce = nonce,
@@ -152,7 +152,7 @@ pub const RepairMessage = union(enum(u8)) {
             inline else => |msg| {
                 // i am the intended recipient
                 const header: RepairRequestHeader = msg.header;
-                if (!header.recipient.equals(&expected_recipient)) {
+                if (!header.recipient.eql(&expected_recipient)) {
                     return error.IdMismatch;
                 }
 
@@ -189,8 +189,8 @@ pub const RepairRequestHeader = struct {
 
     fn eql(self: *const @This(), other: *const @This()) bool {
         return self.signature.eql(&other.signature) and
-            self.sender.equals(&other.sender) and
-            self.recipient.equals(&other.recipient) and
+            self.sender.eql(&other.sender) and
+            self.recipient.eql(&other.recipient) and
             self.timestamp == other.timestamp and
             self.nonce == other.nonce;
     }

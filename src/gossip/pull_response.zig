@@ -111,8 +111,7 @@ test "gossip.pull_response: test filtering values works" {
     var filter = filters.items[0];
 
     // corresponding value
-    const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromKeyPair(&kp);
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.id = id;
     // TODO: make this consistent across tests

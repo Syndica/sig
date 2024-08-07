@@ -177,7 +177,7 @@ test "leaderSchedule calculation matches agave" {
     const slot_leaders = try leaderSchedule(std.testing.allocator, &staked_nodes.unmanaged, 321, 123);
     defer std.testing.allocator.free(slot_leaders);
     for (slot_leaders, 0..) |slot_leader, i| {
-        try std.testing.expect((try Pubkey.fromString(generated_leader_schedule[i])).equals(&slot_leader));
+        try std.testing.expect((try Pubkey.fromString(generated_leader_schedule[i])).eql(&slot_leader));
     }
 }
 
@@ -219,7 +219,7 @@ test "parseLeaderSchedule writeLeaderSchedule happy path roundtrip" {
     try std.testing.expect(expected_start == leader_schedule.start_slot);
     try std.testing.expect(expected_nodes.len == leader_schedule.slot_leaders.len);
     for (expected_nodes, leader_schedule.slot_leaders) |expected, actual| {
-        try std.testing.expect(expected.equals(&actual));
+        try std.testing.expect(expected.eql(&actual));
     }
 
     // write file out

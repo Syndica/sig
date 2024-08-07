@@ -816,7 +816,7 @@ pub inline fn pubkey_hash(key: Pubkey) u64 {
 }
 
 pub inline fn pubkey_eql(key1: Pubkey, key2: Pubkey) bool {
-    return key1.equals(&key2);
+    return key1.eql(&key2);
 }
 
 pub const DiskMemoryConfig = struct {

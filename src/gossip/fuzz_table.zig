@@ -112,7 +112,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     var seed_buf: [32]u8 = undefined;
                     rand.bytes(&seed_buf);
                     const keypair = try KeyPair.create(seed_buf);
-                    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+                    const pubkey = Pubkey.fromKeyPair(&keypair);
 
                     data.setId(pubkey);
                     var signed_data = try SignedGossipData.initSigned(data, &keypair);
@@ -211,7 +211,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 // via iter
                 var iter = gossip_table.contactInfoIterator(0);
                 const found = while (iter.next()) |contact_info| {
-                    if (contact_info.pubkey.equals(&pubkey)) {
+                    if (contact_info.pubkey.eql(&pubkey)) {
                         break true;
                     }
                 } else false;
@@ -250,7 +250,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             while (index < pubkeys.items.len) {
                 const pubkey = pubkeys.items[index];
                 const still_exists = for (available_keys) |*key| {
-                    if (key.equals(&pubkey)) {
+                    if (key.eql(&pubkey)) {
                         break true;
                     }
                 } else false;
@@ -261,7 +261,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     _ = signatures.swapRemove(pubkey);
                     _ = keys.swapRemove(index);
 
-                    std.debug.assert(pk_removed.equals(&pubkey));
+                    std.debug.assert(pk_removed.eql(&pubkey));
                 } else {
                     index += 1;
                 }

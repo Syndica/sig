@@ -83,7 +83,6 @@ pub const Transaction = struct {
 
     pub const MAX_BYTES: usize = 1232;
 
-    // used in tests
     pub fn default() Transaction {
         return Transaction{
             .signatures = &[_]Signature{},
@@ -91,9 +90,9 @@ pub const Transaction = struct {
         };
     }
 
-    pub fn new_unsigned(allocator: std.mem.Allocator, message: Message) Transaction {
+    pub fn new_unsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
         return Transaction{
-            .signatures = allocator.alloc(Signature, message.header.num_required_signatures),
+            .signatures = try allocator.alloc(Signature, message.header.num_required_signatures),
             .message = message,
         };
     }
@@ -262,6 +261,22 @@ pub const AccountMeta = struct {
     pubkey: Pubkey,
     is_signer: bool,
     is_writable: bool,
+
+    pub fn new_mutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
+        return .{
+            .pubkey = pubkey,
+            .is_signer = is_signer,
+            .is_writable = true,
+        };
+    }
+
+    pub fn new_immutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
+        return .{
+            .pubkey = pubkey,
+            .is_signer = is_signer,
+            .is_writable = false,
+        };
+    }
 };
 
 pub const CompiledKeys = struct {
@@ -373,6 +388,17 @@ pub const CompileError = error{
     AddressTableLookupIndexOverflow,
     UnknownInstructionKey,
 };
+
+// const SYSTEM_PROGRAM = Pubkey.fromString("");
+
+// pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
+//     var account_metas = try allocator.alloc(AccountMeta, 2);
+//     account_metas[0] = AccountMeta.new_mutable(from_pubkey, true);
+//     account_metas[1] = AccountMeta.new_mutable(to_pubkey, false);
+//     .{
+//         .program_id =
+//     }
+// }
 
 test "core.transaction: tmp" {
     const msg = Message.default();

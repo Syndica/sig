@@ -33,7 +33,7 @@ pub const Ping = struct {
     pub fn init(token: [PING_TOKEN_SIZE]u8, keypair: *const KeyPair) !Self {
         const signature = try keypair.sign(&token, null);
         const self = Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key),
+            .from = Pubkey.fromKeyPair(keypair),
             .token = token,
             .signature = Signature.init(signature.toBytes()),
         };
@@ -46,7 +46,7 @@ pub const Ping = struct {
         var signature = keypair.sign(&token, null) catch unreachable; // TODO: do we need noise?
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key),
+            .from = Pubkey.fromKeyPair(keypair),
             .token = token,
             .signature = Signature.init(signature.toBytes()),
         };
@@ -72,7 +72,7 @@ pub const Pong = struct {
         const signature = keypair.sign(&hash.data, null) catch return error.SignatureError;
 
         return Self{
-            .from = Pubkey.fromPublicKey(&keypair.public_key),
+            .from = Pubkey.fromKeyPair(keypair),
             .hash = hash,
             .signature = Signature.init(signature.toBytes()),
         };
@@ -152,7 +152,7 @@ pub const PingCache = struct {
     pub fn receviedPong(self: *Self, pong: *const Pong, socket: SocketAddr, now: std.time.Instant) bool {
         const peer_and_addr = PubkeyAndSocketAddr{ .pubkey = pong.from, .socket_addr = socket };
         if (self.pending_cache.peek(pong.hash)) |*pubkey_and_addr| {
-            if (pubkey_and_addr.pubkey.equals(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
+            if (pubkey_and_addr.pubkey.eql(&pong.from) and pubkey_and_addr.socket_addr.eql(&socket)) {
                 _ = self.pings.pop(peer_and_addr);
                 _ = self.pongs.put(peer_and_addr, now);
                 _ = self.pending_cache.pop(pong.hash);

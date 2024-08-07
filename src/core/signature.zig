@@ -60,3 +60,6 @@ pub const Signature = struct {
         return std.mem.eql(u8, self.data[0..], other.data[0..]);
     }
 };
+
+/// TODO: InvalidEncodedLength and InvalidEncodedValue are not used
+const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

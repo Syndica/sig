@@ -259,7 +259,7 @@ pub const GossipTable = struct {
 
             // As long as the pubkey does not change, self.records
             // does not need to be updated.
-            std.debug.assert(old_entry.value.id().equals(&origin));
+            std.debug.assert(old_entry.value.id().eql(&origin));
 
             try self.purged.insert(old_entry.value_hash, now);
 
@@ -1117,7 +1117,7 @@ test "gossip.table: insert and get" {
 
 test "gossip.table: insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
-    var id = Pubkey.fromPublicKey(&kp.public_key);
+    var id = Pubkey.fromKeyPair(&kp);
 
     const legacy_contact_info = LegacyContactInfo.default(id);
     var gossip_value = try SignedGossipData.initSigned(GossipData{
@@ -1135,7 +1135,7 @@ test "gossip.table: insert and get contact_info" {
     var buf: [100]ContactInfo = undefined;
     var nodes = table.getContactInfos(&buf, 0);
     try std.testing.expect(nodes.len == 1);
-    try std.testing.expect(nodes[0].pubkey.equals(&id));
+    try std.testing.expect(nodes[0].pubkey.eql(&id));
 
     // test re-insertion
     const result = table.insert(gossip_value, 0);

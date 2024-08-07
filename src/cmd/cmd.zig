@@ -1088,7 +1088,7 @@ fn initGossip(
     logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(gossip_host_ip, gossip_port));
     for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
@@ -1116,7 +1116,7 @@ fn startGossip(
     app_base.logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&app_base.my_keypair);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, gossip_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));

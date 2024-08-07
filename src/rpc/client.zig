@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
@@ -297,8 +297,8 @@ pub const Client = struct {
             }
 
             for (self.signatures) |signature| {
-                const stack_base58 = try signature.toBase58EncodedString();
-                const heap_base58 = try allocator.dupe(u8, &stack_base58);
+                const stack_base58 = signature.toBase58String().slice();
+                const heap_base58 = try allocator.dupe(u8, stack_base58);
                 try signatures_array.append(.{ .string = heap_base58 });
             }
 
@@ -434,10 +434,10 @@ pub const Client = struct {
         defer client.http_client.deinit();
         var signatures = try allocator.alloc(Signature, 2);
         defer allocator.free(signatures);
-        signatures[0] = try Signature.fromBase58EncodedString(
+        signatures[0] = try Signature.fromBase58String(
             "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
         );
-        signatures[1] = try Signature.fromBase58EncodedString(
+        signatures[1] = try Signature.fromBase58String(
             "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
         );
 

@@ -86,14 +86,14 @@ pub const SignedGossipData = struct {
 
     pub fn init(data: GossipData) Self {
         return Self{
-            .signature = Signature{},
+            .signature = Signature.default(),
             .data = data,
         };
     }
 
     pub fn initSigned(data: GossipData, keypair: *const KeyPair) !Self {
         var self = Self{
-            .signature = Signature{},
+            .signature = Signature.default(),
             .data = data,
         };
         try self.sign(keypair);
@@ -119,7 +119,7 @@ pub const SignedGossipData = struct {
     /// only used in tests
     pub fn randomWithIndex(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
         var data = GossipData.randomFromIndex(rng, index);
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromKeyPair(keypair);
         data.setId(pubkey);
         return try initSigned(data, keypair);
     }
@@ -1722,7 +1722,7 @@ test "gossip.data: contact info bincode serialize matches rust bincode" {
     defer sig_contact_info_deserialised.deinit();
     try testing.expect(sig_contact_info_deserialised.addrs.items.len == 1);
     try testing.expect(sig_contact_info_deserialised.sockets.items.len == 12);
-    try testing.expect(sig_contact_info_deserialised.pubkey.equals(&sig_contact_info.pubkey));
+    try testing.expect(sig_contact_info_deserialised.pubkey.eql(&sig_contact_info.pubkey));
     try testing.expect(sig_contact_info_deserialised.outset == sig_contact_info.outset);
 }
 
@@ -1771,7 +1771,7 @@ test "gossip.data: SocketEntry serializer works" {
 
 test "gossip.data: test sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromKeyPair(&keypair);
     var rng = std.rand.DefaultPrng.init(0);
     var data = DuplicateShred.random(rng.random());
     data.from = pubkey;
@@ -1794,8 +1794,7 @@ test "gossip.data: test sanitize GossipData" {
 test "gossip.data: test SignedGossipData label() and id() methods" {
     const kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    var id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromKeyPair(&kp);
 
     var legacy_contact_info = LegacyContactInfo.default(id);
     legacy_contact_info.wallclock = 0;
@@ -1804,15 +1803,14 @@ test "gossip.data: test SignedGossipData label() and id() methods" {
         .LegacyContactInfo = legacy_contact_info,
     }, &kp);
 
-    try std.testing.expect(value.id().equals(&id));
-    try std.testing.expect(value.label().LegacyContactInfo.equals(&id));
+    try std.testing.expect(value.id().eql(&id));
+    try std.testing.expect(value.label().LegacyContactInfo.eql(&id));
 }
 
 test "gossip.data: pubkey matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromKeyPair(&kp);
 
     const rust_bytes = [_]u8{
         138, 136, 227, 221, 116, 9,   241, 149, 253, 82,  219, 45, 60,  186, 93,  114,
@@ -1829,8 +1827,7 @@ test "gossip.data: pubkey matches rust" {
 test "gossip.data: contact info serialization matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromKeyPair(&kp);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 
@@ -1902,8 +1899,7 @@ test "gossip.data: test RestartLastVotedForkSlots serialization matches rust" {
 test "gossip.data: gossip data serialization matches rust" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromKeyPair(&kp);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
 

@@ -48,7 +48,7 @@ pub const Account = struct {
     pub fn equals(self: *const Account, other: *const Account) bool {
         return std.mem.eql(u8, self.data, other.data) and
             self.lamports == other.lamports and
-            self.owner.equals(&other.owner) and
+            self.owner.eql(&other.owner) and
             self.executable == other.executable and
             self.rent_epoch == other.rent_epoch;
     }
