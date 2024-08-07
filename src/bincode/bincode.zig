@@ -36,6 +36,17 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     return @as(usize, @intCast(stream.bytes_written));
 }
 
+pub fn staticStructSizeOf(comptime T: type) usize {
+    const info = @typeInfo(T).Struct;
+
+    var total_size: usize = 0;
+    inline for (info.fields) |field| {
+        total_size += @sizeOf(field.type);
+    }
+
+    return total_size;
+}
+
 pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
     var stream = std.io.fixedBufferStream(slice);
     return bincode.read(allocator, T, stream.reader(), params);

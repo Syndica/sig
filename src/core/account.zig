@@ -7,6 +7,13 @@ const AccountInFile = sig.accounts_db.accounts_file.AccountInFile;
 
 const U8SliceConfig = bincode.int.U8SliceConfig;
 
+pub const AccountWithoutData = struct {
+    lamports: u64,
+    owner: Pubkey,
+    executable: bool,
+    rent_epoch: Epoch,
+};
+
 pub const Account = struct {
     lamports: u64,
     data: []u8,

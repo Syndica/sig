@@ -97,8 +97,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const Actions = enum { put, get };
 
-    var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe", null, .{});
-    defer geyser.deinit();
+    // var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe", null, .{});
+    // defer geyser.deinit();
 
     // get/put a bunch of accounts
     while (true) {
@@ -141,12 +141,12 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     r.value_ptr.* = tracked_account;
                 }
 
-                // send through geyser
-                _ = try geyser.writePayload(.{ .AccountPayloadV1 = .{
-                    .accounts = accounts,
-                    .pubkeys = pubkeys,
-                    .slot = slot,
-                } });
+                // // send through geyser
+                // _ = try geyser.writePayload(.{ .AccountPayloadV1 = .{
+                //     .accounts = accounts,
+                //     .pubkeys = pubkeys,
+                //     .slot = slot,
+                // } });
 
                 // write to accounts_db
                 try accounts_db.putAccountSlice(

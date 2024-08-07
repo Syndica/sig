@@ -535,33 +535,43 @@ pub const AccountsDB = struct {
 
             if (geyser_is_enabled) {
                 const geyser_storage = geyser_tmp_storage.?;
+                defer geyser_storage.reset();
+
                 const geyser_writer = self.geyser_writer.?;
 
-                const payload = VersionedAccountPayload{
-                    .AccountPayloadV1 = .{
+                {
+                    const data_v1 = sig.geyser.core.AccountPayloadV1{
                         .accounts = geyser_storage.accounts.items,
                         .pubkeys = geyser_storage.pubkeys.items,
                         .slot = slot,
-                    },
-                };
-                // defer: reset the preallocated memory (for account data slices)
-                defer geyser_storage.reset();
+                    };
+                    const data_versioned = sig.geyser.core.VersionedAccountPayload{
+                        .AccountPayloadV1 = data_v1,
+                    };
+                    const len = bincode.sizeOf(data_versioned, .{});
+                    const payload = sig.geyser.core.AccountPayload{
+                        .len = len,
+                        .payload = data_versioned,
+                    };
+                    const total_len = bincode.sizeOf(payload, .{});
 
-                // std.debug.print("n accounts: {d}\n", .{ geyser_storage.accounts.items.len });
-                // for (geyser_storage.accounts.items) |account| {
-                //     if (account.data.len > 200) {
-                //         std.debug.print("data_len: {d}\n", .{ account.data.len });
-                //     }
-                // }
-                // _ = payload;
-                // _ = geyser_writer;
-                std.debug.assert(geyser_storage.accounts.items.len == geyser_storage.pubkeys.items.len);
+                    geyser_writer.recycle_fba.mux.lock();
+                    const buf = blk: while (true) {
+                        const buf = geyser_writer.recycle_fba.allocator().alloc(u8, total_len) catch {
+                            // wait for free memory
+                            geyser_writer.recycle_fba.mux.unlock();
+                            // std.debug.print("waiting for free memory\n", .{});
+                            std.time.sleep(std.time.ns_per_ms);
+                            geyser_writer.recycle_fba.mux.lock();
+                            continue;
+                        };
+                        break :blk buf;
+                    };
+                    geyser_writer.recycle_fba.mux.unlock();
 
-                // write to geyser (with lock since this is a shared resource with
-                // multi-thread loading)
-                geyser_writer.mux.lock();
-                defer geyser_writer.mux.unlock();
-                _ = try geyser_writer.writePayload(payload);
+                    const written_buf = try bincode.writeToSlice(buf, payload, .{});
+                    try geyser_writer.thread_channel.send(written_buf);
+                }
             }
 
             if (accounts_file.number_of_accounts > 0) {
@@ -2270,7 +2280,6 @@ pub fn indexAndValidateAccountFile(
         number_of_accounts += 1;
     }
 
-    // std.debug.print("file id: {} offset vs length = {} vs {}\n", .{accounts_file.id.toInt(), offset, accounts_file.length});
     const aligned_length = std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64));
     if (offset != aligned_length) {
         return error.InvalidAccountFileLength;

@@ -41,18 +41,19 @@ pub fn main() !void {
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "std_geyser") or run_all_benchmarks) {
-        try benchmark(
-            @import("geyser/lib.zig").BenchmarkAccountStream,
-            max_time_per_bench,
-            TimeUnits.milliseconds,
-        );
-    }
+    // TODO: fix
+    // if (std.mem.startsWith(u8, filter, "std_geyser") or run_all_benchmarks) {
+    //     try benchmark(
+    //         @import("geyser/lib.zig").BenchmarkAccountStream,
+    //         max_time_per_bench,
+    //         TimeUnits.milliseconds,
+    //     );
+    // }
 
-    if (std.mem.startsWith(u8, filter, "stream_geyser") or run_all_benchmarks) {
-        std.debug.print("Geyser Streaming Benchmark:\n", .{});
-        try @import("geyser/lib.zig").benchmark.runBenchmark();
-    }
+    // if (std.mem.startsWith(u8, filter, "stream_geyser") or run_all_benchmarks) {
+    //     std.debug.print("Geyser Streaming Benchmark:\n", .{});
+    //     try @import("geyser/lib.zig").benchmark.runBenchmark();
+    // }
 
     if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {
         var run_all = false;

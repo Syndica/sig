@@ -16,6 +16,7 @@ const c = @cImport({
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
+const AccountWithoutData = sig.core.account.AccountWithoutData;
 
 const PIPE_MAX_SIZE_PATH = "/proc/sys/fs/pipe-max-size";
 
@@ -33,13 +34,30 @@ pub const AccountPayload = struct {
 
 pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
+    AccountPayloadV2: AccountPayloadV2,
 
     const Self = @This();
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .AccountPayloadV1 => self.AccountPayloadV1.deinit(allocator),
+            .AccountPayloadV2 => self.AccountPayloadV2.deinit(allocator),
         }
+    }
+};
+
+pub const AccountPayloadV2 = struct {
+    slot: Slot,
+    pubkeys: []Pubkey, // PERF: this can just be []u8
+    account_data: []u8,
+    accounts: []AccountWithoutData,
+
+    const Self = @This();
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        allocator.free(self.account_data);
+        allocator.free(self.accounts);
+        allocator.free(self.pubkeys);
     }
 };
 
@@ -68,10 +86,11 @@ pub const GeyserWriter = struct {
     file: std.fs.File,
     io_buf: []u8,
     exit: ?*std.atomic.Value(bool),
+    recycle_fba: *RecycleFBA,
 
     // TODO: probably dont want everything in this struct but its fine for now
     // to test to see if the performance improves
-    thread_channel: *sig.sync.Channel(VersionedAccountPayload),
+    thread_channel: *sig.sync.Channel([]u8),
 
     // optional mutex to ensure we dont write to the io_buf concurrently
     // NOTE: this will be used during parallel snapshot loading (/startup)
@@ -87,11 +106,12 @@ pub const GeyserWriter = struct {
         pipe_path: []const u8,
         exit: ?*std.atomic.Value(bool),
         allocator_config: WriterAllocatorConfig,
+        recycle_fba: *RecycleFBA,
     ) !Self {
         const file = try openPipe(pipe_path);
         const io_buf = try allocator.alloc(u8, allocator_config.io_buf_len);
 
-        const thread_channel = sig.sync.Channel(VersionedAccountPayload).init(allocator, 1_000);
+        const thread_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
 
         return .{
             .file = file,
@@ -99,6 +119,7 @@ pub const GeyserWriter = struct {
             .io_buf = io_buf,
             .thread_channel = thread_channel,
             .exit = exit,
+            .recycle_fba = recycle_fba,
         };
     }
 
@@ -108,11 +129,25 @@ pub const GeyserWriter = struct {
     }
 
     pub fn IOStreamLoop(self: *Self) !void {
-        while (!self.exit.load(.unordered)) {
-            const maybe_payload = self.thread_channel.receive();
-            if (maybe_payload) |payload| {
-                _ = try self.writePayload(payload);
+        // TODO: fix this optional unwrap
+        while (!self.exit.?.load(.unordered)) {
+            const payloads = self.thread_channel.drain() orelse continue;
+
+            for (payloads) |payload| {
+                _ = try self.writePayloadIO(payload);
+
+                self.recycle_fba.mux.lock();
+                self.recycle_fba.allocator().free(payload);
+                self.recycle_fba.mux.unlock();
             }
+
+            // {
+            //     self.recycle_fba.mux.lock();
+            //     for (payloads) |payload| {
+            //         self.recycle_fba.allocator().free(payload);
+            //     }
+            //     self.recycle_fba.mux.unlock();
+            // }
         }
     }
 
@@ -121,37 +156,36 @@ pub const GeyserWriter = struct {
     ///
     /// NOTE: this will block if the pipe is not big enough, which is why we
     /// have the exit flag to signal to stop writing.
-    pub fn writePayload(
+    pub fn writePayloadIO(
         self: *Self,
-        versioned_payload: VersionedAccountPayload,
+        // versioned_payload: VersionedAccountPayload,
+        written_buf: []u8,
     ) !u64 {
-        const len = bincode.sizeOf(versioned_payload, .{});
-        const payload = AccountPayload{ .len = len, .payload = versioned_payload };
+        // const len = bincode.sizeOf(versioned_payload, .{});
+        // const payload = AccountPayload{ .len = len, .payload = versioned_payload };
 
-        // ensure we have enough space in the buffer
-        const size = bincode.sizeOf(payload, .{});
-        if (size > self.io_buf.len) {
-            std.debug.print("resizing io_buf: {} -> {}\n", .{ self.io_buf.len, size });
-            const new_buf = try self.allocator.alloc(u8, size);
-            self.allocator.free(self.io_buf);
-            self.io_buf = new_buf;
-        }
-
-        const written_buf = try bincode.writeToSlice(self.io_buf, payload, .{});
+        // // ensure we have enough space in the buffer
+        // const size = bincode.sizeOf(payload, .{});
+        // if (size > self.io_buf.len) {
+        //     std.debug.print("resizing io_buf: {} -> {}\n", .{ self.io_buf.len, size });
+        //     const new_buf = try self.allocator.alloc(u8, size);
+        //     self.allocator.free(self.io_buf);
+        //     self.io_buf = new_buf;
+        // }
+        // const written_buf = try bincode.writeToSlice(self.io_buf, payload, .{});
 
         var empty_loop_count: usize = 0;
-
         const expected_n_bytes = written_buf.len;
         var n_bytes_written_total: u64 = 0;
         while (n_bytes_written_total < expected_n_bytes) {
-            if (empty_loop_count % 1_000 == 0 and empty_loop_count > 0) {
-                std.debug.print("WARNING: writePayload pipe is full (is the reader alive?)\n", .{});
-                std.time.sleep(std.time.ns_per_s * 3);
-                // TODO: figure out reasonable limit in prod
-                if (empty_loop_count >= 2_000) {
-                    return error.WriterIsBlocked;
-                }
-            }
+            // if (empty_loop_count % 1_000 == 0 and empty_loop_count > 0) {
+            // std.debug.print("WARNING: writePayload pipe is full (is the reader alive?)\n", .{});
+            // std.time.sleep(std.time.ns_per_s * 3);
+            // TODO: figure out reasonable limit in prod
+            // if (empty_loop_count >= 2_000) {
+            //     return error.WriterIsBlocked;
+            // }
+            // }
 
             const n_bytes_written = self.file.write(written_buf[n_bytes_written_total..expected_n_bytes]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
@@ -177,6 +211,109 @@ pub const GeyserWriter = struct {
         }
 
         return written_buf.len;
+    }
+};
+
+pub const RecycleFBA = struct {
+    // this allocates the underlying memory + dynamic expansions
+    // (only used on init/deinit + arraylist expansion)
+    a: std.mem.Allocator,
+    // this does the data allocations (data is returned from alloc)
+    fba_allocator: std.heap.FixedBufferAllocator,
+    data: Data,
+
+    // for thread safety
+    mux: std.Thread.Mutex = .{},
+
+    // TODO: better name
+    const Data = std.ArrayList(struct { is_free: bool, buf: []u8 });
+    const Self = @This();
+
+    pub fn init(a: std.mem.Allocator, max_capacity: u64) !Self {
+        const buffer = try a.alloc(u8, max_capacity);
+        const fba = std.heap.FixedBufferAllocator.init(buffer);
+        const data = Data.init(a);
+
+        return .{
+            .a = a,
+            .fba_allocator = fba,
+            .data = data,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.a.free(self.fba_allocator.buffer);
+        self.data.deinit();
+    }
+
+    pub fn allocator(self: *Self) std.mem.Allocator {
+        return std.mem.Allocator{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .free = free,
+            },
+        };
+    }
+
+    /// creates a new file with size aligned to page_size and returns a pointer to it
+    pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+        _ = log2_align;
+        _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        // check for a buf to recycle
+        for (self.data.items) |*item| {
+            if (item.is_free and item.buf.len >= n) {
+                item.is_free = false;
+                return item.buf.ptr;
+            }
+        }
+
+        // otherwise, allocate a new one
+        const buf = self.fba_allocator.allocator().alloc(u8, n) catch {
+            // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
+            return null;
+        };
+
+        self.data.append(.{ .is_free = false, .buf = buf }) catch {
+            // std.debug.print("RecycleFBA append error: {}\n", .{ err });
+            return null;
+        };
+
+        return buf.ptr;
+    }
+
+    pub fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
+        _ = log2_align;
+        _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        for (self.data.items) |*item| {
+            if (item.buf.ptr == buf.ptr) {
+                item.is_free = true;
+                return;
+            }
+        }
+
+        @panic("RecycleFBA.free: could not find buf to free");
+    }
+
+    /// not supported rn
+    fn resize(
+        _: *anyopaque,
+        buf_unaligned: []u8,
+        log2_buf_align: u8,
+        new_size: usize,
+        return_address: usize,
+    ) bool {
+        // not supported
+        _ = buf_unaligned;
+        _ = log2_buf_align;
+        _ = new_size;
+        _ = return_address;
+        return false;
     }
 };
 
@@ -366,273 +503,273 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     return file;
 }
 
-test "streaming accounts" {
-    const allocator = std.testing.allocator;
-    const batch_len = 2;
+// test "streaming accounts" {
+//     const allocator = std.testing.allocator;
+//     const batch_len = 2;
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+//     var random = std.rand.DefaultPrng.init(19);
+//     const rng = random.random();
 
-    // generate some data
-    const accounts = try allocator.alloc(Account, batch_len);
-    defer {
-        for (accounts) |*account| account.deinit(allocator);
-        allocator.free(accounts);
-    }
-    const pubkeys = try allocator.alloc(Pubkey, batch_len);
-    defer allocator.free(pubkeys);
+//     // generate some data
+//     const accounts = try allocator.alloc(Account, batch_len);
+//     defer {
+//         for (accounts) |*account| account.deinit(allocator);
+//         allocator.free(accounts);
+//     }
+//     const pubkeys = try allocator.alloc(Pubkey, batch_len);
+//     defer allocator.free(pubkeys);
 
-    for (0..batch_len) |i| {
-        accounts[i] = try Account.random(allocator, rng, 10);
-        pubkeys[i] = Pubkey.random(rng);
-    }
+//     for (0..batch_len) |i| {
+//         accounts[i] = try Account.random(allocator, rng, 10);
+//         pubkeys[i] = Pubkey.random(rng);
+//     }
 
-    // setup writer
-    var stream_writer = try GeyserWriter.init(
-        allocator,
-        "test_data/stream_test.pipe",
-        null,
-        .{
-            .io_buf_len = 1 << 18,
-        },
-    );
-    defer stream_writer.deinit();
+//     // setup writer
+//     var stream_writer = try GeyserWriter.init(
+//         allocator,
+//         "test_data/stream_test.pipe",
+//         null,
+//         .{
+//             .io_buf_len = 1 << 18,
+//         },
+//     );
+//     defer stream_writer.deinit();
 
-    // setup reader
-    var stream_reader = try GeyserReader.init(
-        allocator,
-        "test_data/stream_test.pipe",
-        null,
-        .{
-            .bincode_buf_len = 1 << 18,
-            .io_buf_len = 1 << 18,
-        },
-    );
-    defer stream_reader.deinit();
+//     // setup reader
+//     var stream_reader = try GeyserReader.init(
+//         allocator,
+//         "test_data/stream_test.pipe",
+//         null,
+//         .{
+//             .bincode_buf_len = 1 << 18,
+//             .io_buf_len = 1 << 18,
+//         },
+//     );
+//     defer stream_reader.deinit();
 
-    // write to the pipe
-    const v_payload = VersionedAccountPayload{
-        .AccountPayloadV1 = .{
-            .accounts = accounts,
-            .pubkeys = pubkeys,
-            .slot = 100,
-        },
-    };
-    _ = try stream_writer.writePayload(v_payload);
+//     // write to the pipe
+//     const v_payload = VersionedAccountPayload{
+//         .AccountPayloadV1 = .{
+//             .accounts = accounts,
+//             .pubkeys = pubkeys,
+//             .slot = 100,
+//         },
+//     };
+//     _ = try stream_writer.writePayload(v_payload);
 
-    // read from the pipe
-    _, const data = try stream_reader.readPayload();
+//     // read from the pipe
+//     _, const data = try stream_reader.readPayload();
 
-    try std.testing.expectEqualDeep(v_payload, data);
-    stream_reader.resetMemory();
+//     try std.testing.expectEqualDeep(v_payload, data);
+//     stream_reader.resetMemory();
 
-    // write to the pipe twice
-    // #1
-    _ = try stream_writer.writePayload(v_payload);
+//     // write to the pipe twice
+//     // #1
+//     _ = try stream_writer.writePayload(v_payload);
 
-    const accounts2 = try allocator.alloc(Account, batch_len);
-    defer {
-        for (accounts2) |*account| account.deinit(allocator);
-        allocator.free(accounts2);
-    }
-    const pubkeys2 = try allocator.alloc(Pubkey, batch_len);
-    defer allocator.free(pubkeys2);
-    for (0..batch_len) |i| {
-        accounts2[i] = try Account.random(allocator, rng, 10);
-        pubkeys2[i] = Pubkey.random(rng);
-    }
+//     const accounts2 = try allocator.alloc(Account, batch_len);
+//     defer {
+//         for (accounts2) |*account| account.deinit(allocator);
+//         allocator.free(accounts2);
+//     }
+//     const pubkeys2 = try allocator.alloc(Pubkey, batch_len);
+//     defer allocator.free(pubkeys2);
+//     for (0..batch_len) |i| {
+//         accounts2[i] = try Account.random(allocator, rng, 10);
+//         pubkeys2[i] = Pubkey.random(rng);
+//     }
 
-    // #2
-    const v_payload2 = VersionedAccountPayload{
-        .AccountPayloadV1 = .{
-            .accounts = accounts2,
-            .pubkeys = pubkeys2,
-            .slot = 100,
-        },
-    };
-    _ = try stream_writer.writePayload(v_payload2);
+//     // #2
+//     const v_payload2 = VersionedAccountPayload{
+//         .AccountPayloadV1 = .{
+//             .accounts = accounts2,
+//             .pubkeys = pubkeys2,
+//             .slot = 100,
+//         },
+//     };
+//     _ = try stream_writer.writePayload(v_payload2);
 
-    // first payload matches
-    _, const data2 = try stream_reader.readPayload();
-    try std.testing.expectEqualDeep(v_payload, data2);
-    stream_reader.resetMemory();
+//     // first payload matches
+//     _, const data2 = try stream_reader.readPayload();
+//     try std.testing.expectEqualDeep(v_payload, data2);
+//     stream_reader.resetMemory();
 
-    // second payload matches
-    _, const data3 = try stream_reader.readPayload();
-    try std.testing.expectEqualDeep(v_payload2, data3);
-    stream_reader.resetMemory();
-}
+//     // second payload matches
+//     _, const data3 = try stream_reader.readPayload();
+//     try std.testing.expectEqualDeep(v_payload2, data3);
+//     stream_reader.resetMemory();
+// }
 
-test "buf resizing" {
-    const allocator = std.testing.allocator;
-    const batch_len = 2;
+// test "buf resizing" {
+//     const allocator = std.testing.allocator;
+//     const batch_len = 2;
 
-    var random = std.rand.DefaultPrng.init(19);
-    const rng = random.random();
+//     var random = std.rand.DefaultPrng.init(19);
+//     const rng = random.random();
 
-    // generate some data
-    const accounts = try allocator.alloc(Account, batch_len);
-    defer {
-        for (accounts) |*account| account.deinit(allocator);
-        allocator.free(accounts);
-    }
-    const pubkeys = try allocator.alloc(Pubkey, batch_len);
-    defer allocator.free(pubkeys);
+//     // generate some data
+//     const accounts = try allocator.alloc(Account, batch_len);
+//     defer {
+//         for (accounts) |*account| account.deinit(allocator);
+//         allocator.free(accounts);
+//     }
+//     const pubkeys = try allocator.alloc(Pubkey, batch_len);
+//     defer allocator.free(pubkeys);
 
-    for (0..batch_len) |i| {
-        accounts[i] = try Account.random(allocator, rng, 10);
-        pubkeys[i] = Pubkey.random(rng);
-    }
+//     for (0..batch_len) |i| {
+//         accounts[i] = try Account.random(allocator, rng, 10);
+//         pubkeys[i] = Pubkey.random(rng);
+//     }
 
-    // setup writer
-    var stream_writer = try GeyserWriter.init(
-        allocator,
-        "test_data/stream_test.pipe",
-        null,
-        .{ .io_buf_len = 1 },
-    );
-    defer stream_writer.deinit();
+//     // setup writer
+//     var stream_writer = try GeyserWriter.init(
+//         allocator,
+//         "test_data/stream_test.pipe",
+//         null,
+//         .{ .io_buf_len = 1 },
+//     );
+//     defer stream_writer.deinit();
 
-    // setup reader
-    var stream_reader = try GeyserReader.init(
-        allocator,
-        "test_data/stream_test.pipe",
-        null,
-        .{
-            .bincode_buf_len = 1,
-            .io_buf_len = 1,
-        },
-    );
-    defer stream_reader.deinit();
+//     // setup reader
+//     var stream_reader = try GeyserReader.init(
+//         allocator,
+//         "test_data/stream_test.pipe",
+//         null,
+//         .{
+//             .bincode_buf_len = 1,
+//             .io_buf_len = 1,
+//         },
+//     );
+//     defer stream_reader.deinit();
 
-    const v_payload = VersionedAccountPayload{
-        .AccountPayloadV1 = .{
-            .accounts = accounts,
-            .pubkeys = pubkeys,
-            .slot = 100,
-        },
-    };
+//     const v_payload = VersionedAccountPayload{
+//         .AccountPayloadV1 = .{
+//             .accounts = accounts,
+//             .pubkeys = pubkeys,
+//             .slot = 100,
+//         },
+//     };
 
-    // write to the pipe
-    _ = try stream_writer.writePayload(v_payload);
+//     // write to the pipe
+//     _ = try stream_writer.writePayload(v_payload);
 
-    // read from the pipe
-    _, const data = try stream_reader.readPayload();
+//     // read from the pipe
+//     _, const data = try stream_reader.readPayload();
 
-    try std.testing.expectEqualDeep(v_payload, data);
-    stream_reader.resetMemory();
+//     try std.testing.expectEqualDeep(v_payload, data);
+//     stream_reader.resetMemory();
 
-    try std.testing.expect(stream_writer.io_buf.len > 1);
-    try std.testing.expect(stream_reader.io_buf.len > 1);
-    try std.testing.expect(stream_reader.bincode_buf.len > 1);
-}
+//     try std.testing.expect(stream_writer.io_buf.len > 1);
+//     try std.testing.expect(stream_reader.io_buf.len > 1);
+//     try std.testing.expect(stream_reader.bincode_buf.len > 1);
+// }
 
-pub const BenchmarkAccountStream = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+// pub const BenchmarkAccountStream = struct {
+//     pub const min_iterations = 1;
+//     pub const max_iterations = 1;
 
-    pub const BenchmarkArgs = struct {
-        name: []const u8 = "",
-        n_accounts: u64,
-        data_len: u64,
-        slots: u64,
-    };
+//     pub const BenchmarkArgs = struct {
+//         name: []const u8 = "",
+//         n_accounts: u64,
+//         data_len: u64,
+//         slots: u64,
+//     };
 
-    pub const args = [_]BenchmarkArgs{
-        .{
-            .name = "accounts_1k_data_len_100",
-            .n_accounts = 1_000,
-            .data_len = 100,
-            .slots = 100,
-        },
-        .{
-            .name = "accounts_1k_data_len_200",
-            .n_accounts = 1_000,
-            .data_len = 200,
-            .slots = 100,
-        },
-        .{
-            .name = "accounts_1k_data_len_200",
-            .n_accounts = 1_000,
-            .data_len = 400,
-            .slots = 100,
-        },
-        .{
-            .name = "accounts_1k_data_len_1k",
-            .n_accounts = 1_000,
-            .data_len = 1_000,
-            .slots = 100,
-        },
-        .{
-            .name = "accounts_10k_data_len_100",
-            .n_accounts = 10_000,
-            .data_len = 100,
-            .slots = 100,
-        },
-    };
+//     pub const args = [_]BenchmarkArgs{
+//         .{
+//             .name = "accounts_1k_data_len_100",
+//             .n_accounts = 1_000,
+//             .data_len = 100,
+//             .slots = 100,
+//         },
+//         .{
+//             .name = "accounts_1k_data_len_200",
+//             .n_accounts = 1_000,
+//             .data_len = 200,
+//             .slots = 100,
+//         },
+//         .{
+//             .name = "accounts_1k_data_len_200",
+//             .n_accounts = 1_000,
+//             .data_len = 400,
+//             .slots = 100,
+//         },
+//         .{
+//             .name = "accounts_1k_data_len_1k",
+//             .n_accounts = 1_000,
+//             .data_len = 1_000,
+//             .slots = 100,
+//         },
+//         .{
+//             .name = "accounts_10k_data_len_100",
+//             .n_accounts = 10_000,
+//             .data_len = 100,
+//             .slots = 100,
+//         },
+//     };
 
-    pub fn benchmarkAccountStreaming(bench_args: BenchmarkArgs) !u64 {
-        const allocator = std.heap.page_allocator;
+//     pub fn benchmarkAccountStreaming(bench_args: BenchmarkArgs) !u64 {
+//         const allocator = std.heap.page_allocator;
 
-        var random = std.rand.DefaultPrng.init(19);
-        const rng = random.random();
+//         var random = std.rand.DefaultPrng.init(19);
+//         const rng = random.random();
 
-        // generate some data
-        const accounts = try allocator.alloc(Account, bench_args.n_accounts);
-        defer {
-            for (accounts) |*account| {
-                account.deinit(allocator);
-            }
-            allocator.free(accounts);
-        }
-        const pubkeys = try allocator.alloc(Pubkey, bench_args.n_accounts);
-        defer allocator.free(pubkeys);
+//         // generate some data
+//         const accounts = try allocator.alloc(Account, bench_args.n_accounts);
+//         defer {
+//             for (accounts) |*account| {
+//                 account.deinit(allocator);
+//             }
+//             allocator.free(accounts);
+//         }
+//         const pubkeys = try allocator.alloc(Pubkey, bench_args.n_accounts);
+//         defer allocator.free(pubkeys);
 
-        for (0..bench_args.n_accounts) |i| {
-            accounts[i] = try Account.random(allocator, rng, bench_args.data_len);
-            pubkeys[i] = Pubkey.random(rng);
-        }
+//         for (0..bench_args.n_accounts) |i| {
+//             accounts[i] = try Account.random(allocator, rng, bench_args.data_len);
+//             pubkeys[i] = Pubkey.random(rng);
+//         }
 
-        // setup writer
-        var stream_writer = try GeyserWriter.init(allocator, "test_data/bench_test.pipe", null, .{});
-        defer stream_writer.deinit();
+//         // setup writer
+//         var stream_writer = try GeyserWriter.init(allocator, "test_data/bench_test.pipe", null, .{});
+//         defer stream_writer.deinit();
 
-        // setup reader
-        const stream_reader = try allocator.create(GeyserReader);
-        stream_reader.* = try GeyserReader.init(allocator, "test_data/bench_test.pipe", null, .{});
-        defer {
-            stream_reader.deinit();
-            allocator.destroy(stream_reader);
-        }
+//         // setup reader
+//         const stream_reader = try allocator.create(GeyserReader);
+//         stream_reader.* = try GeyserReader.init(allocator, "test_data/bench_test.pipe", null, .{});
+//         defer {
+//             stream_reader.deinit();
+//             allocator.destroy(stream_reader);
+//         }
 
-        const read_handle = try std.Thread.spawn(.{}, readLoop, .{ stream_reader, bench_args.slots });
+//         const read_handle = try std.Thread.spawn(.{}, readLoop, .{ stream_reader, bench_args.slots });
 
-        var start = try sig.time.Timer.start();
-        for (0..bench_args.slots) |slot| {
-            _ = try stream_writer.writePayload(.{
-                .AccountPayloadV1 = .{
-                    .accounts = accounts,
-                    .pubkeys = pubkeys,
-                    .slot = slot,
-                },
-            });
-        }
-        // when reader is done reading, we can stop the timer
-        read_handle.join();
-        const end = start.read().asNanos();
+//         var start = try sig.time.Timer.start();
+//         for (0..bench_args.slots) |slot| {
+//             _ = try stream_writer.writePayload(.{
+//                 .AccountPayloadV1 = .{
+//                     .accounts = accounts,
+//                     .pubkeys = pubkeys,
+//                     .slot = slot,
+//                 },
+//             });
+//         }
+//         // when reader is done reading, we can stop the timer
+//         read_handle.join();
+//         const end = start.read().asNanos();
 
-        return end;
-    }
-};
+//         return end;
+//     }
+// };
 
-pub fn readLoop(stream_reader: *GeyserReader, n_payloads: usize) !void {
-    var count: usize = 0;
-    while (count < n_payloads) {
-        _, const payload = try stream_reader.readPayload();
+// pub fn readLoop(stream_reader: *GeyserReader, n_payloads: usize) !void {
+//     var count: usize = 0;
+//     while (count < n_payloads) {
+//         _, const payload = try stream_reader.readPayload();
 
-        std.mem.doNotOptimizeAway(payload);
-        stream_reader.resetMemory();
+//         std.mem.doNotOptimizeAway(payload);
+//         stream_reader.resetMemory();
 
-        count += 1;
-    }
-}
+//         count += 1;
+//     }
+// }

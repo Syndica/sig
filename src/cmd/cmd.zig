@@ -495,6 +495,8 @@ fn validator() !void {
 }
 
 const GeyserWriter = sig.geyser.GeyserWriter;
+const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
+const RecycleFBA = sig.geyser.core.RecycleFBA;
 
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
@@ -517,13 +519,21 @@ fn validateSnapshot() !void {
     if (geyser_enabled) {
         app_base.logger.info("geyser enabled");
 
+        const recycle_fba = try allocator.create(RecycleFBA);
+        recycle_fba.* = try RecycleFBA.init(allocator, 1 << 32); // 4GB
+
         geyser_writer = try allocator.create(GeyserWriter);
         geyser_writer.?.* = try GeyserWriter.init(
             allocator,
             geyser_pipe_path,
             geyser_exit,
             .{ .io_buf_len = geyser_io_buf_len },
+            recycle_fba,
         );
+
+        // spawn thread to do i/o
+        const handle = try std.Thread.spawn(.{}, GeyserWriter.IOStreamLoop, .{geyser_writer.?});
+        handle.detach();
     }
     defer {
         if (geyser_writer) |geyser| {
