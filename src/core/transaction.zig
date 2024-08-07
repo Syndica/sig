@@ -230,6 +230,14 @@ pub const Instruction = struct {
     program_id: Pubkey,
     accounts: []AccountMeta,
     data: []u8,
+
+    pub fn initSystemInstruction(allocator: std.mem.Allocator, data: SystemInstruction, accounts: []AccountMeta) !Instruction {
+        return .{
+            .program_id = SYSTEM_PROGRAM_ID,
+            .accounts = accounts,
+            .data = try sig.bincode.writeAlloc(allocator, data, .{}),
+        };
+    }
 };
 
 pub const CompiledInstruction = struct {
@@ -389,16 +397,31 @@ pub const CompileError = error{
     UnknownInstructionKey,
 };
 
-// const SYSTEM_PROGRAM = Pubkey.fromString("");
+const SYSTEM_PROGRAM_ID = Pubkey.init([_]u8{1} ** Pubkey.BYTES_LENGTH);
 
-// pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
-//     var account_metas = try allocator.alloc(AccountMeta, 2);
-//     account_metas[0] = AccountMeta.new_mutable(from_pubkey, true);
-//     account_metas[1] = AccountMeta.new_mutable(to_pubkey, false);
-//     .{
-//         .program_id =
-//     }
-// }
+const SystemInstruction = union(enum(u8)) {
+    CreateAccount,
+    Assign,
+    Transfer: struct {
+        lamports: u64,
+    },
+};
+
+pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
+    var account_metas = try allocator.alloc(AccountMeta, 2);
+    account_metas[0] = AccountMeta.new_mutable(from_pubkey, true);
+    account_metas[1] = AccountMeta.new_mutable(to_pubkey, false);
+    return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
+}
+
+test "core.transfer" {
+    const allocator = std.heap.page_allocator;
+    const from_pubkey = Pubkey.default();
+    const to_pubkey = Pubkey.default();
+    const lamports: u64 = 100;
+    const instruction = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+    std.debug.print("{any}", .{instruction});
+}
 
 test "core.transaction: tmp" {
     const msg = Message.default();
