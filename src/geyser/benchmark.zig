@@ -16,6 +16,7 @@ const PIPE_PATH = "../sig/test_data/accountsdb_fuzz.pipe";
 
 pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
+
     var reader = try sig.geyser.GeyserReader.init(allocator, PIPE_PATH, exit, .{});
     defer reader.deinit();
 
@@ -48,8 +49,10 @@ pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
 pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
 
-    var geyser_writer = try GeyserWriter.init(allocator, PIPE_PATH, exit, .{});
+    var geyser_writer = try GeyserWriter.init(allocator, PIPE_PATH, exit, 1 << 32);
     defer geyser_writer.deinit();
+
+    try geyser_writer.spawnIOLoop();
 
     var random = std.rand.DefaultPrng.init(19);
     const rng = random.random();
@@ -74,10 +77,9 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     }
     var slot: Slot = 0;
 
-    var timer = try sig.time.Timer.start();
-    var bytes_written: u64 = 0;
     while (!exit.load(.unordered)) {
-        const n = try geyser_writer.writePayload(
+        // since the i/o happens in another thread, we cant easily track bytes/second here
+        try geyser_writer.writePayloadToPipe(
             VersionedAccountPayload{
                 .AccountPayloadV1 = .{
                     .accounts = accounts,
@@ -86,19 +88,6 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
                 },
             },
         );
-        bytes_written += n;
-
-        if (timer.read().asNanos() > MEASURE_RATE.asNanos()) {
-            // print mb/sec
-            const elapsed = timer.read().asSecs();
-            const bytes_per_sec = bytes_written / elapsed;
-            const mb_per_sec = bytes_per_sec / 1_000_000;
-            const mb_per_sec_dec = (bytes_per_sec - mb_per_sec * 1_000_000) / (1_000_000 / 100);
-            std.debug.print("write mb/sec: {}.{}\n", .{ mb_per_sec, mb_per_sec_dec });
-
-            bytes_written = 0;
-            timer.reset();
-        }
         slot += 1;
     }
 }
