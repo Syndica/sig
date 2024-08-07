@@ -157,7 +157,7 @@ pub const Message = struct {
     pub fn new(allocator: std.mem.Allocator, instructions: []Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
         var compiled_keys = try CompiledKeys.compile(allocator, instructions, payer);
         const header, const account_keys = try compiled_keys.into_message_header_and_account_keys(allocator);
-        const compiled_instructions = try compile_instructions(instructions, account_keys);
+        const compiled_instructions = try compile_instructions(allocator, instructions, account_keys);
         return .{
             .header = header,
             .account_keys = account_keys,
@@ -334,12 +334,14 @@ pub const CompiledKeys = struct {
     /// TODO: Depending on whether the order of account keys is important, the code could be
     /// optimized by simply counting the key types and appending them to account_keys direclty.
     pub fn into_message_header_and_account_keys(self: *CompiledKeys, allocator: std.mem.Allocator) !struct { MessageHeader, []Pubkey } {
-        if (self.maybe_payer) |payer| {
-            _ = self.key_meta_map.swapRemove(payer);
-        }
-
         var writable_signer_keys = std.ArrayList(Pubkey).init(allocator);
         defer writable_signer_keys.deinit();
+
+        if (self.maybe_payer) |payer| {
+            _ = self.key_meta_map.swapRemove(payer);
+            try writable_signer_keys.append(payer);
+        }
+
         var writable_non_signer_keys = std.ArrayList(Pubkey).init(allocator);
         defer writable_non_signer_keys.deinit();
         var readonly_signer_keys = std.ArrayList(Pubkey).init(allocator);
@@ -439,38 +441,30 @@ pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pu
     return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
 }
 
-pub fn compile_instructions(instructions: []Instruction, account_keys: []Pubkey) ![]CompiledInstruction {
-    // var compiled_instructions = try std.ArrayList(CompiledInstruction).initCapacity(std.heap.page_allocator, instructions.len);
-    // defer compiled_instructions.deinit();
+fn index_of(comptime T: type, slice: []const T, value: T) ?usize {
+    for (slice, 0..) |element, index| {
+        if (std.meta.eql(value, element)) return index;
+    } else return null;
+}
 
-    // for (instructions) |instruction| {
-    //     const program_id_index = try account_keys.find(instruction.program_id);
-    //     if (program_id_index == null) {
-    //         return error.UnknownInstructionKey;
-    //     }
-
-    //     var accounts = try std.ArrayList(u8).init(std.heap.page_allocator);
-    //     defer accounts.deinit();
-
-    //     for (instruction.accounts) |account_meta| {
-    //         const account_index = try account_keys.find(account_meta.pubkey);
-    //         if (account_index == null) {
-    //             return error.UnknownInstructionKey;
-    //         }
-    //         try accounts.append(u8, account_index);
-    //     }
-
-    //     try compiled_instructions.append(.{
-    //         .program_id_index = program_id_index.*,
-    //         .accounts = accounts.items,
-    //         .data = instruction.data,
-    //     });
-    // }
-
-    // return compiled_instructions.items;
-    _ = instructions;
-    _ = account_keys;
-    return &[_]CompiledInstruction{};
+pub fn compile_instruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []Pubkey) !CompiledInstruction {
+    const program_id_index = index_of(Pubkey, account_keys, instruction.program_id).?;
+    var accounts = try allocator.alloc(u8, instruction.accounts.len);
+    for (instruction.accounts, 0..) |account, i| {
+        accounts[i] = @truncate(index_of(Pubkey, account_keys, account.pubkey).?);
+    }
+    return .{
+        .program_id_index = @truncate(program_id_index),
+        .data = try allocator.dupe(u8, instruction.data),
+        .accounts = accounts,
+    };
+}
+pub fn compile_instructions(allocator: std.mem.Allocator, instructions: []Instruction, account_keys: []Pubkey) ![]CompiledInstruction {
+    var compiled_instructions = try allocator.alloc(CompiledInstruction, instructions.len);
+    for (instructions, 0..) |instruction, i| {
+        compiled_instructions[i] = try compile_instruction(allocator, instruction, account_keys);
+    }
+    return compiled_instructions;
 }
 
 test "core.transfer" {
@@ -478,8 +472,7 @@ test "core.transfer" {
     const from_pubkey = Pubkey.default();
     const to_pubkey = Pubkey.default();
     const lamports: u64 = 100;
-    const instruction = try transfer(allocator, from_pubkey, to_pubkey, lamports);
-    std.debug.print("{any}\n", .{instruction});
+    _ = try transfer(allocator, from_pubkey, to_pubkey, lamports);
 }
 
 test "core.transaction: tmp" {
