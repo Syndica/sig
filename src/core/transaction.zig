@@ -91,6 +91,13 @@ pub const Transaction = struct {
         };
     }
 
+    pub fn new_unsigned(allocator: std.mem.Allocator, message: Message) Transaction {
+        return Transaction{
+            .signatures = allocator.alloc(Signature, message.header.num_required_signatures),
+            .message = message,
+        };
+    }
+
     pub fn clone(self: *const Transaction, allocator: std.mem.Allocator) error{OutOfMemory}!Transaction {
         return .{
             .signatures = try allocator.dupe(Signature, self.signatures),
@@ -144,6 +151,12 @@ pub const Message = struct {
             .recent_blockhash = Hash.generateSha256Hash(&[_]u8{0}),
             .instructions = &[_]CompiledInstruction{},
         };
+    }
+
+    pub fn new(instructions: []CompiledInstruction, payer: Pubkey) !Message {
+        _ = instructions;
+        _ = payer;
+        unreachable;
     }
 
     pub fn clone(self: *const Message, allocator: std.mem.Allocator) error{OutOfMemory}!Message {
@@ -214,6 +227,12 @@ pub const MessageHeader = struct {
     num_readonly_unsigned_accounts: u8,
 };
 
+pub const Instruction = struct {
+    program_id: Pubkey,
+    accounts: []AccountMeta,
+    data: []u8,
+};
+
 pub const CompiledInstruction = struct {
     /// Index into the transaction keys array indicating the program account that executes this instruction.
     program_id_index: u8,
@@ -237,6 +256,122 @@ pub const CompiledInstruction = struct {
         allocator.free(self.accounts);
         allocator.free(self.data);
     }
+};
+
+pub const AccountMeta = struct {
+    pubkey: Pubkey,
+    is_signer: bool,
+    is_writable: bool,
+};
+
+pub const CompiledKeys = struct {
+    maybe_payer: ?Pubkey,
+    key_meta_map: std.AutoArrayHashMap(Pubkey, CompiledKeyMeta),
+
+    pub fn compile(allocator: std.mem.Allocator, instructions: []Instruction, maybe_payer: ?Pubkey) !CompiledKeys {
+        var key_meta_map = std.AutoArrayHashMap(Pubkey, CompiledKeyMeta).init(allocator);
+        for (instructions) |instruction| {
+            const instruction_meta_gopr = try key_meta_map.getOrPut(instruction.program_id);
+            if (!instruction_meta_gopr.found_existing) {
+                instruction_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+            }
+            instruction_meta_gopr.value_ptr.*.is_invoked = true;
+
+            for (instruction.accounts) |account_meta| {
+                const account_meta_gopr = try key_meta_map.getOrPut(account_meta.pubkey);
+                if (!account_meta_gopr.found_existing) {
+                    account_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                }
+                account_meta_gopr.value_ptr.*.is_signer |= account_meta.is_signer;
+                account_meta_gopr.value_ptr.*.is_writable |= account_meta.is_writable;
+            }
+
+            if (maybe_payer) |payer| {
+                const payer_meta_gopr = try key_meta_map.getOrPut(payer);
+                if (!payer_meta_gopr.found_existing) {
+                    payer_meta_gopr.value_ptr.* = CompiledKeyMeta.default();
+                }
+                payer_meta_gopr.value_ptr.*.is_signer = true;
+                payer_meta_gopr.value_ptr.*.is_writable = true;
+            }
+        }
+        return .{ .maybe_payer = maybe_payer, .key_meta_map = key_meta_map };
+    }
+
+    /// Creates message header and account keys from the compiled keys.
+    /// Account keys memory is allocated and owned by the caller.
+    /// TODO: Depending on whether the order of account keys is important, the code could be
+    /// optimized by simply counting the key types and appending them to account_keys direclty.
+    pub fn into_message_header_and_account_keys(self: *CompiledKeys, allocator: std.mem.Allocator) !struct { MessageHeader, []Pubkey } {
+        if (self.maybe_payer) |payer| {
+            _ = self.key_meta_map.swapRemove(payer);
+        }
+
+        var writable_signer_keys = std.ArrayList(Pubkey).init(allocator);
+        defer writable_signer_keys.deinit();
+        var writable_non_signer_keys = std.ArrayList(Pubkey).init(allocator);
+        defer writable_non_signer_keys.deinit();
+        var readonly_signer_keys = std.ArrayList(Pubkey).init(allocator);
+        defer readonly_signer_keys.deinit();
+        var readonly_non_signer_keys = std.ArrayList(Pubkey).init(allocator);
+        defer readonly_non_signer_keys.deinit();
+
+        var key_meta_map_iter = self.key_meta_map.iterator();
+        while (key_meta_map_iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const meta = entry.value_ptr.*;
+            switch (meta.is_signer) {
+                true => switch (meta.is_writable) {
+                    true => try writable_signer_keys.append(key),
+                    false => try readonly_signer_keys.append(key),
+                },
+                false => switch (meta.is_writable) {
+                    true => try writable_non_signer_keys.append(key),
+                    false => try readonly_non_signer_keys.append(key),
+                },
+            }
+        }
+
+        const header = MessageHeader{
+            .num_required_signatures = writable_signer_keys.len + readonly_signer_keys.len,
+            .num_readonly_signed_accounts = readonly_signer_keys.len,
+            .num_readonly_unsigned_accounts = readonly_non_signer_keys.len,
+        };
+
+        const account_keys_len =
+            writable_signer_keys.len +
+            readonly_signer_keys.len +
+            writable_non_signer_keys.len +
+            readonly_non_signer_keys.len;
+
+        var account_keys = try std.ArrayList(Pubkey).initCapacity(allocator, account_keys_len);
+        try account_keys.appendSlice(writable_signer_keys.items);
+        try account_keys.appendSlice(readonly_signer_keys.items);
+        try account_keys.appendSlice(writable_non_signer_keys.items);
+        try account_keys.appendSlice(readonly_non_signer_keys.items);
+
+        return .{ header, account_keys.items };
+    }
+};
+
+pub const CompiledKeyMeta = struct {
+    is_signer: bool,
+    is_writable: bool,
+    is_invoked: bool,
+
+    pub fn default() CompiledKeyMeta {
+        return .{
+            .is_signer = false,
+            .is_writable = false,
+            .is_invoked = false,
+        };
+    }
+};
+
+pub const CompileError = error{
+    AccountIndexOverflow,
+    AddressTableLookupIndexOverflow,
+    UnknownInstructionKey,
 };
 
 test "core.transaction: tmp" {
