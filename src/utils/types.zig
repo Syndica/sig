@@ -86,6 +86,32 @@ pub const HashMapInfo = struct {
         /// The `max_load_percentage` parameter
         unordered: std.math.IntFittingRange(1, 99),
     };
+
+    pub fn Type(comptime info: HashMapInfo) type {
+        const K = info.Key;
+        const V = info.Value;
+        const Ctx = info.Context;
+        return switch (info.kind) {
+            .array => |store_hash| switch (info.management) {
+                .managed => std.ArrayHashMap(K, V, Ctx, store_hash),
+                .unmanaged => std.ArrayHashMapUnmanaged(K, V, Ctx, store_hash),
+            },
+            .unordered => |max_load_percentage| switch (info.management) {
+                .managed => std.HashMap(K, V, Ctx, max_load_percentage),
+                .unmanaged => std.HashMapUnmanaged(K, V, Ctx, max_load_percentage),
+            },
+        };
+    }
+
+    pub fn Size(comptime info: HashMapInfo) type {
+        return switch (info.kind) {
+            .unordered => info.Type().Size,
+            .array => {
+                comptime std.debug.assert(!@hasDecl(info.Type(), "Size"));
+                return usize;
+            },
+        };
+    }
 };
 
 pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
@@ -166,6 +192,38 @@ pub fn hashMapInfo(comptime T: type) ?HashMapInfo {
         },
         else => return null,
     }
+}
+
+pub const BoundedArrayInfo = struct {
+    Elem: type,
+    capacity: usize,
+    alignment: usize,
+
+    pub fn Type(comptime info: BoundedArrayInfo) type {
+        return std.BoundedArrayAligned(info.Elem, info.alignment, info.capacity);
+    }
+};
+pub fn boundedArrayInfo(comptime T: type) ?BoundedArrayInfo {
+    const structure = switch (@typeInfo(T)) {
+        .Struct => |info| info,
+        else => return null,
+    };
+    if (!@hasField(T, "buffer")) return null;
+    const buffer_field = structure.fields[std.meta.fieldIndex(T, "buffer").?];
+    const alignment = buffer_field.alignment;
+    const Elem, const capacity = switch (@typeInfo(buffer_field.type)) {
+        .Array => |array| .{ array.child, array.len },
+        else => return null,
+    };
+
+    const Actual = std.BoundedArrayAligned(Elem, alignment, capacity);
+    if (T != Actual) return null;
+
+    return .{
+        .Elem = Elem,
+        .capacity = capacity,
+        .alignment = alignment,
+    };
 }
 
 pub inline fn defaultValue(comptime field: std.builtin.Type.StructField) ?field.type {
