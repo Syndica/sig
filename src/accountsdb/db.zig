@@ -453,7 +453,7 @@ pub const AccountsDB = struct {
         if (geyser_is_enabled) {
             // TODO: make size config value
             geyser_slot_storage = try self.allocator.create(GeyserTmpStorage);
-            geyser_slot_storage.?.* = try GeyserTmpStorage.init(self.allocator, n_accounts_estimate, 1 << 30);
+            geyser_slot_storage.?.* = try GeyserTmpStorage.init(self.allocator, n_accounts_estimate);
         }
 
         for (
@@ -2170,10 +2170,6 @@ pub const AccountsDB = struct {
 /// the memory is serialized into bincode and sent through the pipe.
 /// after this, the memory is freed and re-used for the next account file/slot's data.
 pub const GeyserTmpStorage = struct {
-    memory_allocator: std.mem.Allocator,
-    fb_allocator: std.heap.FixedBufferAllocator,
-    memory: []u8,
-
     accounts: ArrayList(Account),
     pubkeys: ArrayList(Pubkey),
 
@@ -2184,14 +2180,8 @@ pub const GeyserTmpStorage = struct {
         OutOfGeyserArrayMemory,
     };
 
-    pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize, fb_size: u64) !Self {
-        const memory = try allocator.alloc(u8, fb_size);
-        const fb_allocator = std.heap.FixedBufferAllocator.init(memory);
-
+    pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize) !Self {
         return .{
-            .memory_allocator = allocator,
-            .fb_allocator = fb_allocator,
-            .memory = memory,
             .accounts = try ArrayList(Account).initCapacity(allocator, n_accounts_estimate),
             .pubkeys = try ArrayList(Pubkey).initCapacity(allocator, n_accounts_estimate),
         };
@@ -2200,24 +2190,19 @@ pub const GeyserTmpStorage = struct {
     pub fn deinit(self: *Self) void {
         self.accounts.deinit();
         self.pubkeys.deinit();
-        self.memory_allocator.free(self.memory);
     }
 
     pub fn reset(self: *Self) void {
         self.accounts.clearRetainingCapacity();
         self.pubkeys.clearRetainingCapacity();
-        self.fb_allocator.reset();
     }
 
-    pub fn cloneAndTrack(self: *Self, account: AccountInFile) Error!void {
-        const data_slice_allocator = self.fb_allocator.allocator();
+    pub fn cloneAndTrack(self: *Self, account_in_file: AccountInFile) Error!void {
+        // NOTE: this works because we mmap the account files - this will not work once we remove mmaps
+        const account = account_in_file.toAccount();
 
-        var account_clone = account.toOwnedAccount(data_slice_allocator) catch return Error.OutOfGeyserFBAMemory;
-        // var account_clone = account.toAccount();
-        errdefer account_clone.deinit(data_slice_allocator);
-
-        self.accounts.append(account_clone) catch return Error.OutOfGeyserArrayMemory;
-        self.pubkeys.append(account.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
+        self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
+        self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
     }
 };
 

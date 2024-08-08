@@ -217,9 +217,8 @@ this approach generates the index with zero locks
 when loading and verifying account files in `loadAndVerifyAccountsFiles`, we also stream the 
 accounts out to geyser (more docs in `src/geyser/readme.md`).
 
-since Account `data: []u8` fields are on disk, we need to clone them before sending them through the 
-
-
+for each account file, we track the associated Accounts and pubkey in the `GeyserTmpStorage` during 
+indexing and then we push them to the pipe and reset the storage.
 
 
 ## validating a snapshot
