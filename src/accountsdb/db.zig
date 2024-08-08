@@ -2592,7 +2592,7 @@ test "geyser stream on load" {
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
-    const geyser_pipe_path = "ledger/accounts_db/geyser.pipe";
+    const geyser_pipe_path = "test_data/geyser.pipe";
     var geyser_writer: ?*GeyserWriter = null;
 
     const geyser_exit = try allocator.create(std.atomic.Value(bool));
@@ -2604,7 +2604,7 @@ test "geyser stream on load" {
         allocator,
         geyser_pipe_path,
         geyser_exit,
-        1 << 32, // 4gb
+        1 << 18,
     );
     defer {
         if (geyser_writer) |writer| {
