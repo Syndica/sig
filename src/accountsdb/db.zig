@@ -2604,7 +2604,7 @@ test "geyser stream on load" {
         allocator,
         geyser_pipe_path,
         geyser_exit,
-        1 << 18,
+        1 << 20,
     );
     defer {
         if (geyser_writer) |writer| {

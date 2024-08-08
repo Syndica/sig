@@ -80,6 +80,11 @@ pub const GeyserWriter = struct {
 
     const Self = @This();
 
+    pub const WritePipeError = error{
+        PipeBlockedWithExitSignaled,
+        PipeClosed,
+    } || std.posix.WriteError;
+
     /// initializes a linux pipe to stream data to
     pub fn init(
         allocator: std.mem.Allocator,
@@ -187,11 +192,6 @@ pub const GeyserWriter = struct {
         const data = try bincode.writeToSlice(buf, payload, .{});
         return data;
     }
-
-    pub const WritePipeError = error{
-        PipeBlockedWithExitSignaled,
-        PipeClosed,
-    } || std.posix.WriteError;
 
     /// streams a buffer of bytes to the pipe and returns the number of bytes wrote.
     ///
@@ -319,7 +319,7 @@ pub const GeyserReader = struct {
             const n_bytes_read = self.file.read(self.io_buf[total_bytes_read..expected_n_bytes]) catch |err| {
                 if (err == std.posix.ReadError.WouldBlock) {
                     if (self.exit != null and self.exit.?.load(.unordered)) {
-                        return error.BlockWithExit;
+                        return error.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is empty but we dont need to exit, so we try again
                         // TODO(metrics): prometheus metrics on empty loop count
@@ -426,7 +426,14 @@ pub fn streamReader(
     var timer = try sig.time.Timer.start();
 
     while (!exit.load(.unordered)) {
-        const n, const payload = try reader.readPayload();
+        const n, const payload = reader.readPayload() catch |err| {
+            if (err == error.PipeBlockedWithExitSignaled) {
+                break;
+            } else {
+                std.debug.print("error reading from pipe: {}\n", .{err});
+                return err;
+            }
+        };
         bytes_read += n;
 
         // just drop the data

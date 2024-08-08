@@ -49,6 +49,10 @@ pub const RecycleFBA = struct {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
 
+        if (n > self.alloc_allocator.buffer.len) {
+            @panic("RecycleFBA.alloc: requested size too large, make the buffer larger");
+        }
+
         // check for a buf to recycle
         for (self.records.items) |*item| {
             if (item.is_free and item.buf.len >= n) {
