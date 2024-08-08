@@ -3,6 +3,7 @@ const sig = @import("../sig.zig");
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
+const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -123,12 +124,6 @@ pub const Transaction = struct {
             return error.TooManySignatures;
         }
         try self.message.sanitize();
-    }
-
-    pub fn serialize(self: *const Transaction, allocator: std.mem.Allocator) ![]u8 {
-        var buf = [_](u8){0} ** Transaction.MAX_BYTES;
-        const serialized = try sig.bincode.writeToSlice(&buf, self, .{});
-        return try allocator.dupe(u8, serialized);
     }
 };
 

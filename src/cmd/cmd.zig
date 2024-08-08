@@ -998,15 +998,20 @@ pub fn transactionForwardingServiceTest() !void {
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_manager.deinit();
 
-    const channel = Channel(TransactionInfo).init(gpa_allocator, 100);
+    const incoming_channel = Channel(TransactionInfo).init(gpa_allocator, 100);
+    defer incoming_channel.deinit();
+
+    const socket_address = SocketAddr.init(app_base.my_ip, 8003);
 
     const transaction_forwarding_thread = try std.Thread.spawn(
         .{},
         sig.transaction_forwarding_service.run,
         .{
+            socket_address,
+            incoming_channel,
             &gossip_service.gossip_table_rw,
-            channel,
             &app_base.exit,
+            app_base.logger,
         },
     );
 

@@ -547,12 +547,13 @@ pub const Instant = struct {
         return Duration.fromNanos((try std.time.Instant.now()).since(self.inner));
     }
 
-    pub fn elapsed_since(self: Instant, earlier: Instant) Duration {
+    pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
         return Duration.fromNanos(self.inner.since(earlier.inner));
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
-        return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
+    pub fn format(self: Instant, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
+        const nanos: u64 = if (@TypeOf(self.inner.timestamp) == std.posix.timespec) @intCast(self.inner.timestamp.tv_sec * 1_000_000_000 + self.inner.timestamp.tv_nsec) else self.inner.timestamp;
+        return writer.print("{s}", .{std.fmt.fmtDuration(nanos)}) catch unreachable;
     }
 };
 

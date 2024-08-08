@@ -1,12 +1,17 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const network = @import("zig-network");
+
+const socket_utils = sig.net.socket_utils;
 
 const Allocator = std.mem.Allocator;
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 const Thread = std.Thread;
+const UdpSocket = network.Socket;
 
+const Packet = sig.net.Packet;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
@@ -24,6 +29,7 @@ const RpcEpochInfo = sig.rpc.Client.EpochInfo;
 const RpcLeaderSchedule = sig.rpc.Client.LeaderSchedule;
 const RpcLatestBlockhash = sig.rpc.Client.LatestBlockhash;
 const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
+const Logger = sig.trace.log.Logger;
 
 const NUM_CONSECUTIVE_LEADER_SLOTS = sig.core.leader_schedule.NUM_CONSECUTIVE_LEADER_SLOTS;
 
@@ -71,17 +77,36 @@ const SEND_TRANSACTION_METRICS_REPORT_RATE = Duration.fromSecs(5);
 const PendingTransactions = AutoArrayHashMap(Signature, TransactionInfo);
 
 pub fn run(
+    socket_address: SocketAddr,
+    incoming_channel: *Channel(TransactionInfo),
     gossip_table_rw: *RwMux(GossipTable),
-    channel: *Channel(TransactionInfo),
     exit: *AtomicBool,
+    logger: Logger,
 ) !void {
     const allocator = std.heap.page_allocator;
+
+    var socket = UdpSocket.create(.ipv4, .udp) catch return error.SocketCreateFailed;
+    socket.bindToPort(socket_address.port()) catch return error.SocketBindFailed;
+    socket.setReadTimeout(socket_utils.SOCKET_TIMEOUT_US) catch return error.SocketSetTimeoutFailed;
+
+    const outgoing_channel = Channel(std.ArrayList(Packet)).init(allocator, 100);
 
     const pending_transactions = PendingTransactions.init(allocator);
     var pending_transactions_rw = RwMux(PendingTransactions).init(pending_transactions);
 
     const service_info = try ServiceInfo.init(allocator, gossip_table_rw);
     var service_info_rw = RwMux(ServiceInfo).init(service_info);
+
+    const send_socket_handle = try Thread.spawn(
+        .{},
+        socket_utils.sendSocket,
+        .{
+            socket,
+            outgoing_channel,
+            exit,
+            logger,
+        },
+    );
 
     const refresh_service_info_handle = try Thread.spawn(
         .{},
@@ -97,7 +122,8 @@ pub fn run(
         receiveTransactionsThread,
         .{
             allocator,
-            channel,
+            incoming_channel,
+            outgoing_channel,
             &service_info_rw,
             &pending_transactions_rw,
             exit,
@@ -109,6 +135,7 @@ pub fn run(
         processTransactionsThread,
         .{
             allocator,
+            outgoing_channel,
             &service_info_rw,
             &pending_transactions_rw,
             exit,
@@ -120,12 +147,13 @@ pub fn run(
         mockTransactionGenerator,
         .{
             allocator,
-            channel,
+            incoming_channel,
             &service_info_rw,
             exit,
         },
     );
 
+    send_socket_handle.join();
     refresh_service_info_handle.join();
     receive_transactions_handle.join();
     process_transactions_handle.join();
@@ -151,7 +179,8 @@ fn refreshServiceInfoThread(
 
 fn receiveTransactionsThread(
     allocator: Allocator,
-    receiver: *Channel(TransactionInfo),
+    receive_channel: *Channel(TransactionInfo),
+    send_channel: *Channel(std.ArrayList(Packet)),
     service_info_rw: *RwMux(ServiceInfo),
     pending_transactions_rw: *RwMux(PendingTransactions),
     exit: *AtomicBool,
@@ -163,10 +192,11 @@ fn receiveTransactionsThread(
     defer transaction_batch.deinit();
 
     while (!exit.load(.unordered)) {
-        const maybe_transaction = receiver.receive();
+        const maybe_transaction = receive_channel.receive();
         const transaction = if (maybe_transaction == null) {
             break;
         } else blk: {
+            std.debug.print("Failed to find leader addresses\n", .{});
             break :blk maybe_transaction.?;
         };
 
@@ -186,6 +216,7 @@ fn receiveTransactionsThread(
         {
             try sendTransactions(
                 allocator,
+                send_channel,
                 service_info_rw,
                 transaction_batch.values(),
             );
@@ -209,6 +240,7 @@ fn receiveTransactionsThread(
 
 fn processTransactionsThread(
     allocator: Allocator,
+    send_channel: *Channel(std.ArrayList(Packet)),
     service_info_rw: *RwMux(ServiceInfo),
     pending_transactions_rw: *RwMux(PendingTransactions),
     exit: *AtomicBool,
@@ -226,6 +258,7 @@ fn processTransactionsThread(
 
         try processTransactions(
             allocator,
+            send_channel,
             service_info_rw,
             pending_transactions,
         );
@@ -234,6 +267,7 @@ fn processTransactionsThread(
 
 fn sendTransactions(
     allocator: Allocator,
+    channel: *Channel(std.ArrayList(Packet)),
     service_info_rw: *RwMux(ServiceInfo),
     transactions: []TransactionInfo,
 ) !void {
@@ -249,15 +283,22 @@ fn sendTransactions(
     };
     defer allocator.free(leader_addresses);
 
-    const wire_transactions = try allocator.alloc([]u8, transactions.len);
+    const wire_transactions = try allocator.alloc([sig.net.packet.PACKET_DATA_SIZE]u8, transactions.len);
     defer allocator.free(wire_transactions);
 
     for (transactions, 0..) |tx, i| {
         wire_transactions[i] = tx.wire_transaction;
     }
 
+    std.debug.print("Sending {} transactions to {} leaders\n", .{ transactions.len, leader_addresses.len });
+    for (transactions) |tx| {
+        std.debug.print("Transaction: {any}\n", .{tx});
+    }
+
     for (leader_addresses) |leader_address| {
         try sendWireTransactions(
+            allocator,
+            channel,
             leader_address,
             &wire_transactions,
         );
@@ -265,20 +306,27 @@ fn sendTransactions(
 }
 
 fn sendWireTransactions(
+    allocator: Allocator,
+    channel: *Channel(std.ArrayList(Packet)),
     address: SocketAddr,
-    transactions: *const [][]u8,
+    transactions: *const [][sig.net.packet.PACKET_DATA_SIZE]u8,
 ) !void {
     // TODO: Implement
     // var conn = connection_cache.get_connection(tpu_address);
     // conn.send_data_async(transactions);
     std.debug.print("Sending transactions to {}\n", .{address});
-    for (transactions.*, 0..) |tx, i| {
-        std.debug.print("Transaction {}: {s}\n", .{ i, tx });
+    var packets = try std.ArrayList(Packet).initCapacity(allocator, transactions.len);
+    for (transactions.*) |tx| {
+        try packets.append(Packet.init(address.toEndpoint(), tx, tx.len));
     }
+    try channel.send(
+        packets,
+    );
 }
 
 fn processTransactions(
     allocator: Allocator,
+    send_channel: *Channel(std.ArrayList(Packet)),
     service_info_rw: *RwMux(ServiceInfo),
     pending_transactions: *PendingTransactions,
 ) !void {
@@ -297,6 +345,9 @@ fn processTransactions(
         .signatures = signatures,
         .searchTransactionHistory = false,
     });
+
+    std.debug.print("Processing {} transactions\n", .{signature_statuses.value.len});
+    std.debug.print("Statuses: {any}\n", .{signature_statuses.value});
 
     // Populate retry_signatures and drop_signatures
     var pending_transactions_iter = pending_transactions.iterator();
@@ -336,7 +387,7 @@ fn processTransactions(
             // If transaction last sent time is greater than the retry sleep time, retry it
             const now = try Instant.now();
             const resend_transaction = if (transaction_info.last_sent_time) |lst| blk: {
-                break :blk now.elapsed_since(lst).asNanos() >= DEFAULT_PROCESS_TRANSACTIONS_RATE.asNanos();
+                break :blk now.elapsedSince(lst).asNanos() >= DEFAULT_PROCESS_TRANSACTIONS_RATE.asNanos();
             } else true;
             if (resend_transaction) {
                 if (transaction_info.last_sent_time) |_| {
@@ -361,7 +412,12 @@ fn processTransactions(
         while (start_index < retry_transactions.len) {
             const end_index = @min(start_index + DEFAULT_BATCH_SIZE, retry_transactions.len);
             const batch = retry_transactions[start_index..end_index];
-            try sendTransactions(allocator, service_info_rw, batch);
+            try sendTransactions(
+                allocator,
+                send_channel,
+                service_info_rw,
+                batch,
+            );
             start_index = end_index;
         }
     }
@@ -382,7 +438,7 @@ const ServiceInfo = struct {
     gossip_table_rw: *RwMux(GossipTable),
 
     const REFERENCE_SLOT_REFRESH_RATE = Duration.fromSecs(10);
-    const NUMBER_OF_LEADERS_TO_FORWARD_TO = 2;
+    const NUMBER_OF_LEADERS_TO_FORWARD_TO = 1;
 
     pub fn init(
         allocator: Allocator,
@@ -452,9 +508,25 @@ const ServiceInfo = struct {
     }
 
     fn getLeaderAfterNSlots(self: *const ServiceInfo, n: u64) !Pubkey {
+        var rpc_client = RpcClient.init(self.allocator, "https://api.testnet.solana.com");
+        defer rpc_client.deinit();
+        const slot = try rpc_client.getSlot(self.allocator);
+
         const slots_elapsed = (try self.epoch_info_instant.elapsed()).asMillis() / 400;
+
         const slot_index = self.epoch_info.slotIndex + slots_elapsed + n;
+
         std.debug.assert(slot_index < self.leader_schedule.slot_leaders.len);
+        std.debug.print("N:                         {}\n", .{n});
+        std.debug.print("Rpc Slot:                  {}\n", .{slot});
+        std.debug.print("Slot After N:              {}\n", .{self.epoch_info.absoluteSlot + slots_elapsed + n});
+        std.debug.print("Approximate Slot Index:    {}\n", .{self.epoch_info.slotIndex + slots_elapsed});
+        std.debug.print("Approximate Absolute Slot: {}\n", .{self.epoch_info.absoluteSlot + slots_elapsed});
+        std.debug.print("Epoch Info Slot Index:     {}\n", .{self.epoch_info.slotIndex});
+        std.debug.print("Epoch Info Absolute Slot:  {}\n", .{self.epoch_info.absoluteSlot});
+        std.debug.print("Approximate Slots Elapsed: {}\n", .{slots_elapsed});
+        std.debug.print("Epoch info: {any}\n", .{self.epoch_info});
+
         return self.leader_schedule.slot_leaders[slot_index];
     }
 
@@ -528,7 +600,7 @@ const ServiceInfo = struct {
 
 pub const TransactionInfo = struct {
     signature: Signature,
-    wire_transaction: []u8,
+    wire_transaction: [sig.net.packet.PACKET_DATA_SIZE]u8,
     last_valid_block_height: u64,
     durable_nonce_info: ?struct { Pubkey, Hash },
     max_retries: ?usize,
@@ -536,21 +608,23 @@ pub const TransactionInfo = struct {
     last_sent_time: ?Instant,
 
     pub fn new(
-        signature: Signature,
-        wire_transaction: []u8,
+        transaction: Transaction,
         last_valid_block_height: u64,
         durable_nonce_info: ?struct { Pubkey, Hash },
         max_retries: ?usize,
-    ) TransactionInfo {
-        return TransactionInfo{
+    ) !TransactionInfo {
+        const signature = transaction.signatures[0];
+        var transaction_info = TransactionInfo{
             .signature = signature,
-            .wire_transaction = wire_transaction,
+            .wire_transaction = undefined,
             .last_valid_block_height = last_valid_block_height,
             .durable_nonce_info = durable_nonce_info,
             .max_retries = max_retries,
             .retries = 0,
             .last_sent_time = null,
         };
+        _ = try sig.bincode.writeToSlice(&transaction_info.wire_transaction, transaction, .{});
+        return transaction_info;
     }
 };
 
@@ -574,8 +648,6 @@ pub fn mockTransactionGenerator(
     const lamports: u64 = 100;
 
     while (!exit.load(.unordered)) {
-        std.time.sleep(Duration.fromSecs(10).asNanos());
-
         const latest_blockhash = blk: {
             var service_info_lock = service_info_rw.read();
             defer service_info_lock.unlock();
@@ -584,7 +656,7 @@ pub fn mockTransactionGenerator(
             break :blk service_info.latest_blockhash.value;
         };
 
-        var transaction = try sig.core.transaction.buildTransferTansaction(
+        const transaction = try sig.core.transaction.buildTransferTansaction(
             allocator,
             from_keypair,
             from_pubkey,
@@ -593,15 +665,16 @@ pub fn mockTransactionGenerator(
             latest_blockhash.blockhash,
         );
 
-        const transaction_info = TransactionInfo.new(
-            transaction.signatures[0],
-            try transaction.serialize(allocator),
+        const transaction_info = try TransactionInfo.new(
+            transaction,
             latest_blockhash.lastValidBlockHeight,
             null,
             null,
         );
 
         try sender.send(transaction_info);
+
+        std.time.sleep(Duration.fromSecs(100000).asNanos());
     }
 }
 
@@ -635,18 +708,22 @@ test "mockTransaction" {
         latest_blockhash.value.blockhash,
     );
 
-    _ = transaction;
-    // std.debug.print("TRANSACTION\n", .{});
-    // for (transaction.signatures) |s| {
-    //     std.debug.print("Signature: {s}\n", .{try s.toString()});
-    // }
+    // _ = transaction;
+    std.debug.print("TRANSACTION\n", .{});
+    for (transaction.signatures) |s| {
+        std.debug.print("Signature: {s}\n", .{s});
+    }
 
-    // std.debug.print("MessageHeader: {}\n", .{transaction.message.header});
-    // for (transaction.message.account_keys) |k| {
-    //     std.debug.print("AccountKey: {s}\n", .{try k.toString()});
-    // }
-    // std.debug.print("RecentBlockhash: {any}\n", .{transaction.message.recent_blockhash});
-    // for (transaction.message.instructions) |i| {
-    //     std.debug.print("Instruction: {any}\n", .{i});
-    // }
+    std.debug.print("MessageHeader: {}\n", .{transaction.message.header});
+    for (transaction.message.account_keys) |k| {
+        std.debug.print("AccountKey: {s}\n", .{k});
+    }
+    std.debug.print("RecentBlockhash: {any}\n", .{transaction.message.recent_blockhash});
+    for (transaction.message.instructions) |i| {
+        std.debug.print("Instruction: {any}\n", .{i});
+    }
+
+    var buf: [sig.net.packet.PACKET_DATA_SIZE]u8 = undefined;
+    const transaction_bytes = try sig.bincode.writeToSlice(&buf, transaction, .{});
+    std.debug.print("TransactionBytes: {any}\n", .{transaction_bytes});
 }
