@@ -322,17 +322,15 @@ pub fn RwMux(comptime T: type) type {
 /// This is used in conjuction with `toConst` function and is a way to
 /// avoid `@TypeOf()` return type.
 pub fn Const(comptime T: type) type {
-    switch (@typeInfo(T)) {
-        .Pointer => |info| {
+    return switch (@typeInfo(T)) {
+        .Pointer => |info| blk: {
             if (info.size == .C) @compileError("C pointers not supported");
             var new_info = info;
             new_info.is_const = true;
-            return @Type(.{ .Pointer = new_info });
+            break :blk @Type(.{ .Pointer = new_info });
         },
-        else => {
-            return *const T;
-        },
-    }
+        else => *const T,
+    };
 }
 
 /// `Mutable` type is a pointer adapter for different types as explained below:
@@ -358,27 +356,10 @@ pub fn Const(comptime T: type) type {
 /// This is used as return type of `mut` function and is a way to
 /// avoid `@TypeOf()` return type or block statements.
 pub fn Mutable(comptime T: type) type {
-    switch (@typeInfo(T)) {
-        .Pointer => |info| {
-            switch (info.size) {
-                .Slice => {
-                    return []info.child;
-                },
-                .One => {
-                    return *info.child;
-                },
-                .Many => {
-                    return *[*]info.child;
-                },
-                else => {
-                    unreachable;
-                },
-            }
-        },
-        else => {
-            return *T;
-        },
-    }
+    return switch (@typeInfo(T)) {
+        .Pointer => T,
+        else => *T,
+    };
 }
 
 test "sync.mux: Const is correct" {
