@@ -966,6 +966,14 @@ pub const BankHashStats = struct {
     total_data_len: u64,
     num_executable_accounts: u64,
 
+    pub const zero_init: BankHashStats = .{
+        .num_updated_accounts = 0,
+        .num_removed_accounts = 0,
+        .num_lamports_stored = 0,
+        .total_data_len = 0,
+        .num_executable_accounts = 0,
+    };
+
     pub fn random(rand: std.Random) BankHashStats {
         return .{
             .num_updated_accounts = rand.int(u64),
@@ -974,6 +982,30 @@ pub const BankHashStats = struct {
             .total_data_len = rand.int(u64),
             .num_executable_accounts = rand.int(u64),
         };
+    }
+
+    pub const AccountData = struct {
+        lamports: u64,
+        data_len: u64,
+        executable: bool,
+    };
+    pub fn update(stats: *BankHashStats, account: AccountData) void {
+        if (account.lamports == 0) {
+            stats.num_removed_accounts += 1;
+        } else {
+            stats.num_updated_accounts += 1;
+        }
+        stats.total_data_len +%= account.data_len;
+        stats.num_executable_accounts += @intFromBool(account.executable);
+        stats.num_lamports_stored +%= account.lamports;
+    }
+
+    pub fn accumulate(stats: *BankHashStats, other: BankHashStats) void {
+        stats.num_updated_accounts += other.num_updated_accounts;
+        stats.num_removed_accounts += other.num_removed_accounts;
+        stats.total_data_len +%= other.total_data_len;
+        stats.num_lamports_stored +%= other.num_lamports_stored;
+        stats.num_executable_accounts += other.num_executable_accounts;
     }
 };
 
