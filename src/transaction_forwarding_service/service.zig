@@ -614,7 +614,7 @@ test "mockTransaction" {
     const to_pubkey = try Pubkey.fromBase58String("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
     const lamports: u64 = 100;
 
-    _ = try sig.core.transaction.buildTransferTansaction(
+    const transaction = try sig.core.transaction.buildTransferTansaction(
         allocator,
         from_keypair,
         from_pubkey,
@@ -623,5 +623,18 @@ test "mockTransaction" {
         latest_blockhash.value.blockhash,
     );
 
-    // std.debug.print("{any}\n", .{transaction});
+    _ = transaction;
+    // std.debug.print("TRANSACTION\n", .{});
+    // for (transaction.signatures) |s| {
+    //     std.debug.print("Signature: {s}\n", .{try s.toString()});
+    // }
+
+    // std.debug.print("MessageHeader: {}\n", .{transaction.message.header});
+    // for (transaction.message.account_keys) |k| {
+    //     std.debug.print("AccountKey: {s}\n", .{try k.toString()});
+    // }
+    // std.debug.print("RecentBlockhash: {any}\n", .{transaction.message.recent_blockhash});
+    // for (transaction.message.instructions) |i| {
+    //     std.debug.print("Instruction: {any}\n", .{i});
+    // }
 }
