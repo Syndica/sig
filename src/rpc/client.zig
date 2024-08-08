@@ -108,8 +108,6 @@ pub const Client = struct {
         );
         defer allocator.free(request_payload);
 
-        // std.debug.print("Request={s}\n", .{request_payload});
-
         const result = try self.http_client.fetch(.{
             .location = .{ .url = self.http_endpoint },
             .method = std.http.Method.POST,
@@ -123,8 +121,6 @@ pub const Client = struct {
         });
 
         std.debug.assert(result.status == std.http.Status.ok); // TODO: handle error
-
-        // std.debug.print("Response={s}\n", .{response_payload.items});
 
         const parsed = try std.json.parseFromSlice(
             Response(R),
@@ -303,11 +299,12 @@ pub const Client = struct {
         var leader_schedule = LeaderSchedule.init(allocator);
         var json_iter = response.result().object.iterator();
         while (json_iter.next()) |entry| {
+            const key = try allocator.dupe(u8, entry.key_ptr.*);
             var slots = try allocator.alloc(u64, entry.value_ptr.*.array.items.len);
             for (entry.value_ptr.*.array.items, 0..) |slot, i| {
                 slots[i] = @intCast(slot.integer);
             }
-            try leader_schedule.put(entry.key_ptr.*, slots);
+            try leader_schedule.put(key, slots);
         }
 
         return leader_schedule; // TODO: handle error
@@ -502,6 +499,9 @@ pub const Client = struct {
         defer client.http_client.deinit();
         var leader_schedule = try client.getLeaderSchedule(allocator, .{});
         defer {
+            for (leader_schedule.keys()) |key| {
+                allocator.free(key);
+            }
             for (leader_schedule.values()) |slots| {
                 allocator.free(slots);
             }

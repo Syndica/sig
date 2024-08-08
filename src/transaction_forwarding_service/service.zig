@@ -87,7 +87,6 @@ pub fn run(
         .{},
         refreshServiceInfoThread,
         .{
-            allocator,
             &service_info_rw,
             exit,
         },
@@ -134,7 +133,6 @@ pub fn run(
 }
 
 fn refreshServiceInfoThread(
-    allocator: Allocator,
     service_info_rw: *RwMux(ServiceInfo),
     exit: *AtomicBool,
 ) !void {
@@ -147,7 +145,7 @@ fn refreshServiceInfoThread(
         defer service_info_lock.unlock();
         var service_info: *ServiceInfo = service_info_lock.mut();
 
-        try service_info.refresh(allocator);
+        try service_info.refresh();
     }
 }
 
@@ -243,7 +241,11 @@ fn sendTransactions(
         var service_info_lock = service_info_rw.read();
         defer service_info_lock.unlock();
         const service_info: *const ServiceInfo = service_info_lock.get();
-        break :blk try service_info.getLeaderAddresses(allocator);
+        if (try service_info.getLeaderAddresses(allocator)) |leader_addresses| {
+            break :blk leader_addresses;
+        } else {
+            return;
+        }
     };
     defer allocator.free(leader_addresses);
 
@@ -286,13 +288,12 @@ fn processTransactions(
     var drop_signatures = std.ArrayList(Signature).init(allocator);
     defer drop_signatures.deinit();
 
-    var service_info_lock = service_info_rw.write();
-    defer service_info_lock.unlock();
-    const service_info: *ServiceInfo = service_info_lock.mut();
+    var rpc_client = RpcClient.init(allocator, "https://api.testnet.solana.com");
+    defer rpc_client.deinit();
 
-    const block_height = try service_info.rpc_client.getBlockHeight(allocator);
+    const block_height = try rpc_client.getBlockHeight(allocator);
     const signatures = pending_transactions.keys();
-    const signature_statuses = try service_info.rpc_client.getSignatureStatuses(allocator, .{
+    const signature_statuses = try rpc_client.getSignatureStatuses(allocator, .{
         .signatures = signatures,
         .searchTransactionHistory = false,
     });
@@ -372,7 +373,7 @@ fn processTransactions(
 }
 
 const ServiceInfo = struct {
-    rpc_client: RpcClient,
+    allocator: Allocator,
     epoch_info: RpcEpochInfo,
     epoch_info_instant: Instant,
     latest_blockhash: RpcLatestBlockhash,
@@ -380,14 +381,15 @@ const ServiceInfo = struct {
     leader_addresses: AutoArrayHashMap(Pubkey, SocketAddr),
     gossip_table_rw: *RwMux(GossipTable),
 
-    const REFERENCE_SLOT_REFRESH_RATE = Duration.fromSecs(60);
+    const REFERENCE_SLOT_REFRESH_RATE = Duration.fromSecs(10);
     const NUMBER_OF_LEADERS_TO_FORWARD_TO = 2;
 
     pub fn init(
         allocator: Allocator,
         gossip_table_rw: *RwMux(GossipTable),
     ) !ServiceInfo {
-        var rpc_client = RpcClient.init(allocator, "https://api.mainnet-beta.solana.com");
+        var rpc_client = RpcClient.init(allocator, "https://api.testnet.solana.com");
+        defer rpc_client.deinit();
 
         const epoch_info_instant = try Instant.now();
         const epoch_info = try rpc_client.getEpochInfo(allocator, .{});
@@ -396,7 +398,7 @@ const ServiceInfo = struct {
         const leader_addresses = try fetchLeaderAddresses(allocator, leader_schedule.slot_leaders, gossip_table_rw);
 
         return .{
-            .rpc_client = rpc_client,
+            .allocator = allocator,
             .epoch_info = epoch_info,
             .epoch_info_instant = epoch_info_instant,
             .latest_blockhash = latest_blockhash,
@@ -412,18 +414,26 @@ const ServiceInfo = struct {
         self.leader_addresses.deinit();
     }
 
-    pub fn refresh(self: *ServiceInfo, allocator: Allocator) !void {
+    pub fn refresh(self: *ServiceInfo) !void {
+        // Deinit allocated resources
+        self.leader_schedule.deinit();
+        self.leader_addresses.deinit();
+
+        // Fetch new data
+        var rpc_client = RpcClient.init(self.allocator, "https://api.testnet.solana.com");
+        defer rpc_client.deinit();
+
         self.epoch_info_instant = try Instant.now();
-        self.epoch_info = try self.rpc_client.getEpochInfo(allocator, .{});
-        self.latest_blockhash = try self.rpc_client.getLatestBlockhash(allocator, .{});
-        self.leader_schedule = try fetchLeaderSchedule(allocator, &self.rpc_client);
-        self.leader_addresses = try fetchLeaderAddresses(allocator, self.leader_schedule.slot_leaders, self.gossip_table_rw);
+        self.epoch_info = try rpc_client.getEpochInfo(self.allocator, .{});
+        self.latest_blockhash = try rpc_client.getLatestBlockhash(self.allocator, .{});
+        self.leader_schedule = try fetchLeaderSchedule(self.allocator, &rpc_client);
+        self.leader_addresses = try fetchLeaderAddresses(self.allocator, self.leader_schedule.slot_leaders, self.gossip_table_rw);
     }
 
     pub fn getLeaderAddresses(
         self: *const ServiceInfo,
         allocator: Allocator,
-    ) ![]SocketAddr {
+    ) !?[]SocketAddr {
         const leaders = try allocator.alloc(Pubkey, NUMBER_OF_LEADERS_TO_FORWARD_TO);
         defer allocator.free(leaders);
 
@@ -433,7 +443,9 @@ const ServiceInfo = struct {
 
         const leader_addresses = try allocator.alloc(SocketAddr, NUMBER_OF_LEADERS_TO_FORWARD_TO);
         for (leaders, 0..) |pk, i| {
-            leader_addresses[i] = self.leader_addresses.get(pk).?;
+            leader_addresses[i] = self.leader_addresses.get(pk) orelse {
+                return null;
+            };
         }
 
         return leader_addresses;
@@ -564,31 +576,31 @@ pub fn mockTransactionGenerator(
     while (!exit.load(.unordered)) {
         std.time.sleep(Duration.fromSecs(10).asNanos());
 
-        const recent_blockhash = blk: {
+        const latest_blockhash = blk: {
             var service_info_lock = service_info_rw.read();
             defer service_info_lock.unlock();
             const service_info: *const ServiceInfo = service_info_lock.get();
 
-            break :blk service_info.latest_blockhash.value.blockhash;
+            break :blk service_info.latest_blockhash.value;
         };
 
-        const transaction = try sig.core.transaction.buildTransferTansaction(
+        var transaction = try sig.core.transaction.buildTransferTansaction(
             allocator,
             from_keypair,
             from_pubkey,
             to_pubkey,
             lamports,
-            recent_blockhash,
+            latest_blockhash.blockhash,
         );
 
         const transaction_info = TransactionInfo.new(
             transaction.signatures[0],
             try transaction.serialize(allocator),
-            0,
+            latest_blockhash.lastValidBlockHeight,
             null,
             null,
         );
-        std.debug.print("Sending transaction: {any}\n", .{transaction_info.signature});
+
         try sender.send(transaction_info);
     }
 }
