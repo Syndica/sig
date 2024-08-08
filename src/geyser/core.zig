@@ -122,6 +122,7 @@ pub const GeyserWriter = struct {
 
         while (!self.exit.load(.unordered)) {
             try self.io_channel.tryDrainRecycle(&payloads);
+            // TODO(metrics): prometheus metrics on number of payloads written
 
             for (payloads.items) |payload| {
                 _ = try self.writeToPipe(payload);
@@ -169,6 +170,11 @@ pub const GeyserWriter = struct {
             break :blk buf;
         };
         self.io_free_fba.mux.unlock();
+        errdefer {
+            self.io_free_fba.mux.lock();
+            self.io_free_fba.allocator().free(buf);
+            self.io_free_fba.mux.unlock();
+        }
 
         // serialize the payload
         const data = try bincode.writeToSlice(buf, payload, .{});

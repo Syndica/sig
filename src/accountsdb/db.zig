@@ -230,13 +230,12 @@ pub const AccountsDB = struct {
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
-        self.logger.infof("loading from snapshot...", .{});
         const load_duration = try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields.file_map,
             n_threads,
             std.heap.page_allocator,
         );
-        std.debug.print("loaded from snapshot in {s}", .{load_duration});
+        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
             const full_snapshot = snapshot_fields_and_paths.full;
@@ -260,6 +259,8 @@ pub const AccountsDB = struct {
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
     ) !sig.time.Duration {
+        self.logger.infof("loading from snapshot...", .{});
+
         // used to read account files
         const n_parse_threads = n_threads;
         // used to merge thread results
@@ -390,45 +391,6 @@ pub const AccountsDB = struct {
         );
     }
 
-    pub const GeyserSlotStorage = struct {
-        memory_allocator: std.mem.Allocator,
-        fb_allocator: std.heap.FixedBufferAllocator,
-        memory: []u8,
-
-        accounts: ArrayList(Account),
-        pubkeys: ArrayList(Pubkey),
-
-        pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize, fb_size: u64) !GeyserSlotStorage {
-            const memory = try allocator.alloc(u8, fb_size);
-            const fb_allocator = std.heap.FixedBufferAllocator.init(memory);
-
-            return .{
-                .memory_allocator = allocator,
-                .fb_allocator = fb_allocator,
-                .memory = memory,
-                .accounts = try ArrayList(Account).initCapacity(allocator, n_accounts_estimate),
-                .pubkeys = try ArrayList(Pubkey).initCapacity(allocator, n_accounts_estimate),
-            };
-        }
-
-        pub fn deinit(self: *GeyserSlotStorage) void {
-            self.accounts.deinit();
-            self.pubkeys.deinit();
-            self.memory_allocator.free(self.memory);
-        }
-
-        pub fn reset(self: *GeyserSlotStorage) void {
-            self.accounts.clearRetainingCapacity();
-            self.pubkeys.clearRetainingCapacity();
-            self.fb_allocator.reset();
-        }
-
-        pub fn track(self: *GeyserSlotStorage, account: Account, pubkey: Pubkey) !void {
-            try self.accounts.append(account);
-            try self.pubkeys.append(pubkey);
-        }
-    };
-
     /// loads and verifies the account files into the threads file map
     /// and stores the accounts into the threads index
     pub fn loadAndVerifyAccountsFiles(
@@ -486,11 +448,12 @@ pub const AccountsDB = struct {
 
         // init storage which holds temporary account data per slot
         // which is eventually written to geyser
-        var geyser_slot_storage: ?GeyserSlotStorage = null;
+        var geyser_slot_storage: ?*GeyserTmpStorage = null;
         const geyser_is_enabled = self.geyser_writer != null;
         if (geyser_is_enabled) {
-            // TODO: make config value
-            geyser_slot_storage = try GeyserSlotStorage.init(self.allocator, n_accounts_estimate, 1 << 30);
+            // TODO: make size config value
+            geyser_slot_storage = try self.allocator.create(GeyserTmpStorage);
+            geyser_slot_storage.?.* = try GeyserTmpStorage.init(self.allocator, n_accounts_estimate, 1 << 30);
         }
 
         for (
@@ -521,7 +484,7 @@ pub const AccountsDB = struct {
                 self.account_index.pubkey_bin_calculator,
                 bin_counts,
                 &references,
-                &geyser_slot_storage,
+                geyser_slot_storage,
             ) catch |err| {
                 switch (err) {
                     error.OutOfReferenceMemory => {
@@ -1840,7 +1803,7 @@ pub const AccountsDB = struct {
         const account_in_file = account_file.readAccount(offset) catch {
             return error.InvalidOffset;
         };
-        const account = try account_in_file.toAccount();
+        const account = account_in_file.toAccount();
 
         return .{ account, account_file_lg };
     }
@@ -1936,13 +1899,14 @@ pub const AccountsDB = struct {
             n_accounts,
         );
 
-        var geyser_storage: ?GeyserSlotStorage = null;
         try indexAndValidateAccountFile(
             account_file,
             self.account_index.pubkey_bin_calculator,
             bin_counts,
             &references,
-            &geyser_storage,
+            // NOTE: this method should only be called in tests/benchmarks so we dont need
+            // to support geyser
+            null,
         );
         try self.account_index.putReferenceBlock(account_file.slot, references);
 
@@ -2001,6 +1965,8 @@ pub const AccountsDB = struct {
     ) !void {
         std.debug.assert(accounts.len == pubkeys.len);
         if (accounts.len == 0) return;
+
+        // TODO(x19): support geyser writes
 
         {
             const accounts_duped = try self.allocator.alloc(Account, accounts.len);
@@ -2199,20 +2165,74 @@ pub const AccountsDB = struct {
     }
 };
 
+/// this is used when loading from a snapshot. it uses a fixed buffer allocator
+/// to allocate memory which is used to clone account data slices of account files.
+/// the memory is serialized into bincode and sent through the pipe.
+/// after this, the memory is freed and re-used for the next account file/slot's data.
+pub const GeyserTmpStorage = struct {
+    memory_allocator: std.mem.Allocator,
+    fb_allocator: std.heap.FixedBufferAllocator,
+    memory: []u8,
+
+    accounts: ArrayList(Account),
+    pubkeys: ArrayList(Pubkey),
+
+    const Self = @This();
+
+    pub const Error = error{
+        OutOfGeyserFBAMemory,
+        OutOfGeyserArrayMemory,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize, fb_size: u64) !Self {
+        const memory = try allocator.alloc(u8, fb_size);
+        const fb_allocator = std.heap.FixedBufferAllocator.init(memory);
+
+        return .{
+            .memory_allocator = allocator,
+            .fb_allocator = fb_allocator,
+            .memory = memory,
+            .accounts = try ArrayList(Account).initCapacity(allocator, n_accounts_estimate),
+            .pubkeys = try ArrayList(Pubkey).initCapacity(allocator, n_accounts_estimate),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.accounts.deinit();
+        self.pubkeys.deinit();
+        self.memory_allocator.free(self.memory);
+    }
+
+    pub fn reset(self: *Self) void {
+        self.accounts.clearRetainingCapacity();
+        self.pubkeys.clearRetainingCapacity();
+        self.fb_allocator.reset();
+    }
+
+    pub fn cloneAndTrack(self: *Self, account: AccountInFile) Error!void {
+        const data_slice_allocator = self.fb_allocator.allocator();
+
+        var account_clone = account.toOwnedAccount(data_slice_allocator) catch return Error.OutOfGeyserFBAMemory;
+        // var account_clone = account.toAccount();
+        errdefer account_clone.deinit(data_slice_allocator);
+
+        self.accounts.append(account_clone) catch return Error.OutOfGeyserArrayMemory;
+        self.pubkeys.append(account.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
+    }
+};
+
 pub const ValidateAccountFileError = error{
     BinCountMismatch,
     InvalidAccountFileLength,
     OutOfReferenceMemory,
-    OutOfGeyserFBAMemory,
-    OutOfGeyserArrayMemory,
-} || AccountInFile.ValidateError;
+} || AccountInFile.ValidateError || GeyserTmpStorage.Error;
 
 pub fn indexAndValidateAccountFile(
     accounts_file: *AccountFile,
     pubkey_bin_calculator: PubkeyBinCalculator,
     bin_counts: []usize,
     account_refs: *ArrayList(AccountRef),
-    geyser_storage: *?AccountsDB.GeyserSlotStorage,
+    geyser_storage: ?*GeyserTmpStorage,
 ) ValidateAccountFileError!void {
     var offset: usize = 0;
     var number_of_accounts: usize = 0;
@@ -2225,20 +2245,8 @@ pub fn indexAndValidateAccountFile(
         const account = accounts_file.readAccount(offset) catch break;
         try account.validate();
 
-        if (geyser_storage.*) |*storage| {
-            var account_clone = account.toOwnedAccount(storage.fb_allocator.allocator()) catch {
-                // preallocated FBA is not enough for account data slice clone
-                return ValidateAccountFileError.OutOfGeyserFBAMemory;
-            };
-            errdefer account_clone.deinit(storage.fb_allocator.allocator());
-
-            storage.track(
-                account_clone,
-                account.pubkey().*,
-            ) catch {
-                // arraylist memory is not enough
-                return ValidateAccountFileError.OutOfGeyserArrayMemory;
-            };
+        if (geyser_storage) |storage| {
+            try storage.cloneAndTrack(account);
         }
 
         account_refs.append(.{

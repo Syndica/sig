@@ -522,7 +522,7 @@ fn validateSnapshot() !void {
             allocator,
             geyser_pipe_path,
             geyser_exit,
-            1 << 32,
+            1 << 32, // 4gb
         );
 
         // start the geyser writer

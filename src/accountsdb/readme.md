@@ -212,6 +212,15 @@ this approach generates the index with zero locks
 <img src="imgs/2024-03-21-09-15-08.png" width="520" height="340">
 </div>
 
+### geyser during load
+
+when loading and verifying account files in `loadAndVerifyAccountsFiles`, we also stream the 
+accounts out to geyser (more docs in `src/geyser/readme.md`).
+
+since Account `data: []u8` fields are on disk, we need to clone them before sending them through the 
+
+
+
 
 ## validating a snapshot
 
