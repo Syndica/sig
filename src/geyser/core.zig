@@ -125,7 +125,14 @@ pub const GeyserWriter = struct {
             // TODO(metrics): prometheus metrics on number of payloads written
 
             for (payloads.items) |payload| {
-                _ = try self.writeToPipe(payload);
+                _ = self.writeToPipe(payload) catch |err| {
+                    if (err == WritePipeError.PipeBlockedWithExitSignaled) {
+                        return;
+                    } else {
+                        std.debug.print("error writing to pipe: {}\n", .{err});
+                        return err;
+                    }
+                };
 
                 self.io_free_fba.mux.lock();
                 self.io_free_fba.allocator().free(payload);
@@ -181,6 +188,11 @@ pub const GeyserWriter = struct {
         return data;
     }
 
+    pub const WritePipeError = error{
+        PipeBlockedWithExitSignaled,
+        PipeClosed,
+    } || std.posix.WriteError;
+
     /// streams a buffer of bytes to the pipe and returns the number of bytes wrote.
     ///
     /// NOTE: this will block if the pipe is not big enough, which is why we
@@ -188,7 +200,7 @@ pub const GeyserWriter = struct {
     pub fn writeToPipe(
         self: *Self,
         buf: []u8,
-    ) !u64 {
+    ) WritePipeError!u64 {
         var pipe_full_count: usize = 0;
 
         var n_bytes_written_total: u64 = 0;
@@ -196,7 +208,7 @@ pub const GeyserWriter = struct {
             const n_bytes_written = self.file.write(buf[n_bytes_written_total..]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
                     if (self.exit.load(.unordered)) {
-                        return error.PipeBlockedWithExitSignaled;
+                        return WritePipeError.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
                         // TODO(metrics): prometheus metrics on pipe_full_count
@@ -209,7 +221,7 @@ pub const GeyserWriter = struct {
             };
 
             if (n_bytes_written == 0) {
-                return error.PipeClosed;
+                return WritePipeError.PipeClosed;
             }
             // TODO(metrics): prometheus metrics on total_bytes_written
             n_bytes_written_total += n_bytes_written;
@@ -397,6 +409,43 @@ pub fn openPipe(pipe_path: []const u8) !std.fs.File {
     }
 
     return file;
+}
+
+pub fn streamReader(
+    exit: *std.atomic.Value(bool),
+    pipe_path: []const u8,
+    measure_rate: ?sig.time.Duration,
+    allocator_config: ?GeyserReader.AllocatorConfig,
+) !void {
+    const allocator = std.heap.page_allocator;
+
+    var reader = try sig.geyser.GeyserReader.init(allocator, pipe_path, exit, allocator_config orelse .{});
+    defer reader.deinit();
+
+    var bytes_read: usize = 0;
+    var timer = try sig.time.Timer.start();
+
+    while (!exit.load(.unordered)) {
+        const n, const payload = try reader.readPayload();
+        bytes_read += n;
+
+        // just drop the data
+        std.mem.doNotOptimizeAway(payload);
+        reader.resetMemory();
+
+        // mb/sec reading
+        if (measure_rate != null and timer.read().asNanos() > measure_rate.?.asNanos()) {
+            // print mb/sec
+            const elapsed = timer.read().asSecs();
+            const bytes_per_sec = bytes_read / elapsed;
+            const mb_per_sec = bytes_per_sec / 1_000_000;
+            const mb_per_sec_dec = (bytes_per_sec - mb_per_sec * 1_000_000) / (1_000_000 / 100);
+            std.debug.print("read mb/sec: {}.{}\n", .{ mb_per_sec, mb_per_sec_dec });
+
+            bytes_read = 0;
+            timer.reset();
+        }
+    }
 }
 
 test "streaming accounts" {

@@ -14,38 +14,6 @@ const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 const MEASURE_RATE = sig.time.Duration.fromSecs(2);
 const PIPE_PATH = "../sig/test_data/accountsdb_fuzz.pipe";
 
-pub fn streamReader(exit: *std.atomic.Value(bool)) !void {
-    const allocator = std.heap.page_allocator;
-
-    var reader = try sig.geyser.GeyserReader.init(allocator, PIPE_PATH, exit, .{});
-    defer reader.deinit();
-
-    var bytes_read: usize = 0;
-    var timer = try sig.time.Timer.start();
-
-    while (!exit.load(.unordered)) {
-        const n, const payload = try reader.readPayload();
-        bytes_read += n;
-
-        // just drop the data
-        std.mem.doNotOptimizeAway(payload);
-        reader.resetMemory();
-
-        // mb/sec reading
-        if (timer.read().asNanos() > MEASURE_RATE.asNanos()) {
-            // print mb/sec
-            const elapsed = timer.read().asSecs();
-            const bytes_per_sec = bytes_read / elapsed;
-            const mb_per_sec = bytes_per_sec / 1_000_000;
-            const mb_per_sec_dec = (bytes_per_sec - mb_per_sec * 1_000_000) / (1_000_000 / 100);
-            std.debug.print("read mb/sec: {}.{}\n", .{ mb_per_sec, mb_per_sec_dec });
-
-            bytes_read = 0;
-            timer.reset();
-        }
-    }
-}
-
 pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;
 
@@ -92,7 +60,12 @@ pub fn runBenchmark() !void {
 
     exit.* = std.atomic.Value(bool).init(false);
 
-    const reader_handle = try std.Thread.spawn(.{}, streamReader, .{exit});
+    const reader_handle = try std.Thread.spawn(.{}, geyser.core.streamReader, .{
+        exit,
+        PIPE_PATH,
+        MEASURE_RATE,
+        null,
+    });
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
 
     // let it run for ~4 measurements

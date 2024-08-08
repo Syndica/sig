@@ -227,6 +227,31 @@ pub fn run() !void {
         .value_name = "number_of_index_bins",
     };
 
+    // geyser options
+    var enable_geyser_option = cli.Option{
+        .long_name = "enable-geyser",
+        .help = "enable geyser",
+        .value_ref = cli.mkRef(&config.current.geyser.enable),
+        .required = false,
+        .value_name = "enable_geyser",
+    };
+
+    var geyser_pipe_path_option = cli.Option{
+        .long_name = "geyser-pipe-path",
+        .help = "path to the geyser pipe",
+        .value_ref = cli.mkRef(&config.current.geyser.pipe_path),
+        .required = false,
+        .value_name = "geyser_pipe_path",
+    };
+
+    var geyser_writer_fba_bytes_option = cli.Option{
+        .long_name = "geyser-writer-fba-bytes",
+        .help = "number of bytes to allocate for the geyser writer",
+        .value_ref = cli.mkRef(&config.current.geyser.writer_fba_bytes),
+        .required = false,
+        .value_name = "geyser_writer_fba_bytes",
+    };
+
     const app = cli.App{
         .version = "0.2.0",
         .author = "Syndica & Contributors",
@@ -308,6 +333,10 @@ pub fn run() !void {
                             &trusted_validators_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            // geyser
+                            &enable_geyser_option,
+                            &geyser_pipe_path_option,
+                            &geyser_writer_fba_bytes_option,
                             // general
                             &leader_schedule_option,
                         },
@@ -360,6 +389,10 @@ pub fn run() !void {
                             &force_unpack_snapshot_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            // geyser
+                            &enable_geyser_option,
+                            &geyser_pipe_path_option,
+                            &geyser_writer_fba_bytes_option,
                         },
                         .target = .{
                             .action = .{
@@ -455,14 +488,21 @@ fn validator() !void {
     });
     defer gossip_manager.deinit();
 
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    defer {
+        if (geyser_writer) |geyser| {
+            geyser.deinit();
+            allocator.destroy(geyser.exit);
+        }
+    }
+
     const snapshot = try loadSnapshot(
         allocator,
         app_base.logger,
         gossip_service,
         true,
         false,
-        // TODO(geyser) : add geyser writer
-        null,
+        geyser_writer,
     );
 
     // leader schedule
@@ -497,6 +537,31 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
+fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
+    var geyser_writer: ?*GeyserWriter = null;
+    if (config.current.geyser.enable) {
+        logger.info("Starting GeyserWriter...");
+
+        const exit = try allocator.create(Atomic(bool));
+        exit.* = Atomic(bool).init(false);
+
+        geyser_writer = try allocator.create(GeyserWriter);
+        geyser_writer.?.* = try GeyserWriter.init(
+            allocator,
+            config.current.geyser.pipe_path,
+            exit,
+            config.current.geyser.writer_fba_bytes,
+        );
+
+        // start the geyser writer
+        try geyser_writer.?.spawnIOLoop();
+    } else {
+        logger.info("GeyserWriter is disabled.");
+    }
+
+    return geyser_writer;
+}
+
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
     const app_base = try AppBase.init(allocator);
@@ -505,30 +570,13 @@ fn validateSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
-    const geyser_exit = try allocator.create(Atomic(bool));
-    defer allocator.destroy(geyser_exit);
-    geyser_exit.* = Atomic(bool).init(false);
-
-    // TMP CONFIG
-    const geyser_enabled = true;
-    const geyser_pipe_path = "ledger/accounts_db/geyser.pipe";
-
-    var geyser_writer: ?*GeyserWriter = null;
-    if (geyser_enabled) {
-        app_base.logger.info("geyser enabled");
-
-        geyser_writer = try allocator.create(GeyserWriter);
-        geyser_writer.?.* = try GeyserWriter.init(
-            allocator,
-            geyser_pipe_path,
-            geyser_exit,
-            1 << 32, // 4gb
-        );
-
-        // start the geyser writer
-        try geyser_writer.?.spawnIOLoop();
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    defer {
+        if (geyser_writer) |geyser| {
+            geyser.deinit();
+            allocator.destroy(geyser.exit);
+        }
     }
-    defer if (geyser_writer) |geyser| geyser.deinit();
 
     const snapshot_result = try loadSnapshot(
         allocator,

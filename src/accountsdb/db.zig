@@ -455,6 +455,12 @@ pub const AccountsDB = struct {
             geyser_slot_storage = try self.allocator.create(GeyserTmpStorage);
             geyser_slot_storage.?.* = try GeyserTmpStorage.init(self.allocator, n_accounts_estimate);
         }
+        defer {
+            if (geyser_slot_storage) |storage| {
+                storage.deinit();
+                self.allocator.destroy(storage);
+            }
+        }
 
         for (
             file_info_map.keys()[file_map_start_index..file_map_end_index],
@@ -2503,7 +2509,7 @@ test testWriteSnapshotFull {
     // try testWriteSnapshot(tmp_snap_dir, 25);
 }
 
-fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
+fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
     var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
@@ -2533,6 +2539,15 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
             true,
         );
     }
+}
+
+fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
+    std.debug.assert(builtin.is_test); // should only be used in tests
+
+    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    defer dir.close();
+
+    try unpackTestSnapshot(allocator, n_threads);
 
     const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
@@ -2559,6 +2574,83 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     );
 
     return .{ accounts_db, snapshots };
+}
+
+// NOTE: this is a memory leak test - geyser correctness is tested in the geyser tests
+test "geyser stream on load" {
+    const allocator = std.testing.allocator;
+
+    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    defer dir.close();
+    try unpackTestSnapshot(allocator, 2);
+
+    const snapshot_files = try SnapshotFiles.find(allocator, dir);
+
+    const logger = Logger{ .noop = {} };
+    // var logger = Logger.init(std.heap.page_allocator, .debug);
+
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
+    errdefer snapshots.deinit(allocator);
+
+    const geyser_pipe_path = "ledger/accounts_db/geyser.pipe";
+    var geyser_writer: ?*GeyserWriter = null;
+
+    const geyser_exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(geyser_exit);
+    geyser_exit.* = std.atomic.Value(bool).init(false);
+
+    geyser_writer = try allocator.create(GeyserWriter);
+    geyser_writer.?.* = try GeyserWriter.init(
+        allocator,
+        geyser_pipe_path,
+        geyser_exit,
+        1 << 32, // 4gb
+    );
+    defer {
+        if (geyser_writer) |writer| {
+            writer.deinit();
+            allocator.destroy(writer);
+        }
+    }
+
+    // start the geyser writer
+    try geyser_writer.?.spawnIOLoop();
+
+    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        geyser_exit,
+        geyser_pipe_path,
+        null,
+        null,
+    });
+    defer {
+        geyser_exit.store(true, .unordered);
+        _ = reader_handle.join();
+    }
+
+    const snapshot = try snapshots.collapse();
+    var accounts_db = try AccountsDB.init(
+        allocator,
+        logger,
+        dir,
+        .{
+            .number_of_index_bins = 4,
+            .use_disk_index = false,
+        },
+        geyser_writer,
+    );
+    defer {
+        accounts_db.deinit(true);
+        snapshots.deinit(allocator);
+    }
+
+    var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
+    defer accounts_dir.close();
+
+    _ = try accounts_db.loadFromSnapshot(
+        snapshot.accounts_db_fields.file_map,
+        1,
+        allocator,
+    );
 }
 
 test "write and read an account" {
