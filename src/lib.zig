@@ -1,5 +1,6 @@
 pub const accounts_db = @import("accountsdb/lib.zig");
 pub const bincode = @import("bincode/bincode.zig");
+pub const blockstore = @import("blockstore/lib.zig");
 pub const bloom = @import("bloom/lib.zig");
 pub const core = @import("core/lib.zig");
 pub const crypto = @import("crypto/fnv.zig");

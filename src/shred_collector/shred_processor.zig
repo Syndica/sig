@@ -64,8 +64,8 @@ fn processShred(
     };
     var shred = try Shred.fromPayload(allocator, shred_payload);
     defer shred.deinit();
-    if (shred == Shred.Data) {
-        const parent = try shred.Data.parent();
+    if (shred == .data) {
+        const parent = try shred.data.parent();
         if (parent + 1 != slot) {
             tracker.skipSlots(parent, slot) catch |err| switch (err) {
                 error.SlotUnderflow, error.SlotOverflow => {},

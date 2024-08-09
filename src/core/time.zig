@@ -7,3 +7,8 @@ pub const Epoch = u64;
 ///
 /// It is some some number of _ticks_ long.
 pub const Slot = u64;
+
+/// The default tick rate that the cluster attempts to achieve (160 per second).
+///
+/// Note that the actual tick rate at any given time should be expected to drift.
+pub const DEFAULT_TICKS_PER_SECOND: u64 = 160;
