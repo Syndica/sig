@@ -283,12 +283,12 @@ fn sendTransactions(
     };
     defer allocator.free(leader_addresses);
 
-    const wire_transactions = try allocator.alloc([sig.net.packet.PACKET_DATA_SIZE]u8, transactions.len);
-    defer allocator.free(wire_transactions);
+    // const wire_transactions = try allocator.alloc([sig.net.packet.PACKET_DATA_SIZE]u8, transactions.len);
+    // defer allocator.free(wire_transactions);
 
-    for (transactions, 0..) |tx, i| {
-        wire_transactions[i] = tx.wire_transaction;
-    }
+    // for (transactions, 0..) |tx, i| {
+    //     wire_transactions[i] = tx.wire_transaction;
+    // }
 
     std.debug.print("Sending {} transactions to {} leaders\n", .{ transactions.len, leader_addresses.len });
     for (transactions) |tx| {
@@ -296,32 +296,15 @@ fn sendTransactions(
     }
 
     for (leader_addresses) |leader_address| {
-        try sendWireTransactions(
-            allocator,
-            channel,
-            leader_address,
-            &wire_transactions,
+        std.debug.print("Sending transactions to {}\n", .{leader_address});
+        var packets = try std.ArrayList(Packet).initCapacity(allocator, transactions.len);
+        for (transactions) |tx| {
+            try packets.append(Packet.init(leader_address.toEndpoint(), tx.wire_transaction, tx.wire_transaction_size));
+        }
+        try channel.send(
+            packets,
         );
     }
-}
-
-fn sendWireTransactions(
-    allocator: Allocator,
-    channel: *Channel(std.ArrayList(Packet)),
-    address: SocketAddr,
-    transactions: *const [][sig.net.packet.PACKET_DATA_SIZE]u8,
-) !void {
-    // TODO: Implement
-    // var conn = connection_cache.get_connection(tpu_address);
-    // conn.send_data_async(transactions);
-    std.debug.print("Sending transactions to {}\n", .{address});
-    var packets = try std.ArrayList(Packet).initCapacity(allocator, transactions.len);
-    for (transactions.*) |tx| {
-        try packets.append(Packet.init(address.toEndpoint(), tx, tx.len));
-    }
-    try channel.send(
-        packets,
-    );
 }
 
 fn processTransactions(
@@ -453,6 +436,16 @@ const ServiceInfo = struct {
         const leader_schedule = try fetchLeaderSchedule(allocator, &rpc_client);
         const leader_addresses = try fetchLeaderAddresses(allocator, leader_schedule.slot_leaders, gossip_table_rw);
 
+        const file = try std.fs.cwd().createFile("leader-schedule.log", .{});
+        defer file.close();
+
+        for (leader_schedule.slot_leaders, 0..) |leader, i| {
+            const slot = epoch_info.absoluteSlot - epoch_info.slotIndex + i;
+            const string = try std.fmt.allocPrint(allocator, "{} {s}", .{ slot, try leader.toString() });
+            try file.writeAll(string);
+            try file.writeAll("\n");
+        }
+
         return .{
             .allocator = allocator,
             .epoch_info = epoch_info,
@@ -494,7 +487,7 @@ const ServiceInfo = struct {
         defer allocator.free(leaders);
 
         for (0..NUMBER_OF_LEADERS_TO_FORWARD_TO) |i| {
-            leaders[i] = try self.getLeaderAfterNSlots(NUM_CONSECUTIVE_LEADER_SLOTS * i);
+            leaders[i] = try self.getLeaderAfterNSlots(NUM_CONSECUTIVE_LEADER_SLOTS * (i + 1));
         }
 
         const leader_addresses = try allocator.alloc(SocketAddr, NUMBER_OF_LEADERS_TO_FORWARD_TO);
@@ -502,6 +495,7 @@ const ServiceInfo = struct {
             leader_addresses[i] = self.leader_addresses.get(pk) orelse {
                 return null;
             };
+            std.debug.print("Leader pubkey={s} has address={any}\n", .{ try leaders[i].toString(), leader_addresses[i] });
         }
 
         return leader_addresses;
@@ -520,12 +514,13 @@ const ServiceInfo = struct {
         std.debug.print("N:                         {}\n", .{n});
         std.debug.print("Rpc Slot:                  {}\n", .{slot});
         std.debug.print("Slot After N:              {}\n", .{self.epoch_info.absoluteSlot + slots_elapsed + n});
-        std.debug.print("Approximate Slot Index:    {}\n", .{self.epoch_info.slotIndex + slots_elapsed});
-        std.debug.print("Approximate Absolute Slot: {}\n", .{self.epoch_info.absoluteSlot + slots_elapsed});
-        std.debug.print("Epoch Info Slot Index:     {}\n", .{self.epoch_info.slotIndex});
-        std.debug.print("Epoch Info Absolute Slot:  {}\n", .{self.epoch_info.absoluteSlot});
-        std.debug.print("Approximate Slots Elapsed: {}\n", .{slots_elapsed});
-        std.debug.print("Epoch info: {any}\n", .{self.epoch_info});
+        // std.debug.print("Approximate Slot Index:    {}\n", .{self.epoch_info.slotIndex + slots_elapsed});
+        // std.debug.print("Approximate Absolute Slot: {}\n", .{self.epoch_info.absoluteSlot + slots_elapsed});
+        // std.debug.print("Epoch Info Slot Index:     {}\n", .{self.epoch_info.slotIndex});
+        // std.debug.print("Epoch Info Absolute Slot:  {}\n", .{self.epoch_info.absoluteSlot});
+        // std.debug.print("Approximate Slots Elapsed: {}\n", .{slots_elapsed});
+        std.debug.print("EpochInfo: {any}\n", .{self.epoch_info});
+        std.debug.print("Leader Schedule Start: {any}\n", .{self.leader_schedule.start_slot});
 
         return self.leader_schedule.slot_leaders[slot_index];
     }
@@ -562,8 +557,8 @@ const ServiceInfo = struct {
         std.mem.sortUnstable(Record, leaders, {}, struct {
             fn gt(_: void, lhs: Record, rhs: Record) bool {
                 return switch (std.math.order(lhs.slot, rhs.slot)) {
-                    .gt => true,
-                    else => false,
+                    .gt => false,
+                    else => true,
                 };
             }
         }.gt);
@@ -601,6 +596,7 @@ const ServiceInfo = struct {
 pub const TransactionInfo = struct {
     signature: Signature,
     wire_transaction: [sig.net.packet.PACKET_DATA_SIZE]u8,
+    wire_transaction_size: usize,
     last_valid_block_height: u64,
     durable_nonce_info: ?struct { Pubkey, Hash },
     max_retries: ?usize,
@@ -617,13 +613,15 @@ pub const TransactionInfo = struct {
         var transaction_info = TransactionInfo{
             .signature = signature,
             .wire_transaction = undefined,
+            .wire_transaction_size = 0,
             .last_valid_block_height = last_valid_block_height,
             .durable_nonce_info = durable_nonce_info,
             .max_retries = max_retries,
             .retries = 0,
             .last_sent_time = null,
         };
-        _ = try sig.bincode.writeToSlice(&transaction_info.wire_transaction, transaction, .{});
+        const written = try sig.bincode.writeToSlice(&transaction_info.wire_transaction, transaction, .{});
+        transaction_info.wire_transaction_size = written.len;
         return transaction_info;
     }
 };
@@ -648,6 +646,8 @@ pub fn mockTransactionGenerator(
     const lamports: u64 = 100;
 
     while (!exit.load(.unordered)) {
+        std.time.sleep(Duration.fromSecs(60 * 2).asNanos());
+
         const latest_blockhash = blk: {
             var service_info_lock = service_info_rw.read();
             defer service_info_lock.unlock();
@@ -673,8 +673,6 @@ pub fn mockTransactionGenerator(
         );
 
         try sender.send(transaction_info);
-
-        std.time.sleep(Duration.fromSecs(100000).asNanos());
     }
 }
 
