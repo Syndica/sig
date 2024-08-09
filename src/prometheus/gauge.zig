@@ -15,8 +15,12 @@ pub fn Gauge(comptime T: type) type {
             self.value.fetchAdd(1, .monotonic);
         }
 
+        pub fn reset(self: *Self) void {
+            self.value.store(0, .monotonic);
+        }
+
         pub fn add(self: *Self, v: T) void {
-            self.value.fetchAdd(v, .monotonic);
+            _ = self.value.fetchAdd(v, .monotonic);
         }
 
         pub fn dec(self: *Self) void {

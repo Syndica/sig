@@ -11,7 +11,6 @@ const SortedSet = sig.utils.collections.SortedSet;
 
 /// The Meta column family
 pub const SlotMeta = struct {
-    // allocator: Allocator,
     /// The number of slots above the root (the genesis block). The first
     /// slot has slot 0.
     slot: Slot,
@@ -50,7 +49,6 @@ pub const SlotMeta = struct {
         else
             ConnectedFlags{};
         return .{
-            // .allocator = allocator,
             .slot = slot,
             .parent_slot = parent_slot,
             .connected_flags = connected_flags,
@@ -67,12 +65,10 @@ pub const SlotMeta = struct {
         self.next_slots.deinit();
     }
 
-    // TODO copy on write
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
         var next_slots = try std.ArrayList(Slot).initCapacity(allocator, self.next_slots.items.len);
         next_slots.appendSliceAssumeCapacity(self.next_slots.items);
         return .{
-            // .allocator = self.allocator,
             .slot = self.slot,
             .parent_slot = self.parent_slot,
             .connected_flags = self.connected_flags,
@@ -194,7 +190,7 @@ pub const ErasureMeta = struct {
                 .num_data = @intCast(shred.fields.custom.num_data_shreds),
                 .num_coding = @intCast(shred.fields.custom.num_coding_shreds),
             },
-            .first_coding_index = @intCast(shred.firstCodingIndex() orelse return null),
+            .first_coding_index = @intCast(shred.firstCodingIndex() catch return null),
             .first_received_coding_index = @intCast(shred.fields.common.index),
         };
     }

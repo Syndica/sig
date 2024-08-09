@@ -125,7 +125,7 @@ pub const ShredInserter = struct {
         defer self.lock.unlock();
         metrics.insert_lock_elapsed_us.add(get_lock_timer.read().asMicros());
 
-        var write_batch = try self.db.writeBatch();
+        var write_batch = try self.db.initWriteBatch();
 
         var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator); // TODO capacity = shreds.len
         var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);

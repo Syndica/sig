@@ -226,6 +226,8 @@ pub const AccountIndex = struct {
     }
 
     /// adds a reference to the index
+    /// NOTE: this should only be used when you know the reference does not exist
+    /// because we never want duplicate state references in the index
     pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
         const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
 
@@ -1058,7 +1060,81 @@ pub const DiskMemoryAllocator = struct {
     }
 };
 
-test "tests disk allocator on hashmaps" {
+test "swissmap resize" {
+    var map = SwissMap(Pubkey, AccountRef, pubkey_hash, pubkey_eql).init(std.testing.allocator);
+    defer map.deinit();
+
+    try map.ensureTotalCapacity(100);
+
+    const ref = AccountRef.default();
+    map.putAssumeCapacity(Pubkey.default(), ref);
+
+    // this will resize the map with the key still in there
+    try map.ensureTotalCapacity(200);
+    const get_ref = map.get(Pubkey.default()) orelse return error.MissingAccount;
+    try std.testing.expect(std.meta.eql(get_ref, ref));
+}
+
+test "account index update/remove reference" {
+    const allocator = std.testing.allocator;
+
+    var index = try AccountIndex.init(allocator, allocator, 8);
+    defer index.deinit(true);
+    try index.ensureTotalCapacity(100);
+
+    // pubkey -> a
+    var ref_a = AccountRef.default();
+    index.indexRef(&ref_a);
+
+    var ref_b = AccountRef.default();
+    ref_b.slot = 1;
+    index.indexRef(&ref_b);
+
+    // make sure indexRef works
+    {
+        var ref_head_rw = index.getReference(&ref_a.pubkey).?;
+        const ref_head, var ref_head_lg = ref_head_rw.writeWithLock();
+        ref_head_lg.unlock();
+        _, const ref_max = ref_head.highestRootedSlot(10);
+        try std.testing.expectEqual(1, ref_max);
+    }
+
+    // update the tail
+    try std.testing.expect(ref_b.location == .Cache);
+    var ref_b2 = ref_b;
+    ref_b2.location = .{ .File = .{
+        .file_id = FileId.fromInt(@intCast(1)),
+        .offset = 10,
+    } };
+    try index.updateReference(&ref_b.pubkey, 1, &ref_b2);
+    {
+        const ref = index.getReferenceSlot(&ref_a.pubkey, 1).?;
+        try std.testing.expect(ref.location == .File);
+    }
+
+    // update the head
+    var ref_a2 = ref_a;
+    ref_a2.location = .{ .File = .{
+        .file_id = FileId.fromInt(1),
+        .offset = 20,
+    } };
+    try index.updateReference(&ref_a.pubkey, 0, &ref_a2);
+    {
+        const ref = index.getReferenceSlot(&ref_a.pubkey, 0).?;
+        try std.testing.expect(ref.location == .File);
+    }
+
+    // remove the head
+    try index.removeReference(&ref_a2.pubkey, 0);
+    try std.testing.expect(!index.exists(&ref_a2.pubkey, 0));
+    try std.testing.expect(index.exists(&ref_b2.pubkey, 1));
+
+    // remove the tail
+    try index.removeReference(&ref_b2.pubkey, 1);
+    try std.testing.expect(!index.exists(&ref_b2.pubkey, 1));
+}
+
+test "disk allocator on hashmaps" {
     var allocator = DiskMemoryAllocator.init("test_data/tmp");
     defer allocator.deinit(null);
 
@@ -1075,7 +1151,7 @@ test "tests disk allocator on hashmaps" {
     try std.testing.expect(std.meta.eql(r, ref));
 }
 
-test "tests disk allocator" {
+test "disk allocator" {
     var allocator = DiskMemoryAllocator.init("test_data/tmp");
 
     var disk_account_refs = try ArrayList(AccountRef).initCapacity(
@@ -1120,7 +1196,7 @@ test "tests disk allocator" {
     try std.testing.expect(did_error);
 }
 
-test "tests swissmap read/write/delete" {
+test "swissmap read/write/delete" {
     const allocator = std.testing.allocator;
 
     const n_accounts = 10_000;
@@ -1171,7 +1247,7 @@ test "tests swissmap read/write/delete" {
     }
 }
 
-test "tests swissmap read/write" {
+test "swissmap read/write" {
     const allocator = std.testing.allocator;
 
     const n_accounts = 10_000;
@@ -1208,7 +1284,7 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
     []AccountRef,
     []Pubkey,
 } {
-    var random = std.rand.DefaultPrng.init(0);
+    var random = std.Random.DefaultPrng.init(0);
     const rng = random.random();
 
     const accounts = try allocator.alloc(AccountRef, n_accounts);
