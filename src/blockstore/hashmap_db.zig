@@ -52,10 +52,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
         ) Allocator.Error!void {
             const key_bytes = try serializeAlloc(self.allocator, key);
             errdefer self.allocator.free(key_bytes);
+
             const val_bytes = try serializeAlloc(self.allocator, value);
             errdefer self.allocator.free(val_bytes);
+
             self.transaction_lock.lockShared();
             defer self.transaction_lock.unlockShared();
+
             return try self.maps[cf.find(column_families)].put(key_bytes, val_bytes);
         }
 
