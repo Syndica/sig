@@ -114,7 +114,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = self.maps[cf.find(column_families)].delete(self.allocator, key_bytes);
         }
 
-        pub fn writeBatch(self: *Self) error{}!WriteBatch {
+        pub fn initWriteBatch(self: *Self) error{}!WriteBatch {
             return .{
                 .allocator = self.allocator,
                 .instructions = .{},

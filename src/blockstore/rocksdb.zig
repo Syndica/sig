@@ -126,7 +126,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
-        pub fn writeBatch(self: *Self) Error!WriteBatch {
+        pub fn initWriteBatch(self: *Self) Error!WriteBatch {
             return .{
                 .inner = rocks.WriteBatch.init(),
                 .cf_handles = self.cf_handles,

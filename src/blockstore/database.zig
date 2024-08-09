@@ -74,7 +74,7 @@ pub fn Database(comptime Impl: type) type {
             return try self.impl.delete(cf, key);
         }
 
-        pub fn writeBatch(self: *Self) anyerror!WriteBatch {
+        pub fn initWriteBatch(self: *Self) anyerror!WriteBatch {
             return .{ .impl = self.impl.initBatch() };
         }
 
