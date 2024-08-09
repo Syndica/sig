@@ -12,7 +12,7 @@ pub const RecycleFBA = struct {
     // for thread safety
     mux: std.Thread.Mutex = .{},
 
-    const Record = struct { is_free: bool, buf: []u8 };
+    const Record = struct { is_free: bool, buf: [*]u8, len: u64, log2_align: u8 };
     const Self = @This();
 
     pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
@@ -45,8 +45,6 @@ pub const RecycleFBA = struct {
 
     /// creates a new file with size aligned to page_size and returns a pointer to it
     pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
-        _ = log2_align;
-        _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         if (n > self.alloc_allocator.buffer.len) {
@@ -55,24 +53,24 @@ pub const RecycleFBA = struct {
 
         // check for a buf to recycle
         for (self.records.items) |*item| {
-            if (item.is_free and item.buf.len >= n) {
+            if (item.is_free and item.len >= n and item.log2_align == log2_align) {
                 item.is_free = false;
-                return item.buf.ptr;
+                return item.buf;
             }
         }
 
         // otherwise, allocate a new one
-        const buf = self.alloc_allocator.allocator().alloc(u8, n) catch {
+        const buf = self.alloc_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
             // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
             return null;
         };
 
-        self.records.append(.{ .is_free = false, .buf = buf }) catch {
+        self.records.append(.{ .is_free = false, .buf = buf, .len = n, .log2_align = log2_align }) catch {
             // std.debug.print("RecycleFBA append error: {}\n", .{ err });
             return null;
         };
 
-        return buf.ptr;
+        return buf;
     }
 
     pub fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
@@ -81,7 +79,7 @@ pub const RecycleFBA = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         for (self.records.items) |*item| {
-            if (item.buf.ptr == buf.ptr) {
+            if (item.buf == buf.ptr) {
                 item.is_free = true;
                 return;
             }
@@ -101,8 +99,8 @@ pub const RecycleFBA = struct {
 
         const self: *Self = @ptrCast(@alignCast(ctx));
         for (self.records.items) |*item| {
-            if (item.buf.ptr == buf.ptr) {
-                if (item.buf.len >= new_size) {
+            if (item.buf == buf.ptr) {
+                if (item.len >= new_size) {
                     return true;
                 } else {
                     return false;
