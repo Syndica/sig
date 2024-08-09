@@ -893,9 +893,10 @@ pub const BankFields = struct {
 
 /// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
 pub const AccountFileInfo = struct {
-    // note: serialized id is a usize but in code it's FileId (u32)
+    /// note: serialized id is a usize but in code it's FileId (u32)
     id: FileId,
-    length: usize, // amount of bytes used
+    /// amount of bytes used
+    length: usize,
 
     pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
         .serializer = idSerializer,
