@@ -3,7 +3,10 @@ zig-cache/
 zig-out/
 data/
 
+ledger/
 index_storage/
+kcov-output/
+.vscode/
 
 /gossip-dumps
 

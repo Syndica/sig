@@ -12,6 +12,7 @@ const Hash = sig.core.Hash;
 const Signature = sig.core.Signature;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const SocketAddr = sig.net.SocketAddr;
+const Duration = sig.time.Duration;
 
 const getWallclockMs = sig.gossip.data.getWallclockMs;
 
@@ -108,9 +109,9 @@ pub const PingAndSocketAddr = struct { ping: Ping, socket: SocketAddr };
 /// remote node.
 pub const PingCache = struct {
     // Time-to-live of received pong messages.
-    ttl_ns: u64,
+    ttl: sig.time.Duration,
     // Rate limit delay to generate pings for a given address
-    rate_limit_delay_ns: u64,
+    rate_limit_delay: sig.time.Duration,
     // Timestamp of last ping message sent to a remote node.
     // Used to rate limit pings to remote nodes.
     pings: LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant),
@@ -126,14 +127,14 @@ pub const PingCache = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        ttl_ns: u64,
-        rate_limit_delay_ns: u64,
+        ttl: sig.time.Duration,
+        rate_limit_delay: sig.time.Duration,
         cache_capacity: usize,
     ) error{OutOfMemory}!Self {
-        std.debug.assert(rate_limit_delay_ns <= ttl_ns / 2);
+        std.debug.assert(rate_limit_delay.asNanos() <= ttl.asNanos() / 2);
         return Self{
-            .ttl_ns = ttl_ns,
-            .rate_limit_delay_ns = rate_limit_delay_ns,
+            .ttl = ttl,
+            .rate_limit_delay = rate_limit_delay,
             .pings = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
             .pongs = try LruCache(.non_locking, PubkeyAndSocketAddr, std.time.Instant).init(allocator, cache_capacity),
             .pending_cache = try LruCache(.non_locking, Hash, PubkeyAndSocketAddr).init(allocator, cache_capacity),
@@ -172,7 +173,7 @@ pub const PingCache = struct {
             std.debug.assert(now.order(earlier) != .lt);
 
             const elapsed: u64 = now.since(earlier);
-            if (elapsed < self.rate_limit_delay_ns) {
+            if (elapsed < self.rate_limit_delay.asNanos()) {
                 return null;
             }
         }
@@ -198,12 +199,12 @@ pub const PingCache = struct {
             const age = now.since(last_pong_time);
 
             // if age is greater than time-to-live, remove pong
-            if (age > self.ttl_ns) {
+            if (age > self.ttl.asNanos()) {
                 _ = self.pongs.pop(peer_and_addr);
             }
 
             // if age is greater than time-to-live divided by 8, we maybe ping again
-            return .{ .passes_ping_check = true, .maybe_ping = if (age > self.ttl_ns / 8) self.maybePing(now, peer_and_addr, keypair) else null };
+            return .{ .passes_ping_check = true, .maybe_ping = if (age > self.ttl.asNanos() / 8) self.maybePing(now, peer_and_addr, keypair) else null };
         }
         return .{ .passes_ping_check = false, .maybe_ping = self.maybePing(now, peer_and_addr, keypair) };
     }
@@ -246,7 +247,12 @@ pub const PingCache = struct {
 };
 
 test "gossip.ping_pong: PingCache works" {
-    var ping_cache = try PingCache.init(testing.allocator, 10_000, 1000, 1024);
+    var ping_cache = try PingCache.init(
+        testing.allocator,
+        Duration.fromNanos(10_000),
+        Duration.fromNanos(1_000),
+        1_024,
+    );
     defer ping_cache.deinit();
 
     const seed: u64 = @intCast(std.time.milliTimestamp());

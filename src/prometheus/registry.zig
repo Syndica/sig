@@ -14,7 +14,7 @@ const Gauge = @import("gauge.zig").Gauge;
 const GaugeFn = @import("gauge_fn.zig").GaugeFn;
 const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
 const Histogram = @import("histogram.zig").Histogram;
-const default_buckets = @import("histogram.zig").default_buckets;
+const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
 
 const ReturnType = sig.utils.types.ReturnType;
 
@@ -315,7 +315,7 @@ test "prometheus.registry: write" {
 
         // Add a histogram
         {
-            var histogram = try registry.getOrCreateHistogram(tc.histogram_name, &default_buckets);
+            var histogram = try registry.getOrCreateHistogram(tc.histogram_name, &DEFAULT_BUCKETS);
 
             histogram.observe(5.0012);
             histogram.observe(12.30240);

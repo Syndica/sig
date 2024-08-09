@@ -16,12 +16,10 @@ const ContactInfo = sig.gossip.ContactInfo;
 const GenesisConfig = sig.accounts_db.GenesisConfig;
 const GossipService = sig.gossip.GossipService;
 const IpAddr = sig.net.IpAddr;
-const Level = sig.trace.Level;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
 const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
-const SnapshotFieldsAndPaths = sig.accounts_db.SnapshotFieldsAndPaths;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
@@ -154,7 +152,7 @@ pub fn run() !void {
     // accounts-db options
     var n_threads_snapshot_load_option = cli.Option{
         .long_name = "n-threads-snapshot-load",
-        .help = "number of threads to load snapshots: - default: ncpus",
+        .help = "number of threads used to initialize the account index: - default: ncpus",
         .short_alias = 't',
         .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_load),
         .required = false,
@@ -163,7 +161,7 @@ pub fn run() !void {
 
     var n_threads_snapshot_unpack_option = cli.Option{
         .long_name = "n-threads-snapshot-unpack",
-        .help = "number of threads to unpack snapshots - default: ncpus * 2",
+        .help = "number of threads to unpack snapshots (from .tar.zst) - default: ncpus * 2",
         .short_alias = 'u',
         .value_ref = cli.mkRef(&config.current.accounts_db.num_threads_snapshot_unpack),
         .required = false,
@@ -172,7 +170,7 @@ pub fn run() !void {
 
     var force_unpack_snapshot_option = cli.Option{
         .long_name = "force-unpack-snapshot",
-        .help = "force unpack snapshot even if it exists",
+        .help = "unpacks a snapshot (even if it exists)",
         .short_alias = 'f',
         .value_ref = cli.mkRef(&config.current.accounts_db.force_unpack_snapshot),
         .required = false,
@@ -181,7 +179,7 @@ pub fn run() !void {
 
     var use_disk_index_option = cli.Option{
         .long_name = "use-disk-index",
-        .help = "use disk based index for accounts index",
+        .help = "use disk-memory for the account index",
         .value_ref = cli.mkRef(&config.current.accounts_db.use_disk_index),
         .required = false,
         .value_name = "use_disk_index",
@@ -204,6 +202,15 @@ pub fn run() !void {
         .value_name = "snapshot_dir",
     };
 
+    var genesis_file_path = cli.Option{
+        .long_name = "genesis-file-path",
+        .help = "path to the genesis file",
+        .short_alias = 'g',
+        .value_ref = cli.mkRef(&config.current.genesis_file_path),
+        .required = false,
+        .value_name = "genesis_file_path",
+    };
+
     var min_snapshot_download_speed_mb_option = cli.Option{
         .long_name = "min-snapshot-download-speed",
         .help = "minimum download speed of full snapshots in megabytes per second - default: 20MB/s",
@@ -214,7 +221,7 @@ pub fn run() !void {
 
     var number_of_index_bins_option = cli.Option{
         .long_name = "number-of-index-bins",
-        .help = "number of bins to shard the index pubkeys across",
+        .help = "number of bins to shard the account index across",
         .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
         .required = false,
         .value_name = "number_of_index_bins",
@@ -248,6 +255,7 @@ pub fn run() !void {
                             },
                         },
                     },
+
                     &cli.Command{
                         .name = "gossip",
                         .description = .{
@@ -269,6 +277,7 @@ pub fn run() !void {
                             },
                         },
                     },
+
                     &cli.Command{
                         .name = "validator",
                         .description = .{
@@ -298,6 +307,7 @@ pub fn run() !void {
                             &force_new_snapshot_download_option,
                             &trusted_validators_option,
                             &number_of_index_bins_option,
+                            &genesis_file_path,
                             // general
                             &leader_schedule_option,
                         },
@@ -307,8 +317,9 @@ pub fn run() !void {
                             },
                         },
                     },
+
                     &cli.Command{
-                        .name = "download-snapshot",
+                        .name = "snapshot-download",
                         .description = .{
                             .one_line = "Downloads a snapshot",
                             .detailed =
@@ -332,6 +343,31 @@ pub fn run() !void {
                             },
                         },
                     },
+
+                    &cli.Command{
+                        .name = "snapshot-validate",
+                        .description = .{
+                            .one_line = "Validates a snapshot",
+                            .detailed =
+                            \\Loads and validates a snapshot (doesnt download a snapshot).
+                            ,
+                        },
+                        .options = &.{
+                            &snapshot_dir_option,
+                            &use_disk_index_option,
+                            &n_threads_snapshot_load_option,
+                            &n_threads_snapshot_unpack_option,
+                            &force_unpack_snapshot_option,
+                            &number_of_index_bins_option,
+                            &genesis_file_path,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = validateSnapshot,
+                            },
+                        },
+                    },
+
                     &cli.Command{
                         .name = "leader-schedule",
                         .description = .{
@@ -362,6 +398,7 @@ pub fn run() !void {
                             &force_new_snapshot_download_option,
                             &trusted_validators_option,
                             &number_of_index_bins_option,
+                            &genesis_file_path,
                             // general
                             &leader_schedule_option,
                         },
@@ -394,8 +431,7 @@ fn identity() !void {
 fn gossip() !void {
     var app_base = try AppBase.init(gpa_allocator);
 
-    var gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
-    defer gossip_service.deinit();
+    _, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_manager.deinit();
 
     gossip_manager.join();
@@ -417,10 +453,15 @@ fn validator() !void {
         .{ .tag = .repair, .port = repair_port },
         .{ .tag = .turbine_recv, .port = turbine_recv_port },
     });
-    defer gossip_service.deinit();
     defer gossip_manager.deinit();
 
-    const snapshot = try loadFromSnapshot(allocator, app_base.logger, gossip_service, false);
+    const snapshot = try loadSnapshot(
+        allocator,
+        app_base.logger,
+        gossip_service,
+        true,
+        false,
+    );
 
     // leader schedule
     var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse
@@ -450,6 +491,24 @@ fn validator() !void {
     shred_collector_manager.join();
 }
 
+fn validateSnapshot() !void {
+    const allocator = gpa_allocator;
+    const app_base = try AppBase.init(allocator);
+
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    defer snapshot_dir.close();
+
+    const snapshot_result = try loadSnapshot(
+        allocator,
+        app_base.logger,
+        null,
+        true,
+        false,
+    );
+    defer snapshot_result.deinit();
+}
+
 /// entrypoint to print the leader schedule and then exit
 fn printLeaderSchedule() !void {
     const allocator = gpa_allocator;
@@ -457,11 +516,24 @@ fn printLeaderSchedule() !void {
 
     const leader_schedule = try getLeaderScheduleFromCli(allocator) orelse b: {
         app_base.logger.info("Downloading a snapshot to calculate the leader schedule.");
-        var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{});
-        defer gossip_service.deinit();
-        defer gossip_manager.deinit();
-        const snapshot = try loadFromSnapshot(allocator, app_base.logger, gossip_service, false);
-        break :b try leaderScheduleFromBank(allocator, &snapshot.bank);
+        const loaded_snapshot = loadSnapshot(
+            allocator,
+            app_base.logger,
+            null,
+            true,
+            false,
+        ) catch |err| {
+            if (err == error.SnapshotsNotFoundAndNoGossipService) {
+                app_base.logger.err(
+                    \\\ No snapshot found and no gossip service to download a snapshot from.
+                    \\\ Download using the `snapshot-download` command.
+                );
+                return err;
+            } else {
+                return err;
+            }
+        };
+        break :b try leaderScheduleFromBank(allocator, &loaded_snapshot.bank);
     };
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
@@ -493,11 +565,15 @@ const AppBase = struct {
     fn init(allocator: Allocator) !AppBase {
         var logger = try spawnLogger();
         errdefer logger.deinit();
+
         const metrics_thread = try spawnMetrics(logger);
         errdefer metrics_thread.detach();
+
         const my_keypair = try getOrInitIdentity(allocator, logger);
+
         const entrypoints = try getEntrypoints(logger);
         errdefer entrypoints.deinit();
+
         const ip_echo_data = try getMyDataFromIpEcho(logger, entrypoints.items);
 
         return .{
@@ -722,68 +798,89 @@ const LoadedSnapshot = struct {
     }
 };
 
-fn loadFromSnapshot(
+fn loadSnapshot(
     allocator: Allocator,
     logger: Logger,
-    gossip_service: *GossipService,
+    /// optional service to download a fresh snapshot from gossip. if null, will read from the snapshot_dir
+    gossip_service: ?*GossipService,
+    /// whether to validate the snapshot account data against the metadata
+    validate_snapshot: bool,
+    /// whether to validate the genesis config against the bank (to remove when genesis validation works on all clusters)
     validate_genesis: bool,
 ) !*LoadedSnapshot {
-    const output = try allocator.create(LoadedSnapshot);
-    errdefer allocator.destroy(output);
-    var snapshots = try getOrDownloadSnapshots(
-        allocator,
-        logger,
-        gossip_service,
-    );
-    defer snapshots.deinitPaths(allocator); // TODO: This is kind of a huge hack, but we can't free the snapshot fields, since they're used by the result
+    const result = try allocator.create(LoadedSnapshot);
+    errdefer allocator.destroy(result);
 
-    logger.infof("full snapshot: {s}", .{snapshots.full_path});
-    if (snapshots.incremental_path) |inc_path| {
-        logger.infof("incremental snapshot: {s}", .{inc_path});
+    result.allocator = allocator;
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db.snapshot_dir, .{});
+    defer snapshot_dir.close();
+
+    var snapshots, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
+        .snapshot_dir = snapshot_dir,
+        .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
+        .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
+        .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
+        .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
+    });
+    errdefer snapshots.deinit(allocator);
+
+    logger.infof("full snapshot: {s}", .{
+        sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotNameStr().constSlice()),
+    });
+    if (snapshot_files.incremental_snapshot) |inc_snap| {
+        logger.infof("incremental snapshot: {s}", .{
+            sig.utils.fmt.tryRealPath(snapshot_dir, inc_snap.snapshotNameStr().constSlice()),
+        });
     }
 
     // cli parsing
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     const n_threads_snapshot_load: u32 = blk: {
-        const n_threads_snapshot_load: u32 = config.current.accounts_db.num_threads_snapshot_load;
-        if (n_threads_snapshot_load == 0) break :blk @truncate(try std.Thread.getCpuCount());
-        break :blk n_threads_snapshot_load;
+        const cli_n_threads_snapshot_load: u32 = config.current.accounts_db.num_threads_snapshot_load;
+        if (cli_n_threads_snapshot_load == 0) {
+            // default value
+            break :blk @as(u32, @truncate(try std.Thread.getCpuCount()));
+        } else {
+            break :blk cli_n_threads_snapshot_load;
+        }
     };
+    logger.infof("n_threads_snapshot_load: {d}", .{n_threads_snapshot_load});
 
-    output.accounts_db = try AccountsDB.init(
+    result.accounts_db = try AccountsDB.init(
         allocator,
         logger,
-        config.current.accounts_db,
+        snapshot_dir,
+        .{
+            .number_of_index_bins = config.current.accounts_db.number_of_index_bins,
+            .use_disk_index = config.current.accounts_db.use_disk_index,
+        },
     );
-    errdefer output.accounts_db.deinit(false);
+    errdefer result.accounts_db.deinit(false);
 
-    {
-        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{});
-        defer snapshot_dir.close();
-        output.snapshot_fields = try output.accounts_db.loadWithDefaults(
-            &snapshots,
-            snapshot_dir,
-            n_threads_snapshot_load,
-            true, // validate too
-        );
-    }
-    errdefer output.snapshot_fields.deinit(allocator);
+    result.snapshot_fields = try result.accounts_db.loadWithDefaults(
+        &snapshots,
+        n_threads_snapshot_load,
+        validate_snapshot,
+    );
+    errdefer result.snapshot_fields.deinit(allocator);
 
-    const bank_fields = &output.snapshot_fields.bank_fields;
+    const bank_fields = &result.snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
     logger.infof("reading genesis...", .{});
-    output.genesis_config = readGenesisConfig(allocator, snapshot_dir_str) catch |err| {
+    const genesis_file_path = config.current.genesis_file_path orelse return error.GenesisNotProvided;
+    result.genesis_config = readGenesisConfig(allocator, genesis_file_path) catch |err| {
         if (err == error.GenesisNotFound) {
-            logger.errf("genesis.bin not found - expecting {s}/genesis.bin to exist", .{snapshot_dir_str});
+            logger.errf("genesis config not found - expecting {s} to exist", .{genesis_file_path});
         }
         return err;
     };
-    errdefer output.genesis_config.deinit(allocator);
+    errdefer result.genesis_config.deinit(allocator);
 
     logger.infof("validating bank...", .{});
-    output.bank = Bank.init(&output.accounts_db, bank_fields);
-    Bank.validateBankFields(output.bank.bank_fields, &output.genesis_config) catch |e| switch (e) {
+    result.bank = Bank.init(&result.accounts_db, bank_fields);
+    Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config) catch |e| switch (e) {
         // TODO: remove when genesis validation works on all clusters
         error.BankAndGenesisMismatch => if (validate_genesis) {
             return e;
@@ -803,24 +900,18 @@ fn loadFromSnapshot(
     };
     defer status_cache.deinit(allocator);
 
-    var slot_history = try output.accounts_db.getSlotHistory();
-    defer slot_history.deinit(output.accounts_db.allocator);
+    var slot_history = try result.accounts_db.getSlotHistory();
+    defer slot_history.deinit(result.accounts_db.allocator);
+
     try status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
 
-    return output;
+    return result;
 }
 
 /// load genesis config with default filenames
-fn readGenesisConfig(allocator: Allocator, snapshot_dir: []const u8) !GenesisConfig {
-    const genesis_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/genesis.bin",
-        .{snapshot_dir},
-    );
-    defer allocator.free(genesis_path);
-
+fn readGenesisConfig(allocator: Allocator, genesis_path: []const u8) !GenesisConfig {
     std.fs.cwd().access(genesis_path, .{}) catch {
         return error.GenesisNotFound;
     };
@@ -874,12 +965,16 @@ fn downloadSnapshot() !void {
 
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     const min_mb_per_sec = config.current.accounts_db.min_snapshot_download_speed_mbs;
+
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    defer snapshot_dir.close();
+
     try downloadSnapshotsFromGossip(
         gpa_allocator,
         logger,
         if (trusted_validators) |trusted| trusted.items else null,
         &gossip_service,
-        snapshot_dir_str,
+        snapshot_dir,
         @intCast(min_mb_per_sec),
     );
 }
@@ -905,95 +1000,108 @@ fn getOrDownloadSnapshots(
     allocator: Allocator,
     logger: Logger,
     gossip_service: ?*GossipService,
-) !SnapshotFieldsAndPaths {
+    // accounts_db_config: config.AccountsDBConfig,
+    options: struct {
+        snapshot_dir: std.fs.Dir,
+        force_unpack_snapshot: bool,
+        force_new_snapshot_download: bool,
+        num_threads_snapshot_unpack: u16,
+        min_snapshot_download_speed_mbs: usize,
+    },
+) !struct { AllSnapshotFields, SnapshotFiles } {
     // arg parsing
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-    const force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot;
-    const force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download;
+    const snapshot_dir = options.snapshot_dir;
+    const force_unpack_snapshot = options.force_unpack_snapshot;
+    const force_new_snapshot_download = options.force_new_snapshot_download;
 
     const n_cpus = @as(u32, @truncate(try std.Thread.getCpuCount()));
-    var n_threads_snapshot_unpack: u32 = @intCast(config.current.accounts_db.num_threads_snapshot_unpack);
+    var n_threads_snapshot_unpack: u32 = options.num_threads_snapshot_unpack;
     if (n_threads_snapshot_unpack == 0) {
         n_threads_snapshot_unpack = n_cpus * 2;
     }
-
-    // if this exists, we wont look for a .tar.zstd
-    const accounts_path = try std.fmt.allocPrint(
-        allocator,
-        "{s}/accounts/",
-        .{snapshot_dir_str},
-    );
-    defer allocator.free(accounts_path);
-
-    var snap_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{ .iterate = true });
-    defer snap_dir.close();
 
     const maybe_snapshot_files: ?SnapshotFiles = blk: {
         if (force_new_snapshot_download) {
             break :blk null;
         }
 
-        break :blk SnapshotFiles.find(allocator, snap_dir) catch |err| switch (err) {
+        break :blk SnapshotFiles.find(allocator, snapshot_dir) catch |err| switch (err) {
             error.NoFullSnapshotFileInfoFound => null,
             else => |e| return e,
         };
     };
 
-    var snapshot_files = maybe_snapshot_files orelse blk: {
+    const snapshot_files = maybe_snapshot_files orelse blk: {
         const trusted_validators = try getTrustedValidators(gpa_allocator);
         defer if (trusted_validators) |*tvs| tvs.deinit();
 
-        const min_mb_per_sec = config.current.accounts_db.min_snapshot_download_speed_mbs;
+        const min_mb_per_sec = options.min_snapshot_download_speed_mbs;
         try downloadSnapshotsFromGossip(
             allocator,
             logger,
             if (trusted_validators) |trusted| trusted.items else null,
             gossip_service orelse return error.SnapshotsNotFoundAndNoGossipService,
-            snapshot_dir_str,
+            snapshot_dir,
             @intCast(min_mb_per_sec),
         );
-        break :blk try SnapshotFiles.find(allocator, snap_dir);
+        break :blk try SnapshotFiles.find(allocator, snapshot_dir);
     };
-    defer snapshot_files.deinit(allocator);
 
     if (snapshot_files.incremental_snapshot == null) {
         logger.infof("no incremental snapshot found", .{});
     }
 
-    var accounts_path_exists = true;
-    std.fs.cwd().access(accounts_path, .{}) catch {
-        accounts_path_exists = false;
-    };
+    // if this exists, we wont look for a .tar.zstd
+    const accounts_path_exists = if (snapshot_dir.access("accounts", .{})) |_| true else |_| false;
+    errdefer {
+        // if something goes wrong, delete the accounts/ directory
+        // so we unpack the full snapshot the next time.
+        //
+        // NOTE: if we didnt do this, we would try to startup with a incomplete
+        // accounts/ directory the next time we ran the code - see `should_unpack_snapshot`.
+        snapshot_dir.deleteTree("accounts") catch |err| {
+            std.debug.print("failed to delete accounts/ dir: {}\n", .{err});
+        };
+    }
+
     const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
+    if (!should_unpack_snapshot) {
+        logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+    }
 
     var timer = try std.time.Timer.start();
     if (should_unpack_snapshot) {
         logger.infof("unpacking snapshots...", .{});
         // if accounts/ doesnt exist then we unpack the found snapshots
-        var snapshot_dir = try std.fs.cwd().openDir(snapshot_dir_str, .{ .iterate = true });
-        defer snapshot_dir.close();
-
         // TODO: delete old accounts/ dir if it exists
         timer.reset();
-        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.filename});
-        try parallelUnpackZstdTarBall(
-            allocator,
-            logger,
-            snapshot_files.full_snapshot.filename,
-            snapshot_dir,
-            n_threads_snapshot_unpack,
-            true,
-        );
+        logger.infof("unpacking {s}...", .{snapshot_files.full_snapshot.snapshotNameStr().constSlice()});
+        {
+            const archive_file = try snapshot_dir.openFile(snapshot_files.full_snapshot.snapshotNameStr().constSlice(), .{});
+            defer archive_file.close();
+            try parallelUnpackZstdTarBall(
+                allocator,
+                logger,
+                archive_file,
+                snapshot_dir,
+                n_threads_snapshot_unpack,
+                true,
+            );
+        }
         logger.infof("unpacked snapshot in {s}", .{std.fmt.fmtDuration(timer.read())});
 
         // TODO: can probs do this in parallel with full snapshot
         if (snapshot_files.incremental_snapshot) |incremental_snapshot| {
             timer.reset();
-            logger.infof("unpacking {s}...", .{incremental_snapshot.filename});
+            logger.infof("unpacking {s}...", .{incremental_snapshot.snapshotNameStr().constSlice()});
+
+            const archive_file = try snapshot_dir.openFile(incremental_snapshot.snapshotNameStr().constSlice(), .{});
+            defer archive_file.close();
+
             try parallelUnpackZstdTarBall(
                 allocator,
                 logger,
-                incremental_snapshot.filename,
+                archive_file,
                 snapshot_dir,
                 n_threads_snapshot_unpack,
                 false,
@@ -1006,8 +1114,8 @@ fn getOrDownloadSnapshots(
 
     timer.reset();
     logger.infof("reading snapshot metadata...", .{});
-    const snapshots = try AllSnapshotFields.fromFiles(allocator, snapshot_dir_str, snapshot_files);
+    const snapshots = try AllSnapshotFields.fromFiles(allocator, logger, snapshot_dir, snapshot_files);
     logger.infof("read snapshot metdata in {s}", .{std.fmt.fmtDuration(timer.read())});
 
-    return snapshots;
+    return .{ snapshots, snapshot_files };
 }
