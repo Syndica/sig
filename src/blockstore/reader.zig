@@ -1431,9 +1431,22 @@ const BlockstoreRpcApiMetrics = struct {
     }
 };
 
-const AncestorIterator = struct {
+pub const AncestorIterator = struct {
     db: *BlockstoreDB,
     next_slot: ?Slot,
+
+    pub fn initExclusive(db: *BlockstoreDB, start_slot: Slot) !AncestorIterator {
+        var self = AncestorIterator.initInclusive(db, start_slot);
+        _ = try self.next();
+        return self;
+    }
+
+    pub fn initInclusive(db: *BlockstoreDB, start_slot: Slot) AncestorIterator {
+        return .{
+            .db = db,
+            .next_slot = start_slot,
+        };
+    }
 
     pub fn next(self: *AncestorIterator) !?Slot {
         if (self.next_slot) |slot| {

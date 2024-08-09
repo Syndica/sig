@@ -9,3 +9,4 @@ pub const rocksdb = @import("rocksdb.zig");
 pub const schema = @import("schema.zig");
 pub const shredder = @import("shredder.zig");
 pub const transaction_status = @import("transaction_status.zig");
+pub const writer = @import("writer.zig");

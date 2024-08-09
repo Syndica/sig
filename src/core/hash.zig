@@ -31,6 +31,10 @@ pub const Hash = extern struct {
         return .{ .data = hasher.finalResult() };
     }
 
+    pub fn eql(self: Hash, other: Hash) bool {
+        return self.order(&other) == .eq;
+    }
+
     pub fn order(a: *const Hash, b: *const Hash) std.math.Order {
         for (a.data, b.data) |a_byte, b_byte| {
             if (a_byte > b_byte) return .gt;
