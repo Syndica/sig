@@ -594,7 +594,7 @@ test "ReedSolomon.reconstruct basic 0-11 sequence with any missing combination" 
         }
         try rs.reconstruct(allocator, data.items, false);
         for (0..5) |s| {
-            try std.testing.expect(std.mem.eql(u8, &master_copy[s], data.items[s].?));
+            try std.testing.expectEqualSlices(u8, &master_copy[s], data.items[s].?);
         }
     };
 }
@@ -652,7 +652,7 @@ test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
         }
         try rs.reconstruct(allocator, data.items, false);
         for (0..num_shards) |s| {
-            try std.testing.expect(std.mem.eql(u8, master_copy[s], data.items[s].?));
+            try std.testing.expectEqualSlices(u8, master_copy[s], data.items[s].?);
         }
     };
 }
