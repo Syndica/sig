@@ -290,15 +290,12 @@ pub fn GenericShred(
         }
 
         fn verify(self: Self, signer: sig.core.Pubkey) bool {
-            const signed_data = self.signedData() catch return false;
+            const signed_data = self.merkleRoot() catch return false;
             const signature = layout.getSignature(self.payload) orelse return false;
             return signature.verify(signer, &signed_data.data);
         }
 
-        fn signedData(self: Self) !Hash {
-            return getMerkleRoot(self.payload, constants, self.common.shred_variant);
-        }
-
+        /// this is the data that is signed by the signature
         pub fn merkleRoot(self: Self) !Hash {
             return getMerkleRoot(self.payload, constants, self.common.shred_variant);
         }
