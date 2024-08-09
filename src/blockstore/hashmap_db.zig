@@ -144,6 +144,16 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             }
         }
 
+        /// A write batch is a sequence of operations that execute atomically.
+        /// This is typically called a "transaction" in most databases.
+        ///
+        /// Use this instead of Database.put or Database.delete when you need
+        /// to ensure that a group of operations are either all executed
+        /// successfully, or none of them are executed.
+        ///
+        /// It is called a write batch instead of a transaction because:
+        /// - rocksdb uses the name "write batch" for this concept
+        /// - this name avoids confusion with solana transactions
         pub const WriteBatch = struct {
             allocator: Allocator,
             instructions: std.ArrayListUnmanaged(Instruction),
