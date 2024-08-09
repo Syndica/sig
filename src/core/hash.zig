@@ -1,6 +1,7 @@
 const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const base58 = @import("base58-zig");
+const Allocator = std.mem.Allocator;
 
 pub const HASH_SIZE: usize = 32;
 
@@ -43,6 +44,20 @@ pub const Hash = extern struct {
         var buf: [44]u8 = undefined;
         const size = b58_encoder.encode(&self.data, &buf) catch unreachable;
         return writer.print("{s}", .{buf[0..size]});
+    }
+
+    pub fn base58EncodeAlloc(self: Hash, allocator: Allocator) Allocator.Error![]const u8 {
+        const buf = try allocator.alloc(u8, 44);
+        const size = self.base58EncodeToSlice(buf[0..44]);
+        std.debug.assert(size <= 44);
+        return try allocator.realloc(buf, size);
+    }
+
+    fn base58EncodeToSlice(self: Hash, buf: *[44]u8) usize {
+        const b58_encoder = base58.Encoder.init(.{});
+        // unreachable because 44 is the maximum encoded length for 32 bytes.
+        const size = b58_encoder.encode(&self.data, buf[0..]) catch unreachable;
+        return size;
     }
 
     /// Intended to be used in tests.

@@ -6,6 +6,76 @@ const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const ShortVecConfig = sig.bincode.shortvec.ShortVecConfig;
 
+pub const VersionedTransaction = struct {
+    allocator: std.mem.Allocator,
+    signatures: []Signature,
+    message: VersionedMessage,
+
+    pub fn sanitize(self: VersionedTransaction) !void {
+        switch (self.message) {
+            .legacy, .v0 => |m| try m.sanitize(),
+        }
+    }
+};
+
+const VersionedMessage = union(enum) {
+    legacy: Message,
+    v0: V0Message,
+};
+
+pub const V0Message = struct {
+    /// The message header, identifying signed and read-only `account_keys`.
+    /// Header values only describe static `account_keys`, they do not describe
+    /// any additional account keys loaded via address table lookups.
+    header: MessageHeader,
+
+    /// List of accounts loaded by this transaction.
+    account_keys: []Pubkey,
+
+    /// The blockhash of a recent block.
+    recent_blockhash: Hash,
+
+    /// Instructions that invoke a designated program, are executed in sequence,
+    /// and committed in one atomic transaction if all succeed.
+    ///
+    /// # Notes
+    ///
+    /// Program indexes must index into the list of message `account_keys` because
+    /// program id's cannot be dynamically loaded from a lookup table.
+    ///
+    /// Account indexes must index into the list of addresses
+    /// constructed from the concatenation of three key lists:
+    ///   1) message `account_keys`
+    ///   2) ordered list of keys loaded from `writable` lookup table indexes
+    ///   3) ordered list of keys loaded from `readable` lookup table indexes
+    instructions: []CompiledInstruction,
+
+    /// List of address table lookups used to load additional accounts
+    /// for this transaction.
+    address_table_lookups: []MessageAddressTableLookup,
+
+    pub fn sanitize(_: V0Message) !void {
+        // TODO
+        std.debug.print("V0Message.sanitize not implemented", .{});
+    }
+
+    pub fn addressTableLookups(self: V0Message) ?[]MessageAddressTableLookup {
+        switch (self) {
+            .legacy => null,
+            .v0 => |m| m.address_table_lookups,
+        }
+    }
+};
+
+pub const MessageAddressTableLookup = struct {
+    /// Address lookup table account key
+    account_key: Pubkey,
+    /// List of indexes used to load writable account addresses
+    writable_indexes: []u8,
+    /// List of indexes used to load readonly account addresses
+    readonly_indexes: []u8,
+};
+
 pub const Transaction = struct {
     signatures: []Signature,
     message: Message,

@@ -191,7 +191,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) anyerror!Iterator(direction) {
+        ) anyerror!Iterator(cf, direction) {
             const shared_map = &self.maps[cf.find(column_families)];
             const map = &shared_map.map;
 
@@ -225,7 +225,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             };
         }
 
-        pub fn Iterator(direction: IteratorDirection) type {
+        pub fn Iterator(cf: ColumnFamily, direction: IteratorDirection) type {
             return struct {
                 allocator: Allocator,
                 keys: []const []const u8,
@@ -233,8 +233,31 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 cursor: usize = 0,
                 size: usize,
 
-                pub fn deinit(_: *@This()) void {
-                    // TODO
+                pub fn deinit(self: *@This()) void {
+                    inline for (.{ self.keys, self.vals }) |slices| {
+                        for (slices) |slice| {
+                            self.allocator.free(slice);
+                        }
+                        self.allocator.free(slices);
+                    }
+                }
+
+                pub fn next(self: *@This()) anyerror!?cf.Entry() {
+                    const index = self.nextIndex() orelse return null;
+                    return .{
+                        deserialize(cf.Key, self.allocator, self.keys[index]),
+                        deserialize(cf.Value, self.allocator, self.vals[index]),
+                    };
+                }
+
+                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                    const index = self.nextIndex() orelse return null;
+                    return deserialize(cf.Key, self.allocator, self.keys[index]);
+                }
+
+                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                    const index = self.nextIndex() orelse return null;
+                    return deserialize(cf.Value, self.allocator, self.vals[index]);
                 }
 
                 pub fn nextBytes(self: *@This()) error{}!?[2]BytesRef {
@@ -259,6 +282,14 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 }
             };
         }
+
+        pub fn rawIterator(self: *Self, comptime cf: ColumnFamily) error{}!RawIterator {
+            _ = self; // autofix
+            _ = cf; // autofix
+            unreachable;
+        }
+
+        pub const RawIterator = struct {};
     };
 }
 

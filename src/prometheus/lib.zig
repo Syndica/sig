@@ -9,6 +9,7 @@ pub const registry = @import("registry.zig");
 pub const Counter = counter.Counter;
 pub const GaugeFn = gauge_fn.GaugeFn;
 pub const Gauge = gauge.Gauge;
+pub const GetMetricError = registry.GetMetricError;
 pub const Histogram = histogram.Histogram;
 pub const Registry = registry.Registry;
 

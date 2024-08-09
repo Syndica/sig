@@ -177,9 +177,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) Error!Iterator(direction) {
-            _ = start.?; //TODO
+        ) anyerror!Iterator(cf, direction) {
+            const start_bytes = if (start) |s| try serializeToRef(self.allocator, s) else null;
+            defer if (start_bytes) |sb| sb.deinit();
             return .{
+                .allocator = self.allocator,
                 .logger = self.logger,
                 .inner = self.db.iterator(
                     self.cf_handles[cf.find(column_families)],
@@ -187,26 +189,59 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                         .forward => .forward,
                         .reverse => .reverse,
                     },
+                    if (start_bytes) |sb| sb.data else null,
                 ),
             };
         }
 
-        pub fn Iterator(_: IteratorDirection) type {
+        pub fn Iterator(cf: ColumnFamily, _: IteratorDirection) type {
             return struct {
+                allocator: Allocator,
                 inner: rocks.Iterator,
                 logger: Logger,
 
+                /// This is a noop, but you should still call it when you're done with the iterator.
                 pub fn deinit(_: *@This()) void {}
 
+                pub fn next(self: *@This()) anyerror!?cf.Entry() {
+                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
+                    return if (entry) |kv| .{
+                        try deserialize(cf.Key, self.allocator, kv[0].data),
+                        try deserialize(cf.Value, self.allocator, kv[1].data),
+                    } else null;
+                }
+
+                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
+                    return if (entry) |kv|
+                        try deserialize(cf.Key, self.allocator, kv[0].data)
+                    else
+                        null;
+                }
+
+                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
+                    return if (entry) |kv|
+                        try deserialize(cf.Value, self.allocator, kv[1].data)
+                    else
+                        null;
+                }
+
                 pub fn nextBytes(self: *@This()) Error!?[2]BytesRef {
-                    const next = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
-                    return if (next) |kv| .{
-                        .{ .allocator = kv[0].allocator, .data = kv[0].data },
-                        .{ .allocator = kv[1].allocator, .data = kv[1].data },
+                    const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
+                    return if (entry) |kv| .{
+                        .{ .allocator = self.allocator, .data = kv[0].data },
+                        .{ .allocator = self.allocator, .data = kv[1].data },
                     } else null;
                 }
             };
         }
+
+        pub fn rawIterator(self: *Self, comptime cf: ColumnFamily) Error!RawIterator {
+            return self.db.rawIterator(self.cf_handles[cf.find(column_families)]);
+        }
+
+        pub const RawIterator = rocks.RawIterator;
 
         const Error = error{
             RocksDBOpen,

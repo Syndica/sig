@@ -37,12 +37,14 @@ const SlotMeta = meta.SlotMeta;
 
 const serializer = sig.blockstore.database.serializer;
 
+const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
+
 pub const ShredInserter = struct {
     allocator: Allocator,
     logger: sig.trace.Logger,
     db: BlockstoreDB,
     lock: Mutex,
-    max_root: std.atomic.Value(u64),
+    max_root: std.atomic.Value(u64), // TODO shared
 
     const WriteBatch: type = BlockstoreDB.WriteBatch;
 
@@ -1649,11 +1651,6 @@ fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
 fn slotLeader(provider: ?SlotLeaderProvider, slot: Slot) ?Pubkey {
     return if (provider) |p| if (p.call(slot)) |l| l else null else null;
 }
-
-/// The default tick rate that the cluster attempts to achieve (160 per second).
-///
-/// Note that the actual tick rate at any given time should be expected to drift.
-const DEFAULT_TICKS_PER_SECOND: u64 = 160;
 
 /// update_slot_meta
 fn updateSlotMeta(

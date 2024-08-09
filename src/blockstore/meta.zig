@@ -65,6 +65,8 @@ pub const SlotMeta = struct {
 
     pub fn deinit(self: Self) void {
         self.next_slots.deinit();
+        var map = self.completed_data_indexes;
+        map.deinit();
     }
 
     // TODO copy on write
@@ -288,7 +290,7 @@ pub const UnixTimestamp = i64;
 
 // TODO consider union
 pub const PerfSample = struct {
-    tag: u32 = 1, // for binary compatibility with rust enum serialization
+    version: u32 = 1, // for binary compatibility with rust enum serialization
     // `PerfSampleV1` part
     num_transactions: u64,
     num_slots: u64,
@@ -303,7 +305,19 @@ pub const ProgramCost = struct {
 };
 
 pub const FrozenHashVersioned = union(enum) {
-    Current: FrozenHashStatus,
+    current: FrozenHashStatus,
+
+    pub fn isDuplicateConfirmed(self: @This()) bool {
+        return switch (self) {
+            .current => |c| c.is_duplicate_confirmed,
+        };
+    }
+
+    pub fn frozenHash(self: @This()) sig.core.Hash {
+        return switch (self) {
+            .current => |c| c.frozen_hash,
+        };
+    }
 };
 
 pub const FrozenHashStatus = struct {

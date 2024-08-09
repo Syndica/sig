@@ -8,9 +8,10 @@ const Logger = sig.trace.Logger;
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
     sig.utils.interface.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
+    const dummy_cf = ColumnFamily{ .name = "", .Key = void, .Value = void };
     sig.utils.interface.assertSameInterface(
-        Database(Impl).Iterator(.forward),
-        Impl.Iterator(.forward),
+        Database(Impl).Iterator(dummy_cf, .forward),
+        Impl.Iterator(dummy_cf, .forward),
         .subset,
     );
 }
@@ -109,16 +110,28 @@ pub fn Database(comptime Impl: type) type {
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) anyerror!Iterator(direction) {
+        ) anyerror!Iterator(cf, direction) {
             return .{ .impl = try self.impl.iterator(cf, direction, start) };
         }
 
-        pub fn Iterator(direction: IteratorDirection) type {
+        pub fn Iterator(cf: ColumnFamily, direction: IteratorDirection) type {
             return struct {
-                impl: Impl.Iterator(direction),
+                impl: Impl.Iterator(cf, direction),
 
                 pub fn deinit(self: *@This()) void {
                     return self.impl.deinit();
+                }
+
+                pub fn next(self: *@This()) anyerror!?cf.Entry() {
+                    return try self.impl.next();
+                }
+
+                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                    return try self.impl.nextKey();
+                }
+
+                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                    return try self.impl.nextValue();
                 }
 
                 pub fn nextBytes(self: *@This()) anyerror!?[2]BytesRef {
@@ -126,6 +139,12 @@ pub fn Database(comptime Impl: type) type {
                 }
             };
         }
+
+        pub fn rawIterator(self: *Self, comptime cf: ColumnFamily) anyerror!RawIterator {
+            return .{ .impl = try self.impl.rawIterator(cf) };
+        }
+
+        pub const RawIterator = struct {};
     };
 }
 
@@ -137,6 +156,10 @@ pub const ColumnFamily = struct {
     Value: type,
 
     const Self = @This();
+
+    pub fn Entry(self: Self) type {
+        return struct { self.Key, self.Value };
+    }
 
     /// At comptime, find this family in a slice. Useful for for fast runtime
     /// accesses of data in other slices that are one-to-one with this slice.
