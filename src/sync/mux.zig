@@ -159,7 +159,7 @@ pub fn RwMux(comptime T: type) type {
             valid: bool,
 
             /// get func returns a `Const(T)`
-            pub fn get(self: *RLockGuard) Const(T) {
+            pub fn get(self: *const RLockGuard) Const(T) {
                 assert(self.valid == true);
                 switch (@typeInfo(T)) {
                     // if value is a pointer, we will return pointer itself instead of `*const *T`
