@@ -1890,6 +1890,8 @@ pub const AccountsDB = struct {
         );
     }
 
+    /// index and validate an account file.
+    /// NOTE: should only be called in tests/benchmarks
     pub fn putAccountFile(
         self: *Self,
         account_file: *AccountFile,
