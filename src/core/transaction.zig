@@ -7,13 +7,12 @@ const Hash = sig.core.Hash;
 const ShortVecConfig = sig.bincode.shortvec.ShortVecConfig;
 
 pub const VersionedTransaction = struct {
-    allocator: std.mem.Allocator,
     signatures: []Signature,
     message: VersionedMessage,
 
     pub fn sanitize(self: VersionedTransaction) !void {
         switch (self.message) {
-            .legacy, .v0 => |m| try m.sanitize(),
+            inline .legacy, .v0 => |m| try m.sanitize(),
         }
     }
 };

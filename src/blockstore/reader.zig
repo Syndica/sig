@@ -489,7 +489,7 @@ pub const BlockstoreReader = struct {
                     .{ err, slot, transaction },
                 );
             };
-            const signature = transaction.signatures.items[0];
+            const signature = transaction.signatures[0];
             txns_with_statuses.appendAssumeCapacity(.{
                 .transaction = transaction,
                 .meta = try self.db.get(schema.transaction_status, .{ signature, slot }) orelse
@@ -682,7 +682,7 @@ pub const BlockstoreReader = struct {
                         .{ err, slot, transaction },
                     );
                 }
-                if (signature.eql(&transaction.signatures.items[0])) {
+                if (signature.eql(&transaction.signatures[0])) {
                     return transaction;
                 }
             }
@@ -854,9 +854,9 @@ pub const BlockstoreReader = struct {
             .initCapacity(self.allocator, block.transactions.len);
         for (1..block.transactions.len + 1) |i| {
             const transaction_with_meta = block.transactions[block.transactions.len - i];
-            if (transaction_with_meta.transaction.signatures.items.len > 0) {
+            if (transaction_with_meta.transaction.signatures.len > 0) {
                 signatures.appendAssumeCapacity(
-                    transaction_with_meta.transaction.signatures.items[0],
+                    transaction_with_meta.transaction.signatures[0],
                 );
             }
         }
@@ -870,9 +870,9 @@ pub const BlockstoreReader = struct {
         var signatures = try ArrayList(Signature)
             .initCapacity(self.allocator, block.transactions.len);
         for (block.transactions) |transaction_with_meta| {
-            if (transaction_with_meta.transaction.signatures.items.len > 0) {
+            if (transaction_with_meta.transaction.signatures.len > 0) {
                 signatures.appendAssumeCapacity(
-                    transaction_with_meta.transaction.signatures.items[0],
+                    transaction_with_meta.transaction.signatures[0],
                 );
             }
         }
@@ -1120,12 +1120,12 @@ pub const BlockstoreReader = struct {
             };
             defer bytes.deinit();
             const these_entries = sig.bincode
-                .readFromSlice(self.allocator, ArrayList(Entry), bytes.items, .{}) catch |e| {
+                .readFromSlice(self.allocator, []Entry, bytes.items, .{}) catch |e| {
                 self.logger.errf("failed to deserialize entries from shreds: {}", .{e});
                 return e;
             };
-            defer these_entries.deinit();
-            try entries.appendSlice(these_entries.items);
+            defer self.allocator.free(these_entries);
+            try entries.appendSlice(these_entries);
         }
         return entries;
     }
