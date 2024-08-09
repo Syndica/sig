@@ -87,7 +87,7 @@ pub const GossipMessage = union(enum(u32)) {
             .PruneMessage => |*msg| {
                 const from = msg[0];
                 const value = msg[1];
-                if (!from.equals(&value.pubkey)) {
+                if (!from.eql(&value.pubkey)) {
                     return error.InvalidValue;
                 }
                 try sanitizeWallclock(value.wallclock);
@@ -148,7 +148,7 @@ pub const PruneData = struct {
             .pubkey = pubkey,
             .prunes = prunes,
             .destination = destination,
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.default(),
             .wallclock = now,
         };
     }
@@ -162,9 +162,9 @@ pub const PruneData = struct {
 
     pub fn random(rng: std.rand.Random, keypair: *KeyPair) !PruneData {
         var self = PruneData{
-            .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+            .pubkey = Pubkey.fromKeyPair(keypair),
             .prunes = &[0]Pubkey{},
-            .signature = Signature.init(.{0} ** 64),
+            .signature = Signature.default(),
             .destination = Pubkey.random(rng),
             .wallclock = getWallclockMs(),
         };
@@ -238,10 +238,10 @@ test "gossip.message: test prune data sig verify" {
     const rust_bytes = [_]u8{ 80, 98, 7, 181, 129, 96, 249, 247, 34, 39, 251, 41, 125, 241, 31, 25, 122, 103, 202, 48, 78, 160, 222, 65, 228, 81, 171, 237, 233, 87, 248, 29, 37, 0, 19, 66, 83, 207, 78, 86, 232, 157, 184, 144, 71, 12, 223, 86, 144, 169, 160, 171, 139, 248, 106, 63, 194, 178, 144, 119, 51, 60, 201, 7 };
 
     var prune_v2 = PruneData{
-        .pubkey = Pubkey.fromPublicKey(&keypair.public_key),
+        .pubkey = Pubkey.fromKeyPair(&keypair),
         .prunes = &[0]Pubkey{},
-        .signature = Signature.init(.{0} ** 64),
-        .destination = Pubkey.fromPublicKey(&keypair.public_key),
+        .signature = Signature.default(),
+        .destination = Pubkey.fromKeyPair(&keypair),
         .wallclock = 0,
     };
     try prune_v2.sign(&keypair);
@@ -262,7 +262,7 @@ test "gossip.message: ping message serializes and deserializes correctly" {
 
     var deserialized = try bincode.readFromSlice(testing.allocator, GossipMessage, serialized, bincode.Params.standard);
 
-    try testing.expect(original.PingMessage.from.equals(&deserialized.PingMessage.from));
+    try testing.expect(original.PingMessage.from.eql(&deserialized.PingMessage.from));
     try testing.expect(original.PingMessage.signature.eql(&deserialized.PingMessage.signature));
     try testing.expect(std.mem.eql(u8, original.PingMessage.token[0..], deserialized.PingMessage.token[0..]));
 }
@@ -287,7 +287,7 @@ test "gossip.message: pull request serializes and deserializes" {
         61,  170, 38,  18,  67,  196, 242, 219, 50,  154, 4,   254, 79,  227, 253, 229, 188, 230,
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromKeyPair(&keypair);
 
     // pull requests only use ContactInfo data
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
@@ -331,8 +331,7 @@ test "gossip.message: pull request serializes and deserializes" {
 test "gossip.message: push message serializes and deserializes correctly" {
     const kp_bytes = [_]u8{1} ** 32;
     const kp = try KeyPair.create(kp_bytes);
-    const pk = kp.public_key;
-    const id = Pubkey.fromPublicKey(&pk);
+    const id = Pubkey.fromKeyPair(&kp);
 
     const gossip_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1234);
     const unspecified_addr = SocketAddr.unspecified();

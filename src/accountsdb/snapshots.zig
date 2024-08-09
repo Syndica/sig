@@ -306,7 +306,7 @@ test "deserialize VoteState.node_pubkey" {
     } ++ .{0} ** 1586 ++ .{ 31, 0, 0, 0, 0, 0, 0, 0, 1 } ++ .{0} ** 24;
     const vote_state = try bincode.readFromSlice(undefined, VoteState, &bytes, .{});
     const expected_pubkey = try Pubkey.fromString("55abJrqFnjm7ZRB1noVdh7BzBe3bBSMFT3pt16mw6Vad");
-    try std.testing.expect(expected_pubkey.equals(&vote_state.node_pubkey));
+    try std.testing.expect(expected_pubkey.eql(&vote_state.node_pubkey));
 }
 
 /// Analogous to [Delegation](https://github.com/anza-xyz/agave/blob/f807911531359e0ae4cfcaf371bd3843ec52f1c6/sdk/program/src/stake/state.rs#L587)

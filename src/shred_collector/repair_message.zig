@@ -11,7 +11,7 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
+const SIGNATURE_LENGTH = sig.core.Signature.BYTES_LENGTH;
 
 /// Analogous to [SIGNED_REPAIR_TIME_WINDOW](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L89)
 const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
@@ -54,8 +54,8 @@ pub fn serializeRepairRequest(
     nonce: Nonce,
 ) ![]u8 {
     const header = RepairRequestHeader{
-        .signature = Signature.init(undefined),
-        .sender = try Pubkey.fromBytes(&keypair.public_key.bytes),
+        .signature = Signature.default(),
+        .sender = Pubkey.fromKeyPair(keypair),
         .recipient = recipient,
         .timestamp = timestamp,
         .nonce = nonce,
@@ -154,7 +154,7 @@ pub const RepairMessage = union(enum(u8)) {
             inline else => |msg| {
                 // i am the intended recipient
                 const header: RepairRequestHeader = msg.header;
-                if (!header.recipient.equals(&expected_recipient)) {
+                if (!header.recipient.eql(&expected_recipient)) {
                     return error.IdMismatch;
                 }
 
@@ -191,8 +191,8 @@ pub const RepairRequestHeader = struct {
 
     fn eql(self: *const @This(), other: *const @This()) bool {
         return self.signature.eql(&other.signature) and
-            self.sender.equals(&other.sender) and
-            self.recipient.equals(&other.recipient) and
+            self.sender.eql(&other.sender) and
+            self.recipient.eql(&other.recipient) and
             self.timestamp == other.timestamp and
             self.nonce == other.nonce;
     }

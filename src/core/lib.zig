@@ -20,10 +20,7 @@ pub const Signature = signature.Signature;
 pub const Epoch = time.Epoch;
 pub const Slot = time.Slot;
 
-pub const CompiledInstruction = transaction.CompiledInstruction;
+pub const Instruction = transaction.CompiledInstruction;
 pub const Message = transaction.Message;
 pub const MessageHeader = transaction.MessageHeader;
 pub const Transaction = transaction.Transaction;
-
-pub const SIGNATURE_LENGTH = signature.SIGNATURE_LENGTH;
-pub const HASH_SIZE = hash.HASH_SIZE;

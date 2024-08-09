@@ -69,12 +69,12 @@ pub fn randomPongPacket(rng: std.rand.Random, keypair: *const KeyPair, to_addr: 
 
 pub fn randomSignedGossipData(rng: std.rand.Random, maybe_should_pass_sig_verification: ?bool) !SignedGossipData {
     var keypair = try KeyPair.create(null);
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromKeyPair(&keypair);
 
     // will have random id
     // var value = try SignedGossipData.random(rng, &keypair);
     var value = try SignedGossipData.randomWithIndex(rng, &keypair, 0);
-    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromPublicKey(&keypair.public_key));
+    value.data.LegacyContactInfo = LegacyContactInfo.default(Pubkey.fromKeyPair(&keypair));
     try value.sign(&keypair);
 
     const should_pass_sig_verification = maybe_should_pass_sig_verification orelse rng.boolean();
@@ -98,7 +98,7 @@ pub fn randomPushMessage(rng: std.rand.Random, keypair: *const KeyPair, to_addr:
     const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key),
+        &Pubkey.fromKeyPair(keypair),
         &values,
         &to_addr,
         ChunkType.PushMessage,
@@ -118,7 +118,7 @@ pub fn randomPullResponse(rng: std.rand.Random, keypair: *const KeyPair, to_addr
     const allocator = std.heap.page_allocator;
     const packets = try gossipDataToPackets(
         allocator,
-        &Pubkey.fromPublicKey(&keypair.public_key),
+        &Pubkey.fromKeyPair(keypair),
         &values,
         &to_addr,
         ChunkType.PullResponse,
@@ -254,7 +254,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     // setup sending socket
     var fuzz_keypair = try KeyPair.create(null);
     const fuzz_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9998);
-    const fuzz_pubkey = Pubkey.fromPublicKey(&fuzz_keypair.public_key);
+    const fuzz_pubkey = Pubkey.fromKeyPair(&fuzz_keypair);
     var fuzz_contact_info = ContactInfo.init(allocator, fuzz_pubkey, 0, 19);
     try fuzz_contact_info.setSocket(.gossip, fuzz_address);
 
@@ -265,7 +265,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             // this is who we blast messages at
             var client_keypair = try KeyPair.create(null);
             const client_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 9988);
-            const client_pubkey = Pubkey.fromPublicKey(&client_keypair.public_key);
+            const client_pubkey = Pubkey.fromKeyPair(&client_keypair);
             var client_contact_info = ContactInfo.init(allocator, client_pubkey, 0, 19);
             try client_contact_info.setSocket(.gossip, client_address);
 

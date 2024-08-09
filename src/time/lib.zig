@@ -3,3 +3,4 @@ pub const time = @import("time.zig");
 
 pub const Timer = time.Timer;
 pub const Duration = time.Duration;
+pub const Instant = time.Instant;

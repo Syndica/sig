@@ -168,7 +168,7 @@ pub const GossipService = struct {
         errdefer gossip_table.deinit();
 
         const gossip_table_rw = RwMux(GossipTable).init(gossip_table);
-        const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+        const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
         const my_shred_version = my_contact_info.shred_version;
         const active_set = ActiveSet.init(allocator);
 
@@ -559,7 +559,7 @@ pub const GossipService = struct {
                         var should_process_value = true;
                         switch (value.data) {
                             .ContactInfo => |*data| {
-                                if (data.pubkey.equals(&self.my_pubkey)) {
+                                if (data.pubkey.eql(&self.my_pubkey)) {
                                     // talking to myself == ignore
                                     should_process_value = false;
                                 }
@@ -571,7 +571,7 @@ pub const GossipService = struct {
                                 }
                             },
                             .LegacyContactInfo => |*data| {
-                                if (data.id.equals(&self.my_pubkey)) {
+                                if (data.id.eql(&self.my_pubkey)) {
                                     // talking to myself == ignore
                                     should_process_value = false;
                                 }
@@ -613,7 +613,7 @@ pub const GossipService = struct {
                         const prune_wallclock = prune_data.wallclock;
 
                         const too_old = prune_wallclock < now -| PRUNE_MSG_TIMEOUT.asMillis();
-                        const incorrect_destination = !prune_data.destination.equals(&self.my_pubkey);
+                        const incorrect_destination = !prune_data.destination.eql(&self.my_pubkey);
                         if (too_old or incorrect_destination) {
                             self.stats.prune_messages_dropped.add(1);
                             // prune_data free by defered shallowFree
@@ -1382,7 +1382,7 @@ pub const GossipService = struct {
             defer endpoint_str.deinit();
             self.logger
                 .field("from_endpoint", endpoint_str.items)
-                .field("from_pubkey", &ping_message.ping.from.string())
+                .field("from_pubkey", &(try ping_message.ping.from.toString()))
                 .debug("gossip: recv ping");
         }
         self.stats.pong_messages_sent.add(n_ping_messages);
@@ -1487,7 +1487,7 @@ pub const GossipService = struct {
             // update active set
             const from_pubkey = prune_data.pubkey;
             for (prune_data.prunes) |origin| {
-                if (origin.equals(&self.my_pubkey)) {
+                if (origin.eql(&self.my_pubkey)) {
                     continue;
                 }
                 active_set.prune(from_pubkey, origin);
@@ -1571,7 +1571,7 @@ pub const GossipService = struct {
                 // logging this message takes too long and causes a bottleneck
                 // self.logger
                 //     .field("n_values", valid_len)
-                //     .field("from_addr", &push_message.from_pubkey.string())
+                //     .field("from_addr", &push_message.from_pubkey.toString())
                 //     .field("n_failed_inserts", failed_insert_indexs.items.len)
                 //     .debug("gossip: recv push_message");
 
@@ -1657,7 +1657,7 @@ pub const GossipService = struct {
 
             self.logger
                 .field("n_pruned_origins", prune_size)
-                .field("to_addr", &from_pubkey.string())
+                .field("to_addr", &(try from_pubkey.toString()))
                 .debug("gossip: send prune_message");
 
             var packet = &prune_packet_batch.items[count];
@@ -1828,7 +1828,7 @@ pub const GossipService = struct {
         var node_index: usize = 0;
         for (contact_infos) |contact_info| {
             // filter self
-            if (contact_info.pubkey.equals(&self.my_pubkey)) {
+            if (contact_info.pubkey.eql(&self.my_pubkey)) {
                 continue;
             }
             // filter matching shred version or my_shred_version == 0
@@ -2165,7 +2165,7 @@ test "handle pong messages" {
 
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+    const pubkey = Pubkey.fromKeyPair(&keypair);
     const contact_info = try localhostTestContactInfo(pubkey);
 
     var gossip_service = try GossipService.init(
@@ -2185,7 +2185,7 @@ test "handle pong messages" {
 
     // send out a ping to the endpoint
     const other_keypair = try KeyPair.create(null);
-    const other_pubkey = Pubkey.fromPublicKey(&other_keypair.public_key);
+    const other_pubkey = Pubkey.fromKeyPair(&other_keypair);
     const pubkey_and_addr = sig.gossip.ping_pong.PubkeyAndSocketAddr{
         .pubkey = other_pubkey,
         .socket_addr = SocketAddr.fromEndpoint(endpoint),
@@ -2231,7 +2231,7 @@ test "build messages startup and shutdown" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2285,7 +2285,7 @@ test "handling prune messages" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2359,7 +2359,7 @@ test "handling pull responses" {
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    var my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    var my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2421,7 +2421,7 @@ test "handle old prune & pull request message" {
 
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
@@ -2547,7 +2547,7 @@ test "handle pull request" {
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     var contact_info = try localhostTestContactInfo(my_pubkey);
     contact_info.shred_version = 99;
 
@@ -2595,7 +2595,7 @@ test "handle pull request" {
 
     // make sure we get a response by setting a valid pong response
     var rando_keypair = try KeyPair.create([_]u8{22} ** 32);
-    const rando_pubkey = Pubkey.fromPublicKey(&rando_keypair.public_key);
+    const rando_pubkey = Pubkey.fromKeyPair(&rando_keypair);
 
     const addr = SocketAddr.random(rng.random());
     var ci = try SignedGossipData.randomWithIndex(rng.random(), &rando_keypair, 0);
@@ -2662,7 +2662,7 @@ test "test build prune messages and handle push messages" {
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2741,7 +2741,7 @@ test "test build prune messages and handle push messages" {
     defer bincode.free(allocator, message);
 
     var prune_data = message.PruneMessage[1];
-    try std.testing.expect(prune_data.destination.equals(&push_from));
+    try std.testing.expect(prune_data.destination.eql(&push_from));
     try std.testing.expectEqual(prune_data.prunes.len, 10);
 }
 
@@ -2750,7 +2750,7 @@ test "test build pull requests" {
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2806,7 +2806,7 @@ test "test build push messages" {
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2837,7 +2837,7 @@ test "test build push messages" {
     lg.unlock();
 
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    // var id = Pubkey.fromPublicKey(&keypair.public_key);
+    // var id = Pubkey.fromKeyPair(&keypair);
     const value = try SignedGossipData.random(rng.random(), &keypair);
 
     // set the active set
@@ -2880,7 +2880,7 @@ test "test large push messages" {
     var rng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -2938,7 +2938,7 @@ test "test packet verification" {
     const allocator = std.testing.allocator;
     var exit = AtomicBool.init(false);
     var keypair = try KeyPair.create([_]u8{1} ** 32);
-    const id = Pubkey.fromPublicKey(&keypair.public_key);
+    const id = Pubkey.fromKeyPair(&keypair);
     const contact_info = try localhostTestContactInfo(id);
 
     // noop for this case because this tests error failed verification
@@ -3012,7 +3012,7 @@ test "test packet verification" {
 
     // send it with a SignedGossipData which hash a slice
     {
-        const rand_pubkey = Pubkey.fromPublicKey(&rand_keypair.public_key);
+        const rand_pubkey = Pubkey.fromKeyPair(&rand_keypair);
         var dshred = sig.gossip.data.DuplicateShred.random(rng.random());
         var chunk: [32]u8 = .{1} ** 32;
         dshred.chunk = &chunk;
@@ -3045,7 +3045,7 @@ test "test packet verification" {
             defer verified_channel.allocator.free(msgs);
             for (msgs) |msg| {
                 defer bincode.free(gossip_service.allocator, msg);
-                try std.testing.expect(msg.message.PushMessage[0].equals(&id));
+                try std.testing.expect(msg.message.PushMessage[0].eql(&id));
                 msg_count += 1;
             }
         }
@@ -3077,7 +3077,7 @@ test "process contact info push packet" {
     const gossip_value_allocator = allocator;
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     const contact_info = try localhostTestContactInfo(my_pubkey);
 
     var logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -3099,7 +3099,7 @@ test "process contact info push packet" {
     const responder_channel = gossip_service.packet_outgoing_channel;
 
     var kp = try KeyPair.create(null);
-    const pk = Pubkey.fromPublicKey(&kp.public_key);
+    const pk = Pubkey.fromKeyPair(&kp);
 
     var packet_handle = try Thread.spawn(
         .{},
@@ -3263,7 +3263,7 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
         const endpoint = address.toEndpoint();
 
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromKeyPair(&keypair);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
@@ -3393,7 +3393,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         var keypair = try KeyPair.create(null);
         var address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8888);
 
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromKeyPair(&keypair);
         var contact_info = ContactInfo.init(allocator, pubkey, 0, 19);
         try contact_info.setSocket(.gossip, address);
 
@@ -3423,7 +3423,7 @@ pub const BenchmarkGossipServicePullRequests = struct {
         // setup recv peer
         const recv_address = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8889);
         var recv_keypair = try KeyPair.create(null);
-        const recv_pubkey = Pubkey.fromPublicKey(&recv_keypair.public_key);
+        const recv_pubkey = Pubkey.fromKeyPair(&recv_keypair);
 
         var contact_info_recv = ContactInfo.init(allocator, recv_pubkey, 0, 19);
         try contact_info_recv.setSocket(.gossip, recv_address);

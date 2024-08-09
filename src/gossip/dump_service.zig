@@ -49,7 +49,7 @@ pub const GossipDumpService = struct {
                     &gossip_versioned_data.value_hash.data,
                     &encoder_buf,
                 );
-                const pubkey_str = val.id().string();
+                const pubkey_str = try val.id().toString();
                 const len: usize = if (pubkey_str[43] == 0) 43 else 44;
                 try writer.print("{s},{s},{s},{},", .{
                     @tagName(val.data),

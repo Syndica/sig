@@ -399,7 +399,7 @@ pub const RepairPeerProvider = struct {
         var infos = gossip_table.contactInfoIterator(0);
         while (infos.next()) |info| {
             const serve_repair_socket = info.getSocket(.serve_repair);
-            if (!info.pubkey.equals(&self.my_pubkey) and // don't request from self
+            if (!info.pubkey.eql(&self.my_pubkey) and // don't request from self
                 info.shred_version == self.my_shred_version.load(.monotonic) and // need compatible shreds
                 serve_repair_socket != null and // node must be able to receive repair requests
                 info.getSocket(.turbine_recv) != null) // node needs access to shreds
@@ -457,7 +457,7 @@ test "RepairService sends repair request to gossip peer" {
     };
     try peer_socket.bind(peer_endpoint);
     try peer_socket.setReadTimeout(100_000);
-    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromPublicKey(&peer_keypair.public_key), wallclock, my_shred_version.load(.unordered));
+    var peer_contact_info = ContactInfo.init(allocator, Pubkey.fromKeyPair(&peer_keypair), wallclock, my_shred_version.load(.unordered));
     try peer_contact_info.setSocket(.serve_repair, SocketAddr.fromEndpoint(&peer_endpoint));
     try peer_contact_info.setSocket(.turbine_recv, SocketAddr.fromEndpoint(&peer_endpoint));
     _ = try gossip.insert(try SignedGossipData.initSigned(.{ .ContactInfo = peer_contact_info }, &peer_keypair), wallclock);
@@ -469,7 +469,7 @@ test "RepairService sends repair request to gossip peer" {
         allocator,
         random,
         &gossip_mux,
-        Pubkey.fromPublicKey(&keypair.public_key),
+        Pubkey.fromKeyPair(&keypair),
         &my_shred_version,
     );
     var tracker = BasicShredTracker.init(13579, .noop);
@@ -498,7 +498,7 @@ test "RepairService sends repair request to gossip peer" {
     // assertions
     try std.testing.expect(160 == size);
     const msg = try bincode.readFromSlice(allocator, RepairMessage, buf[0..160], .{});
-    try msg.verify(buf[0..160], Pubkey.fromPublicKey(&peer_keypair.public_key), @intCast(std.time.milliTimestamp()));
+    try msg.verify(buf[0..160], Pubkey.fromKeyPair(&peer_keypair), @intCast(std.time.milliTimestamp()));
     try std.testing.expect(msg.HighestWindowIndex.slot == 13579);
     try std.testing.expect(msg.HighestWindowIndex.shred_index == 0);
 }
@@ -541,7 +541,7 @@ test "RepairPeerProvider selects correct peers" {
         allocator,
         random,
         &gossip_mux,
-        Pubkey.fromPublicKey(&keypair.public_key),
+        Pubkey.fromKeyPair(&keypair),
         &my_shred_version,
     );
     defer peers.deinit();
@@ -597,7 +597,7 @@ const TestPeerGenerator = struct {
         const keypair = KeyPair.create(null) catch unreachable;
         const serve_repair_addr = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8003);
         const shred_version = if (peer_type == .WrongShredVersion) self.shred_version + 1 else self.shred_version;
-        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        const pubkey = Pubkey.fromKeyPair(&keypair);
         var contact_info = ContactInfo.init(self.allocator, pubkey, wallclock, shred_version);
         if (peer_type != .MissingServeRepairPort) {
             try contact_info.setSocket(.serve_repair, serve_repair_addr);

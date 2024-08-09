@@ -23,6 +23,8 @@ const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSche
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
+const Channel = sig.sync.Channel;
+const TransactionInfo = sig.transaction_forwarding_service.TransactionInfo;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -408,6 +410,29 @@ pub fn run() !void {
                             },
                         },
                     },
+
+                    &cli.Command{
+                        .name = "test-tfs",
+                        .description = .{
+                            .one_line = "Run transaction forwarding service test",
+                            .detailed =
+                            \\Starts a transaction forwarding service test.
+                            ,
+                        },
+                        .options = &.{
+                            // gossip
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = transactionForwardingServiceTest,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -551,6 +576,33 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
         null;
 }
 
+pub fn transactionForwardingServiceTest() !void {
+    var app_base = try AppBase.init(gpa_allocator);
+
+    const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
+    defer gossip_manager.deinit();
+
+    const incoming_channel = Channel(TransactionInfo).init(gpa_allocator, 100);
+    defer incoming_channel.deinit();
+
+    const socket_address = SocketAddr.init(app_base.my_ip, 8003);
+
+    const transaction_forwarding_thread = try std.Thread.spawn(
+        .{},
+        sig.transaction_forwarding_service.run,
+        .{
+            socket_address,
+            incoming_channel,
+            &gossip_service.gossip_table_rw,
+            &app_base.exit,
+            app_base.logger,
+        },
+    );
+
+    transaction_forwarding_thread.join();
+    gossip_manager.join();
+}
+
 /// State that typically needs to be initialized at the start of the app,
 /// and deinitialized only when the app exits.
 const AppBase = struct {
@@ -609,7 +661,7 @@ fn initGossip(
     logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&my_keypair);
     var contact_info = ContactInfo.init(gpa_allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(gossip_host_ip, gossip_port));
     for (sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(gossip_host_ip, s.port));
@@ -637,7 +689,7 @@ fn startGossip(
     app_base.logger.infof("gossip port: {d}", .{gossip_port});
 
     // setup contact info
-    const my_pubkey = Pubkey.fromPublicKey(&app_base.my_keypair.public_key);
+    const my_pubkey = Pubkey.fromKeyPair(&app_base.my_keypair);
     var contact_info = ContactInfo.init(allocator, my_pubkey, getWallclockMs(), 0);
     try contact_info.setSocket(.gossip, SocketAddr.init(app_base.my_ip, gossip_port));
     for (extra_sockets) |s| try contact_info.setSocket(s.tag, SocketAddr.init(app_base.my_ip, s.port));

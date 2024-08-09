@@ -87,7 +87,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
 
     var result = PeerSearchResult{};
     search_loop: for (contact_infos) |*peer_contact_info| {
-        const is_me = peer_contact_info.pubkey.equals(&my_pubkey);
+        const is_me = peer_contact_info.pubkey.eql(&my_pubkey);
         if (is_me) {
             result.is_me_count += 1;
             continue;
@@ -117,7 +117,7 @@ pub fn findPeersToDownloadFromAssumeCapacity(
 
         // dont try to download from a slow peer
         for (blacklist) |black_list_peers| {
-            if (black_list_peers.equals(&peer_contact_info.pubkey)) {
+            if (black_list_peers.eql(&peer_contact_info.pubkey)) {
                 result.is_blacklist += 1;
                 continue :search_loop;
             }
