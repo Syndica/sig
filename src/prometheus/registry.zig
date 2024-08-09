@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
 const fmt = std.fmt;
 const hash_map = std.hash_map;
 const heap = std.heap;
@@ -14,6 +15,8 @@ const GaugeFn = @import("gauge_fn.zig").GaugeFn;
 const GaugeCallFnType = @import("gauge_fn.zig").GaugeCallFnType;
 const Histogram = @import("histogram.zig").Histogram;
 const DEFAULT_BUCKETS = @import("histogram.zig").DEFAULT_BUCKETS;
+
+const ReturnType = sig.utils.types.ReturnType;
 
 pub const GetMetricError = error{
     /// Returned when trying to add a metric to an already full registry.
@@ -87,10 +90,10 @@ pub fn Registry(comptime options: RegistryOptions) type {
             name: []const u8,
             state: anytype,
             callFn: GaugeCallFnType(@TypeOf(state), f64),
-        ) GetMetricError!*GaugeFn(@TypeOf(state), Return(@TypeOf(callFn))) {
+        ) GetMetricError!*GaugeFn(@TypeOf(state), ReturnType(@TypeOf(callFn))) {
             return self.getOrCreateMetric(
                 name,
-                GaugeFn(@TypeOf(state), Return(@TypeOf(callFn))),
+                GaugeFn(@TypeOf(state), ReturnType(@TypeOf(callFn))),
                 .{ callFn, state },
             );
         }
@@ -179,15 +182,6 @@ pub fn Registry(comptime options: RegistryOptions) type {
                 try value.metric.write(allocator, writer, key);
             }
         }
-    };
-}
-
-/// Gets the return type of a function or function pointer
-fn Return(comptime FnPtr: type) type {
-    return switch (@typeInfo(FnPtr)) {
-        .Fn => |fun| fun.return_type.?,
-        .Pointer => |ptr| @typeInfo(ptr.child).Fn.return_type.?,
-        else => @compileError("not a function or function pointer"),
     };
 }
 

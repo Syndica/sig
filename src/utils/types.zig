@@ -33,6 +33,15 @@ pub fn ParamsTuple(comptime function: anytype) type {
     } });
 }
 
+/// Gets the return type of a function or function pointer
+pub fn ReturnType(comptime FnPtr: type) type {
+    return switch (@typeInfo(FnPtr)) {
+        .Fn => |fun| fun.return_type.?,
+        .Pointer => |ptr| @typeInfo(ptr.child).Fn.return_type.?,
+        else => @compileError("not a function or function pointer"),
+    };
+}
+
 pub const AllocManagement = enum {
     managed,
     unmanaged,
