@@ -11,7 +11,6 @@ const SortedSet = sig.utils.collections.SortedSet;
 
 /// The Meta column family
 pub const SlotMeta = struct {
-    // allocator: Allocator,
     /// The number of slots above the root (the genesis block). The first
     /// slot has slot 0.
     slot: Slot,
@@ -50,7 +49,6 @@ pub const SlotMeta = struct {
         else
             ConnectedFlags{};
         return .{
-            // .allocator = allocator,
             .slot = slot,
             .parent_slot = parent_slot,
             .connected_flags = connected_flags,
@@ -72,7 +70,6 @@ pub const SlotMeta = struct {
         var next_slots = try std.ArrayList(Slot).initCapacity(allocator, self.next_slots.items.len);
         next_slots.appendSliceAssumeCapacity(self.next_slots.items);
         return .{
-            // .allocator = self.allocator,
             .slot = self.slot,
             .parent_slot = self.parent_slot,
             .connected_flags = self.connected_flags,
