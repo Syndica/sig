@@ -7,6 +7,12 @@ pub const HASH_SIZE: usize = 32;
 pub const Hash = extern struct {
     data: [HASH_SIZE]u8,
 
+    pub fn fromSizedSlice(data: *const [HASH_SIZE]u8) Hash {
+        var hash: Hash = undefined;
+        @memcpy(&hash.data, data);
+        return hash;
+    }
+
     pub fn default() Hash {
         return .{ .data = .{0} ** HASH_SIZE };
     }

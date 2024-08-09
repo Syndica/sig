@@ -29,8 +29,23 @@ pub fn LruCacheCustom(
     comptime K: type,
     comptime V: type,
     comptime DeinitContext: type,
-    comptime deinitFn: fn (*V, DeinitContext) void,
+    comptime deinitFn_: anytype,
 ) type {
+    const deinitFn = switch (@TypeOf(deinitFn_)) {
+        fn (V, DeinitContext) void => deinitFn_,
+        fn (*V, DeinitContext) void => deinitFn_,
+        fn (V) void => struct {
+            fn f(v: V, _: DeinitContext) void {
+                V.deinit(v);
+            }
+        }.f,
+        fn (*V) void => struct {
+            fn f(v: *V, _: DeinitContext) void {
+                V.deinit(v);
+            }
+        }.f,
+        else => @compileError("unsupported deinit function type"),
+    };
     return struct {
         mux: if (kind == .locking) Mutex else void,
         allocator: Allocator,
@@ -72,8 +87,8 @@ pub fn LruCacheCustom(
         }
 
         /// Use if DeinitContext is void.
-        pub fn init(allocator: Allocator, max_items: usize) error{OutOfMemory}!LruCache(kind, K, V) {
-            return LruCache(kind, K, V).initWithContext(allocator, max_items, void{});
+        pub fn init(allocator: Allocator, max_items: usize) error{OutOfMemory}!Self {
+            return Self.initWithContext(allocator, max_items, void{});
         }
 
         /// Use if DeinitContext is not void.

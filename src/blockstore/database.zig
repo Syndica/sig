@@ -8,6 +8,11 @@ const Logger = sig.trace.Logger;
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
     sig.utils.interface.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
+    sig.utils.interface.assertSameInterface(
+        Database(Impl).Iterator(.forward),
+        Impl.Iterator(.forward),
+        .subset,
+    );
 }
 
 /// Runs all tests in `tests`
@@ -108,8 +113,33 @@ pub fn Database(comptime Impl: type) type {
                 return try self.impl.delete(cf, key);
             }
         };
+
+        pub fn iterator(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            comptime direction: IteratorDirection,
+            start: ?cf.Key,
+        ) anyerror!Iterator(direction) {
+            return .{ .impl = try self.impl.iterator(cf, direction, start) };
+        }
+
+        pub fn Iterator(direction: IteratorDirection) type {
+            return struct {
+                impl: Impl.Iterator(direction),
+
+                pub fn deinit(self: *@This()) void {
+                    return self.impl.deinit();
+                }
+
+                pub fn nextBytes(self: *@This()) anyerror!?[2]BytesRef {
+                    return try self.impl.nextBytes();
+                }
+            };
+        }
     };
 }
+
+pub const IteratorDirection = enum { forward, reverse };
 
 pub const ColumnFamily = struct {
     name: []const u8,
@@ -134,8 +164,8 @@ pub const ColumnFamily = struct {
 pub const serializer = struct {
     /// Returned slice is owned by the caller. Free with `allocator.free`.
     pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
-        const buf = try allocator.alloc(u8, try sig.bincode.sizeOf(item, .{}));
-        return sig.bincode.writeToSlice(item, buf);
+        const buf = try allocator.alloc(u8, sig.bincode.sizeOf(item, .{}));
+        return sig.bincode.writeToSlice(buf, item, .{});
     }
 
     /// Returned data may or may not be owned by the caller.
@@ -151,7 +181,7 @@ pub const serializer = struct {
             .data = item,
         } else .{
             .allocator = allocator,
-            .data = serializeAlloc(allocator, item),
+            .data = try serializeAlloc(allocator, item),
         };
     }
 
