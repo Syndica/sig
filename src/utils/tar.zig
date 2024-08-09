@@ -1,12 +1,13 @@
 const std = @import("std");
 const TarOutputHeader = std.tar.output.Header;
 
-const ThreadPoolTask = @import("../utils/thread.zig").ThreadPoolTask;
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const printTimeEstimate = @import("../time/estimate.zig").printTimeEstimate;
+const sig = @import("../lib.zig");
+const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
+const ThreadPool = sig.sync.thread_pool.ThreadPool;
+const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 
 /// Unpack tarball is related to accounts_db so we reuse it's progress bar
-const TAR_PROGRESS_UPDATES_NS = @import("../accountsdb/db.zig").DB_PROGRESS_UPDATES_NS;
+const TAR_PROGRESS_UPDATES = @import("../accountsdb/db.zig").DB_LOG_RATE;
 
 fn stripComponents(path: []const u8, count: u32) ![]const u8 {
     var i: usize = 0;
@@ -81,8 +82,8 @@ pub fn parallelUntarToFileSystem(
     const tasks = try UnTarTask.init(allocator, n_threads);
     defer allocator.free(tasks);
 
-    var timer = try std.time.Timer.start();
-    var progress_timer = try std.time.Timer.start();
+    var timer = try sig.time.Timer.start();
+    var progress_timer = try sig.time.Timer.start();
     var file_count: usize = 0;
     const strip_components: u32 = 0;
     loop: while (true) {
@@ -124,7 +125,7 @@ pub fn parallelUntarToFileSystem(
                 }
 
                 if (n_files_estimate) |total_n_files| {
-                    if (progress_timer.read() > TAR_PROGRESS_UPDATES_NS) {
+                    if (progress_timer.read().asNanos() > TAR_PROGRESS_UPDATES.asNanos()) {
                         printTimeEstimate(
                             logger,
                             &timer,

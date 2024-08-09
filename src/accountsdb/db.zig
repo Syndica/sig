@@ -48,8 +48,8 @@ const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 
-pub const DB_PROGRESS_UPDATES_NS = 5 * std.time.ns_per_s;
-pub const DB_MANAGER_UPDATE_NS = 5 * std.time.ns_per_s;
+pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
+pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
@@ -433,9 +433,8 @@ pub const AccountsDB = struct {
         const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
         defer counting_alloc.deinitIfSafe();
 
-        const ref_timer = try std.time.Timer.start();
-        var timer = ref_timer;
-        var progress_timer = ref_timer;
+        var timer = try sig.time.Timer.start();
+        var progress_timer = try sig.time.Timer.start();
 
         if (n_account_files > std.math.maxInt(AccountIndex.ReferenceMemory.Size)) {
             return error.FileMapTooBig;
@@ -546,7 +545,7 @@ pub const AccountsDB = struct {
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
             _ = self.largest_root_slot.fetchMax(slot, .monotonic);
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -589,7 +588,7 @@ pub const AccountsDB = struct {
                 ref_count += 1;
             }
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -686,7 +685,7 @@ pub const AccountsDB = struct {
         thread_id: usize,
     ) !void {
         const total_bins = bin_end_index - bin_start_index;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         const print_progress = thread_id == 0;
 
@@ -728,7 +727,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     logger,
                     &timer,
@@ -940,7 +939,7 @@ pub const AccountsDB = struct {
         defer self.allocator.free(keys);
 
         var local_total_lamports: u64 = 0;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         for (thread_bins, 1..) |*bin_rw, count| {
             // get and sort pubkeys in bin
@@ -1014,7 +1013,7 @@ pub const AccountsDB = struct {
                 local_total_lamports += lamports;
             }
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -1084,8 +1083,8 @@ pub const AccountsDB = struct {
         while (!exit.load(.unordered)) {
             defer {
                 const elapsed = timer.lap();
-                if (elapsed < DB_MANAGER_UPDATE_NS) {
-                    const delay = DB_MANAGER_UPDATE_NS - elapsed;
+                if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
+                    const delay = DB_MANAGER_LOOP_MIN.asNanos() - elapsed;
                     std.time.sleep(delay);
                 }
             }

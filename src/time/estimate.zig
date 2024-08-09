@@ -1,11 +1,12 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
 const Logger = @import("../trace/log.zig").Logger;
 
 // TODO: change to writer interface when logger has improved
 pub fn printTimeEstimate(
     logger: Logger,
     // timer should be started at the beginning of the loop
-    timer: *std.time.Timer,
+    timer: *sig.time.Timer,
     total: usize,
     i: usize,
     comptime name: []const u8,
@@ -19,14 +20,14 @@ pub fn printTimeEstimate(
                 info,
                 i,
                 total,
-                std.fmt.fmtDuration(timer.read()),
+                timer.read(),
             });
         } else {
             logger.infof("{s}: {d}/{d} (?%) (est: ? elp: {s})", .{
                 name,
                 i,
                 total,
-                std.fmt.fmtDuration(timer.read()),
+                timer.read(),
             });
         }
         return;
@@ -35,7 +36,7 @@ pub fn printTimeEstimate(
     const p_done = i * 100 / total;
     const left = total - i;
 
-    const elapsed = timer.read();
+    const elapsed = timer.read().asNanos();
     const ns_per_vec = elapsed / i;
     const ns_left = ns_per_vec * left;
 
@@ -47,7 +48,7 @@ pub fn printTimeEstimate(
             total,
             p_done,
             std.fmt.fmtDuration(ns_left),
-            std.fmt.fmtDuration(timer.read()),
+            timer.read(),
         });
     } else {
         logger.infof("{s}: {d}/{d} ({d}%) (est: {s} elp: {s})", .{
@@ -56,7 +57,7 @@ pub fn printTimeEstimate(
             total,
             p_done,
             std.fmt.fmtDuration(ns_left),
-            std.fmt.fmtDuration(timer.read()),
+            timer.read(),
         });
     }
 }
