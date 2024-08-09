@@ -114,6 +114,9 @@ pub const GossipService = struct {
     packet_outgoing_channel: *Channel(PacketBatch),
     verified_incoming_channel: *Channel(GossipMessageWithEndpoint),
 
+    // TODO(x19): most of these things need to be on the heap to be shared between threads
+    // but rn we do this by having GossipService be on the heap, which is not ideal
+    // ... we should figure out a better way to do this
     gossip_table_rw: RwMux(GossipTable),
     // push message things
     active_set_rw: RwMux(ActiveSet),

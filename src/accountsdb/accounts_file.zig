@@ -167,7 +167,7 @@ pub const AccountInFile = struct {
         };
     }
 
-    pub fn toAccount(self: *const Self) !Account {
+    pub fn toAccount(self: *const Self) Account {
         return .{
             .data = self.data,
             .executable = self.executable().*,

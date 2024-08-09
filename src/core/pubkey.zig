@@ -1,11 +1,15 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
 const base58 = @import("base58-zig");
 const Ed25519 = std.crypto.sign.Ed25519;
+const U8ArrayConfig = sig.bincode.int.U8ArrayConfig;
 const encoder = base58.Encoder.init(.{});
 const decoder = base58.Decoder.init(.{});
 
 pub const Pubkey = extern struct {
     data: [32]u8,
+
+    pub const @"!bincode-config:data" = U8ArrayConfig(32);
 
     const Self = @This();
 

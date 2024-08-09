@@ -8,8 +8,8 @@ pub const Config = struct {
     identity: IdentityConfig = .{},
     gossip: GossipConfig = .{},
     shred_collector: ShredCollectorConfig = shred_collector_defaults,
-
     accounts_db: AccountsDBConfig = .{},
+    geyser: GeyserConfig = .{},
 
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
@@ -65,6 +65,12 @@ pub const AccountsDBConfig = struct {
     min_snapshot_download_speed_mbs: usize = 20,
     /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
     force_new_snapshot_download: bool = false,
+};
+
+pub const GeyserConfig = struct {
+    enable: bool = false,
+    pipe_path: []const u8 = "ledger/geyser.pipe",
+    writer_fba_bytes: usize = 1 << 32, // 4gb
 };
 
 const LogConfig = struct {};

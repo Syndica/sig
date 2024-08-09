@@ -182,16 +182,15 @@ pub fn downloadSnapshotsFromGossip(
 
         // only hold gossip table lock for this block
         {
-            var lg = gossip_service.gossip_table_rw.read();
-            defer lg.unlock();
-            const table: *const GossipTable = lg.get();
+            const gossip_table, var gossip_table_lg = gossip_service.gossip_table_rw.readWithLock();
+            defer gossip_table_lg.unlock();
 
-            const contacts = table.getThreadSafeContactInfos(&contact_info_buf, 0);
+            const contacts = gossip_table.getThreadSafeContactInfos(&contact_info_buf, 0);
 
             try available_snapshot_peers.ensureTotalCapacity(contacts.len);
             const result = try findPeersToDownloadFromAssumeCapacity(
                 allocator,
-                table,
+                gossip_table,
                 contacts,
                 my_contact_info.shred_version,
                 my_contact_info.pubkey,
@@ -201,7 +200,15 @@ pub fn downloadSnapshotsFromGossip(
                 &available_snapshot_peers,
             );
 
-            logger.infof("searched for peers to downlod from: {any}", .{result});
+            var write_buf: [512]u8 = undefined;
+            var i: usize = 0;
+            inline for (@typeInfo(PeerSearchResult).Struct.fields) |field| {
+                if (@field(result, field.name) != 0) {
+                    const r = try std.fmt.bufPrint(write_buf[i..], "{s}: {d} ", .{ field.name, @field(result, field.name) });
+                    i += r.len;
+                }
+            }
+            logger.infof("searched for snapshot peers: {s}", .{write_buf[0..i]});
         }
 
         for (available_snapshot_peers.items) |peer| {
