@@ -190,7 +190,7 @@ pub const ErasureMeta = struct {
                 .num_data = @intCast(shred.fields.custom.num_data_shreds),
                 .num_coding = @intCast(shred.fields.custom.num_coding_shreds),
             },
-            .first_coding_index = @intCast(shred.firstCodingIndex() orelse return null),
+            .first_coding_index = @intCast(shred.firstCodingIndex() catch return null),
             .first_received_coding_index = @intCast(shred.fields.common.index),
         };
     }

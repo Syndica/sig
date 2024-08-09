@@ -115,13 +115,6 @@ pub const CodingShred = struct {
     const Self = @This();
     const consts = coding_shred;
 
-    pub fn firstCodingIndex(self: *const Self) ?u32 {
-        return sig.utils.math.checkedSub(
-            self.fields.common.index,
-            @as(u32, @intCast(self.fields.custom.position)),
-        ) catch null;
-    }
-
     pub fn sanitize(self: *const Self) !void {
         try self.fields.sanitize();
         if (self.fields.custom.num_coding_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
@@ -140,7 +133,7 @@ pub const CodingShred = struct {
             return error.InvalidErasureShardIndex;
         }
         if (try checkedAdd(
-            try self.first_coding_index(),
+            try self.firstCodingIndex(),
             try checkedSub(@as(u32, @intCast(self.fields.custom.num_coding_shreds)), 1),
         ) >= coding_shred.max_per_slot) {
             return error.InvalidErasureShardIndex;
@@ -153,8 +146,11 @@ pub const CodingShred = struct {
         return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
     }
 
-    fn first_coding_index(self: *const Self) !u32 {
-        return checkedSub(self.fields.common.index, self.fields.custom.position);
+    pub fn firstCodingIndex(self: *const Self) !u32 {
+        return sig.utils.math.checkedSub(
+            self.fields.common.index,
+            @as(u32, @intCast(self.fields.custom.position)),
+        );
     }
 };
 
