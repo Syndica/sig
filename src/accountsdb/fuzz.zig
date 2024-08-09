@@ -95,11 +95,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         std.debug.print("deleted snapshot dir\n", .{});
     }
 
-    var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
-        .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
-        .use_disk_index = use_disk,
-        // TODO: other things we can fuzz (number of bins, ...)
-    }, null);
+    var accounts_db = try AccountsDB.init(
+        gpa,
+        logger,
+        snapshot_dir,
+        .{
+            .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
+            .use_disk_index = use_disk,
+            // TODO: other things we can fuzz (number of bins, ...)
+        },
+        null,
+    );
     defer accounts_db.deinit(true);
 
     const exit = try gpa.create(std.atomic.Value(bool));
@@ -132,9 +138,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     var largest_rooted_slot: Slot = 0;
     var slot: Slot = 0;
-
-    // var geyser = try GeyserWriter.init(allocator, "test_data/accountsdb_fuzz.pipe", null, .{});
-    // defer geyser.deinit();
 
     // get/put a bunch of accounts
     while (true) {
@@ -177,13 +180,6 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     r.value_ptr.* = tracked_account;
                 }
                 defer for (accounts) |account| account.deinit(gpa);
-
-                // // send through geyser
-                // _ = try geyser.writePayload(.{ .AccountPayloadV1 = .{
-                //     .accounts = accounts,
-                //     .pubkeys = pubkeys,
-                //     .slot = slot,
-                // } });
 
                 // write to accounts_db
                 try accounts_db.putAccountSlice(
