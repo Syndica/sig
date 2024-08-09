@@ -6,7 +6,6 @@ const sig = @import("../lib.zig");
 
 const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
 const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const GossipTable = sig.gossip.GossipTable;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipService = sig.gossip.GossipService;
@@ -162,7 +161,7 @@ pub fn downloadSnapshotsFromGossip(
     // if null, then we trust any peer for snapshot download
     maybe_trusted_validators: ?[]const Pubkey,
     gossip_service: *GossipService,
-    output_dir: []const u8,
+    output_dir: std.fs.Dir,
     min_mb_per_sec: usize,
 ) !void {
     logger.infof("starting snapshot download with min download speed: {d} MB/s", .{min_mb_per_sec});
@@ -296,13 +295,12 @@ const DownloadProgress = struct {
 
     pub fn init(
         logger: Logger,
-        output_dir_str: []const u8,
+        output_dir: std.fs.Dir,
         filename: []const u8,
         download_size: usize,
         min_mb_per_second: ?usize,
     ) !Self {
-        var output_dir = try std.fs.cwd().openDir(output_dir_str, .{});
-        var file = try output_dir.createFile(filename, .{ .read = true });
+        const file = try output_dir.createFile(filename, .{ .read = true });
         defer file.close();
 
         // resize the file
@@ -407,7 +405,7 @@ pub fn downloadFile(
     allocator: std.mem.Allocator,
     logger: Logger,
     url: [:0]const u8,
-    output_dir_str: []const u8,
+    output_dir: std.fs.Dir,
     filename: []const u8,
     min_mb_per_second: ?usize,
 ) !void {
@@ -433,18 +431,12 @@ pub fn downloadFile(
     easy.timeout_ms = std.time.ms_per_hour * 5; // 5 hours is probs too long but its ok
     var download_progress = try DownloadProgress.init(
         logger,
-        output_dir_str,
+        output_dir,
         filename,
         download_size,
         min_mb_per_second,
     );
-    errdefer {
-        // NOTE: this shouldnt fail because we open the dir in DownloadProgress.init
-        const output_dir = std.fs.cwd().openDir(output_dir_str, .{}) catch {
-            std.debug.panic("failed to open output dir: {s}", .{output_dir_str});
-        };
-        output_dir.deleteFile(filename) catch {};
-    }
+    errdefer output_dir.deleteFile(filename) catch {};
     defer download_progress.deinit();
 
     try setNoBody(easy, false); // full download
@@ -463,9 +455,10 @@ pub fn downloadFile(
     }
 }
 
-const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
-const LegacyContactInfo = @import("../gossip/data.zig").LegacyContactInfo;
-const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
+const ThreadPool = sig.sync.thread_pool.ThreadPool;
+const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 test "accounts_db.download: test remove untrusted peers" {
@@ -501,7 +494,7 @@ test "accounts_db.download: test remove untrusted peers" {
         var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
         try trusted_validators.append(ci.pubkey);
-        try table.insert(data, 0);
+        _ = try table.insert(data, 0);
     }
 
     _ = try findPeersToDownloadFromAssumeCapacity(
@@ -592,7 +585,7 @@ test "accounts_db.download: test finding peers" {
         var kp = try KeyPair.create(null);
         var data = try SignedGossipData.randomWithIndex(rng, &kp, 9);
         data.data.SnapshotHashes.from = ci.pubkey;
-        try table.insert(data, 0);
+        _ = try table.insert(data, 0);
     }
 
     result = try findPeersToDownloadFromAssumeCapacity(

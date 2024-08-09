@@ -95,6 +95,18 @@ pub fn Mux(comptime T: type) type {
             }
         };
 
+        pub fn readWithLock(self: *Self) struct { Const(T), LockGuard } {
+            var lock_guard = self.lock();
+            const t = lock_guard.get();
+            return .{ t, lock_guard };
+        }
+
+        pub fn writeWithLock(self: *Self) struct { Mutable(T), LockGuard } {
+            var lock_guard = self.lock();
+            const t = lock_guard.mut();
+            return .{ t, lock_guard };
+        }
+
         /// `lock` returns a `LockGuard` after acquiring `Mutex` lock
         pub fn lock(self: *Self) LockGuard {
             self.private.m.lock();
@@ -252,13 +264,13 @@ pub fn RwMux(comptime T: type) type {
             };
         }
 
-        pub fn readWithLock(self: *Self) struct { *const T, RLockGuard } {
+        pub fn readWithLock(self: *Self) struct { Const(T), RLockGuard } {
             var lock_guard = self.read();
             const t = lock_guard.get();
             return .{ t, lock_guard };
         }
 
-        pub fn writeWithLock(self: *Self) struct { *T, WLockGuard } {
+        pub fn writeWithLock(self: *Self) struct { Mutable(T), WLockGuard } {
             var lock_guard = self.write();
             const t = lock_guard.mut();
             return .{ t, lock_guard };
@@ -312,36 +324,13 @@ pub fn RwMux(comptime T: type) type {
 pub fn Const(comptime T: type) type {
     switch (@typeInfo(T)) {
         .Pointer => |info| {
-            switch (info.size) {
-                .Slice => {
-                    return []const info.child;
-                },
-                .One => {
-                    return *const info.child;
-                },
-                .Many => {
-                    return *const [*]info.child;
-                },
-                else => {
-                    unreachable;
-                },
-            }
+            if (info.size == .C) @compileError("C pointers not supported");
+            var new_info = info;
+            new_info.is_const = true;
+            return @Type(.{ .Pointer = new_info });
         },
         else => {
             return *const T;
-        },
-    }
-}
-
-/// toConst takes a `val` and converts it into a `Const(@TypeOf(val))`
-fn toConst(val: anytype) Const(@TypeOf(val)) {
-    switch (@typeInfo(@TypeOf(val))) {
-        // if value is a pointer, we will return pointer itself
-        .Pointer => |_| {
-            return val;
-        },
-        else => {
-            return &val;
         },
     }
 }
@@ -405,19 +394,6 @@ test "sync.mux: Const is correct" {
     assert(*const Packet == Const(Packet));
     assert(*const [100]u32 == Const([100]u32));
     assert(*const [100]u32 == Const(*[100]u32));
-
-    assert(@TypeOf(toConst(true)) == Const(bool));
-    var bool_val = false;
-    assert(@TypeOf(toConst(&bool_val)) == Const(bool));
-    assert(@TypeOf(toConst(@as(usize, 10))) == Const(usize));
-    var usize_val: usize = 3;
-    assert(@TypeOf(toConst(&usize_val)) == Const(usize));
-    assert(@TypeOf(toConst(&[_]u8{ 1, 2, 3, 4 })) == Const([4]u8));
-    var arr = [4]u8{ 1, 2, 3, 4 };
-    assert(@TypeOf(toConst(arr)) == Const([4]u8));
-    assert(@TypeOf(toConst(&arr)) == Const([4]u8));
-    const slice_of_arr: []u8 = arr[0..];
-    assert(@TypeOf(toConst(slice_of_arr)) == Const([]u8));
 }
 
 test "sync.mux: Mux handles slices properly" {

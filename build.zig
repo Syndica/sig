@@ -100,6 +100,7 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("base58-zig", base58_module);
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
+    fuzz_exe.root_module.addImport("zstd", zstd_mod);
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
     fuzz_exe_run.addArgs(b.args orelse &.{});

@@ -118,7 +118,10 @@ pub const SignedGossipData = struct {
 
     /// only used in tests
     pub fn randomWithIndex(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
-        return try initSigned(GossipData.randomFromIndex(rng, index), keypair);
+        var data = GossipData.randomFromIndex(rng, index);
+        const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
+        data.setId(pubkey);
+        return try initSigned(data, keypair);
     }
 
     pub fn sign(self: *Self, keypair: *const KeyPair) !void {
@@ -138,100 +141,63 @@ pub const SignedGossipData = struct {
 
     pub fn id(self: *const Self) Pubkey {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| {
-                return v.id;
-            },
-            .Vote => |*v| {
-                return v[1].from;
-            },
-            .LowestSlot => |*v| {
-                return v[1].from;
-            },
-            .LegacySnapshotHashes => |*v| {
-                return v.from;
-            },
-            .AccountsHashes => |*v| {
-                return v.from;
-            },
-            .EpochSlots => |*v| {
-                return v[1].from;
-            },
-            .LegacyVersion => |*v| {
-                return v.from;
-            },
-            .Version => |*v| {
-                return v.from;
-            },
-            .NodeInstance => |*v| {
-                return v.from;
-            },
-            .DuplicateShred => |*v| {
-                return v[1].from;
-            },
-            .SnapshotHashes => |*v| {
-                return v.from;
-            },
-            .ContactInfo => |*v| {
-                return v.pubkey;
-            },
-            .RestartLastVotedForkSlots => |*v| {
-                return v.from;
-            },
-            .RestartHeaviestFork => |*v| {
-                return v.from;
-            },
+            .LegacyContactInfo => |*v| v.id,
+            .Vote => |*v| v[1].from,
+            .LowestSlot => |*v| v[1].from,
+            .LegacySnapshotHashes => |*v| v.from,
+            .AccountsHashes => |*v| v.from,
+            .EpochSlots => |*v| v[1].from,
+            .LegacyVersion => |*v| v.from,
+            .Version => |*v| v.from,
+            .NodeInstance => |*v| v.from,
+            .DuplicateShred => |*v| v[1].from,
+            .SnapshotHashes => |*v| v.from,
+            .ContactInfo => |*v| v.pubkey,
+            .RestartLastVotedForkSlots => |*v| v.from,
+            .RestartHeaviestFork => |*v| v.from,
+        };
+    }
+
+    pub fn wallclockPtr(self: *Self) *u64 {
+        return switch (self.data) {
+            .LegacyContactInfo => |*v| &v.wallclock,
+            .Vote => |*v| &v[1].wallclock,
+            .LowestSlot => |*v| &v[1].wallclock,
+            .LegacySnapshotHashes => |*v| &v.wallclock,
+            .AccountsHashes => |*v| &v.wallclock,
+            .EpochSlots => |*v| &v[1].wallclock,
+            .LegacyVersion => |*v| &v.wallclock,
+            .Version => |*v| &v.wallclock,
+            .NodeInstance => |*v| &v.wallclock,
+            .DuplicateShred => |*v| &v[1].wallclock,
+            .SnapshotHashes => |*v| &v.wallclock,
+            .ContactInfo => |*v| &v.wallclock,
+            .RestartLastVotedForkSlots => |*v| &v.wallclock,
+            .RestartHeaviestFork => |*v| &v.wallclock,
         };
     }
 
     pub fn wallclock(self: *const Self) u64 {
         return switch (self.data) {
-            .LegacyContactInfo => |*v| {
-                return v.wallclock;
-            },
-            .Vote => |*v| {
-                return v[1].wallclock;
-            },
-            .LowestSlot => |*v| {
-                return v[1].wallclock;
-            },
-            .LegacySnapshotHashes => |*v| {
-                return v.wallclock;
-            },
-            .AccountsHashes => |*v| {
-                return v.wallclock;
-            },
-            .EpochSlots => |*v| {
-                return v[1].wallclock;
-            },
-            .LegacyVersion => |*v| {
-                return v.wallclock;
-            },
-            .Version => |*v| {
-                return v.wallclock;
-            },
-            .NodeInstance => |*v| {
-                return v.wallclock;
-            },
-            .DuplicateShred => |*v| {
-                return v[1].wallclock;
-            },
-            .SnapshotHashes => |*v| {
-                return v.wallclock;
-            },
-            .ContactInfo => |*v| {
-                return v.wallclock;
-            },
-            .RestartLastVotedForkSlots => |*v| {
-                return v.wallclock;
-            },
-            .RestartHeaviestFork => |*v| {
-                return v.wallclock;
-            },
+            .LegacyContactInfo => |*v| v.wallclock,
+            .Vote => |*v| v[1].wallclock,
+            .LowestSlot => |*v| v[1].wallclock,
+            .LegacySnapshotHashes => |*v| v.wallclock,
+            .AccountsHashes => |*v| v.wallclock,
+            .EpochSlots => |*v| v[1].wallclock,
+            .LegacyVersion => |*v| v.wallclock,
+            .Version => |*v| v.wallclock,
+            .NodeInstance => |*v| v.wallclock,
+            .DuplicateShred => |*v| v[1].wallclock,
+            .SnapshotHashes => |*v| v.wallclock,
+            .ContactInfo => |*v| v.wallclock,
+            .RestartLastVotedForkSlots => |*v| v.wallclock,
+            .RestartHeaviestFork => |*v| v.wallclock,
         };
     }
 
     pub fn label(self: *const Self) GossipKey {
-        return switch (self.data) {
+        switch (self.data) {
             .LegacyContactInfo => {
                 return .{ .LegacyContactInfo = self.id() };
             },
@@ -274,7 +240,7 @@ pub const SignedGossipData = struct {
             .RestartHeaviestFork => {
                 return .{ .RestartHeaviestFork = self.id() };
             },
-        };
+        }
     }
 };
 
@@ -1278,22 +1244,23 @@ pub const ContactInfo = struct {
         };
     }
 
-    pub fn initDummyForTest(
+    pub fn random(
         allocator: std.mem.Allocator,
+        rng: std.rand.Random,
         pubkey: Pubkey,
         wallclock: u64,
         outset: u64,
         shred_version: u16,
-    ) ContactInfo {
-        var addrs = ArrayList(IpAddr).initCapacity(allocator, 4) catch unreachable;
-        var sockets = ArrayList(SocketEntry).initCapacity(allocator, 6) catch unreachable;
+    ) !ContactInfo {
+        var addrs = try ArrayList(IpAddr).initCapacity(allocator, rng.intRangeAtMost(usize, 4, 10));
+        var sockets = try ArrayList(SocketEntry).initCapacity(allocator, rng.intRangeAtMost(usize, 4, 10));
 
-        for (0..4) |_| {
-            addrs.append(IpAddr.newIpv4(127, 0, 0, 1)) catch unreachable;
+        for (0..addrs.items.len) |_| {
+            addrs.appendAssumeCapacity(IpAddr.newIpv4(127, 0, 0, 1));
         }
 
-        for (0..6) |_| {
-            sockets.append(.{ .key = .turbine_recv, .index = 20, .offset = 30 }) catch unreachable;
+        for (0..sockets.items.len) |_| {
+            sockets.appendAssumeCapacity(.{ .key = .turbine_recv, .index = 20, .offset = 30 });
         }
 
         return ContactInfo{
@@ -1994,7 +1961,7 @@ test "gossip.data: LegacyContactInfo <-> ContactInfo roundtrip" {
 test "gossip.data: sanitize valid ContactInfo works" {
     var rand = std.rand.DefaultPrng.init(871329);
     const rng = rand.random();
-    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng), 100, 123, 246);
+    const info = try ContactInfo.random(std.testing.allocator, rng, Pubkey.random(rng), 100, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     try data.sanitize();
@@ -2003,7 +1970,7 @@ test "gossip.data: sanitize valid ContactInfo works" {
 test "gossip.data: sanitize invalid ContactInfo has error" {
     var rand = std.rand.DefaultPrng.init(3414214);
     const rng = rand.random();
-    const info = ContactInfo.initDummyForTest(std.testing.allocator, Pubkey.random(rng), 1_000_000_000_000_000, 123, 246);
+    const info = try ContactInfo.random(std.testing.allocator, rng, Pubkey.random(rng), 1_000_000_000_000_000, 123, 246);
     defer info.deinit();
     const data = GossipData{ .ContactInfo = info };
     if (data.sanitize()) |_| return error.ExpectedError else |_| {}

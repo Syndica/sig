@@ -4,11 +4,9 @@ const sig = @import("../lib.zig");
 const testing = std.testing;
 const bincode = sig.bincode;
 
-const RndGen = std.rand.DefaultPrng;
 const ArrayList = std.ArrayList;
 
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
-const BitVec = sig.bloom.bit_vec.BitVec;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const FnvHasher = sig.crypto.FnvHasher;
 

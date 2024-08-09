@@ -125,7 +125,7 @@ test "gossip.gossip_shards: tests GossipTableShards" {
 fn newTestGossipVersionedData(rng: std.rand.Random, gossip_table: *GossipTable) !GossipVersionedData {
     const keypair = try KeyPair.create(null);
     var value = try SignedGossipData.random(rng, &keypair);
-    try gossip_table.insert(value, 0);
+    _ = try gossip_table.insert(value, 0);
     const label = value.label();
     const x = gossip_table.get(label).?;
     return x;

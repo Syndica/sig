@@ -91,7 +91,7 @@ test "gossip.pull_response: test filtering values works" {
     var lg = gossip_table_rw.write();
     for (0..100) |_| {
         const gossip_value = try SignedGossipData.random(rng, &kp);
-        try lg.mut().insert(gossip_value, 0);
+        _ = try lg.mut().insert(gossip_value, 0);
     }
     lg.unlock();
 
@@ -125,7 +125,7 @@ test "gossip.pull_response: test filtering values works" {
     lg = gossip_table_rw.write();
     for (0..64) |_| {
         const v2 = try SignedGossipData.random(rng, &kp);
-        try lg.mut().insert(v2, 0);
+        _ = try lg.mut().insert(v2, 0);
     }
 
     const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());

@@ -10,7 +10,6 @@ const exp = std.math.exp;
 const GossipTable = @import("table.zig").GossipTable;
 const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
-const getWallclockMs = _gossip_data.getWallclockMs;
 const RwMux = @import("../sync/mux.zig").RwMux;
 
 pub const MAX_BLOOM_SIZE: usize = 928;
@@ -278,7 +277,7 @@ test "gossip.pull_request: test building filters" {
             .LegacyContactInfo = legacy_contact_info,
         }, &kp);
 
-        try gossip_table.insert(gossip_value, 0);
+        _ = try gossip_table.insert(gossip_value, 0);
     }
 
     const max_bytes = 2;

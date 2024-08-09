@@ -58,7 +58,7 @@ pub const StakedNode = struct { id: Pubkey, stake: u64 };
 
 pub fn leaderSchedule(
     allocator: Allocator,
-    staked_nodes: *const std.AutoArrayHashMap(Pubkey, u64),
+    staked_nodes: *const std.AutoArrayHashMapUnmanaged(Pubkey, u64),
     slots_in_epoch: Slot,
     epoch: Epoch,
 ) Allocator.Error![]Pubkey {
@@ -172,7 +172,7 @@ test "leaderSchedule calculation matches agave" {
         const stake = random.int(u64) / 1000;
         try staked_nodes.put(key, stake);
     }
-    const slot_leaders = try leaderSchedule(std.testing.allocator, &staked_nodes, 321, 123);
+    const slot_leaders = try leaderSchedule(std.testing.allocator, &staked_nodes.unmanaged, 321, 123);
     defer std.testing.allocator.free(slot_leaders);
     for (slot_leaders, 0..) |slot_leader, i| {
         try std.testing.expect((try Pubkey.fromString(generated_leader_schedule[i])).equals(&slot_leader));

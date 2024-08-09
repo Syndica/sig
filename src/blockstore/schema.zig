@@ -125,6 +125,8 @@ pub const schema = struct {
     };
 };
 
+const decls = @typeInfo(schema).Struct.decls;
+
 pub const list: [decls.len]ColumnFamily = l: {
     var ret: [decls.len]ColumnFamily = undefined;
     for (decls, 0..) |decl, i| {
@@ -132,4 +134,3 @@ pub const list: [decls.len]ColumnFamily = l: {
     }
     break :l ret;
 };
-const decls = @typeInfo(schema).Struct.decls;

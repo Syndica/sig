@@ -11,6 +11,7 @@ pub const GaugeFn = gauge_fn.GaugeFn;
 pub const Gauge = gauge.Gauge;
 pub const GetMetricError = registry.GetMetricError;
 pub const Histogram = histogram.Histogram;
+pub const DEFAULT_HISTOGRAM_BUCKETS = histogram.DEFAULT_BUCKETS;
 pub const Registry = registry.Registry;
 
 pub const globalRegistry = registry.globalRegistry;
