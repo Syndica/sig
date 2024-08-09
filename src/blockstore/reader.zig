@@ -6,16 +6,13 @@ pub const blockstore = @import("lib.zig");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
-const DefaultRwLock = std.Thread.RwLock.DefaultRwLock;
 
 // sig common
-const Bank = sig.accounts_db.Bank;
 const Counter = sig.prometheus.Counter;
 const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
 const Logger = sig.trace.Logger;
-const Message = sig.core.Message;
 const Pubkey = sig.core.Pubkey;
 const Registry = sig.prometheus.Registry;
 const RwMux = sig.sync.RwMux;
@@ -24,13 +21,11 @@ const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 const Timer = sig.time.Timer;
 const Transaction = sig.core.Transaction;
-const V0Message = sig.core.V0Message;
 const VersionedTransaction = sig.core.VersionedTransaction;
 
 // shred
 const Shred = sig.shred_collector.shred.Shred;
 const DataShred = sig.shred_collector.shred.DataShred;
-const CodingShred = sig.shred_collector.shred.CodingShred;
 
 const shred_layout = sig.shred_collector.shred.layout;
 
@@ -39,9 +34,7 @@ const BytesRef = blockstore.database.BytesRef;
 const BlockstoreDB = blockstore.blockstore.BlockstoreDB;
 const ColumnFamily = blockstore.database.ColumnFamily;
 const DuplicateSlotProof = blockstore.meta.DuplicateSlotProof;
-const IteratorDirection = blockstore.database.IteratorDirection;
 const PerfSample = blockstore.meta.PerfSample;
-const Rewards = blockstore.transaction_status.Rewards;
 const SlotMeta = blockstore.meta.SlotMeta;
 const TransactionStatusMeta = blockstore.meta.TransactionStatusMeta;
 const TransactionError = blockstore.transaction_status.TransactionError;
