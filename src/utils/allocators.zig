@@ -12,7 +12,7 @@ pub const RecycleFBA = struct {
     // for thread safety
     mux: std.Thread.Mutex = .{},
 
-    const Record = struct { is_free: bool, buf: [*]u8, len: u64, log2_align: u8 };
+    const Record = struct { is_free: bool, buf: [*]u8, len: u64 };
     const Self = @This();
 
     pub fn init(backing_allocator: std.mem.Allocator, n_bytes: u64) !Self {
@@ -53,7 +53,7 @@ pub const RecycleFBA = struct {
 
         // check for a buf to recycle
         for (self.records.items) |*item| {
-            if (item.is_free and item.len >= n and item.log2_align == log2_align) {
+            if (item.is_free and item.len >= n and std.mem.isAlignedLog2(@intFromPtr(item.buf), log2_align)) {
                 item.is_free = false;
                 return item.buf;
             }
@@ -65,7 +65,7 @@ pub const RecycleFBA = struct {
             return null;
         };
 
-        self.records.append(.{ .is_free = false, .buf = buf, .len = n, .log2_align = log2_align }) catch {
+        self.records.append(.{ .is_free = false, .buf = buf, .len = n }) catch {
             // std.debug.print("RecycleFBA append error: {}\n", .{ err });
             return null;
         };
