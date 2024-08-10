@@ -1174,7 +1174,7 @@ pub const AccountsDB = struct {
             };
 
             if (largest_flushed_slot - latest_full_snapshot_slot >= slots_per_full_snapshot) {
-                self.logger.infof("generating full snapshot for slot {d}", .{largest_flushed_slot});
+                self.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
 
                 var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
                     largest_flushed_slot,
@@ -1211,14 +1211,14 @@ pub const AccountsDB = struct {
                     if (largest_flushed_slot < latest_full_snapshot_info.*.?.slot + slots_per_incremental_snapshot) break :inc_blk;
                 }
 
-                self.logger.infof("generating incremental snapshot from {d} to {d}", .{
+                self.logger.infof("accountsdb[manager]: generating incremental snapshot from {d} to {d}", .{
                     latest_full_snapshot_slot,
                     largest_flushed_slot,
                 });
 
                 var inc_snapshot_pkg, const snapshot_gen_info = try self.makeIncrementalSnapshotGenerationPackage(
                     largest_flushed_slot,
-                    tmp_bank_fields, // NOTE: this will be up-to-date/populated during full snapshot generation
+                    &tmp_bank_fields,
                     rand.random().int(u64),
                     0,
                 );
@@ -2499,7 +2499,7 @@ pub const AccountsDB = struct {
         /// Must exist explicitly in the database.
         target_slot: Slot,
         /// Temporary: See above TODO
-        bank_fields: BankFields,
+        bank_fields: *BankFields,
         lamports_per_signature: u64,
         /// For tests against older snapshots. Should just be 0 during normal operation.
         deprecated_stored_meta_write_version: u64,
@@ -2556,6 +2556,8 @@ pub const AccountsDB = struct {
         // TODO: compute the correct value during account writes
         const delta_hash = Hash.default();
 
+        bank_fields.slot = target_slot; // !
+
         const package: IncSnapshotGenerationPackage = .{
             .slot = target_slot,
 
@@ -2565,7 +2567,7 @@ pub const AccountsDB = struct {
                 .accounts_hash = Hash.default(),
                 .stats = bank_hash_stats,
             },
-            .bank_fields = bank_fields,
+            .bank_fields = bank_fields.*,
             .snapshot_persistence = .{
                 .full_slot = full_snapshot_info.slot,
                 .full_hash = full_snapshot_info.hash,
@@ -2846,7 +2848,7 @@ fn testWriteSnapshotIncremental(
     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
     defer manifest_file.close();
 
-    const snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
     try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
@@ -2858,7 +2860,7 @@ fn testWriteSnapshotIncremental(
     const archive_file = blk: {
         var snapshot_gen_pkg, const snapshot_gen_info = try accounts_db.makeIncrementalSnapshotGenerationPackage(
             slot,
-            snap_fields.bank_fields,
+            &snap_fields.bank_fields,
             snap_fields.lamports_per_signature,
             snap_fields.accounts_db_fields.stored_meta_write_version,
         );
@@ -2893,7 +2895,7 @@ fn testWriteSnapshotIncremental(
     try archive_file.seekTo(0);
     try std.tar.pipeToFileSystem(actual_snapshot_dir, archive_file.reader(), .{});
 
-    // // TODO: this is broken too, but it shouldnt be, so not sure whats going on here
+    // // TODO: this is broken too (see full snapshot test)
     // {
     //     try manifest_file.seekTo(0);
     //     const expected_manifest_bytes = try manifest_file.readToEndAlloc(allocator, 1 << 21);

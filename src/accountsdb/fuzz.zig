@@ -85,7 +85,9 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const alternative_snapshot_dir_name = "alt";
     var alternative_snapshot_dir = try snapshot_dir.makeOpenPath(alternative_snapshot_dir_name, .{});
     defer alternative_snapshot_dir.close();
+
     var last_full_snapshot_validated_slot: Slot = 0;
+    var last_inc_snapshot_validated_slot: Slot = 0;
 
     var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
         .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
@@ -100,8 +102,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const manager_handle = try std.Thread.spawn(.{}, AccountsDB.runManagerLoop, .{ &accounts_db, AccountsDB.ManagerLoopConfig{
         .exit = exit,
-        .slots_per_full_snapshot = 500,
-        .slots_per_incremental_snapshot = 50,
+        .slots_per_full_snapshot = 50_000,
+        .slots_per_incremental_snapshot = 5_000,
     } });
     errdefer {
         exit.store(true, .monotonic);
@@ -203,7 +205,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             // holding the lock here means that the snapshot archive wont be deleted
             // since deletion requires a write lock
-            const archive_name, const snapshot_info = b: {
+            const archive_name, const snapshot_info = full: {
                 const full_snapshot_info, var full_snapshot_info_lg = accounts_db.latest_full_snapshot_info.readWithLock();
                 defer full_snapshot_info_lg.unlock();
 
@@ -224,31 +226,80 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
                 // now that we have a copy, we can release the lock
                 try snapshot_dir.copyFile(archive_name.slice(), alternative_snapshot_dir, archive_name.slice(), .{});
-                break :b .{ archive_name, snapshot_info };
+                break :full .{ archive_name, snapshot_info };
             };
 
             var archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
             defer archive_file.close();
 
-            // load + validate
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
                 allocator,
-                logger,
+                .noop,
                 archive_file,
                 alternative_snapshot_dir,
                 5,
                 true,
             );
 
-            const snapshot_files = sig.accounts_db.SnapshotFiles{
+            logger.infof("fuzz[validate]: unpacked full snapshot at slot: {}\n", .{snapshot_info.slot});
+            var snapshot_files = sig.accounts_db.SnapshotFiles{
                 .full_snapshot = .{
                     .hash = snapshot_info.hash,
                     .slot = snapshot_info.slot,
                     .compression = .zstd,
                 },
-                // TODO:
+                // is populated below
                 .incremental_snapshot = null,
             };
+
+            // the same for incremental snapshots
+            const inc_result = inc: {
+                const maybe_inc_snapshot_info, var inc_snapshot_info_lg = accounts_db.latest_incremental_snapshot_info.readWithLock();
+                defer inc_snapshot_info_lg.unlock();
+                // no snapshot yet
+                if (maybe_inc_snapshot_info.* == null) break :inc null;
+
+                const inc_snapshot_info = maybe_inc_snapshot_info.*.?;
+
+                // already validated
+                if (inc_snapshot_info.slot <= last_inc_snapshot_validated_slot) break :inc null;
+                last_inc_snapshot_validated_slot = inc_snapshot_info.slot;
+
+                const inc_archive_name = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+                    .base_slot = inc_snapshot_info.base_slot,
+                    .hash = inc_snapshot_info.hash,
+                    .slot = inc_snapshot_info.slot,
+                    .compression = .zstd,
+                });
+
+                // now that we have a copy, we can release the lock
+                try snapshot_dir.copyFile(inc_archive_name.slice(), alternative_snapshot_dir, inc_archive_name.slice(), .{});
+                break :inc .{ inc_archive_name, inc_snapshot_info };
+            };
+
+            if (inc_result) |result| {
+                const inc_archive_name, const inc_snapshot_info = result;
+
+                var inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name.slice(), .{});
+                defer inc_archive_file.close();
+
+                try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                    allocator,
+                    .noop,
+                    inc_archive_file,
+                    alternative_snapshot_dir,
+                    5,
+                    true,
+                );
+                logger.infof("fuzz[validate]: unpacked inc snapshot at slot: {}\n", .{inc_snapshot_info.slot});
+
+                snapshot_files.incremental_snapshot = .{
+                    .base_slot = inc_snapshot_info.base_slot,
+                    .hash = inc_snapshot_info.hash,
+                    .slot = inc_snapshot_info.slot,
+                    .compression = .zstd,
+                };
+            }
 
             var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
                 allocator,
@@ -262,7 +313,8 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
-            logger.infof("loaded and validated snapshot at slot: {}\n", .{snapshot_info.slot});
+            const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
+            logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})\n", .{ snapshot_info.slot, maybe_inc_slot });
         }
     }
 
