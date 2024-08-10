@@ -258,10 +258,11 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, logger, alternative_snapshot_dir, accounts_db.config);
+            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
+            logger.infof("loaded and validated snapshot at slot: {}\n", .{snapshot_info.slot});
         }
     }
 
