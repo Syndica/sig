@@ -85,14 +85,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     const alternative_snapshot_dir_name = "alt";
     var alternative_snapshot_dir = try snapshot_dir.makeOpenPath(alternative_snapshot_dir_name, .{});
     defer alternative_snapshot_dir.close();
-    defer {
-        // NOTE: sometimes this can take a long time so we print when we start and finish
-        std.debug.print("deleting snapshot dir...\n", .{});
-        test_data_dir.deleteTreeMinStackSize(alternative_snapshot_dir_name) catch |err| {
-            std.debug.print("failed to delete snapshot dir ('{s}'): {}\n", .{ sig.utils.fmt.tryRealPath(snapshot_dir, "."), err });
-        };
-        std.debug.print("deleted snapshot dir\n", .{});
-    }
+    var last_full_snapshot_validated_slot: Slot = 0;
 
     var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
         .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
@@ -203,6 +196,72 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
         if (create_new_root) {
             largest_rooted_slot = @min(slot, largest_rooted_slot + 2);
             accounts_db.largest_rooted_slot.store(largest_rooted_slot, .monotonic);
+        }
+
+        blk: {
+            const allocator = std.heap.page_allocator;
+
+            // holding the lock here means that the snapshot archive wont be deleted
+            // since deletion requires a write lock
+            const archive_name, const snapshot_info = b: {
+                const full_snapshot_info, var full_snapshot_info_lg = accounts_db.latest_full_snapshot_info.readWithLock();
+                defer full_snapshot_info_lg.unlock();
+
+                // no snapshot yet
+                if (full_snapshot_info.* == null) break :blk;
+
+                const snapshot_info: AccountsDB.FullSnapshotGenerationInfo = full_snapshot_info.*.?;
+
+                // already validated
+                if (snapshot_info.slot <= last_full_snapshot_validated_slot) break :blk;
+                last_full_snapshot_validated_slot = snapshot_info.slot;
+
+                const archive_name = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                    .hash = snapshot_info.hash,
+                    .slot = snapshot_info.slot,
+                    .compression = .zstd,
+                });
+
+                // now that we have a copy, we can release the lock
+                try snapshot_dir.copyFile(archive_name.slice(), alternative_snapshot_dir, archive_name.slice(), .{});
+                break :b .{ archive_name, snapshot_info };
+            };
+
+            var archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
+            defer archive_file.close();
+
+            // load + validate
+            try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
+                allocator,
+                logger,
+                archive_file,
+                alternative_snapshot_dir,
+                5,
+                true,
+            );
+
+            const snapshot_files = sig.accounts_db.SnapshotFiles{
+                .full_snapshot = .{
+                    .hash = snapshot_info.hash,
+                    .slot = snapshot_info.slot,
+                    .compression = .zstd,
+                },
+                // TODO:
+                .incremental_snapshot = null,
+            };
+
+            var snapshot_fields = try sig.accounts_db.AllSnapshotFields.fromFiles(
+                allocator,
+                logger,
+                alternative_snapshot_dir,
+                snapshot_files,
+            );
+            defer snapshot_fields.deinit(allocator);
+
+            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, logger, alternative_snapshot_dir, accounts_db.config);
+            defer alt_accounts_db.deinit(true);
+
+            _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
         }
     }
 

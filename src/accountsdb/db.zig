@@ -1096,7 +1096,7 @@ pub const AccountsDB = struct {
         // TODO: get rid of this once `makeFullSnapshotGenerationPackage` can actually
         // derive this data correctly by itself.
         var rand = std.Random.DefaultPrng.init(1234);
-        const random_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
+        var random_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
         defer random_bank_fields.deinit(self.allocator);
 
         while (!exit.load(.monotonic)) {
@@ -1139,7 +1139,7 @@ pub const AccountsDB = struct {
             const must_flush_slots = flush_slots.items.len > 0;
 
             if (must_flush_slots) {
-                self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
+                // self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
                 defer {
                     flush_slots.clearRetainingCapacity();
                     unclean_account_files.clearRetainingCapacity();
@@ -1170,7 +1170,7 @@ pub const AccountsDB = struct {
             if (largest_flushed_slot - latest_full_snapshot_slot >= slots_per_full_snapshot) {
                 var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
                     largest_flushed_slot,
-                    random_bank_fields,
+                    &random_bank_fields,
                     rand.random().int(u64),
                     0,
                 );
@@ -2231,7 +2231,7 @@ pub const AccountsDB = struct {
         /// Must exist explicitly in the database.
         target_slot: Slot,
         /// Temporary: See above TODO
-        bank_fields: BankFields,
+        bank_fields: *BankFields,
         lamports_per_signature: u64,
         /// For tests against older snapshots. Should just be 0 during normal operation.
         deprecated_stored_meta_write_version: u64,
@@ -2275,20 +2275,11 @@ pub const AccountsDB = struct {
             },
         });
 
-        // TODO: figure out what the delta hash actually means - this happens to work in some cases,
-        // but sometimes fails with it being an empty range.
-        const delta_hash, _ = self.computeAccountHashesAndLamports(.{
-            .IncrementalAccountHash = .{
-                .min_slot = target_slot - 1,
-                .max_slot = target_slot,
-            },
-        }) catch |err| switch (err) {
-            error.EmptyHashList => |e| blk: {
-                self.logger.errf("{s}: from {d} to {d}", .{ @errorName(e), target_slot - 1, target_slot });
-                break :blk .{ Hash.default(), undefined };
-            },
-            else => |e| return e,
-        };
+        // TODO: this is a temporary value
+        const delta_hash = Hash.default();
+
+        bank_fields.slot = target_slot; // !
+        bank_fields.capitalization = full_capitalization; // !
 
         const package: FullSnapshotGenerationPackage = .{
             .slot = target_slot,
@@ -2299,7 +2290,7 @@ pub const AccountsDB = struct {
                 .accounts_hash = full_hash,
                 .stats = bank_hash_stats,
             },
-            .bank_fields = bank_fields,
+            .bank_fields = bank_fields.*,
             .deprecated_stored_meta_write_version = deprecated_stored_meta_write_version,
 
             .file_infos_map = serializable_file_map,
@@ -2480,20 +2471,8 @@ pub const AccountsDB = struct {
             },
         });
 
-        // TODO: figure out what the delta hash actually means - this happens to work in some cases,
-        // but sometimes fails with it being an empty range.
-        const delta_hash, _ = self.computeAccountHashesAndLamports(.{
-            .IncrementalAccountHash = .{
-                .min_slot = target_slot - 1,
-                .max_slot = target_slot,
-            },
-        }) catch |err| switch (err) {
-            error.EmptyHashList => |e| blk: {
-                self.logger.errf("{s}: from {d} to {d}", .{ @errorName(e), target_slot - 1, target_slot });
-                break :blk .{ Hash.default(), undefined };
-            },
-            else => |e| return e,
-        };
+        // TODO: compute the correct value during account writes
+        const delta_hash = Hash.default();
 
         const package: IncSnapshotGenerationPackage = .{
             .slot = target_slot,
@@ -2705,7 +2684,7 @@ fn testWriteSnapshotFull(
     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
     defer manifest_file.close();
 
-    const snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
     try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
@@ -2717,7 +2696,7 @@ fn testWriteSnapshotFull(
     const archive_file = blk: {
         var snapshot_gen_pkg, const snapshot_gen_info = try accounts_db.makeFullSnapshotGenerationPackage(
             slot,
-            snap_fields.bank_fields,
+            &snap_fields.bank_fields,
             snap_fields.lamports_per_signature,
             snap_fields.accounts_db_fields.stored_meta_write_version,
         );
