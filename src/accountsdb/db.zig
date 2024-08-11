@@ -2510,8 +2510,6 @@ pub const AccountsDB = struct {
         errdefer file_map_rw.unlock();
         const file_map = file_map_rw.get();
 
-        const max_flushed_slot = self.largest_flushed_slot.load(.monotonic);
-
         const p_maybe_full_snapshot_info, var full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
         defer full_snapshot_info_lg.unlock();
         const full_snapshot_info = p_maybe_full_snapshot_info.* orelse return error.NoFullSnapshotExists;
@@ -2526,8 +2524,8 @@ pub const AccountsDB = struct {
             const account_file: *const AccountFile, var account_file_lg = account_file_rw.readWithLock();
             defer account_file_lg.unlock();
 
-            if (account_file.slot > max_flushed_slot) continue;
             if (account_file.slot <= full_snapshot_info.slot) continue;
+            if (account_file.slot > target_slot) continue;
 
             const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
             defer bank_hash_stats_map_lg.unlock();
@@ -2549,7 +2547,7 @@ pub const AccountsDB = struct {
         = try self.computeAccountHashesAndLamports(.{
             .IncrementalAccountHash = .{
                 .min_slot = full_snapshot_info.slot,
-                .max_slot = max_flushed_slot,
+                .max_slot = target_slot,
             },
         });
 

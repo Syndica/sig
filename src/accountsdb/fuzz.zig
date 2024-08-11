@@ -215,7 +215,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 const snapshot_info: AccountsDB.FullSnapshotGenerationInfo = full_snapshot_info.*.?;
 
                 // already validated
-                if (snapshot_info.slot <= last_full_snapshot_validated_slot) break :blk;
+                if (snapshot_info.slot <= last_full_snapshot_validated_slot) {
+                    // check for a non-validated incremental snapshot
+                    const maybe_inc_snapshot_info, var inc_snapshot_info_lg = accounts_db.latest_incremental_snapshot_info.readWithLock();
+                    defer inc_snapshot_info_lg.unlock();
+                    // no snapshot yet
+                    if (maybe_inc_snapshot_info.* == null) break :blk;
+                    const inc_snapshot_info = maybe_inc_snapshot_info.*.?;
+                    // already validated
+                    if (inc_snapshot_info.slot <= last_inc_snapshot_validated_slot) break :blk;
+                    // if we get here, we have a new incremental snapshot to validate
+                }
                 last_full_snapshot_validated_slot = snapshot_info.slot;
 
                 const archive_name = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
@@ -241,7 +251,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 true,
             );
 
-            logger.infof("fuzz[validate]: unpacked full snapshot at slot: {}\n", .{snapshot_info.slot});
+            logger.infof("fuzz[validate]: unpacked full snapshot at slot: {}", .{snapshot_info.slot});
             var snapshot_files = sig.accounts_db.SnapshotFiles{
                 .full_snapshot = .{
                     .hash = snapshot_info.hash,
@@ -291,7 +301,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                     5,
                     true,
                 );
-                logger.infof("fuzz[validate]: unpacked inc snapshot at slot: {}\n", .{inc_snapshot_info.slot});
+                logger.infof("fuzz[validate]: unpacked inc snapshot at slot: {}", .{inc_snapshot_info.slot});
 
                 snapshot_files.incremental_snapshot = .{
                     .base_slot = inc_snapshot_info.base_slot,
@@ -314,7 +324,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
-            logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})\n", .{ snapshot_info.slot, maybe_inc_slot });
+            logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
         }
     }
 
