@@ -22,11 +22,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
         const Self = @This();
 
-        pub fn open(
-            allocator: Allocator,
-            logger: Logger,
-            path: []const u8,
-        ) Error!Self {
+        pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
             // allocate cf descriptions
             const column_family_descriptions = try allocator
                 .alloc(rocks.ColumnFamilyDescription, column_families.len + 1);

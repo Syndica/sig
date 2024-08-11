@@ -263,6 +263,11 @@ pub const Index = struct {
             .code = ShredIndex.init(allocator),
         };
     }
+
+    pub fn deinit(self: *Index) void {
+        self.data.deinit();
+        self.code.deinit();
+    }
 };
 
 pub const ShredIndex = SortedSet(u64);
