@@ -2776,7 +2776,7 @@ fn testWriteSnapshotFull(
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    const archive_file = blk: {
+    const snapshot_gen_info = blk: {
         var snapshot_gen_pkg, const snapshot_gen_info = try accounts_db.makeFullSnapshotGenerationPackage(
             slot,
             &snap_fields.bank_fields,
@@ -2784,11 +2784,6 @@ fn testWriteSnapshotFull(
             snap_fields.accounts_db_fields.stored_meta_write_version,
         );
         defer snapshot_gen_pkg.deinit();
-
-        try std.testing.expectEqual(slot, snapshot_gen_info.slot);
-        if (maybe_expected_hash) |expected_hash| {
-            try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
-        }
 
         const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
             .slot = snapshot_gen_info.slot,
@@ -2805,40 +2800,25 @@ fn testWriteSnapshotFull(
 
         try accounts_db.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
 
-        break :blk archive_file;
+        break :blk snapshot_gen_info;
     };
-    defer archive_file.close();
+    try std.testing.expectEqual(slot, snapshot_gen_info.slot);
+    if (maybe_expected_hash) |expected_hash| {
+        try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
+    }
 
-    var actual_snapshot_dir = try tmp_dir.makeOpenPath("output", .{ .iterate = true });
-    defer actual_snapshot_dir.close();
-    // TODO: should delete this dir at the end of testing
-
-    try archive_file.seekTo(0);
-    try std.tar.pipeToFileSystem(actual_snapshot_dir, archive_file.reader(), .{});
-
-    // // TODO: this is broken since the manifest values are updated to be correct while writing the snapshot
-    // {
-    //     try manifest_file.seekTo(0);
-    //     const expected_manifest_bytes = try manifest_file.readToEndAlloc(allocator, 1 << 21);
-    //     defer allocator.free(expected_manifest_bytes);
-
-    //     const actual_manifest_file = try actual_snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
-    //     defer actual_manifest_file.close();
-
-    //     const actual_manifest_bytes = try actual_manifest_file.readToEndAlloc(allocator, 1 << 21);
-    //     defer allocator.free(actual_manifest_bytes);
-
-    //     const actual_manifest = try bincode.readFromSlice(allocator, SnapshotFields, actual_manifest_bytes, .{});
-    //     defer bincode.free(allocator, actual_manifest);
-
-    //     try std.testing.expectEqualSlices(u8, expected_manifest_bytes, actual_manifest_bytes);
-    // }
+    try accounts_db.validateLoadFromSnapshot(
+        null,
+        slot,
+        snapshot_gen_info.capitalization,
+        snapshot_gen_info.hash,
+    );
 }
 
 fn testWriteSnapshotIncremental(
     accounts_db: *AccountsDB,
     slot: Slot,
-    maybe_expected_hash: ?Hash,
+    maybe_expected_incremental_hash: ?Hash,
 ) !void {
     const allocator = std.testing.allocator;
     const snapshot_dir = accounts_db.snapshot_dir;
@@ -2856,7 +2836,7 @@ fn testWriteSnapshotIncremental(
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    const archive_file = blk: {
+    const snapshot_gen_info, const incremental_persistence: BankIncrementalSnapshotPersistence = blk: {
         var snapshot_gen_pkg, const snapshot_gen_info = try accounts_db.makeIncrementalSnapshotGenerationPackage(
             slot,
             &snap_fields.bank_fields,
@@ -2864,11 +2844,6 @@ fn testWriteSnapshotIncremental(
             snap_fields.accounts_db_fields.stored_meta_write_version,
         );
         defer snapshot_gen_pkg.deinit();
-
-        try std.testing.expectEqual(slot, snapshot_gen_info.slot);
-        if (maybe_expected_hash) |expected_hash| {
-            try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
-        }
 
         const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
             .base_slot = snapshot_gen_info.base_slot,
@@ -2884,33 +2859,21 @@ fn testWriteSnapshotIncremental(
         try snapshot_gen_pkg.write(buffered_state.writer());
         try buffered_state.flush();
 
-        break :blk archive_file;
+        break :blk .{ snapshot_gen_info, snapshot_gen_pkg.snapshot_persistence };
     };
-    defer archive_file.close();
 
-    var actual_snapshot_dir = try tmp_dir.makeOpenPath("output", .{ .iterate = true });
-    defer actual_snapshot_dir.close();
+    try std.testing.expectEqual(slot, snapshot_gen_info.slot);
+    if (maybe_expected_incremental_hash) |expected_hash| {
+        try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
+    }
+    try std.testing.expectEqual(incremental_persistence.incremental_hash, snapshot_gen_info.hash);
 
-    try archive_file.seekTo(0);
-    try std.tar.pipeToFileSystem(actual_snapshot_dir, archive_file.reader(), .{});
-
-    // // TODO: this is broken too (see full snapshot test)
-    // {
-    //     try manifest_file.seekTo(0);
-    //     const expected_manifest_bytes = try manifest_file.readToEndAlloc(allocator, 1 << 21);
-    //     defer allocator.free(expected_manifest_bytes);
-
-    //     const actual_manifest_file = try actual_snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
-    //     defer actual_manifest_file.close();
-
-    //     const actual_manifest_bytes = try actual_manifest_file.readToEndAlloc(allocator, 1 << 21);
-    //     defer allocator.free(actual_manifest_bytes);
-
-    //     const actual_manifest = try bincode.readFromSlice(allocator, SnapshotFields, actual_manifest_bytes, .{});
-    //     defer bincode.free(allocator, actual_manifest);
-
-    //     try std.testing.expectEqualSlices(u8, expected_manifest_bytes, actual_manifest_bytes);
-    // }
+    try accounts_db.validateLoadFromSnapshot(
+        incremental_persistence,
+        incremental_persistence.full_slot,
+        incremental_persistence.full_capitalization,
+        incremental_persistence.full_hash,
+    );
 }
 
 test "testWriteSnapshot" {
