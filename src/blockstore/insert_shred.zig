@@ -1614,7 +1614,7 @@ pub const ShredInserter = struct {
                 try newly_completed_slots.append(entry.key_ptr.*);
             }
             // Check if the working copy of the metadata has changed
-            if (backup.* == null or (&backup.*.?).eql(slot_meta)) {
+            if (backup.* == null or !(&backup.*.?).eql(slot_meta)) {
                 should_signal = should_signal or slotHasUpdates(slot_meta, backup);
                 try write_batch.put(schema.slot_meta, entry.key_ptr.*, slot_meta.*);
             }
