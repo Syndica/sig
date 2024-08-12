@@ -1109,7 +1109,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            const root_slot = root: {
+            {
                 const account_cache, var account_cache_lg = self.account_cache.readWithLock();
                 defer account_cache_lg.unlock();
 
@@ -1133,9 +1133,7 @@ pub const AccountsDB = struct {
                         try flush_slots.append(cache_slot.*);
                     }
                 }
-
-                break :root root_slot;
-            };
+            }
 
             const must_flush_slots = flush_slots.items.len > 0;
 
@@ -1150,6 +1148,8 @@ pub const AccountsDB = struct {
 
                 // flush the slots
                 try unclean_account_files.ensureTotalCapacityPrecise(flush_slots.items.len);
+
+                var largest_flushed_slot: Slot = 0;
                 for (flush_slots.items) |flush_slot| {
                     const unclean_file_id = self.flushSlot(flush_slot) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
@@ -1157,8 +1157,9 @@ pub const AccountsDB = struct {
                         continue;
                     };
                     unclean_account_files.appendAssumeCapacity(unclean_file_id);
+                    largest_flushed_slot = @max(largest_flushed_slot, flush_slot);
                 }
-                self.largest_flushed_slot.store(root_slot, .seq_cst);
+                _ = self.largest_flushed_slot.fetchMax(largest_flushed_slot, .seq_cst);
             }
 
             const largest_flushed_slot = self.largest_flushed_slot.load(.seq_cst);
