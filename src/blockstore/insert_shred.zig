@@ -1099,7 +1099,7 @@ pub const ShredInserter = struct {
                 },
             }
         }
-        return undefined;
+        return recovered_shreds;
     }
 
     /// agave: recover_shreds
