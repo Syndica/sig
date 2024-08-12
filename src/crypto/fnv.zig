@@ -24,7 +24,7 @@ pub const FnvHasher = struct {
     pub fn update(self: *Self, input: []const u8) void {
         for (input) |byte| {
             self.hashh ^= byte;
-            self.hashh *%= prime;
+            self.hashh *= prime;
         }
     }
 
