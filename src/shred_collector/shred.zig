@@ -1072,7 +1072,7 @@ test "getSignedData" {
     try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &signed_data.data));
 }
 
-const test_data_shred = [_]u8{
+pub const test_data_shred = [_]u8{
     102, 205, 108, 67,  218, 3,   214, 186, 28,  110, 167, 22,  75,  135, 233, 156, 45,  215,
     209, 1,   253, 53,  142, 52,  6,   98,  158, 51,  157, 207, 190, 22,  96,  106, 68,  248,
     244, 162, 13,  205, 193, 194, 143, 192, 142, 141, 134, 85,  93,  252, 43,  200, 224, 101,

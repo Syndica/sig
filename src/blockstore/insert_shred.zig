@@ -154,7 +154,13 @@ pub const ShredInserter = struct {
         defer erasure_metas.deinit();
         defer merkle_root_metas.deinit();
         defer slot_meta_working_set.deinit();
-        defer index_working_set.deinit();
+        defer {
+            var iter = index_working_set.iterator();
+            while (iter.next()) |entry| {
+                entry.value_ptr.deinit();
+            }
+            index_working_set.deinit();
+        }
         defer duplicate_shreds.deinit();
 
         var get_lock_timer = try Timer.start();
@@ -645,7 +651,7 @@ pub const ShredInserter = struct {
             slot,
             try shred.parent(),
         );
-        const slot_meta = slot_meta_entry.new_slot_meta;
+        const slot_meta = &slot_meta_entry.new_slot_meta;
 
         const erasure_set = shred.fields.common.erasureSetId();
         // TODO: redundant get or put pattern
@@ -771,17 +777,14 @@ pub const ShredInserter = struct {
         // TODO: redundant get or put pattern
         const entry = try working_set.getOrPut(slot);
         if (!entry.found_existing) {
-            const sm = try self.allocator.create(SlotMeta);
             if (try self.db.get(schema.slot_meta, slot)) |item| {
-                sm.* = item;
                 entry.value_ptr.* = .{
-                    .new_slot_meta = sm,
+                    .new_slot_meta = item,
                     .old_slot_meta = try item.clone(self.allocator),
                 };
             } else {
-                sm.* = SlotMeta.init(self.allocator, slot, parent_slot);
                 entry.value_ptr.* = .{
-                    .new_slot_meta = sm,
+                    .new_slot_meta = SlotMeta.init(self.allocator, slot, parent_slot),
                 };
             }
         }
@@ -1098,7 +1101,7 @@ pub const ShredInserter = struct {
                 },
             }
         }
-        return undefined;
+        return recovered_shreds;
     }
 
     /// agave: recover_shreds
@@ -1187,15 +1190,15 @@ pub const ShredInserter = struct {
         var keys = try self.allocator.alloc(u64, count);
         defer self.allocator.free(keys);
         var keep_i: usize = 0;
-        var delete_i = count - 1;
+        var delete_i = count;
         var iter = working_set.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.did_insert_occur) {
                 keys[keep_i] = entry.key_ptr.*;
                 keep_i += 1;
             } else {
-                keys[delete_i] = entry.key_ptr.*;
                 delete_i -= 1;
+                keys[delete_i] = entry.key_ptr.*;
             }
         }
         std.debug.assert(keep_i == delete_i);
@@ -1204,7 +1207,7 @@ pub const ShredInserter = struct {
         }
 
         // handle chaining
-        var new_chained_slots = AutoHashMap(u64, *SlotMeta).init(self.allocator);
+        var new_chained_slots = AutoHashMap(u64, SlotMeta).init(self.allocator);
         for (keys[0..keep_i]) |slot| {
             try self.handleChainingForSlot(write_batch, working_set, &new_chained_slots, slot);
         }
@@ -1212,7 +1215,7 @@ pub const ShredInserter = struct {
         // Write all the newly changed slots in new_chained_slots to the write_batch
         var new_iter = new_chained_slots.iterator();
         while (new_iter.next()) |entry| {
-            try write_batch.put(schema.slot_meta, entry.key_ptr.*, entry.value_ptr.*.*);
+            try write_batch.put(schema.slot_meta, entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
@@ -1221,11 +1224,11 @@ pub const ShredInserter = struct {
         self: *Self,
         write_batch: *WriteBatch,
         working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-        new_chained_slots: *AutoHashMap(u64, *SlotMeta),
+        new_chained_slots: *AutoHashMap(u64, SlotMeta),
         slot: Slot,
     ) !void {
-        const slot_meta_entry = working_set.get(slot) orelse return error.Unwrap;
-        const slot_meta = slot_meta_entry.new_slot_meta;
+        const slot_meta_entry = working_set.getPtr(slot) orelse return error.Unwrap;
+        const slot_meta = &slot_meta_entry.new_slot_meta;
         const meta_backup = slot_meta_entry.old_slot_meta;
 
         const was_orphan_slot = meta_backup != null and meta_backup.?.isOrphan();
@@ -1288,23 +1291,21 @@ pub const ShredInserter = struct {
     fn findSlotMetaElseCreate(
         self: *Self,
         working_set: *const AutoHashMap(u64, SlotMetaWorkingSetEntry),
-        chained_slots: *AutoHashMap(u64, *SlotMeta),
+        chained_slots: *AutoHashMap(u64, SlotMeta),
         slot: Slot,
     ) !*SlotMeta {
-        return if (working_set.get(slot)) |m|
-            m.new_slot_meta
-        else if (chained_slots.get(slot)) |m|
+        if (working_set.getPtr(slot)) |m| {
+            return &m.new_slot_meta;
+        }
+        const entry = try chained_slots.getOrPut(slot);
+        if (entry.found_existing) {
+            return entry.value_ptr;
+        }
+        entry.value_ptr.* = if (try self.db.get(schema.slot_meta, slot)) |m|
             m
-        else blk: {
-            // TODO lifetime (this leaks)
-            const slot_meta = try self.allocator.create(SlotMeta);
-            slot_meta.* = if (try self.db.get(schema.slot_meta, slot)) |m|
-                m
-            else
-                SlotMeta.init(self.allocator, slot, null);
-            try chained_slots.put(slot, slot_meta);
-            break :blk slot_meta;
-        };
+        else
+            SlotMeta.init(self.allocator, slot, null);
+        return entry.value_ptr;
     }
 
     /// Traverse all slots and their children (direct and indirect), and apply
@@ -1326,7 +1327,7 @@ pub const ShredInserter = struct {
         self: *Self,
         slots: []const u64,
         working_set: *AutoHashMap(u64, SlotMetaWorkingSetEntry),
-        passed_visited_slots: *AutoHashMap(u64, *SlotMeta),
+        passed_visited_slots: *AutoHashMap(u64, SlotMeta),
     ) !void {
         var slot_lists = std.ArrayList([]const u64).init(self.allocator);
         try slot_lists.append(slots);
@@ -1609,13 +1610,13 @@ pub const ShredInserter = struct {
         while (iter.next()) |entry| {
             // Any slot that wasn't written to should have been filtered out by now.
             std.debug.assert(entry.value_ptr.did_insert_occur);
-            const slot_meta = entry.value_ptr.new_slot_meta;
+            const slot_meta = &entry.value_ptr.new_slot_meta;
             const backup = &entry.value_ptr.old_slot_meta;
             if (completed_slots_senders.len > 0 and isNewlyCompletedSlot(slot_meta, backup)) {
                 try newly_completed_slots.append(entry.key_ptr.*);
             }
             // Check if the working copy of the metadata has changed
-            if (backup.* == null or (&backup.*.?).eql(slot_meta)) {
+            if (backup.* == null or !(&backup.*.?).eql(slot_meta)) {
                 should_signal = should_signal or slotHasUpdates(slot_meta, backup);
                 try write_batch.put(schema.slot_meta, entry.key_ptr.*, slot_meta.*);
             }
@@ -1809,6 +1810,10 @@ pub const IndexMetaWorkingSetEntry = struct {
     pub fn init(allocator: std.mem.Allocator, slot: Slot) IndexMetaWorkingSetEntry {
         return .{ .index = meta.Index.init(allocator, slot) };
     }
+
+    pub fn deinit(self: *IndexMetaWorkingSetEntry) void {
+        self.index.deinit();
+    }
 };
 
 pub const BlockstoreInsertionMetrics = struct {
@@ -1874,11 +1879,11 @@ pub const BlockstoreInsertionMetrics = struct {
 pub const SlotMetaWorkingSetEntry = struct {
     /// The dirty version of the `SlotMeta` which might not be persisted
     /// to the blockstore yet.
-    new_slot_meta: *SlotMeta, // TODO: lifetime everywhere this is used
+    new_slot_meta: SlotMeta,
     /// The latest version of the `SlotMeta` that was persisted in the
     /// blockstore.  If None, it means the current slot is new to the
     /// blockstore.
-    old_slot_meta: ?SlotMeta = null, // TODO should this be a pointer too?
+    old_slot_meta: ?SlotMeta = null,
     /// True only if at least one shred for this SlotMeta was inserted since
     /// this struct was created.
     did_insert_occur: bool = false,
@@ -1888,7 +1893,7 @@ fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
 }
 
-test "insertShreds SharedHashMapDB" {
+test "insertShreds" {
     const allocator = std.testing.allocator;
     const logger = sig.trace.Logger.init(std.testing.allocator, .warn);
     defer logger.deinit();
@@ -1898,5 +1903,7 @@ test "insertShreds SharedHashMapDB" {
     var registry = sig.prometheus.Registry(.{}).init(allocator);
     defer registry.deinit();
     var inserter = try ShredInserter.init(std.testing.allocator, logger, &registry, db);
-    _ = try inserter.insertShreds(&.{}, &.{}, null, false, null);
+    const shred = try Shred.fromPayload(allocator, &sig.shred_collector.shred.test_data_shred);
+    defer shred.deinit();
+    _ = try inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
 }
