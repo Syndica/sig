@@ -61,10 +61,9 @@ pub const SlotMeta = struct {
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         self.next_slots.deinit();
-        var map = self.completed_data_indexes;
-        map.deinit();
+        self.completed_data_indexes.deinit();
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
