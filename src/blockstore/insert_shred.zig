@@ -151,14 +151,8 @@ pub const ShredInserter = struct {
         defer just_inserted_shreds.deinit();
         defer erasure_metas.deinit();
         defer merkle_root_metas.deinit();
-        defer slot_meta_working_set.deinit();
-        defer {
-            var iter = index_working_set.iterator();
-            while (iter.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-            index_working_set.deinit();
-        }
+        defer deinitMapRecursive(&slot_meta_working_set);
+        defer deinitMapRecursive(&index_working_set);
         defer duplicate_shreds.deinit();
 
         var get_lock_timer = try Timer.start();
@@ -776,9 +770,10 @@ pub const ShredInserter = struct {
         const entry = try working_set.getOrPut(slot);
         if (!entry.found_existing) {
             if (try self.db.get(schema.slot_meta, slot)) |item| {
+                const slot_meta: SlotMeta = item;
                 entry.value_ptr.* = .{
-                    .new_slot_meta = item,
-                    .old_slot_meta = try item.clone(self.allocator),
+                    .new_slot_meta = slot_meta,
+                    .old_slot_meta = try slot_meta.clone(self.allocator),
                 };
             } else {
                 entry.value_ptr.* = .{
@@ -808,7 +803,7 @@ pub const ShredInserter = struct {
     /// agave: is_data_shred_present
     fn isDataShredPresent(
         shred: DataShred,
-        slot_meta: *SlotMeta,
+        slot_meta: *const SlotMeta,
         data_index: *meta.ShredIndex,
     ) bool {
         const shred_index: u64 = @intCast(shred.fields.common.index);
@@ -819,7 +814,7 @@ pub const ShredInserter = struct {
     fn shouldInsertDataShred(
         self: *Self,
         shred: DataShred,
-        slot_meta: *SlotMeta,
+        slot_meta: *const SlotMeta,
         just_inserted_shreds: *AutoHashMap(ShredId, Shred),
         max_root: Slot,
         leader_schedule: ?SlotLeaderProvider,
@@ -1201,7 +1196,10 @@ pub const ShredInserter = struct {
         }
         std.debug.assert(keep_i == delete_i);
         for (keys[delete_i..count]) |k| {
-            _ = working_set.remove(k);
+            if (working_set.fetchRemove(k)) |entry| {
+                var slot_meta_working_set_entry = entry.value;
+                slot_meta_working_set_entry.deinit();
+            }
         }
 
         // handle chaining
@@ -1727,6 +1725,7 @@ fn updateCompletedDataIndexes(
     completed_data_indexes: *SortedSet(u32),
 ) Allocator.Error!ArrayList([2]u32) {
     var shred_indices = ArrayList(u32).init(allocator);
+    defer shred_indices.deinit();
     const subslice = completed_data_indexes.range(null, new_shred_index);
     const start_shred_index = if (subslice.len == 0) 0 else subslice[subslice.len - 1];
     // Consecutive entries i, k, j in this vector represent potential ranges [i, k),
@@ -1890,29 +1889,70 @@ pub const SlotMetaWorkingSetEntry = struct {
     /// True only if at least one shred for this SlotMeta was inserted since
     /// this struct was created.
     did_insert_occur: bool = false,
+
+    pub fn deinit(self: *@This()) void {
+        self.new_slot_meta.deinit();
+        if (self.old_slot_meta) |*old| old.deinit();
+    }
 };
+
+fn deinitMapRecursive(map: anytype) void {
+    var iter = map.iterator();
+    while (iter.next()) |entry| {
+        entry.value_ptr.deinit();
+    }
+    map.deinit();
+}
+
+//////////
+// Tests
+
+const comptimePrint = std.fmt.comptimePrint;
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
 }
 
-test "insertShreds" {
+const test_dir = comptimePrint("test_data/blockstore/insert_shred", .{});
+
+fn openTestDb(comptime test_name: []const u8) !struct {
+    db: BlockstoreDB,
+    inserter: ShredInserter,
+    registry: sig.prometheus.Registry(.{}),
+    fn deinit(self: *@This()) void {
+        self.db.deinit();
+        self.registry.deinit();
+    }
+} {
+    const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
+    try sig.blockstore.tests.freshDir(path);
     const allocator = std.testing.allocator;
     const logger = sig.trace.Logger.init(std.testing.allocator, .warn);
     defer logger.deinit();
-    const DB = sig.blockstore.blockstore.BlockstoreDB;
-    var db = try DB.open(allocator, logger, "test_data/insert-shreds");
-    defer db.deinit();
+    const db = try BlockstoreDB.open(allocator, logger, path);
     var registry = sig.prometheus.Registry(.{}).init(allocator);
-    defer registry.deinit();
-    var inserter = try ShredInserter.init(std.testing.allocator, logger, &registry, db);
+    const inserter = try ShredInserter.init(std.testing.allocator, logger, &registry, db);
+    return .{ .db = db, .inserter = inserter, .registry = registry };
+}
+
+test "insertShreds" {
+    const allocator = std.testing.allocator;
+    var state = try openTestDb("insertShreds");
+    defer state.deinit();
     const shred = try Shred.fromPayload(allocator, &sig.shred_collector.shred.test_data_shred);
     defer shred.deinit();
-    _ = try inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
-    const stored_shred = try db.getBytes(
+    _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
+    const stored_shred = try state.db.getBytes(
         schema.data_shred,
         .{ shred.commonHeader().slot, shred.commonHeader().index },
     );
     defer stored_shred.?.deinit();
     try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
+}
+
+test "merkle root metas coding" {
+    var state = try openTestDb("merkle root metas coding");
+    defer state.deinit();
+
+    // TODO
 }
