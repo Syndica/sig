@@ -1163,17 +1163,12 @@ pub const AccountsDB = struct {
             }
 
             const largest_flushed_slot = self.largest_flushed_slot.load(.seq_cst);
+
             const latest_full_snapshot_slot = blk: {
                 const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
                 defer latest_full_snapshot_info_lg.unlock();
                 break :blk if (latest_full_snapshot_info.*) |info| info.slot else 0;
             };
-            const latest_incremental_snapshot_slot = blk: {
-                const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.readWithLock();
-                defer latest_incremental_snapshot_info_lg.unlock();
-                break :blk if (latest_incremental_snapshot_info.*) |info| info.slot else 0;
-            };
-
             if (largest_flushed_slot - latest_full_snapshot_slot >= slots_per_full_snapshot) {
                 self.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
 
@@ -1202,6 +1197,11 @@ pub const AccountsDB = struct {
                 try self.commitFullSnapshotInfo(snapshot_gen_info, .delete_old);
             }
 
+            const latest_incremental_snapshot_slot = blk: {
+                const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.readWithLock();
+                defer latest_incremental_snapshot_info_lg.unlock();
+                break :blk if (latest_incremental_snapshot_info.*) |info| info.slot else 0;
+            };
             if (largest_flushed_slot - latest_incremental_snapshot_slot >= slots_per_incremental_snapshot) inc_blk: {
                 {
                     const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
@@ -2388,42 +2388,6 @@ pub const AccountsDB = struct {
         }
     }
 
-    pub fn commitIncrementalSnapshotInfo(
-        self: *Self,
-        snapshot_gen_info: IncSnapshotGenerationInfo,
-        old_snapshot_action: enum {
-            /// Ignore the previous snapshot.
-            ignore_old,
-            /// Delete the previous snapshot.
-            delete_old,
-        },
-    ) std.fs.Dir.DeleteFileError!void {
-        const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.writeWithLock();
-        defer latest_incremental_snapshot_info_lg.unlock();
-
-        const maybe_old_snapshot_info: ?IncSnapshotGenerationInfo = latest_incremental_snapshot_info.*;
-        latest_incremental_snapshot_info.* = snapshot_gen_info;
-        if (maybe_old_snapshot_info) |old_snapshot_info| {
-            std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
-        }
-
-        switch (old_snapshot_action) {
-            .ignore_old => {},
-            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
-                const old_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
-                    .base_slot = old_snapshot_info.base_slot,
-                    .slot = old_snapshot_info.slot,
-                    .hash = old_snapshot_info.hash,
-                    .compression = .zstd,
-                });
-                const old_name = old_name_bounded.constSlice();
-
-                self.logger.infof("deleting old incremental snapshot archive: {s}", .{old_name});
-                try self.snapshot_dir.deleteFile(old_name);
-            },
-        }
-    }
-
     pub const IncSnapshotGenerationInfo = struct {
         base_slot: Slot,
         slot: Slot,
@@ -2587,6 +2551,42 @@ pub const AccountsDB = struct {
         };
 
         return .{ package, info };
+    }
+
+    pub fn commitIncrementalSnapshotInfo(
+        self: *Self,
+        snapshot_gen_info: IncSnapshotGenerationInfo,
+        old_snapshot_action: enum {
+            /// Ignore the previous snapshot.
+            ignore_old,
+            /// Delete the previous snapshot.
+            delete_old,
+        },
+    ) std.fs.Dir.DeleteFileError!void {
+        const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.writeWithLock();
+        defer latest_incremental_snapshot_info_lg.unlock();
+
+        const maybe_old_snapshot_info: ?IncSnapshotGenerationInfo = latest_incremental_snapshot_info.*;
+        latest_incremental_snapshot_info.* = snapshot_gen_info;
+        if (maybe_old_snapshot_info) |old_snapshot_info| {
+            std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
+        }
+
+        switch (old_snapshot_action) {
+            .ignore_old => {},
+            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
+                const old_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+                    .base_slot = old_snapshot_info.base_slot,
+                    .slot = old_snapshot_info.slot,
+                    .hash = old_snapshot_info.hash,
+                    .compression = .zstd,
+                });
+                const old_name = old_name_bounded.constSlice();
+
+                self.logger.infof("deleting old incremental snapshot archive: {s}", .{old_name});
+                try self.snapshot_dir.deleteFile(old_name);
+            },
+        }
     }
 
     inline fn lessThanIf(
