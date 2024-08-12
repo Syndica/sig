@@ -36,12 +36,18 @@ pub const FileId = enum(Int) {
     }
 
     pub fn format(
-        _: FileId,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        _: anytype,
+        id: FileId,
+        comptime fmt_str: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
     ) !void {
-        @compileError("Should not print " ++ @typeName(FileId) ++ " directly");
+        try std.fmt.formatType(
+            @intFromEnum(id),
+            fmt_str,
+            options,
+            writer,
+            std.options.fmt_max_depth,
+        );
     }
 };
 
