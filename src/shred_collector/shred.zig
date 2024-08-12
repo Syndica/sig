@@ -635,9 +635,9 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
     return checkedSub(
         constants.payload_size,
         constants.headers_size +
-            if (variant.chained) SIZE_OF_MERKLE_ROOT else 0 +
+            (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
             variant.proof_size * merkle_proof_entry_size +
-            if (variant.resigned) SIGNATURE_LENGTH else 0,
+            (if (variant.resigned) SIGNATURE_LENGTH else 0),
     ) catch error.InvalidProofSize;
 }
 

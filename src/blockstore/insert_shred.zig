@@ -1935,10 +1935,10 @@ fn openTestDb(comptime test_name: []const u8) !struct {
     return .{ .db = db, .inserter = inserter, .registry = registry };
 }
 
-test "insertShreds" {
-    const allocator = std.testing.allocator;
-    var state = try openTestDb("insertShreds");
+test "insertShreds single shred" {
+    var state = try openTestDb("insertShreds single shred");
     defer state.deinit();
+    const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &sig.shred_collector.shred.test_data_shred);
     defer shred.deinit();
     _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
@@ -1950,9 +1950,26 @@ test "insertShreds" {
     try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 }
 
-test "merkle root metas coding" {
-    var state = try openTestDb("merkle root metas coding");
+test "insertShreds 32 data shreds" {
+    var state = try openTestDb("insertShreds 32 shreds");
     defer state.deinit();
+    var defers = sig.utils.service_manager.DeferList.init(std.testing.allocator);
+    defer defers.deinit();
 
-    // TODO
+    const test_shreds = @import("test_data_shreds.zig").test_shreds;
+    var shreds = std.ArrayList(Shred).init(std.testing.allocator);
+    defer shreds.deinit();
+    for (test_shreds) |payload| {
+        const shred = try Shred.fromPayload(std.testing.allocator, payload);
+        try defers.deferCall(Shred.deinit, .{shred});
+        try shreds.append(shred);
+    }
+    _ = try state.inserter.insertShreds(shreds.items, &(.{false} ** 32), null, false, null);
+    for (shreds.items) |shred| {
+        const bytes = try state.db.getBytes(
+            schema.data_shred,
+            .{ shred.commonHeader().slot, shred.commonHeader().index },
+        );
+        try std.testing.expectEqualSlices(u8, shred.payload(), bytes.?.data);
+    }
 }
