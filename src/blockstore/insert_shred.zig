@@ -1900,7 +1900,7 @@ test "insertShreds" {
     const allocator = std.testing.allocator;
     const logger = sig.trace.Logger.init(std.testing.allocator, .warn);
     defer logger.deinit();
-    const DB = sig.blockstore.blockstore.BlockstoreDB; //hashmap_db.SharedHashMapDB(&sig.blockstore.schema.list);
+    const DB = sig.blockstore.blockstore.BlockstoreDB;
     var db = try DB.open(allocator, logger, "test_data/insert-shreds");
     defer db.deinit();
     var registry = sig.prometheus.Registry(.{}).init(allocator);
@@ -1909,4 +1909,10 @@ test "insertShreds" {
     const shred = try Shred.fromPayload(allocator, &sig.shred_collector.shred.test_data_shred);
     defer shred.deinit();
     _ = try inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
+    const stored_shred = try db.getBytes(
+        schema.data_shred,
+        .{ shred.commonHeader().slot, shred.commonHeader().index },
+    );
+    defer stored_shred.?.deinit();
+    try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 }
