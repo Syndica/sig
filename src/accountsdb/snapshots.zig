@@ -274,7 +274,7 @@ pub const VoteAccount = struct {
 
         const vote_state: ?anyerror!VoteState = switch (rand.enumValue(enum { null, err, value })) {
             .null => null,
-            .err => sig.rand.errorValue(rand, RandomErrorSet),
+            .err => @as(anyerror!VoteState, sig.rand.errorValue(rand, RandomErrorSet)),
             .value => VoteState.random(rand),
         };
 
@@ -893,9 +893,10 @@ pub const BankFields = struct {
 
 /// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
 pub const AccountFileInfo = struct {
-    // note: serialized id is a usize but in code it's FileId (u32)
+    /// note: serialized id is a usize but in code it's FileId (u32)
     id: FileId,
-    length: usize, // amount of bytes used
+    /// amount of bytes used
+    length: usize,
 
     pub const @"!bincode-config:id": bincode.FieldConfig(FileId) = .{
         .serializer = idSerializer,
@@ -966,6 +967,14 @@ pub const BankHashStats = struct {
     total_data_len: u64,
     num_executable_accounts: u64,
 
+    pub const zero_init: BankHashStats = .{
+        .num_updated_accounts = 0,
+        .num_removed_accounts = 0,
+        .num_lamports_stored = 0,
+        .total_data_len = 0,
+        .num_executable_accounts = 0,
+    };
+
     pub fn random(rand: std.Random) BankHashStats {
         return .{
             .num_updated_accounts = rand.int(u64),
@@ -974,6 +983,30 @@ pub const BankHashStats = struct {
             .total_data_len = rand.int(u64),
             .num_executable_accounts = rand.int(u64),
         };
+    }
+
+    pub const AccountData = struct {
+        lamports: u64,
+        data_len: u64,
+        executable: bool,
+    };
+    pub fn update(stats: *BankHashStats, account: AccountData) void {
+        if (account.lamports == 0) {
+            stats.num_removed_accounts += 1;
+        } else {
+            stats.num_updated_accounts += 1;
+        }
+        stats.total_data_len +%= account.data_len;
+        stats.num_executable_accounts += @intFromBool(account.executable);
+        stats.num_lamports_stored +%= account.lamports;
+    }
+
+    pub fn accumulate(stats: *BankHashStats, other: BankHashStats) void {
+        stats.num_updated_accounts += other.num_updated_accounts;
+        stats.num_removed_accounts += other.num_removed_accounts;
+        stats.total_data_len +%= other.total_data_len;
+        stats.num_lamports_stored +%= other.num_lamports_stored;
+        stats.num_executable_accounts += other.num_executable_accounts;
     }
 };
 
