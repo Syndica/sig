@@ -235,5 +235,5 @@ fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@
 }
 
 test "rocksdb database" {
-    sig.blockstore.database.testDatabase(RocksDB);
+    try sig.blockstore.database.testDatabase(RocksDB);
 }

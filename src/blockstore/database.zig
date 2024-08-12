@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const blockstore = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -16,9 +17,9 @@ pub fn assertIsDatabase(comptime Impl: type) void {
 }
 
 /// Runs all tests in `tests`
-pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) void {
+pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) !void {
     assertIsDatabase(Impl(&.{}));
-    for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
+    inline for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
         try @call(.auto, @field(tests(Impl), decl.name), .{});
     }
 }
@@ -202,8 +203,12 @@ pub const BytesRef = struct {
 
 /// Test cases that can be applied to any implementation of Database
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
+    @setEvalBranchQuota(10_000);
+    const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
+    const test_dir = std.fmt.comptimePrint("test_data/bsdb/{s}", .{impl_id.buffer});
+
     return struct {
-        fn basic() !void {
+        pub fn basic() !void {
             const Value = struct { hello: u16 };
             const cf1 = ColumnFamily{
                 .name = "one",
@@ -215,14 +220,12 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
                 .Key = u64,
                 .Value = Value,
             };
+            const path = std.fmt.comptimePrint("{s}/basic", .{test_dir});
+            try blockstore.tests.freshDir(path);
             const allocator = std.testing.allocator;
             const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
             defer logger.deinit();
-            var db = try Database(Impl(&.{ cf1, cf2 })).open(
-                allocator,
-                logger,
-                "test_data/bsdb",
-            );
+            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
             defer db.deinit();
             try db.put(cf1, 123, .{ .hello = 345 });
             const got = try db.get(cf1, 123);

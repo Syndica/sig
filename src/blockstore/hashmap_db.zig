@@ -322,5 +322,5 @@ const SharedHashMap = struct {
 };
 
 test "hashmap database" {
-    sig.blockstore.database.testDatabase(SharedHashMapDB);
+    try sig.blockstore.database.testDatabase(SharedHashMapDB);
 }
