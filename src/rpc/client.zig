@@ -108,6 +108,8 @@ pub const Client = struct {
         );
         defer allocator.free(request_payload);
 
+        // std.debug.print("Request: {s}\n", .{request_payload});
+
         const result = try self.http_client.fetch(.{
             .location = .{ .url = self.http_endpoint },
             .method = std.http.Method.POST,
@@ -119,6 +121,8 @@ pub const Client = struct {
             .response_storage = .{ .dynamic = &response_payload },
             .max_append_size = 100 * 1024 * 1024,
         });
+
+        // std.debug.print("Response: {s}\n", .{response_payload.items});
 
         std.debug.assert(result.status == std.http.Status.ok); // TODO: handle error
 
@@ -426,6 +430,50 @@ pub const Client = struct {
         return try SignatureStatuses.init(allocator, response.result());
     }
 
+    pub const SendTransactionParams = struct {
+        transaction: []const u8,
+        encoding: ?[]const u8 = null,
+        skipPreflight: ?bool = null,
+        preflightCommitment: ?Commitment = null,
+        maxRetries: ?u64 = null,
+        minContextSlot: ?Slot = null,
+
+        pub fn toJsonString(self: SendTransactionParams, allocator: std.mem.Allocator) ![]const u8 {
+            var config = std.json.ObjectMap.init(allocator);
+            defer config.deinit();
+            if (self.encoding) |encoding|
+                try config.put("encoding", .{ .string = encoding });
+            if (self.skipPreflight) |skipPreflight|
+                try config.put("skipPreflight", .{ .bool = skipPreflight });
+            if (self.preflightCommitment) |preflightCommitment|
+                try config.put("preflightCommitment", .{ .string = preflightCommitment.asString() });
+            if (self.maxRetries) |maxRetries|
+                try config.put("maxRetries", .{ .integer = @intCast(maxRetries) });
+            if (self.minContextSlot) |minContextSlot|
+                try config.put("minContextSlot", .{ .integer = @intCast(minContextSlot) });
+            var array = try std.ArrayList(std.json.Value).initCapacity(allocator, 2);
+            defer array.deinit();
+            try array.insert(0, .{ .string = self.transaction });
+            try array.insert(1, .{ .object = config });
+            return try std.json.stringifyAlloc(allocator, std.json.Value{ .array = array }, .{});
+        }
+    };
+
+    pub fn sendTransaction(self: *Client, allocator: std.mem.Allocator, params: SendTransactionParams) !Signature {
+        const params_json = try params.toJsonString(allocator);
+        defer allocator.free(params_json);
+
+        const response = try self.sendFetchRequest(
+            allocator,
+            std.json.Value,
+            "sendTransaction",
+            params_json,
+        );
+        defer response.deinit();
+
+        return try Signature.fromString(response.result().string); // TODO: handle error
+    }
+
     test "rpc.Client.getBlockHeight" {
         const allocator = std.testing.allocator;
         var client = Client{
@@ -540,5 +588,57 @@ pub const Client = struct {
             .searchTransactionHistory = true,
         });
         defer signature_statuses.deinit();
+    }
+
+    test "rpc.Client.sendTransaction" {
+        const base58 = @import("base58-zig");
+        const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+        const BASE58_ENCODER = base58.Encoder.init(.{});
+
+        // const allocator = std.testing.allocator;
+        const allocator = std.heap.page_allocator;
+        var client = Client{
+            .http_client = std.http.Client{
+                .allocator = std.heap.page_allocator,
+            },
+            .http_endpoint = "https://api.testnet.solana.com",
+        };
+        defer client.http_client.deinit();
+
+        const blockhash_params = sig.rpc.Client.LatestBlockhashParams{};
+        const latest_blockhash = try client.getLatestBlockhash(allocator, blockhash_params);
+
+        const from_pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+        const from_keypair = KeyPair{
+            .public_key = .{ .bytes = from_pubkey.data },
+            .secret_key = .{ .bytes = [_]u8{ 76, 196, 192, 17, 40, 245, 120, 49, 64, 133, 213, 227, 12, 42, 183, 70, 235, 64, 235, 96, 246, 205, 78, 13, 173, 111, 254, 96, 210, 208, 121, 240, 159, 193, 185, 89, 227, 77, 234, 91, 232, 234, 253, 119, 162, 105, 200, 227, 123, 90, 111, 105, 72, 53, 60, 147, 76, 154, 44, 72, 29, 165, 2, 246 } },
+        };
+        const to_pubkey = try Pubkey.fromString("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
+        const lamports: u64 = 100;
+
+        const transaction = try sig.core.transaction.buildTransferTansaction(
+            allocator,
+            from_keypair,
+            from_pubkey,
+            to_pubkey,
+            lamports,
+            latest_blockhash.value.blockhash,
+        );
+        defer transaction.deinit(allocator);
+
+        const transaction_bytes = try sig.bincode.writeToArray(allocator, transaction, .{});
+        defer transaction_bytes.deinit();
+
+        const transaction_base58 = try BASE58_ENCODER.encodeAlloc(allocator, transaction_bytes.items);
+        defer allocator.free(transaction_base58);
+
+        const params = SendTransactionParams{
+            .transaction = transaction_base58,
+        };
+
+        const signature = try client.sendTransaction(allocator, params);
+
+        _ = signature;
+        // std.debug.print("Transfer Signature: {s}", .{try signature.toString()});
     }
 };
