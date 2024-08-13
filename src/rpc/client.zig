@@ -42,7 +42,7 @@ pub const Client = struct {
     };
 
     const GetAccountInfoConfig = struct {
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
         encoding: ?[]const u8 = null,
         dataSlice: ?DataSlice = null,
         minContextSlot: ?u64 = null,
@@ -78,7 +78,7 @@ pub const Client = struct {
     };
 
     const GetBalanceConfig = struct {
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
         minContextSlot: ?u64 = null,
     };
 
@@ -120,7 +120,7 @@ pub const Client = struct {
     };
 
     const GetBlockConfig = struct {
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
         encoding: ?[]const u8 = null,
         transactionDetails: ?[]const u8 = null,
         maxSupportedTransactionVersion: ?u64 = null,
@@ -153,7 +153,7 @@ pub const Client = struct {
     }
 
     const GetBlockHeightConfig = struct {
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
         minContextSlot: ?u64 = null,
     };
 
@@ -182,7 +182,7 @@ pub const Client = struct {
     };
 
     const GetEpochInfoConfig = struct {
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
         minContextSlot: ?u64 = null,
     };
 
@@ -223,7 +223,7 @@ pub const Client = struct {
     };
 
     const GetLatestBlockhashConfig = struct {
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
         minContextSlot: ?Slot = null,
     };
 
@@ -241,7 +241,7 @@ pub const Client = struct {
 
     pub const GetLeaderScheduleConfig = struct {
         identity: ?[]const u8 = null,
-        commitment: ?[]const u8 = null,
+        commitment: ?Commitment = null,
     };
 
     pub fn getLeaderSchedule(self: *Client, arena: *std.heap.ArenaAllocator, maybe_epoch: ?Epoch, config: GetLeaderScheduleConfig) !LeaderSchedule {
@@ -274,12 +274,68 @@ pub const Client = struct {
     // TODO: getProgramAccounts()
     // TODO: getRecentPerformanceSamples()
     // TODO: getRecentPrioritizationFees()
-    // TODO: getSignatureStatuses()
+
+    const SignatureStatuses = struct {
+        context: Context,
+        value: []const ?Status,
+
+        pub const Context = struct {
+            apiVersion: []const u8,
+            slot: u64,
+        };
+
+        pub const Status = struct {
+            slot: u64,
+            confirmations: ?usize,
+            err: ?[]const u8,
+            confirmationStatus: ?[]const u8,
+        };
+    };
+
+    const GetSignatureStatusesConfig = struct {
+        searchTransactionHistory: ?bool = null,
+    };
+
+    pub fn getSignatureStatuses(
+        self: *Client,
+        arena: *std.heap.ArenaAllocator,
+        signatures: []const Signature,
+        config: GetSignatureStatusesConfig,
+    ) !SignatureStatuses {
+        const allocator = arena.allocator();
+
+        var signatures_base58 = try allocator.alloc([]const u8, signatures.len);
+        for (signatures, 0..) |signature, i| {
+            signatures_base58[i] = try signature.toStringAlloc(allocator);
+        }
+        const signatures_json = try std.json.stringifyAlloc(allocator, signatures_base58, .{});
+
+        var params_builder = ParamsBuilder.init(arena.allocator());
+        try params_builder.addArgument("{s}", signatures_json);
+        try params_builder.addConfig(config);
+        return try self.sendFetchRequest(arena.allocator(), SignatureStatuses, .{
+            .method = "getSignatureStatuses",
+            .params = try params_builder.build(),
+        });
+    }
+
     // TODO: getSignaturesForAddress()
 
-    pub fn getSlot(self: *Client, arena: *std.heap.ArenaAllocator) !Slot {
+    const GetSlotConfig = struct {
+        commitment: ?Commitment = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub fn getSlot(
+        self: *Client,
+        arena: *std.heap.ArenaAllocator,
+        config: GetSlotConfig,
+    ) !Slot {
+        var params_builder = ParamsBuilder.init(arena.allocator());
+        try params_builder.addConfig(config);
         return try self.sendFetchRequest(arena.allocator(), Slot, .{
             .method = "getSlot",
+            .params = try params_builder.build(),
         });
     }
 
@@ -364,6 +420,12 @@ pub const Client = struct {
         }
     };
 
+    const Commitment = enum {
+        finalized,
+        confirmed,
+        processed,
+    };
+
     const Request = struct {
         id: u64 = 1,
         jsonrpc: []const u8 = "2.0",
@@ -428,6 +490,7 @@ pub const Client = struct {
 
         pub fn build(self: *ParamsBuilder) !?[]const u8 {
             if (self.array.items.len == 0) return null;
+            // TODO: Replace hacky solution with proper json serialization
             var params = try std.fmt.allocPrint(self.allocator, "{s}", .{self.array.items});
             params[0] = '[';
             params[params.len - 1] = ']';
@@ -481,7 +544,8 @@ test "rpc.Client.getBlock: returns block" {
         defer client.deinit();
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        _ = try client.getBlock(&arena, try client.getSlot(&arena) - 10, .{
+        const block = try client.getSlot(&arena, .{ .commitment = .finalized });
+        _ = try client.getBlock(&arena, block, .{
             .transactionDetails = "none",
             .rewards = false,
         });
@@ -506,7 +570,8 @@ test "rpc.Client.getBlockCommitment: returns block commitment" {
         defer client.deinit();
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        _ = try client.getBlockCommitment(&arena, try client.getSlot(&arena));
+        const slot = try client.getSlot(&arena, .{ .commitment = .finalized });
+        _ = try client.getBlockCommitment(&arena, slot);
     }
 }
 
@@ -521,17 +586,17 @@ test "rpc.Client.getEpochInfo: returns epoch info" {
     }
 }
 
-// TODO: getEpochSchedule()
-// TODO: getFeeForMessage()
-// TODO: getFirstAvailableBlock()
-// TODO: getGenesisHash()
-// TODO: getHealth()
-// TODO: getHighestSnapshotSlot()
-// TODO: getIdentity()
-// TODO: getInflationGovernor()
-// TODO: getInflationRate()
-// TODO: getInflationReward()
-// TODO: getLargeAccounts()
+// TODO: test getEpochSchedule()
+// TODO: test getFeeForMessage()
+// TODO: test getFirstAvailableBlock()
+// TODO: test getGenesisHash()
+// TODO: test getHealth()
+// TODO: test getHighestSnapshotSlot()
+// TODO: test getIdentity()
+// TODO: test getInflationGovernor()
+// TODO: test getInflationRate()
+// TODO: test getInflationReward()
+// TODO: test getLargeAccounts()
 
 test "rpc.Client.getLatestBlockhash: returns latest blockhash" {
     const allocator = std.testing.allocator;
@@ -551,15 +616,34 @@ test "rpc.Client.getLeaderSchedule: returns leader schedule" {
     _ = try client.getLeaderSchedule(&arena, null, .{});
 }
 
-// TODO: getMaxRetransmitSlot()
-// TODO: getMaxShredInsertSlot()
-// TODO: getMinimumBalanceForRentExemption()
-// TODO: getMultipleAccounts()
-// TODO: getProgramAccounts()
-// TODO: getRecentPerformanceSamples()
-// TODO: getRecentPrioritizationFees()
-// TODO: getSignatureStatuses()
-// TODO: getSignaturesForAddress()
+// TODO: test getMaxRetransmitSlot()
+// TODO: test getMaxShredInsertSlot()
+// TODO: test getMinimumBalanceForRentExemption()
+// TODO: test getMultipleAccounts()
+// TODO: test getProgramAccounts()
+// TODO: test getRecentPerformanceSamples()
+// TODO: test getRecentPrioritizationFees()
+
+test "rpc.Client.getSignatureStatuses: returns signature statuses" {
+    {
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
+        defer client.deinit();
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        var signatures = try allocator.alloc(Signature, 2);
+        defer allocator.free(signatures);
+        signatures[0] = try Signature.fromString(
+            "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
+        );
+        signatures[1] = try Signature.fromString(
+            "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
+        );
+        _ = try client.getSignatureStatuses(&arena, signatures, .{});
+    }
+}
+
+// TODO: test getSignaturesForAddress()
 
 test "rpc.Client.getSlot: returns slot" {
     {
@@ -568,26 +652,26 @@ test "rpc.Client.getSlot: returns slot" {
         defer client.deinit();
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        _ = try client.getSlot(&arena);
+        _ = try client.getSlot(&arena, .{});
     }
 }
 
-// TODO: getSlotLeader()
-// TODO: getSlotLeaders()
-// TODO: getStakeActivation()
-// TODO: getStakeMinimumDelegation()
-// TODO: getSupply()
-// TODO: getTokenAccountBalance()
-// TODO: getTokenAccountsByDelegate()
-// TODO: getTockenAccountsByOwner()
-// TODO: getTokenLargestAccounts()
-// TODO: getTokenSupply()
-// TODO: getTransaction()
-// TODO: getTransactionCount()
-// TODO: getVersion()
-// TODO: getVoteAccounts()
-// TODO: isBlockhashValid()
-// TODO: minimumLedgerSlot()
-// TODO: requestAirdrop()
-// TODO: sendTransaction()
-// TODO: simulateTransaction()
+// TODO: test getSlotLeader()
+// TODO: test getSlotLeaders()
+// TODO: test getStakeActivation()
+// TODO: test getStakeMinimumDelegation()
+// TODO: test getSupply()
+// TODO: test getTokenAccountBalance()
+// TODO: test getTokenAccountsByDelegate()
+// TODO: test getTockenAccountsByOwner()
+// TODO: test getTokenLargestAccounts()
+// TODO: test getTokenSupply()
+// TODO: test getTransaction()
+// TODO: test getTransactionCount()
+// TODO: test getVersion()
+// TODO: test getVoteAccounts()
+// TODO: test isBlockhashValid()
+// TODO: test minimumLedgerSlot()
+// TODO: test requestAirdrop()
+// TODO: test sendTransaction()
+// TODO: test simulateTransaction()
