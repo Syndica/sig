@@ -15,7 +15,7 @@ pub const SlotLeaderProvider = sig.utils.closure.PointerClosure(Slot, ?Pubkey);
 
 /// Only works for a single epoch. This is a basic limited approach that should
 /// only be used as a placeholder until a better approach is fleshed out.
-pub const SingleEpochLeaderSchedule = struct {
+pub const LeaderSchedule = struct {
     allocator: Allocator,
     slot_leaders: []const sig.core.Pubkey,
     start_slot: Slot,
@@ -39,7 +39,7 @@ pub const SingleEpochLeaderSchedule = struct {
 pub fn leaderScheduleFromBank(
     allocator: Allocator,
     bank_fields: *const sig.accounts_db.snapshots.BankFields,
-) !SingleEpochLeaderSchedule {
+) !LeaderSchedule {
     const epoch = bank_fields.epoch;
     const epoch_stakes = bank_fields.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
     const slots_in_epoch = bank_fields.epoch_schedule.getSlotsInEpoch(epoch);
@@ -49,7 +49,7 @@ pub fn leaderScheduleFromBank(
 
     _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
     const epoch_start_slot = bank_fields.slot - slot_index;
-    return SingleEpochLeaderSchedule{
+    return .{
         .allocator = allocator,
         .slot_leaders = slot_leaders,
         .start_slot = epoch_start_slot,
@@ -112,7 +112,7 @@ pub fn leaderSchedule(
     return slot_leaders;
 }
 
-pub fn writeLeaderSchedule(sched: SingleEpochLeaderSchedule, writer: anytype) !void {
+pub fn writeLeaderSchedule(sched: LeaderSchedule, writer: anytype) !void {
     for (sched.slot_leaders, 0..) |leader, i| {
         try writer.print("  {}       {s}\n", .{ i + sched.start_slot, leader });
     }
@@ -123,7 +123,7 @@ pub fn writeLeaderSchedule(sched: SingleEpochLeaderSchedule, writer: anytype) !v
 pub fn parseLeaderSchedule(
     allocator: std.mem.Allocator,
     reader: anytype,
-) !SingleEpochLeaderSchedule {
+) !LeaderSchedule {
     var slot_leaders = std.ArrayList(Pubkey).init(allocator);
     var start_slot: Slot = 0;
     var expect: ?Slot = null;

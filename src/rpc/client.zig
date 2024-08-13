@@ -306,7 +306,7 @@ pub const Client = struct {
 
         var signatures_base58 = try allocator.alloc([]const u8, signatures.len);
         for (signatures, 0..) |signature, i| {
-            signatures_base58[i] = try signature.toStringAlloc(allocator);
+            signatures_base58[i] = try allocator.dupe(u8, signature.toBase58String().slice());
         }
         const signatures_json = try std.json.stringifyAlloc(allocator, signatures_base58, .{});
 
@@ -406,7 +406,7 @@ pub const Client = struct {
         return error.RpcRequestFailed;
     }
 
-    const Cluster = enum {
+    pub const Cluster = enum {
         Mainnet,
         Testnet,
         Devnet,
@@ -633,10 +633,10 @@ test "rpc.Client.getSignatureStatuses: returns signature statuses" {
         defer arena.deinit();
         var signatures = try allocator.alloc(Signature, 2);
         defer allocator.free(signatures);
-        signatures[0] = try Signature.fromString(
+        signatures[0] = try Signature.fromBase58String(
             "56H13bd79hzZa67gMACJYsKxb5MdfqHhe3ceEKHuBEa7hgjMgAA4Daivx68gBFUa92pxMnhCunngcP3dpVnvczGp",
         );
-        signatures[1] = try Signature.fromString(
+        signatures[1] = try Signature.fromBase58String(
             "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
         );
         _ = try client.getSignatureStatuses(&arena, signatures, .{});

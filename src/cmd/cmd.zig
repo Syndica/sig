@@ -20,12 +20,12 @@ const IpAddr = sig.net.IpAddr;
 const Logger = sig.trace.Logger;
 const Pubkey = sig.core.Pubkey;
 const ShredCollectorDependencies = sig.shred_collector.ShredCollectorDependencies;
-const SingleEpochLeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
+const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const SnapshotFiles = sig.accounts_db.SnapshotFiles;
 const SocketAddr = sig.net.SocketAddr;
 const StatusCache = sig.accounts_db.StatusCache;
 const Channel = sig.sync.Channel;
-const TransactionInfo = sig.transaction_forwarding_service.TransactionInfo;
+const TransactionInfo = sig.transaction_sender.TransactionInfo;
 
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
@@ -560,7 +560,7 @@ pub fn run() !void {
                         },
                         .target = .{
                             .action = .{
-                                .exec = transactionForwardingServiceTest,
+                                .exec = testTransactionSenderService,
                             },
                         },
                     },
@@ -982,7 +982,7 @@ fn printLeaderSchedule() !void {
     try stdout.flush();
 }
 
-fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
+fn getLeaderScheduleFromCli(allocator: Allocator) !?LeaderSchedule {
     return if (config.current.leader_schedule_path) |path|
         if (std.mem.eql(u8, "--", path))
             try parseLeaderSchedule(allocator, std.io.getStdIn().reader())
@@ -992,23 +992,27 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
         null;
 }
 
-pub fn transactionForwardingServiceTest() !void {
+pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
 
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_manager.deinit();
 
-    const incoming_channel = Channel(TransactionInfo).init(gpa_allocator, 100);
-    defer incoming_channel.deinit();
+    const transaction_channel = Channel(TransactionInfo).init(gpa_allocator, 100);
+    defer transaction_channel.deinit();
 
-    const socket_address = SocketAddr.init(app_base.my_ip, 8003);
+    const transaction_sender_config = sig.transaction_sender.Config{
+        .cluster = .Testnet,
+        .socket = SocketAddr.init(app_base.my_ip, 8003),
+    };
 
     const transaction_forwarding_thread = try std.Thread.spawn(
         .{},
-        sig.transaction_forwarding_service.run,
+        sig.transaction_sender.run,
         .{
-            socket_address,
-            incoming_channel,
+            std.heap.page_allocator,
+            transaction_sender_config,
+            transaction_channel,
             &gossip_service.gossip_table_rw,
             &app_base.exit,
             app_base.logger,
