@@ -151,11 +151,16 @@ pub const Shred = union(ShredType) {
 
 /// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
 pub const CodingShred = struct {
+    // TODO(x19): pull out the generics
     fields: Fields,
     const Fields = GenericShred(CodingShredHeader, coding_shred);
 
     const Self = @This();
     const consts = coding_shred;
+
+    pub fn default(allocator: std.mem.Allocator) Self {
+        return .{ .fields = Fields.default(allocator) };
+    }
 
     /// agave: ShredCode::from_recovered_shard
     pub fn fromRecoveredShard(
@@ -239,6 +244,10 @@ pub const DataShred = struct {
 
     const Self = @This();
     pub const constants = data_shred;
+
+    pub fn default(allocator: std.mem.Allocator) Self {
+        return .{ .fields = Fields.default(allocator) };
+    }
 
     /// agave: ShredData::from_recovered_shard
     pub fn fromRecoveredShard(
@@ -326,11 +335,21 @@ pub fn GenericShred(
 
         pub const constants = constants_;
 
+        pub fn default(allocator: std.mem.Allocator) Self {
+            return .{
+                .common = CommonHeader.default(),
+                .custom = CustomHeader.default(),
+                .allocator = allocator,
+                .payload = undefined,
+            };
+        }
+
         pub fn deinit(self: Self) void {
             self.allocator.free(self.payload);
         }
 
         pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
+            // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is 1207 bytes
             if (payload.len < constants.payload_size) {
                 return error.InvalidPayloadSize;
             }
@@ -730,6 +749,19 @@ pub const CommonHeader = struct {
 
     pub const @"!bincode-config:shred_variant" = ShredVariantConfig;
 
+    const Self = @This();
+
+    pub fn default() Self {
+        return .{
+            .signature = Signature{ .data = undefined },
+            .shred_variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
+            .slot = 0,
+            .index = 0,
+            .version = 0,
+            .fec_set_index = 0,
+        };
+    }
+
     // Identifier for the erasure coding set that the shred belongs to.
     pub fn erasureSetId(self: @This()) ErasureSetId {
         return ErasureSetId{
@@ -743,12 +775,32 @@ pub const DataShredHeader = struct {
     parent_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
+
+    const Self = @This();
+
+    pub fn default() Self {
+        return .{
+            .parent_offset = 0,
+            .flags = .{},
+            .size = 0,
+        };
+    }
 };
 
 pub const CodingShredHeader = struct {
     num_data_shreds: u16,
     num_coding_shreds: u16,
     position: u16, // [0..num_coding_shreds)
+
+    const Self = @This();
+
+    pub fn default() Self {
+        return .{
+            .num_data_shreds = 0,
+            .num_coding_shreds = 0,
+            .position = 0,
+        };
+    }
 };
 
 pub const ShredType = enum(u8) {
@@ -905,9 +957,9 @@ pub const layout = struct {
     const SIZE_OF_SHRED_VARIANT: usize = 1;
     const SIZE_OF_SHRED_SLOT: usize = 8;
 
-    const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE;
-    const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT;
-    const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT;
+    const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
+    const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
+    const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
 
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;
@@ -1070,6 +1122,11 @@ test "getSignedData" {
         33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,
     };
     try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &signed_data.data));
+}
+
+test "fromPayload" {
+    const shred = try Shred.fromPayload(std.testing.allocator, &test_data_shred);
+    defer shred.deinit();
 }
 
 pub const test_data_shred = [_]u8{

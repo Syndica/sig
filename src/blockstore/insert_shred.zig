@@ -999,7 +999,7 @@ pub const ShredInserter = struct {
     }
 
     /// agave: insert_data_shred
-    fn insertDataShred(
+    pub fn insertDataShred(
         self: *const Self,
         slot_meta: *SlotMeta,
         data_index: *meta.ShredIndex,
@@ -1692,7 +1692,7 @@ fn updateSlotMeta(
     if (first_insert) {
         // predict the timestamp of what would have been the first shred in this slot
         const slot_time_elapsed = @as(u64, @intCast(reference_tick)) * 1000 / DEFAULT_TICKS_PER_SECOND;
-        slot_meta.first_shred_timestamp = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
+        slot_meta.first_shred_timestamp_milli = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
     }
     slot_meta.consumed = new_consumed;
     // If the last index in the slot hasn't been set before, then

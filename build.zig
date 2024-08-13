@@ -14,6 +14,7 @@ pub fn build(b: *Build) void {
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
+    const tmp_step = b.step("tmp", "tmp");
 
     // Dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
@@ -105,6 +106,24 @@ pub fn build(b: *Build) void {
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
     fuzz_exe_run.addArgs(b.args orelse &.{});
     fuzz_step.dependOn(&fuzz_exe_run.step);
+
+    // reader test
+    const tmp_exe = b.addExecutable(.{
+        .name = "tmp",
+        .root_source_file = b.path("src/tmp.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(tmp_exe);
+    tmp_exe.root_module.addImport("base58-zig", base58_module);
+    tmp_exe.root_module.addImport("zig-network", zig_network_module);
+    tmp_exe.root_module.addImport("httpz", httpz_mod);
+    tmp_exe.root_module.addImport("zstd", zstd_mod);
+    tmp_exe.root_module.addImport("rocksdb", rocksdb_mod);
+
+    const tmp_exe_run = b.addRunArtifact(tmp_exe);
+    tmp_exe_run.addArgs(b.args orelse &.{});
+    tmp_step.dependOn(&tmp_exe_run.step);
 
     // benchmarks
     const benchmark_exe = b.addExecutable(.{
