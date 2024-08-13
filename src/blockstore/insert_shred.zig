@@ -423,12 +423,9 @@ pub const ShredInserter = struct {
 
         const erasure_set = shred.fields.common.erasureSetId();
         // TODO: redundant get or put pattern
-        const merkle_root_meta_entry = try merkle_root_metas.getOrPut(erasure_set);
-        if (!merkle_root_meta_entry.found_existing) {
+        if (!merkle_root_metas.contains(erasure_set)) {
             if (try self.db.get(schema.merkle_root_meta, erasure_set)) |meta_| {
-                merkle_root_meta_entry.value_ptr.* = .{ .clean = meta_ };
-            } else {
-                std.debug.assert(merkle_root_metas.remove(erasure_set));
+                try merkle_root_metas.put(erasure_set, .{ .clean = meta_ });
             }
         }
 
@@ -534,8 +531,7 @@ pub const ShredInserter = struct {
             self.metrics.num_inserted.inc();
             const entry = try merkle_root_metas.getOrPut(erasure_set);
             if (!entry.found_existing) {
-                // TODO: agave code is the same: it does nothing to an existing item. is this correct?
-                entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(.{ .code = shred }) };
+                entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(shred) };
             }
             break :blk true;
         } else |_| false;
@@ -647,12 +643,9 @@ pub const ShredInserter = struct {
 
         const erasure_set = shred.fields.common.erasureSetId();
         // TODO: redundant get or put pattern
-        const merkle_root_meta_entry = try merkle_root_metas.getOrPut(erasure_set);
-        if (!merkle_root_meta_entry.found_existing) {
+        if (!merkle_root_metas.contains(erasure_set)) {
             if (try self.db.get(schema.merkle_root_meta, erasure_set)) |meta_| {
-                merkle_root_meta_entry.value_ptr.* = .{ .clean = meta_ };
-            } else {
-                std.debug.assert(merkle_root_metas.remove(erasure_set));
+                try merkle_root_metas.put(erasure_set, .{ .clean = meta_ });
             }
         }
 
@@ -718,8 +711,7 @@ pub const ShredInserter = struct {
         );
         const entry = try merkle_root_metas.getOrPut(erasure_set);
         if (!entry.found_existing) {
-            // TODO: agave code is the same: it does nothing to an existing item. is this correct?
-            entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(shred_union) };
+            entry.value_ptr.* = .{ .dirty = MerkleRootMeta.fromShred(shred) };
         }
         try just_inserted_shreds.put(shred.fields.id(), shred_union); // TODO check first?
         index_meta_working_set_entry.did_insert_occur = true;
@@ -882,12 +874,12 @@ pub const ShredInserter = struct {
                 // FIXME: leak - decide how to free shred
                 const maybe_shred = try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id);
                 const ending_shred = if (maybe_shred) |s| s else {
-                    self.logger.errf(
+                    self.logger.errf(&newlinesToSpaces(
                         \\Last received data shred {any} indicated by slot meta \
                         \\{any} is missing from blockstore. This should only happen in \
                         \\extreme cases where blockstore cleanup has caught up to the root. \
                         \\Skipping data shred insertion
-                    , .{ shred_id, slot_meta });
+                    ), .{ shred_id, slot_meta });
                     return false; // TODO: this is redundant
                 };
                 const dupe = meta.DuplicateSlotProof{
@@ -955,11 +947,11 @@ pub const ShredInserter = struct {
             return true;
         }
 
-        self.logger.warnf(
-            \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle \
-            \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting \
+        self.logger.warnf(&newlinesToSpaces(
+            \\Received conflicting merkle roots for slot: {}, erasure_set: {any} original merkle
+            \\root meta {any} vs conflicting merkle root {any} shred index {} type {any}. Reporting
             \\as duplicate
-        , .{
+        ), .{
             slot,
             shred.commonHeader().erasureSetId(),
             merkle_root_meta,
@@ -982,14 +974,12 @@ pub const ShredInserter = struct {
                     },
                 });
             } else {
-                self.logger.errf(
+                self.logger.errf(&newlinesToSpaces(
                     \\Shred {any} indiciated by merkle root meta {any} is 
                     \\missing from blockstore. This should only happen in extreme cases where 
                     \\blockstore cleanup has caught up to the root. Skipping the merkle root 
                     \\consistency check
-                ,
-                    .{ shred_id, merkle_root_meta },
-                );
+                ), .{ shred_id, merkle_root_meta });
                 return true;
             }
         }
@@ -1639,7 +1629,7 @@ fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?Sl
     return slot_meta.isFull() and ( //
         backup_slot_meta.* == null or
         slot_meta.consumed != (backup_slot_meta.* orelse unreachable).consumed);
-    // TODO unreachable
+    // TODO unreachable: explain or fix
 }
 
 /// Returns a boolean indicating whether a slot has received additional shreds
@@ -1765,7 +1755,8 @@ fn WorkingEntry(comptime T: type) type {
 
         fn asRef(self: *const @This()) *const T {
             return switch (self.*) {
-                inline .dirty, .clean => |t| &t,
+                .dirty => &self.dirty,
+                .clean => &self.clean,
             };
         }
     };
@@ -1904,6 +1895,14 @@ fn deinitMapRecursive(map: anytype) void {
     map.deinit();
 }
 
+fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
+    var ret: [fmt.len]u8 = .{' '} ** fmt.len;
+    for (fmt, 0..) |char, i| if (char != '\n') {
+        ret[i] = char;
+    };
+    return ret;
+}
+
 //////////
 // Tests
 
@@ -1950,21 +1949,22 @@ test "insertShreds single shred" {
     try std.testing.expectEqualSlices(u8, shred.payload(), stored_shred.?.data);
 }
 
-test "insertShreds 32 data shreds" {
+test "insertShreds 100 shreds from mainnet" {
+    const test_data = @import("../shred_collector/test_shreds.zig");
     var state = try openTestDb("insertShreds 32 shreds");
     defer state.deinit();
-    var defers = sig.utils.service_manager.DeferList.init(std.testing.allocator);
-    defer defers.deinit();
 
-    const test_shreds = @import("test_data_shreds.zig").test_shreds;
+    const test_shreds = test_data.mainnet_shreds;
     var shreds = std.ArrayList(Shred).init(std.testing.allocator);
     defer shreds.deinit();
+    defer for (shreds.items) |s| s.deinit();
+
     for (test_shreds) |payload| {
         const shred = try Shred.fromPayload(std.testing.allocator, payload);
-        try defers.deferCall(Shred.deinit, .{shred});
         try shreds.append(shred);
     }
-    _ = try state.inserter.insertShreds(shreds.items, &(.{false} ** 32), null, false, null);
+    _ = try state.inserter
+        .insertShreds(shreds.items, &(.{false} ** test_shreds.len), null, false, null);
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
