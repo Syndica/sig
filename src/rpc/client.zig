@@ -27,7 +27,7 @@ pub const Client = struct {
         value: Value,
 
         const Context = struct {
-            slot: Slot,
+            slot: u64,
             apiVersion: []const u8,
         };
 
@@ -68,7 +68,7 @@ pub const Client = struct {
         value: u64,
 
         const Context = struct {
-            slot: Slot,
+            slot: u64,
             apiVersion: []const u8,
         };
 
@@ -93,19 +93,22 @@ pub const Client = struct {
     }
 
     const Block = struct {
-        // TODO: Add missing fields and structs
         blockhash: []const u8,
         previousBlockhash: []const u8,
-        parentSlot: Slot,
+        parentSlot: u64,
         blockTime: ?u64 = null,
         blockHeight: ?u64 = null,
         transactions: ?[]const _Transaction = null,
         signatures: ?[]const _Signature = null,
         rewards: ?[]const _Rewards = null,
 
-        const _Transaction = struct {};
+        const _Transaction = struct {
+            // TODO: Implement
+        };
 
-        const _Signature = struct {};
+        const _Signature = struct {
+            // TODO: Implement
+        };
 
         const _Rewards = struct {
             pubkey: []const u8,
@@ -170,9 +173,9 @@ pub const Client = struct {
     // TODO: getClusterNodes()
 
     pub const EpochInfo = struct {
-        absoluteSlot: Slot,
+        absoluteSlot: u64,
         blockHeight: u64,
-        epoch: Epoch,
+        epoch: u64,
         slotIndex: u64,
         slotsInEpoch: u64,
         transactionCount: u64,
@@ -203,8 +206,67 @@ pub const Client = struct {
     // TODO: getInflationRate()
     // TODO: getInflationReward()
     // TODO: getLargeAccounts()
-    // TODO: getLatestBlockhash()
-    // TODO: getLeaderSchedule()
+
+    pub const LatestBlockhash = struct {
+        context: Context,
+        value: Value,
+
+        const Context = struct {
+            slot: u64,
+            apiVersion: []const u8,
+        };
+
+        const Value = struct {
+            blockhash: []const u8,
+            lastValidBlockHeight: u64,
+        };
+    };
+
+    const GetLatestBlockhashConfig = struct {
+        commitment: ?[]const u8 = null,
+        minContextSlot: ?Slot = null,
+    };
+
+    pub fn getLatestBlockhash(self: *Client, arena: *std.heap.ArenaAllocator, config: GetLatestBlockhashConfig) !LatestBlockhash {
+        var params_builder = ParamsBuilder.init(arena.allocator());
+        try params_builder.addConfig(config);
+        return try self.sendFetchRequest(arena.allocator(), LatestBlockhash, .{
+            .method = "getLatestBlockhash",
+            .params = try params_builder.build(),
+        });
+    }
+
+    // pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
+    pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
+
+    pub const GetLeaderScheduleConfig = struct {
+        identity: ?[]const u8 = null,
+        commitment: ?[]const u8 = null,
+    };
+
+    pub fn getLeaderSchedule(self: *Client, arena: *std.heap.ArenaAllocator, maybe_epoch: ?Epoch, config: GetLeaderScheduleConfig) !LeaderSchedule {
+        const allocator = arena.allocator();
+        var params_builder = ParamsBuilder.init(allocator);
+        try params_builder.addOptionalArgument("{d}", maybe_epoch);
+        try params_builder.addConfig(config);
+        const leader_schedule_json = try self.sendFetchRequest(allocator, std.json.Value, .{
+            .method = "getLeaderSchedule",
+            .params = try params_builder.build(),
+        });
+
+        var leader_schedule = LeaderSchedule.init(allocator);
+        var json_iter = leader_schedule_json.object.iterator();
+        while (json_iter.next()) |entry| {
+            var slots = try allocator.alloc(u64, entry.value_ptr.*.array.items.len);
+            for (entry.value_ptr.*.array.items, 0..) |slot, i| {
+                slots[i] = @intCast(slot.integer);
+            }
+            try leader_schedule.put(entry.key_ptr.*, slots);
+        }
+
+        return leader_schedule; // TODO: handle error
+    }
+
     // TODO: getMaxRetransmitSlot()
     // TODO: getMaxShredInsertSlot()
     // TODO: getMinimumBalanceForRentExemption()
@@ -419,7 +481,7 @@ test "rpc.Client.getBlock: returns block" {
         defer client.deinit();
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
-        _ = try client.getBlock(&arena, try client.getSlot(&arena), .{
+        _ = try client.getBlock(&arena, try client.getSlot(&arena) - 10, .{
             .transactionDetails = "none",
             .rewards = false,
         });
@@ -459,6 +521,46 @@ test "rpc.Client.getEpochInfo: returns epoch info" {
     }
 }
 
+// TODO: getEpochSchedule()
+// TODO: getFeeForMessage()
+// TODO: getFirstAvailableBlock()
+// TODO: getGenesisHash()
+// TODO: getHealth()
+// TODO: getHighestSnapshotSlot()
+// TODO: getIdentity()
+// TODO: getInflationGovernor()
+// TODO: getInflationRate()
+// TODO: getInflationReward()
+// TODO: getLargeAccounts()
+
+test "rpc.Client.getLatestBlockhash: returns latest blockhash" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet);
+    defer client.deinit();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    _ = try client.getLatestBlockhash(&arena, .{});
+}
+
+test "rpc.Client.getLeaderSchedule: returns leader schedule" {
+    const allocator = std.testing.allocator;
+    var client = Client.init(allocator, .Testnet);
+    defer client.deinit();
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    _ = try client.getLeaderSchedule(&arena, null, .{});
+}
+
+// TODO: getMaxRetransmitSlot()
+// TODO: getMaxShredInsertSlot()
+// TODO: getMinimumBalanceForRentExemption()
+// TODO: getMultipleAccounts()
+// TODO: getProgramAccounts()
+// TODO: getRecentPerformanceSamples()
+// TODO: getRecentPrioritizationFees()
+// TODO: getSignatureStatuses()
+// TODO: getSignaturesForAddress()
+
 test "rpc.Client.getSlot: returns slot" {
     {
         const allocator = std.testing.allocator;
@@ -469,3 +571,23 @@ test "rpc.Client.getSlot: returns slot" {
         _ = try client.getSlot(&arena);
     }
 }
+
+// TODO: getSlotLeader()
+// TODO: getSlotLeaders()
+// TODO: getStakeActivation()
+// TODO: getStakeMinimumDelegation()
+// TODO: getSupply()
+// TODO: getTokenAccountBalance()
+// TODO: getTokenAccountsByDelegate()
+// TODO: getTockenAccountsByOwner()
+// TODO: getTokenLargestAccounts()
+// TODO: getTokenSupply()
+// TODO: getTransaction()
+// TODO: getTransactionCount()
+// TODO: getVersion()
+// TODO: getVoteAccounts()
+// TODO: isBlockhashValid()
+// TODO: minimumLedgerSlot()
+// TODO: requestAirdrop()
+// TODO: sendTransaction()
+// TODO: simulateTransaction()
