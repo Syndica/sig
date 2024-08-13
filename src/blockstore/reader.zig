@@ -1468,17 +1468,19 @@ const Blockstore = sig.blockstore.BlockstoreDB;
 const ShredInserter = sig.blockstore.ShredInserter;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 
-const TEST_BLOCKSTORE_PATH = "test_data/blockstore";
+const openTestDb = sig.blockstore.insert_shred.openTestDb;
 
 test "findMissingDataIndexes" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try BlockstoreDB.open(allocator, logger, TEST_BLOCKSTORE_PATH);
-    defer db.deinit();
+    var state = try openTestDb("findMissingDataIndexes");
+    defer state.deinit();
+    var db = state.db;
 
     const reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    _ = reader;
 
     const size = sig.shred_collector.shred.DataShred.constants.payload_size;
     const shred_payload = try allocator.alloc(u8, size);
@@ -1507,7 +1509,6 @@ test "findMissingDataIndexes" {
     );
     try db.commit(write_batch);
 
-    _ = reader;
     // // TODO: this is broken
     // var indexes = try reader.findMissingDataIndexes(
     //     10,
@@ -1526,8 +1527,9 @@ test "getCodeShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try BlockstoreDB.open(allocator, logger, TEST_BLOCKSTORE_PATH);
-    defer db.deinit();
+    var state = try openTestDb("getCodeShred");
+    defer state.deinit();
+    var db = state.db;
 
     var reader = try BlockstoreReader.init(allocator, logger, db, registry);
 
@@ -1595,8 +1597,9 @@ test "getDataShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var db = try BlockstoreDB.open(allocator, logger, TEST_BLOCKSTORE_PATH);
-    defer db.deinit();
+    var state = try openTestDb("getDataShred");
+    defer state.deinit();
+    var db = state.db;
 
     var reader = try BlockstoreReader.init(allocator, logger, db, registry);
 

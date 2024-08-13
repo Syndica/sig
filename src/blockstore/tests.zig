@@ -21,7 +21,8 @@ test "put/get data consistency for merkle root" {
     };
     const root = sig.core.Hash.random(random);
     var db = try BlockstoreDB.open(std.testing.allocator, logger, path);
-    defer db.deinit();
+    defer db.deinit(true);
+
     try db.put(
         schema.merkle_root_meta,
         id,

@@ -19,10 +19,13 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         db: rocks.DB,
         logger: Logger,
         cf_handles: []const rocks.ColumnFamilyHandle,
+        path: []const u8,
 
         const Self = @This();
 
         pub fn open(allocator: Allocator, logger: Logger, path: []const u8) Error!Self {
+            const owned_path = try allocator.dupe(u8, path);
+
             // allocate cf descriptions
             const column_family_descriptions = try allocator
                 .alloc(rocks.ColumnFamilyDescription, column_families.len + 1);
@@ -63,12 +66,19 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 .db = database,
                 .logger = logger,
                 .cf_handles = cf_handles,
+                .path = owned_path,
             };
         }
 
-        pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self, delete_disk: bool) void {
             self.allocator.free(self.cf_handles);
             self.db.deinit();
+            if (delete_disk) {
+                std.fs.cwd().deleteTree(self.path) catch |e| {
+                    std.debug.print("failed to delete rocksDB path: {s}", .{@errorName(e)});
+                };
+            }
+            self.allocator.free(self.path);
         }
 
         pub fn put(

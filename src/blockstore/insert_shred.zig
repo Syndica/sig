@@ -1911,12 +1911,13 @@ fn assertOk(result: anytype) void {
 
 const test_dir = comptimePrint("test_data/blockstore/insert_shred", .{});
 
-fn openTestDb(comptime test_name: []const u8) !struct {
+pub fn openTestDb(comptime test_name: []const u8) !struct {
     db: BlockstoreDB,
     inserter: ShredInserter,
     registry: sig.prometheus.Registry(.{}),
-    fn deinit(self: *@This()) void {
-        self.db.deinit();
+
+    pub fn deinit(self: *@This()) void {
+        self.db.deinit(true);
         self.registry.deinit();
     }
 } {

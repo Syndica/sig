@@ -110,7 +110,7 @@ pub const BlockstoreWriter = struct {
 
     /// agave: set_roots
     pub fn setRoots(self: *Self, rooted_slots: []const Slot) !void {
-        var write_batch = try self.db.writeBatch();
+        var write_batch = try self.db.initWriteBatch();
         var max_new_rooted_slot: Slot = 0;
         for (rooted_slots) |slot| {
             max_new_rooted_slot = @max(max_new_rooted_slot, slot);
@@ -182,13 +182,17 @@ pub const BlockstoreWriter = struct {
             break :blk slot;
         } else self.max_root.load(.monotonic);
         const end_slot = maybe_end_slot orelse lowest_cleanup_slot.get().*;
+        // NOTE: this travels backwards from the start_root to the end_slot
         var ancestor_iterator = try AncestorIterator.initExclusive(&self.db, start_root);
 
         var find_missing_roots_timer = try Timer.start();
         var roots_to_fix = ArrayList(Slot).init(self.allocator);
+        defer roots_to_fix.deinit();
+
         while (try ancestor_iterator.next()) |slot| {
             if (slot < end_slot) break;
-            if (!try self.isRoot(slot)) {
+            const is_rooted = try self.isRoot(slot);
+            if (!is_rooted) {
                 try roots_to_fix.append(slot);
             }
             if (exit.load(.monotonic)) {
@@ -215,12 +219,13 @@ pub const BlockstoreWriter = struct {
             self.logger.debugf("No missing roots found in range {} to {}", .{ start_root, end_slot });
         }
         const fix_roots_us = fix_roots_timer.read().asMicros();
+        const num_roots_fixed = roots_to_fix.items.len;
 
         self.scan_and_fix_roots_metrics.fix_roots_us.observe(@floatFromInt(fix_roots_us));
         self.scan_and_fix_roots_metrics.find_missing_roots_us.observe(@floatFromInt(find_missing_roots_us));
         self.scan_and_fix_roots_metrics.num_roots_to_fix.observe(@floatFromInt(roots_to_fix.items.len));
 
-        return roots_to_fix.items.len;
+        return num_roots_fixed;
     }
 
     /// Mark a root `slot` as connected, traverse `slot`'s children and update
@@ -297,3 +302,72 @@ const ScanAndFixRootsMetrics = struct {
         break :blk bs;
     };
 };
+
+const openTestDb = sig.blockstore.insert_shred.openTestDb;
+
+test "setRoots" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("setRoots");
+    defer state.deinit();
+    const db = state.db;
+
+    var writer = BlockstoreWriter{
+        .allocator = allocator,
+        .db = db,
+        .logger = logger,
+        .lowest_cleanup_slot = RwMux(Slot).init(0),
+        .max_root = std.atomic.Value(Slot).init(0),
+        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+    };
+
+    const roots: [5]Slot = .{ 1, 2, 3, 4, 5 };
+    try writer.setRoots(&roots);
+
+    for (roots) |slot| {
+        const is_root = try writer.isRoot(slot);
+        try std.testing.expect(is_root);
+    }
+}
+
+test "scanAndFixRoots" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("scanAndFixRoots");
+    defer state.deinit();
+    var db = state.db;
+
+    var writer = BlockstoreWriter{
+        .allocator = allocator,
+        .db = db,
+        .logger = logger,
+        .lowest_cleanup_slot = RwMux(Slot).init(0),
+        .max_root = std.atomic.Value(Slot).init(0),
+        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+    };
+
+    // slot = 2 is not a root, but should be!
+    const roots: [2]Slot = .{ 1, 3 };
+    try writer.setRoots(&roots);
+
+    const slot_meta_1 = SlotMeta.init(allocator, 1, null);
+    const slot_meta_2 = SlotMeta.init(allocator, 2, 1);
+    const slot_meta_3 = SlotMeta.init(allocator, 3, 2);
+
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
+    try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
+    try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
+    try db.commit(write_batch);
+
+    const exit = std.atomic.Value(bool).init(false);
+
+    try std.testing.expectEqual(false, try writer.isRoot(2));
+
+    const num_fixed = try writer.scanAndFixRoots(3, 1, exit);
+    try std.testing.expectEqual(1, num_fixed);
+}
