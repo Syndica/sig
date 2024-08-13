@@ -110,8 +110,10 @@ pub const BlockstoreReader = struct {
             return true;
         }
 
-        const start_slot_meta = try self.db.get(schema.slot_meta, starting_slot) orelse return false;
-        var next_slots: ArrayList(Slot) = start_slot_meta.next_slots;
+        var start_slot_meta = try self.db.get(schema.slot_meta, starting_slot) orelse return false;
+        defer start_slot_meta.deinit();
+        // need a reference so the start_slot_meta.deinit works correctly
+        var next_slots: *ArrayList(Slot) = &start_slot_meta.next_slots;
 
         // TODO: revisit this with more extensive testing. how does agave work fine with
         //       supposed bugs? it may be worth opening a PR in agave with the presumed fix
@@ -121,7 +123,10 @@ pub const BlockstoreReader = struct {
         var last_slot = starting_slot;
         while (i < next_slots.items.len) : (i += 1) {
             const slot = next_slots.items[i];
-            if (try self.db.get(schema.slot_meta, slot)) |slot_meta| {
+            if (try self.db.get(schema.slot_meta, slot)) |_slot_meta| {
+                var slot_meta = _slot_meta;
+                defer slot_meta.deinit();
+
                 if (slot_meta.isFull()) {
                     std.debug.assert(last_slot == slot - 1);
                     // this append is the same as agave, but is it redundant?
@@ -1216,8 +1221,11 @@ pub const BlockstoreReader = struct {
         num: usize,
     ) !ArrayList(OptimisticSlot) {
         var optimistic_slots = std.ArrayList(OptimisticSlot).init(self.allocator);
+        errdefer optimistic_slots.deinit();
+
         var iter = try self.db.iterator(schema.optimistic_slots, .reverse, null);
         defer iter.deinit();
+
         var count: usize = 0;
         while (try iter.next()) |entry| : (count += 1) {
             if (count >= num) break;
@@ -1469,6 +1477,135 @@ const ShredInserter = sig.blockstore.ShredInserter;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 
 const openTestDb = sig.blockstore.insert_shred.openTestDb;
+
+test "slotRangeConnected" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("slotRangeConnected");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    var write_batch = try db.initWriteBatch();
+    const roots: [3]Slot = .{ 1, 2, 3 };
+
+    // 1 -> 2 -> 3
+    var parent_slot: ?Slot = null;
+    for (roots, 0..) |slot, i| {
+        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+        defer slot_meta.deinit();
+        // ensure isFull() is true
+        slot_meta.last_index = 1;
+        slot_meta.consumed = 3;
+        // update next slots
+        if (i + 1 < roots.len) {
+            try slot_meta.next_slots.append(roots[i + 1]);
+        }
+        try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+        // connect the chain
+        parent_slot = slot;
+    }
+    try db.commit(write_batch);
+
+    const is_connected = try reader.slotRangeConnected(1, 3);
+    try std.testing.expectEqual(true, is_connected);
+
+    // insert a non-full last_slot
+    var slot_meta = SlotMeta.init(allocator, 4, parent_slot);
+    defer slot_meta.deinit();
+    // ensure isFull() is FALSE
+    slot_meta.last_index = 1;
+    try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+
+    // this should still pass
+    try std.testing.expectEqual(true, try reader.slotRangeConnected(1, 3));
+    // this should not pass
+    try std.testing.expectEqual(false, try reader.slotRangeConnected(1, 4));
+    try std.testing.expectEqual(false, try reader.slotRangeConnected(1, 5));
+}
+
+test "lowestSlot" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("lowestSlot");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    const shred_slot = 10;
+    const shred_index = 10;
+
+    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
+    const shred_payload = try allocator.alloc(u8, size);
+    defer allocator.free(shred_payload);
+
+    var shred = Shred{ .data = DataShred.default(allocator) };
+    shred.data.fields.common.slot = shred_slot;
+    shred.data.fields.common.index = shred_index;
+
+    // insert a shred
+    var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+    slot_meta.last_index = 21;
+    slot_meta.received = 1;
+
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(
+        schema.slot_meta,
+        shred_slot,
+        slot_meta,
+    );
+    try db.commit(write_batch);
+
+    const lowest_slot = try reader.lowestSlot();
+    try std.testing.expectEqual(slot_meta.slot, lowest_slot);
+}
+
+test "isShredDuplicate" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("isShredDuplicate");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    const shred_slot = 10;
+    const shred_index = 10;
+
+    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
+    const shred_payload = try allocator.alloc(u8, size);
+    defer allocator.free(shred_payload);
+
+    var shred = Shred{ .data = DataShred.default(allocator) };
+    shred.data.fields.common.slot = shred_slot;
+    shred.data.fields.common.index = shred_index;
+
+    // no duplicate
+    try std.testing.expectEqual(null, try reader.isShredDuplicate(shred));
+
+    // insert a shred
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(
+        schema.data_shred,
+        .{ shred_slot, shred_index },
+        shred_payload,
+    );
+    try db.commit(write_batch);
+
+    // should now be a duplicate
+    const other_payload = (try reader.isShredDuplicate(shred)).?;
+    defer other_payload.deinit();
+
+    try std.testing.expectEqualSlices(u8, shred_payload, other_payload.items);
+}
 
 test "findMissingDataIndexes" {
     const allocator = std.testing.allocator;
