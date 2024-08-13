@@ -59,6 +59,7 @@ pub const RecycleFBA = struct {
             }
         }
 
+        // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be O(1)
         // otherwise, allocate a new one
         const buf = self.alloc_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
             // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
