@@ -153,6 +153,9 @@ pub const BlockstoreWriter = struct {
     /// the ancestor of a root is also inherently a root. Returns the
     /// number of slots that were actually updated.
     ///
+    /// NOTE: with correct usage, start_root should be greater than end_slot. since
+    /// we iterate from start_root to end_slot using the `parent_slot` field.
+    ///
     /// Arguments:
     ///  - `start_root`: The root to start scan from, or the highest root in
     ///    the blockstore if this value is `None`. This slot must be a root.
@@ -182,7 +185,7 @@ pub const BlockstoreWriter = struct {
             break :blk slot;
         } else self.max_root.load(.monotonic);
         const end_slot = maybe_end_slot orelse lowest_cleanup_slot.get().*;
-        // NOTE: this travels backwards from the start_root to the end_slot
+
         var ancestor_iterator = try AncestorIterator.initExclusive(&self.db, start_root);
 
         var find_missing_roots_timer = try Timer.start();
@@ -191,8 +194,7 @@ pub const BlockstoreWriter = struct {
 
         while (try ancestor_iterator.next()) |slot| {
             if (slot < end_slot) break;
-            const is_rooted = try self.isRoot(slot);
-            if (!is_rooted) {
+            if (!try self.isRoot(slot)) {
                 try roots_to_fix.append(slot);
             }
             if (exit.load(.monotonic)) {
@@ -239,37 +241,43 @@ pub const BlockstoreWriter = struct {
     /// have their slots considered connected.
     /// agave: set_and_chain_connected_on_root_and_next_slots
     pub fn setAndChainConnectedOnRootAndNextSlots(self: *Self, root: Slot) !void {
-        var root_meta: SlotMeta = try self.db.get(schema.slot_meta, root) orelse
+        var root_slot_meta: SlotMeta = try self.db.get(schema.slot_meta, root) orelse
             SlotMeta.init(self.allocator, root, null);
+        defer root_slot_meta.deinit();
+
         // If the slot was already connected, there is nothing to do as this slot's
         // children are also assumed to be appropriately connected
-        if (root_meta.isConnected()) {
+        if (root_slot_meta.isConnected()) {
             return;
         }
         self.logger.infof("Marking slot {} and any full children slots as connected", .{root});
-        var write_batch = try self.db.writeBatch();
+        var write_batch = try self.db.initWriteBatch();
 
         // Mark both connected bits on the root slot so that the flags for this
         // slot match the flags of slots that become connected the typical way.
-        _ = root_meta.setParentConnected();
-        root_meta.setConnected();
-        try write_batch.put(schema.slot_meta, root_meta.slot, root_meta);
+        _ = root_slot_meta.setParentConnected();
+        root_slot_meta.setConnected();
+        try write_batch.put(schema.slot_meta, root_slot_meta.slot, root_slot_meta);
 
         // var next_slots = VecDeque::from(root_meta.next_slots);
         var next_slots = try ArrayList(Slot)
-            .initCapacity(self.allocator, root_meta.next_slots.items.len);
-        next_slots.appendSliceAssumeCapacity(root_meta.next_slots.items);
+            .initCapacity(self.allocator, root_slot_meta.next_slots.items.len);
+        defer next_slots.deinit();
+
+        next_slots.appendSliceAssumeCapacity(root_slot_meta.next_slots.items);
         var i: usize = 0;
         while (i < next_slots.items.len) : (i += 1) {
             const slot = next_slots.items[i];
-            var meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
+            var slot_meta: SlotMeta = try self.db.get(schema.slot_meta, slot) orelse {
                 self.logger.errf("Slot {} is a child but has no SlotMeta in blockstore", .{slot});
                 return error.CorruptedBlockstore;
             };
-            if (meta.setParentConnected()) {
-                try next_slots.appendSlice(meta.next_slots.items);
+            defer slot_meta.deinit();
+
+            if (slot_meta.setParentConnected()) {
+                try next_slots.appendSlice(slot_meta.next_slots.items);
             }
-            try write_batch.put(schema.slot_meta, meta.slot, meta);
+            try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
         }
 
         try self.db.commit(write_batch);
@@ -370,4 +378,137 @@ test "scanAndFixRoots" {
 
     const num_fixed = try writer.scanAndFixRoots(3, 1, exit);
     try std.testing.expectEqual(1, num_fixed);
+}
+
+test "setAndChainConnectedOnRootAndNextSlots" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("setAndChainConnectedOnRootAndNextSlots");
+    defer state.deinit();
+    var db = state.db;
+
+    var writer = BlockstoreWriter{
+        .allocator = allocator,
+        .db = db,
+        .logger = logger,
+        .lowest_cleanup_slot = RwMux(Slot).init(0),
+        .max_root = std.atomic.Value(Slot).init(0),
+        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+    };
+
+    // 1 is a root
+    const roots: [1]Slot = .{1};
+    try writer.setRoots(&roots);
+    const slot_meta_1 = SlotMeta.init(allocator, 1, null);
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
+    try db.commit(write_batch);
+
+    try std.testing.expectEqual(false, slot_meta_1.isConnected());
+
+    try writer.setAndChainConnectedOnRootAndNextSlots(1);
+
+    // should be connected
+    const db_slot_meta_1 = (try db.get(schema.slot_meta, 1)) orelse return error.MissingSlotMeta;
+    try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
+
+    // write some roots past 1
+    const other_roots: [3]Slot = .{ 2, 3, 4 };
+    var parent_slot: ?Slot = 1;
+    var write_batch2 = try db.initWriteBatch();
+    try writer.setRoots(&other_roots);
+
+    for (other_roots, 0..) |slot, i| {
+        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+        defer slot_meta.deinit();
+
+        // ensure isFull() is true
+        slot_meta.last_index = 1;
+        slot_meta.consumed = 3;
+        // update next slots
+        if (i + 1 < other_roots.len) {
+            try slot_meta.next_slots.append(other_roots[i + 1]);
+        }
+
+        try write_batch2.put(schema.slot_meta, slot_meta.slot, slot_meta);
+        // connect the chain
+        parent_slot = slot;
+    }
+    try db.commit(write_batch2);
+
+    try writer.setAndChainConnectedOnRootAndNextSlots(other_roots[0]);
+
+    for (other_roots) |slot| {
+        var db_slot_meta = (try db.get(schema.slot_meta, slot)) orelse return error.MissingSlotMeta;
+        defer db_slot_meta.deinit();
+        try std.testing.expectEqual(true, db_slot_meta.isConnected());
+    }
+}
+
+test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try openTestDb("setAndChainConnectedOnRootAndNextSlots");
+    defer state.deinit();
+    var db = state.db;
+
+    var writer = BlockstoreWriter{
+        .allocator = allocator,
+        .db = db,
+        .logger = logger,
+        .lowest_cleanup_slot = RwMux(Slot).init(0),
+        .max_root = std.atomic.Value(Slot).init(0),
+        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+    };
+
+    // 1 is a root and full
+
+    var write_batch = try db.initWriteBatch();
+    const roots: [3]Slot = .{ 1, 2, 3 };
+    try writer.setRoots(&roots);
+
+    var slot_meta_1 = SlotMeta.init(allocator, 1, null);
+    defer slot_meta_1.deinit();
+    slot_meta_1.last_index = 1;
+    slot_meta_1.consumed = 3;
+    try slot_meta_1.next_slots.append(2);
+    try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
+
+    // 2 is not full
+    var slot_meta_2 = SlotMeta.init(allocator, 2, 1);
+    defer slot_meta_2.deinit();
+    slot_meta_2.last_index = 1;
+    slot_meta_2.consumed = 0; // ! NOT FULL
+    try slot_meta_2.next_slots.append(3);
+    try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
+
+    // 3 is full
+    var slot_meta_3 = SlotMeta.init(allocator, 3, 2);
+    defer slot_meta_3.deinit();
+    slot_meta_3.last_index = 1;
+    slot_meta_3.consumed = 3;
+    try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
+
+    try db.commit(write_batch);
+
+    try writer.setAndChainConnectedOnRootAndNextSlots(1);
+
+    // should be connected
+    var db_slot_meta_1 = (try db.get(schema.slot_meta, 1)) orelse return error.MissingSlotMeta;
+    defer db_slot_meta_1.deinit();
+    try std.testing.expectEqual(true, db_slot_meta_1.isConnected());
+
+    var db_slot_meta_2: SlotMeta = (try db.get(schema.slot_meta, 2)) orelse return error.MissingSlotMeta;
+    defer db_slot_meta_2.deinit();
+    try std.testing.expectEqual(true, db_slot_meta_2.isParentConnected());
+    try std.testing.expectEqual(false, db_slot_meta_2.isConnected());
+
+    var db_slot_meta_3: SlotMeta = (try db.get(schema.slot_meta, 3)) orelse return error.MissingSlotMeta;
+    defer db_slot_meta_3.deinit();
+    try std.testing.expectEqual(false, db_slot_meta_3.isParentConnected());
+    try std.testing.expectEqual(false, db_slot_meta_3.isConnected());
 }

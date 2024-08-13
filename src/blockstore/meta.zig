@@ -105,7 +105,7 @@ pub const SlotMeta = struct {
         return self.parent_slot == null;
     }
 
-    pub fn isConnected(self: *Self) bool {
+    pub fn isConnected(self: *const Self) bool {
         return self.connected_flags.isSet(.connected);
     }
 
