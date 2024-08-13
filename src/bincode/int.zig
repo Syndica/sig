@@ -31,6 +31,7 @@ pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig
     };
 }
 
+// TODO: make this the default behaviour for bincode []u8 slices
 pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, _: bincode.Params) !void {
@@ -62,6 +63,7 @@ pub fn U8SliceConfig() bincode.FieldConfig([]u8) {
     };
 }
 
+// TODO: make this the default behaviour for bincode [size]u8 arrays
 pub fn U8ArrayConfig(comptime size: u64) bincode.FieldConfig([size]u8) {
     const S = struct {
         pub fn serialize(writer: anytype, data: anytype, params: bincode.Params) !void {
