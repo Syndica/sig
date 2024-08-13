@@ -13,19 +13,19 @@ modify `/etc/hosts` to include the following line:
 
 ## Running 
 
-mac: `docker compose -f compose-mac.yaml up -d`
-linux: `docker compose -f compose-linux.yaml up -d`
+macOS: `docker compose -f compose-mac.yaml up -d`
+Linux: `docker compose -f compose-linux.yaml up -d`
 
-- grafana will be accessable on `localhost:3000`
+- Grafana will be accessable on `localhost:3000`
   - note: `username: admin password: grafana`
-- prometheus will be accessable on `localhost:9090`
+- Prometheus will be accessable on `localhost:9090`
 - sig metrics will be published to localhost:12345 (if you change this on the sig cli, you will 
 need to also modify the prometheus `target` to point to the different port).
 
 ## Shutting down
 
-mac: `docker compose -f compose-mac.yaml down`
-linux: `docker compose -f compose-linux.yaml down`
+macOS: `docker compose -f compose-mac.yaml down`
+Linux: `docker compose -f compose-linux.yaml down`
 
 ## Compose sample
 ### Prometheus & Grafana
