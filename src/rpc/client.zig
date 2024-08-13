@@ -388,13 +388,12 @@ pub const Client = struct {
     }
 };
 
-const CLIENT_TESTING_ALLOCATOR = std.testing.allocator;
-
 test "rpc.Client.getAccountInfo: returns account info" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const pubkey = try Pubkey.fromBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
         _ = try client.getAccountInfo(&arena, pubkey, .{});
@@ -403,9 +402,10 @@ test "rpc.Client.getAccountInfo: returns account info" {
 
 test "rpc.Client.getBalance: returns balance" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const pubkey = try Pubkey.fromBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
         _ = try client.getBalance(&arena, pubkey, .{});
@@ -414,9 +414,10 @@ test "rpc.Client.getBalance: returns balance" {
 
 test "rpc.Client.getBlock: returns block" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         _ = try client.getBlock(&arena, try client.getSlot(&arena), .{
             .transactionDetails = "none",
@@ -427,9 +428,10 @@ test "rpc.Client.getBlock: returns block" {
 
 test "rpc.Client.getBlockHeight: returns block height" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         _ = try client.getBlockHeight(&arena, .{});
     }
@@ -437,9 +439,10 @@ test "rpc.Client.getBlockHeight: returns block height" {
 
 test "rpc.Client.getBlockCommitment: returns block commitment" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         _ = try client.getBlockCommitment(&arena, try client.getSlot(&arena));
     }
@@ -447,9 +450,10 @@ test "rpc.Client.getBlockCommitment: returns block commitment" {
 
 test "rpc.Client.getEpochInfo: returns epoch info" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         _ = try client.getEpochInfo(&arena, null, .{});
     }
@@ -457,9 +461,10 @@ test "rpc.Client.getEpochInfo: returns epoch info" {
 
 test "rpc.Client.getSlot: returns slot" {
     {
-        var client = Client.init(CLIENT_TESTING_ALLOCATOR, .Testnet);
+        const allocator = std.testing.allocator;
+        var client = Client.init(allocator, .Testnet);
         defer client.deinit();
-        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         _ = try client.getSlot(&arena);
     }
