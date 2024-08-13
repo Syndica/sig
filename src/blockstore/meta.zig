@@ -342,17 +342,21 @@ pub const MerkleRootMeta = struct {
     /// The shred type of the first received shred
     first_received_shred_type: sig.shred_collector.shred.ShredType,
 
-    pub fn fromShred(shred: Shred) MerkleRootMeta {
-        return .{
+    pub fn fromShred(shred: anytype) MerkleRootMeta {
+        comptime std.debug.assert(
+            @TypeOf(shred) == sig.shred_collector.shred.DataShred or
+                @TypeOf(shred) == sig.shred_collector.shred.CodingShred,
+        );
+        return MerkleRootMeta{
             // An error here after the shred has already sigverified
             // can only indicate that the leader is sending
             // legacy or malformed shreds. We should still store
             // `None` for those cases in blockstore, as a later
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
-            .merkle_root = shred.merkleRoot() catch null,
-            .first_received_shred_index = shred.commonHeader().index,
-            .first_received_shred_type = shred,
+            .merkle_root = shred.fields.merkleRoot() catch null,
+            .first_received_shred_index = shred.fields.common.index,
+            .first_received_shred_type = shred.fields.common.shred_variant.shred_type,
         };
     }
 };

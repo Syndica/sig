@@ -682,9 +682,9 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
     return checkedSub(
         constants.payload_size,
         constants.headers_size +
-            if (variant.chained) SIZE_OF_MERKLE_ROOT else 0 +
+            (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
             variant.proof_size * merkle_proof_entry_size +
-            if (variant.resigned) SIGNATURE_LENGTH else 0,
+            (if (variant.resigned) SIGNATURE_LENGTH else 0),
     ) catch error.InvalidProofSize;
 }
 
@@ -1160,3 +1160,21 @@ pub const test_data_shred = [_]u8{
     247, 250, 214, 101, 190, 52,  28,  152, 85,  9,   49,  168, 162, 199, 128, 242, 217, 219,
     71,  219, 72,  191, 107, 210, 46,  255, 206, 122, 234, 142, 229, 214, 240, 186,
 };
+
+test "mainnet shreds look like agave" {
+    const test_data = @import("test_shreds.zig");
+    const test_shreds = test_data.mainnet_shreds;
+
+    for (0..test_shreds.len) |i| {
+        const payload = test_shreds[i];
+        const shred = try Shred.fromPayload(std.testing.allocator, payload);
+        defer shred.deinit();
+        const actual_fields = test_data.ParsedFields{
+            .slot = shred.commonHeader().slot,
+            .index = shred.commonHeader().index,
+            .fec_set_index = shred.commonHeader().fec_set_index,
+            .merkle_root = (shred.merkleRoot() catch unreachable).data,
+        };
+        try std.testing.expectEqual(test_data.expected_data[i], actual_fields);
+    }
+}
