@@ -1,1 +1,3 @@
-pub const Client = @import("client.zig").Client;
+const client = @import("client.zig");
+
+pub const Client = client.Client;
