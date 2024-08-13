@@ -95,16 +95,18 @@ pub const RecycleFBA = struct {
         new_size: usize,
         return_address: usize,
     ) bool {
-        _ = log2_align;
-        _ = return_address;
-
         const self: *Self = @ptrCast(@alignCast(ctx));
         for (self.records.items) |*item| {
             if (item.buf == buf.ptr) {
                 if (item.len >= new_size) {
                     return true;
                 } else {
-                    return false;
+                    return self.alloc_allocator.allocator().rawResize(
+                        buf,
+                        log2_align,
+                        new_size,
+                        return_address,
+                    );
                 }
             }
         }
