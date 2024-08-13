@@ -819,52 +819,12 @@ pub const ShredInserter = struct {
         const is_last_in_slot = shred.isLastInSlot();
         assertOk(shred.sanitize());
 
-        // Check that we do not receive shred_index >= than the last_index
-        // for the slot
-        if (slot_meta.last_index) |last_index| if (shred_index_u64 > last_index) {
-            if (!try self.hasDuplicateShredsInSlot(slot)) {
-                const shred_id = ShredId{
-                    .slot = slot,
-                    .index = shred_index_u32,
-                    .shred_type = .data,
-                };
-                // FIXME: leak - decide how to free shred
-                const maybe_shred = try self.getShredFromJustInsertedOrDb(just_inserted_shreds, shred_id);
-                const ending_shred = if (maybe_shred) |s| s else {
-                    self.logger.errf(
-                        \\Last index data shred {any} indiciated by slot meta {any}
-                        \\is missing from blockstore. This should only happen in extreme cases
-                        \\where blockstore cleanup has caught up to the root. Skipping data shred
-                        \\insertion
-                    , .{ shred_id, slot_meta });
-                    return false; // TODO: this is redundant
-                };
-                const dupe = meta.DuplicateSlotProof{
-                    .shred1 = ending_shred,
-                    .shred2 = shred.fields.payload,
-                };
-                self.db.put(schema.duplicate_slots, slot, dupe) catch |e| {
-                    // TODO: only log a database error?
-                    self.logger.errf("failed to store duplicate slot: {}", .{e});
-                };
-                // FIXME data ownership
-                try duplicate_shreds.append(.{ .LastIndexConflict = .{
-                    .original = .{ .data = shred },
-                    .conflict = ending_shred,
-                } });
-            }
-
-            const leader_pubkey = slotLeader(leader_schedule, slot);
-            self.logger.errf(
-                \\Leader {any}, slot {}: received index {} >= 
-                \\slot.last_index {any}, shred_source: {any}
-            , .{ leader_pubkey, slot, shred_index_u32, last_index, shred_source });
-            return false;
-        };
-
-        // Check that we do not receive a shred with "last_index" true, but shred_index
-        // less than our current received
-        if (is_last_in_slot and shred_index_u64 < slot_meta.received) {
+        // Check that we do not receive a shred with either:
+        // - shred_index >= than the last_index for the slot
+        // - "last_index" true, but shred_index less than our current received
+        if (slot_meta.last_index != null and shred_index_u64 > slot_meta.last_index.? or
+            is_last_in_slot and shred_index_u64 < slot_meta.received)
+        {
             if (!try self.hasDuplicateShredsInSlot(slot)) {
                 const shred_id = ShredId{
                     .slot = slot,
