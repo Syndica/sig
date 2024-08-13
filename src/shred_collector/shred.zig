@@ -348,6 +348,22 @@ pub fn GenericShred(
             self.allocator.free(self.payload);
         }
 
+        pub fn writePayload(self: *Self, data: []const u8) !void {
+            if (self.payload.len < constants.payload_size) {
+                return error.InvalidPayloadSize;
+            }
+            @memset(self.payload, 0);
+
+            var buf = std.io.fixedBufferStream(self.payload[0..constants.payload_size]);
+            const writer = buf.writer();
+
+            try bincode.write(writer, self.common, .{});
+            try bincode.write(writer, self.custom, .{});
+
+            const offset = writer.context.pos;
+            @memcpy(self.payload[offset .. offset + data.len], data);
+        }
+
         pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
             // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is 1207 bytes
             if (payload.len < constants.payload_size) {

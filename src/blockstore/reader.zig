@@ -1470,6 +1470,57 @@ const CodingShred = sig.shred_collector.shred.CodingShred;
 
 const TEST_BLOCKSTORE_PATH = "test_data/blockstore";
 
+test "findMissingDataIndexes" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var db = try BlockstoreDB.open(allocator, logger, TEST_BLOCKSTORE_PATH);
+    defer db.deinit();
+
+    const reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
+    const shred_payload = try allocator.alloc(u8, size);
+    defer allocator.free(shred_payload);
+
+    const shred_slot = 10;
+    const shred_index = 10;
+
+    var shred = Shred{ .data = DataShred.default(allocator) };
+    shred.data.fields.common.slot = shred_slot;
+    shred.data.fields.common.index = shred_index;
+
+    var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+    slot_meta.last_index = 21;
+
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(
+        schema.data_shred,
+        .{ shred_slot, shred_index },
+        shred_payload,
+    );
+    try write_batch.put(
+        schema.slot_meta,
+        shred_slot,
+        slot_meta,
+    );
+    try db.commit(write_batch);
+
+    _ = reader;
+    // // TODO: this is broken
+    // var indexes = try reader.findMissingDataIndexes(
+    //     10,
+    //     0,
+    //     10,
+    //     0,
+    //     100,
+    //     100,
+    // );
+    // defer indexes.deinit();
+    // std.debug.print("indexes: {any}\n", .{indexes});
+}
+
 test "getCodeShred" {
     const allocator = std.testing.allocator;
     const logger = .noop;
@@ -1608,52 +1659,3 @@ test "getDataShred" {
     // const shred_payload_2 = shreds.items[0].payload();
     // try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
 }
-
-// test "getCodeShred" {
-//     const allocator = std.testing.allocator;
-//     const logger = .noop;
-//     const registry = sig.prometheus.globalRegistry();
-
-//     var db = try BlockstoreDB.open(allocator, logger, TEST_BLOCKSTORE_PATH);
-//     defer db.deinit();
-
-//     var reader = try BlockstoreReader.init(allocator, logger, db, registry);
-
-//     const shred_payload = sig.shred_collector.shred.test_data_shred[0..sig.shred_collector.shred.DataShred.constants.payload_size];
-//     const shred_slot = shred_layout.getSlot(shred_payload) orelse return error.InvalidShredData;
-//     const shred_index = shred_layout.getIndex(shred_payload) orelse return error.InvalidShredData;
-
-//     var shred = try sig.shred_collector.shred.Shred.fromPayload(allocator, shred_payload);
-//     defer shred.deinit();
-
-//     var write_batch = try db.initWriteBatch();
-//     try write_batch.put(
-//         schema.data_shred,
-//         .{ shred_slot, shred_index },
-//         shred_payload,
-//     );
-//     try db.commit(write_batch);
-
-//     // correct data read
-//     const read_bytes_ref = try reader.getDataShred(
-//         shred_slot,
-//         shred_index,
-//     ) orelse {
-//         return error.NullDataShred;
-//     };
-//     try std.testing.expectEqualSlices(
-//         u8,
-//         shred_payload,
-//         read_bytes_ref.data,
-//     );
-
-//     // incorrect slot
-//     if (try reader.getDataShred(shred_slot + 10, shred_index) != null) {
-//         return error.ShouldNotFindDataShred;
-//     }
-
-//     // incorrect index
-//     if (try reader.getDataShred(shred_slot, shred_index + 10) != null) {
-//         return error.ShouldNotFindDataShred;
-//     }
-// }
