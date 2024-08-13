@@ -16,7 +16,6 @@ const c = @cImport({
 const Account = sig.core.Account;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const AccountWithoutData = sig.core.account.AccountWithoutData;
 const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 const PIPE_MAX_SIZE_PATH = "/proc/sys/fs/pipe-max-size";
