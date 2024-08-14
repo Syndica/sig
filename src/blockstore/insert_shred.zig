@@ -67,6 +67,11 @@ pub const ShredInserter = struct {
         };
     }
 
+    pub const InsertShredsResult = struct {
+        completed_data_set_infos: ArrayList(CompletedDataSetInfo),
+        duplicate_shreds: ArrayList(PossibleDuplicateShred),
+    };
+
     /// The main function that performs the shred insertion logic
     /// and updates corresponding metadata.
     ///
@@ -130,10 +135,7 @@ pub const ShredInserter = struct {
         leader_schedule: ?SlotLeaderProvider,
         is_trusted: bool,
         retransmit_sender: ?PointerClosure([]const []const u8, void),
-    ) !struct {
-        completed_data_set_infos: ArrayList(CompletedDataSetInfo),
-        duplicate_shreds: ArrayList(PossibleDuplicateShred),
-    } {
+    ) !InsertShredsResult {
         self.metrics.num_shreds.add(shreds.len);
         const allocator = self.allocator;
         var reed_solomon_cache = try ReedSolomonCache.init(allocator);
@@ -163,6 +165,7 @@ pub const ShredInserter = struct {
         var shred_insertion_timer = try Timer.start();
         var index_meta_time_us: u64 = 0;
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(allocator);
+        defer newly_completed_data_sets.deinit();
         for (shreds, is_repaired) |shred, is_repair| {
             const shred_source: ShredSource = if (is_repair) .repaired else .turbine;
             switch (shred) {
@@ -184,6 +187,7 @@ pub const ShredInserter = struct {
                         if (is_repair) {
                             self.metrics.num_repair.inc();
                         }
+                        defer completed_data_sets.deinit();
                         try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                         self.metrics.num_inserted.inc();
                     } else |e| switch (e) {
@@ -715,6 +719,7 @@ pub const ShredInserter = struct {
         }
         try just_inserted_shreds.put(shred.fields.id(), shred_union); // TODO check first?
         index_meta_working_set_entry.did_insert_occur = true;
+        slot_meta_entry.did_insert_occur = true;
 
         // TODO: redundant get or put pattern
         const erasure_meta_entry = try erasure_metas.getOrPut(erasure_set_id);
@@ -761,11 +766,18 @@ pub const ShredInserter = struct {
         // TODO: redundant get or put pattern
         const entry = try working_set.getOrPut(slot);
         if (!entry.found_existing) {
-            if (try self.db.get(schema.slot_meta, slot)) |item| {
-                const slot_meta: SlotMeta = item;
+            if (try self.db.get(schema.slot_meta, slot)) |backup| {
+                var slot_meta: SlotMeta = try backup.clone(self.allocator);
+                // If parent_slot == None, then this is one of the orphans inserted
+                // during the chaining process, see the function find_slot_meta_in_cached_state()
+                // for details. Slots that are orphans are missing a parent_slot, so we should
+                // fill in the parent now that we know it.
+                if (slot_meta.isOrphan()) {
+                    slot_meta.parent_slot = parent_slot;
+                }
                 entry.value_ptr.* = .{
                     .new_slot_meta = slot_meta,
-                    .old_slot_meta = try slot_meta.clone(self.allocator),
+                    .old_slot_meta = backup,
                 };
             } else {
                 entry.value_ptr.* = .{
@@ -971,7 +983,7 @@ pub const ShredInserter = struct {
         try data_index.put(index);
 
         var newly_completed_data_sets = ArrayList(CompletedDataSetInfo).init(self.allocator);
-        for ((try updateSlotMeta(
+        const shred_indices = try updateSlotMeta(
             self.allocator,
             shred.isLastInSlot(),
             shred.dataComplete(),
@@ -980,7 +992,9 @@ pub const ShredInserter = struct {
             new_consumed,
             shred.referenceTick(),
             data_index,
-        )).items) |indices| {
+        );
+        defer shred_indices.deinit();
+        for (shred_indices.items) |indices| {
             const start, const end = indices;
             try newly_completed_data_sets.append(.{
                 .slot = slot,
@@ -1154,6 +1168,7 @@ pub const ShredInserter = struct {
 
         // handle chaining
         var new_chained_slots = AutoHashMap(u64, SlotMeta).init(self.allocator);
+        defer deinitMapRecursive(&new_chained_slots);
         for (keys[0..keep_i]) |slot| {
             try self.handleChainingForSlot(write_batch, working_set, &new_chained_slots, slot);
         }
@@ -1276,6 +1291,7 @@ pub const ShredInserter = struct {
         passed_visited_slots: *AutoHashMap(u64, SlotMeta),
     ) !void {
         var slot_lists = std.ArrayList([]const u64).init(self.allocator);
+        defer slot_lists.deinit();
         try slot_lists.append(slots);
         var i: usize = 0;
         while (i < slot_lists.items.len) {
@@ -1866,6 +1882,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 //////////
 // Tests
 
+const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 
 fn assertOk(result: anytype) void {
@@ -1874,28 +1891,57 @@ fn assertOk(result: anytype) void {
 
 const test_dir = comptimePrint("test_data/blockstore/insert_shred", .{});
 
-fn openTestDb(comptime test_name: []const u8) !struct {
+pub const TestState = struct {
     db: BlockstoreDB,
     inserter: ShredInserter,
     registry: sig.prometheus.Registry(.{}),
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
+    const allocator = gpa.allocator();
+
+    // const allocator = std.testing.allocator;
+
+    fn init(comptime test_name: []const u8) !TestState {
+        const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
+        try sig.blockstore.tests.freshDir(path);
+        const logger = sig.trace.Logger.init(allocator, .warn);
+        defer logger.deinit();
+        const db = try BlockstoreDB.open(allocator, logger, path);
+        var registry = sig.prometheus.Registry(.{}).init(allocator);
+        const inserter = try ShredInserter.init(allocator, logger, &registry, db);
+        return .{ .db = db, .inserter = inserter, .registry = registry };
+    }
+
+    /// Test helper to convert raw bytes into shreds and pass them to insertShreds
+    fn insertShredBytes(
+        self: *TestState,
+        shred_payloads: []const []const u8,
+    ) !ShredInserter.InsertShredsResult {
+        const shreds = try allocator.alloc(Shred, shred_payloads.len);
+        defer {
+            for (shreds) |shred| shred.deinit();
+            allocator.free(shreds);
+        }
+        for (shred_payloads, 0..) |payload, i| {
+            shreds[i] = try Shred.fromPayload(allocator, payload);
+        }
+        const is_repairs = try allocator.alloc(bool, shred_payloads.len);
+        defer allocator.free(is_repairs);
+        for (0..shreds.len) |i| {
+            is_repairs[i] = false;
+        }
+        return self.inserter.insertShreds(shreds, is_repairs, null, false, null);
+    }
+
     fn deinit(self: *@This()) void {
         self.db.deinit();
         self.registry.deinit();
+        _ = gpa.detectLeaks();
     }
-} {
-    const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
-    try sig.blockstore.tests.freshDir(path);
-    const allocator = std.testing.allocator;
-    const logger = sig.trace.Logger.init(std.testing.allocator, .warn);
-    defer logger.deinit();
-    const db = try BlockstoreDB.open(allocator, logger, path);
-    var registry = sig.prometheus.Registry(.{}).init(allocator);
-    const inserter = try ShredInserter.init(std.testing.allocator, logger, &registry, db);
-    return .{ .db = db, .inserter = inserter, .registry = registry };
-}
+};
 
 test "insertShreds single shred" {
-    var state = try openTestDb("insertShreds single shred");
+    var state = try TestState.init("insertShreds single shred");
     defer state.deinit();
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &sig.shred_collector.shred.test_data_shred);
@@ -1910,26 +1956,98 @@ test "insertShreds single shred" {
 }
 
 test "insertShreds 100 shreds from mainnet" {
-    const test_data = @import("../shred_collector/test_shreds.zig");
-    var state = try openTestDb("insertShreds 32 shreds");
+    var state = try TestState.init("insertShreds 32 shreds");
     defer state.deinit();
 
-    const test_shreds = test_data.mainnet_shreds;
+    const shred_bytes = test_shreds.mainnet_shreds;
     var shreds = std.ArrayList(Shred).init(std.testing.allocator);
     defer shreds.deinit();
     defer for (shreds.items) |s| s.deinit();
 
-    for (test_shreds) |payload| {
+    for (shred_bytes) |payload| {
         const shred = try Shred.fromPayload(std.testing.allocator, payload);
         try shreds.append(shred);
     }
     _ = try state.inserter
-        .insertShreds(shreds.items, &(.{false} ** test_shreds.len), null, false, null);
+        .insertShreds(shreds.items, &(.{false} ** shred_bytes.len), null, false, null);
     for (shreds.items) |shred| {
         const bytes = try state.db.getBytes(
             schema.data_shred,
             .{ shred.commonHeader().slot, shred.commonHeader().index },
         );
         try std.testing.expectEqualSlices(u8, shred.payload(), bytes.?.data);
+    }
+}
+
+// agave: test_handle_chaining_basic
+test "chaining basic" {
+    var state = try TestState.init("handle chaining basic");
+    defer state.deinit();
+
+    const shreds = test_shreds.handle_chaining_basic_shreds;
+    const shreds_per_slot = shreds.len / 3;
+
+    // segregate shreds by slot
+    const slots = .{
+        shreds[0..shreds_per_slot],
+        shreds[shreds_per_slot .. 2 * shreds_per_slot],
+        shreds[2 * shreds_per_slot .. 3 * shreds_per_slot],
+    };
+
+    // insert slot 1
+    _ = try state.insertShredBytes(slots[1]);
+    {
+        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 1)).?;
+        defer slot_meta.deinit();
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expect(!slot_meta.isConnected());
+        try std.testing.expectEqual(0, slot_meta.parent_slot);
+        try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
+    }
+
+    // insert slot 2
+    _ = try state.insertShredBytes(slots[2]);
+    {
+        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 1)).?;
+        defer slot_meta.deinit();
+        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
+        try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
+        try std.testing.expectEqual(0, slot_meta.parent_slot);
+        try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
+    }
+    {
+        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 2)).?;
+        defer slot_meta.deinit();
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expect(!slot_meta.isConnected()); // since 0 is not yet inserted
+        try std.testing.expectEqual(1, slot_meta.parent_slot);
+        try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
+    }
+
+    // insert slot 0
+    _ = try state.insertShredBytes(slots[0]);
+    {
+        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 0)).?;
+        defer slot_meta.deinit();
+        try std.testing.expectEqualSlices(u64, &.{1}, slot_meta.next_slots.items);
+        try std.testing.expect(slot_meta.isConnected());
+        try std.testing.expectEqual(0, slot_meta.parent_slot);
+        try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
+    }
+    {
+        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 1)).?;
+        defer slot_meta.deinit();
+        try std.testing.expectEqualSlices(u64, &.{2}, slot_meta.next_slots.items);
+        try std.testing.expect(slot_meta.isConnected());
+        try std.testing.expectEqual(0, slot_meta.parent_slot);
+        try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
+    }
+    {
+        var slot_meta: SlotMeta = (try state.db.get(schema.slot_meta, 2)).?;
+        defer slot_meta.deinit();
+        try std.testing.expectEqualSlices(u64, &.{}, slot_meta.next_slots.items);
+        try std.testing.expect(slot_meta.isConnected());
+        try std.testing.expectEqual(1, slot_meta.parent_slot);
+        try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
     }
 }
