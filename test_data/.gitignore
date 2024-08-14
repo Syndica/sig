@@ -12,3 +12,4 @@
 !status_cache
 !test_account_file
 !shreds
+!shreds/*
