@@ -316,6 +316,7 @@ pub const Client = struct {
         return try self.sendFetchRequest(arena.allocator(), SignatureStatuses, .{
             .method = "getSignatureStatuses",
             .params = try params_builder.build(),
+            .parse_options = .{ .ignore_unknown_fields = true },
         });
     }
 
@@ -386,7 +387,12 @@ pub const Client = struct {
             return error.HttpRequestFailed;
         }
 
-        const response = std.json.parseFromSliceLeaky(Response(T), allocator, response_payload.items, .{}) catch |err| {
+        const response = std.json.parseFromSliceLeaky(
+            Response(T),
+            allocator,
+            response_payload.items,
+            request.parse_options,
+        ) catch |err| {
             std.debug.print("Failed to parse JSON response: error={} response={s}\n", .{ err, response_payload.items });
             return err;
         };
@@ -431,6 +437,7 @@ pub const Client = struct {
         jsonrpc: []const u8 = "2.0",
         method: []const u8,
         params: ?[]const u8 = null,
+        parse_options: std.json.ParseOptions = .{},
 
         pub fn toJsonString(self: Request, allocator: std.mem.Allocator) ![]const u8 {
             if (self.params) |params|

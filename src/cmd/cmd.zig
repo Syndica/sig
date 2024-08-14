@@ -1006,9 +1006,19 @@ pub fn testTransactionSenderService() !void {
         .socket = SocketAddr.init(app_base.my_ip, 8003),
     };
 
-    const transaction_forwarding_thread = try std.Thread.spawn(
+    const mock_transfer_generator_handle = try std.Thread.spawn(
         .{},
-        sig.transaction_sender.run,
+        sig.transaction_sender.mock_transfer_generator.run,
+        .{
+            std.heap.page_allocator,
+            transaction_channel,
+            &app_base.exit,
+        },
+    );
+
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.transaction_sender.service.run,
         .{
             std.heap.page_allocator,
             transaction_sender_config,
@@ -1019,7 +1029,8 @@ pub fn testTransactionSenderService() !void {
         },
     );
 
-    transaction_forwarding_thread.join();
+    mock_transfer_generator_handle.join();
+    transaction_sender_handle.join();
     gossip_manager.join();
 }
 
