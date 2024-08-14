@@ -1455,7 +1455,257 @@ const Blockstore = sig.blockstore.BlockstoreDB;
 const ShredInserter = sig.blockstore.ShredInserter;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 
+const bincode = sig.bincode;
 const TestState = sig.blockstore.insert_shred.TestState;
+const test_shreds = @import("test_shreds.zig");
+
+// isDead [x]
+// getFirstDuplicateProof [x]
+// getLatestOptimisticSlots []
+// lowestSlot
+// highestSlot
+// getSlotsSince
+// getCompletedRanges
+// getSlotEntriesInBlock
+// getCompleteBlockWithEntries -- rpc usage, debugging (print all block entries)
+
+test "getSlotsSince" {}
+
+test "getCompletedRanges" {
+    // look up slot_meta @ slot
+    // slot_meta.completed_data_indexes
+    // updateCompletedDataIndexes
+}
+
+test "getSlotEntriesInBlock" {
+    // ...
+}
+
+test "getCompleteBlockWithEntries" {
+    // slot meta is full
+    //
+}
+
+test "getLatestOptimisticSlots" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("getLatestOptimisticSlots");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    {
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(schema.optimistic_slots, 1, .{
+            .V0 = .{
+                .hash = Hash.default(),
+                .timestamp = 10,
+            },
+        });
+        try db.commit(write_batch);
+
+        const hash, const ts = (try reader.getOptimisticSlot(1)).?;
+        try std.testing.expectEqual(10, ts);
+        try std.testing.expectEqual(hash, Hash.default());
+
+        var opt_slots = try reader.getLatestOptimisticSlots(1);
+        defer opt_slots.deinit();
+
+        try std.testing.expectEqual(1, opt_slots.items.len);
+        try std.testing.expectEqual(1, opt_slots.items[0][0]); // slot match
+        try std.testing.expectEqual(hash, opt_slots.items[0][1]); // hash match
+        try std.testing.expectEqual(ts, opt_slots.items[0][2]); // ts match
+    }
+}
+
+test "getFirstDuplicateProof" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("getFirstDuplicateProof");
+    defer state.deinit();
+    var db = state.db;
+
+    const reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    _ = reader;
+
+    {
+        const proof = DuplicateSlotProof{
+            .shred1 = test_shreds.mainnet_shreds[0],
+            .shred2 = test_shreds.mainnet_shreds[1],
+        };
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(schema.duplicate_slots, 19, proof);
+        try db.commit(write_batch);
+
+        // // TODO: this is broken when trying to free the proof ?
+        // const slot, const proof2 = (try reader.getFirstDuplicateProof()).?;
+        // defer bincode.free(allocator, proof2);
+
+        // try std.testing.expectEqual(19, slot);
+        // try std.testing.expectEqualSlices(u8, proof.shred1, proof2.shred1);
+        // try std.testing.expectEqualSlices(u8, proof.shred2, proof2.shred2);
+    }
+}
+
+test "isDead" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("isDead");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    {
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(schema.dead_slots, 19, true);
+        try db.commit(write_batch);
+    }
+    try std.testing.expectEqual(try reader.isDead(19), true);
+
+    {
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(schema.dead_slots, 19, false);
+        try db.commit(write_batch);
+    }
+    try std.testing.expectEqual(try reader.isDead(19), false);
+}
+
+test "getBlockHeight" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("getBlockHeight");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(schema.block_height, 19, 19);
+    try db.commit(write_batch);
+
+    // should succeeed
+    const height = try reader.getBlockHeight(19);
+    try std.testing.expectEqual(19, height);
+}
+
+test "getRootedBlockTime" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("getRootedBlockTime");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    var write_batch = try db.initWriteBatch();
+    try write_batch.put(schema.blocktime, 19, 19);
+    try db.commit(write_batch);
+
+    // not rooted
+    const r = reader.getRootedBlockTime(19);
+    try std.testing.expectError(error.SlotNotRooted, r);
+
+    // root it
+    var write_batch2 = try db.initWriteBatch();
+    try write_batch2.put(schema.roots, 19, true);
+    try db.commit(write_batch2);
+
+    // should succeeed
+    const time = try reader.getRootedBlockTime(19);
+    try std.testing.expectEqual(19, time);
+}
+
+test "slotMetaIterator" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("slotMetaIterator");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    var slot_metas = ArrayList(SlotMeta).init(allocator);
+    defer {
+        for (slot_metas.items) |*slot_meta| {
+            slot_meta.deinit();
+        }
+        slot_metas.deinit();
+    }
+
+    var write_batch = try db.initWriteBatch();
+    // 1 -> 2 -> 3
+    const roots: [3]Slot = .{ 1, 2, 3 };
+    var parent_slot: ?Slot = null;
+    for (roots, 0..) |slot, i| {
+        var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
+        // ensure isFull() is true
+        slot_meta.last_index = 1;
+        slot_meta.consumed = slot_meta.last_index.? + 1;
+        // update next slots
+        if (i + 1 < roots.len) {
+            try slot_meta.next_slots.append(roots[i + 1]);
+        }
+        try write_batch.put(schema.slot_meta, slot_meta.slot, slot_meta);
+        // connect the chain
+        parent_slot = slot;
+
+        try slot_metas.append(slot_meta);
+    }
+    try db.commit(write_batch);
+
+    var iter = try reader.slotMetaIterator(0);
+    var index: u64 = 0;
+    while (try iter.next()) |entry| {
+        var slot_meta = entry[1];
+        defer slot_meta.deinit();
+
+        try std.testing.expectEqual(slot_metas.items[index].slot, slot_meta.slot);
+        try std.testing.expectEqual(slot_metas.items[index].last_index, slot_meta.last_index);
+        index += 1;
+    }
+}
+
+test "rootedSlotIterator" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("rootedSlotIterator");
+    defer state.deinit();
+    var db = state.db;
+
+    // var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    const reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    _ = reader;
+
+    var write_batch = try db.initWriteBatch();
+    const roots: [3]Slot = .{ 2, 3, 4 };
+    for (roots) |slot| {
+        try write_batch.put(schema.roots, slot, true);
+    }
+    try db.commit(write_batch);
+
+    // // TODO: this is broken -- output is {3, 4, 4}
+    // var iter = try reader.rootedSlotIterator(0);
+    // var iter = try db.iterator(schema.roots, .forward, null);
+    // while (try iter.next()) |slot| {
+    //     std.debug.print("slot: {any}\n", .{slot});
+    // }
+}
 
 test "slotRangeConnected" {
     const allocator = std.testing.allocator;
