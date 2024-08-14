@@ -123,7 +123,7 @@ const Hash = @import("hash.zig").Hash;
 
 pub fn hashAccount(
     lamports: u64,
-    data: []u8,
+    data: []const u8,
     owner_pubkey_data: []const u8,
     executable: bool,
     rent_epoch: u64,

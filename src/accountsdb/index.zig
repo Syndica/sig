@@ -150,12 +150,9 @@ pub const AccountIndex = struct {
     }
 
     pub fn getReference(self: *Self, pubkey: *const Pubkey) ?AccountReferenceHead {
-        const bin_rw = self.getBinFromPubkey(pubkey);
-        const bin, var bin_lg = bin_rw.readWithLock();
+        const bin, var bin_lg = self.getBinFromPubkey(pubkey).readWithLock();
         defer bin_lg.unlock();
-
-        const ref_head_rw = bin.get(pubkey.*);
-        return ref_head_rw;
+        return bin.get(pubkey.*);
     }
 
     /// returns a reference to the slot in the index which is a local copy

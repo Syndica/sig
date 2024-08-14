@@ -162,7 +162,7 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) !Account {
+    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) std.mem.Allocator.Error!Account {
         const owned_data = try allocator.dupe(u8, self.data);
         return .{
             .data = owned_data,
@@ -268,7 +268,7 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: Self) void {
         std.posix.munmap(self.memory);
         self.file.close();
     }
