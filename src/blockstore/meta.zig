@@ -95,17 +95,19 @@ pub const SlotMeta = struct {
     }
 
     pub fn isFull(self: Self) bool {
-        return if (self.last_index) |last_index|
-            self.consumed > last_index + 1
-        else
-            false;
+        if (self.last_index) |last_index| {
+            std.debug.assert(self.consumed <= last_index + 1);
+            return self.consumed == last_index + 1;
+        } else {
+            return false;
+        }
     }
 
     pub fn isOrphan(self: Self) bool {
         return self.parent_slot == null;
     }
 
-    pub fn isConnected(self: *const Self) bool {
+    pub fn isConnected(self: Self) bool {
         return self.connected_flags.isSet(.connected);
     }
 

@@ -311,14 +311,14 @@ const ScanAndFixRootsMetrics = struct {
     };
 };
 
-const openTestDb = sig.blockstore.insert_shred.openTestDb;
+const TestState = sig.blockstore.insert_shred.TestState;
 
 test "setRoots" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("setRoots");
+    var state = try TestState.init("setRoots");
     defer state.deinit();
     const db = state.db;
 
@@ -345,7 +345,7 @@ test "scanAndFixRoots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("scanAndFixRoots");
+    var state = try TestState.init("scanAndFixRoots");
     defer state.deinit();
     var db = state.db;
 
@@ -385,7 +385,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("setAndChainConnectedOnRootAndNextSlots");
+    var state = try TestState.init("setAndChainConnectedOnRootAndNextSlots");
     defer state.deinit();
     var db = state.db;
 
@@ -426,7 +426,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = 3;
+        slot_meta.consumed = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < other_roots.len) {
             try slot_meta.next_slots.append(other_roots[i + 1]);
@@ -452,7 +452,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("setAndChainConnectedOnRootAndNextSlots");
+    var state = try TestState.init("setAndChainConnectedOnRootAndNextSlots");
     defer state.deinit();
     var db = state.db;
 
@@ -474,7 +474,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     var slot_meta_1 = SlotMeta.init(allocator, 1, null);
     defer slot_meta_1.deinit();
     slot_meta_1.last_index = 1;
-    slot_meta_1.consumed = 3;
+    slot_meta_1.consumed = 1 + 1;
     try slot_meta_1.next_slots.append(2);
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
 
@@ -490,7 +490,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     var slot_meta_3 = SlotMeta.init(allocator, 3, 2);
     defer slot_meta_3.deinit();
     slot_meta_3.last_index = 1;
-    slot_meta_3.consumed = 3;
+    slot_meta_3.consumed = 1 + 1;
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
 
     try db.commit(write_batch);

@@ -1476,14 +1476,14 @@ const Blockstore = sig.blockstore.BlockstoreDB;
 const ShredInserter = sig.blockstore.ShredInserter;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 
-const openTestDb = sig.blockstore.insert_shred.openTestDb;
+const TestState = sig.blockstore.insert_shred.TestState;
 
 test "slotRangeConnected" {
     const allocator = std.testing.allocator;
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("slotRangeConnected");
+    var state = try TestState.init("slotRangeConnected");
     defer state.deinit();
     var db = state.db;
 
@@ -1499,7 +1499,7 @@ test "slotRangeConnected" {
         defer slot_meta.deinit();
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = 3;
+        slot_meta.consumed = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
             try slot_meta.next_slots.append(roots[i + 1]);
@@ -1532,7 +1532,7 @@ test "lowestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("lowestSlot");
+    var state = try TestState.init("lowestSlot");
     defer state.deinit();
     var db = state.db;
 
@@ -1571,7 +1571,7 @@ test "isShredDuplicate" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("isShredDuplicate");
+    var state = try TestState.init("isShredDuplicate");
     defer state.deinit();
     var db = state.db;
 
@@ -1612,7 +1612,7 @@ test "findMissingDataIndexes" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("findMissingDataIndexes");
+    var state = try TestState.init("findMissingDataIndexes");
     defer state.deinit();
     var db = state.db;
 
@@ -1664,7 +1664,7 @@ test "getCodeShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("getCodeShred");
+    var state = try TestState.init("getCodeShred");
     defer state.deinit();
     var db = state.db;
 
@@ -1734,7 +1734,7 @@ test "getDataShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try openTestDb("getDataShred");
+    var state = try TestState.init("getDataShred");
     defer state.deinit();
     var db = state.db;
 
