@@ -185,13 +185,13 @@ pub const BlockstoreReader = struct {
         var iterator = try self.db.iterator(cf, .forward, .{ slot, start_index });
         defer iterator.deinit();
         var shreds = std.ArrayList(Shred).init(self.allocator);
-        while (try iterator.next()) |data_shred| {
-            const key, const shred_bytes = data_shred;
-            if (key[0] != slot) {
+        while (try iterator.next()) |shred_entry| {
+            const slot_and_index, const payload = shred_entry;
+            if (slot_and_index[0] != slot) {
                 break;
             }
             // NOTE perf: memcpy
-            try shreds.append(try Shred.fromPayload(self.allocator, shred_bytes));
+            try shreds.append(try Shred.fromPayload(self.allocator, payload));
         }
         return shreds;
     }
@@ -229,6 +229,7 @@ pub const BlockstoreReader = struct {
         // TODO: this directly calls bincode: revisit this after database serializer is figured out
         const serde = struct {
             const key_serialized_size = sig.bincode.sizeOf(schema.data_shred.Key, .{});
+
             fn serializeKey(buf: []u8, key: schema.data_shred.Key) ![]u8 {
                 return try sig.bincode.writeToSlice(buf, key, .{});
             }
@@ -1545,7 +1546,8 @@ test "lowestSlot" {
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
-    var shred = Shred{ .data = DataShred.default(allocator) };
+    var shred = Shred{ .data = try DataShred.default(allocator) };
+    defer shred.deinit();
     shred.data.fields.common.slot = shred_slot;
     shred.data.fields.common.index = shred_index;
 
@@ -1584,9 +1586,11 @@ test "isShredDuplicate" {
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
-    var shred = Shred{ .data = DataShred.default(allocator) };
+    var shred = Shred{ .data = try DataShred.default(allocator) };
+    defer shred.deinit();
     shred.data.fields.common.slot = shred_slot;
     shred.data.fields.common.index = shred_index;
+    @memset(shred.data.fields.payload, 0);
 
     // no duplicate
     try std.testing.expectEqual(null, try reader.isShredDuplicate(shred));
@@ -1616,19 +1620,27 @@ test "findMissingDataIndexes" {
     defer state.deinit();
     var db = state.db;
 
+    // var reader = try BlockstoreReader.init(allocator, logger, db, registry);
     const reader = try BlockstoreReader.init(allocator, logger, db, registry);
     _ = reader;
-
-    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
-    const shred_payload = try allocator.alloc(u8, size);
-    defer allocator.free(shred_payload);
 
     const shred_slot = 10;
     const shred_index = 10;
 
-    var shred = Shred{ .data = DataShred.default(allocator) };
+    var shred = Shred{ .data = try DataShred.default(allocator) };
+    defer shred.deinit();
     shred.data.fields.common.slot = shred_slot;
     shred.data.fields.common.index = shred_index;
+
+    // set the variant
+    const variant = sig.shred_collector.shred.ShredVariant{
+        .shred_type = .data,
+        .proof_size = 100 & 0x0F,
+        .chained = false,
+        .resigned = false,
+    };
+    shred.data.fields.common.shred_variant = variant;
+    try shred.data.fields.writePayload(&(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
     slot_meta.last_index = 21;
@@ -1637,7 +1649,7 @@ test "findMissingDataIndexes" {
     try write_batch.put(
         schema.data_shred,
         .{ shred_slot, shred_index },
-        shred_payload,
+        shred.payload(),
     );
     try write_batch.put(
         schema.slot_meta,
@@ -1670,11 +1682,23 @@ test "getCodeShred" {
 
     var reader = try BlockstoreReader.init(allocator, logger, db, registry);
 
-    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
-    const shred_payload = try allocator.alloc(u8, size);
-    defer allocator.free(shred_payload);
+    var shred = Shred{ .code = try CodingShred.default(allocator) };
+    defer shred.deinit();
+    shred.code.fields.common.slot = 10;
+    shred.code.fields.common.index = 10;
 
-    const shred = Shred{ .code = CodingShred.default(allocator) };
+    try std.testing.expect(shred == .code);
+
+    // set the variant
+    const variant = sig.shred_collector.shred.ShredVariant{
+        .shred_type = .code,
+        .proof_size = 100 & 0x0F,
+        .chained = false,
+        .resigned = false,
+    };
+    shred.code.fields.common.shred_variant = variant;
+    try shred.code.fields.writePayload(&(.{2} ** 100));
+
     const shred_slot = shred.commonHeader().slot;
     const shred_index = shred.commonHeader().index;
 
@@ -1682,18 +1706,15 @@ test "getCodeShred" {
     try write_batch.put(
         schema.code_shred,
         .{ shred_slot, shred_index },
-        shred_payload,
+        shred.payload(),
     );
     try db.commit(write_batch);
 
     // correct data read
-    const read_bytes_ref = try reader.getCodeShred(
-        shred_slot,
-        shred_index,
-    ) orelse {
+    const read_bytes_ref = try reader.getCodeShred(shred_slot, shred_index) orelse {
         return error.NullDataShred;
     };
-    try std.testing.expectEqualSlices(u8, shred_payload, read_bytes_ref.data);
+    try std.testing.expectEqualSlices(u8, shred.payload(), read_bytes_ref.data);
 
     // incorrect slot
     if (try reader.getCodeShred(shred_slot + 10, shred_index) != null) {
@@ -1709,24 +1730,18 @@ test "getCodeShred" {
     const is_full = try reader.isFull(shred_slot);
     try std.testing.expectEqual(false, is_full);
 
-    var iter = try db.iterator(schema.code_shred, .forward, null);
-    defer iter.deinit();
+    var shreds = try reader.getCodingShredsForSlot(shred_slot, shred_index);
+    defer {
+        for (shreds.items) |*s| {
+            s.deinit();
+        }
+        shreds.deinit();
+    }
 
-    // // TODO: this is broken
-    // var count: u64 = 0;
-    // while (try iter.next()) |code_shred| {
-    //     _ = code_shred;
-    //     count += 1;
-    // }
-    // try std.testing.expectEqual(1, count);
+    try std.testing.expectEqual(1, shreds.items.len);
 
-    // // TODO: this is broken
-    // var shreds = try reader.getCodingShredsForSlot(shred_slot, shred_index);
-    // defer shreds.deinit();
-    // try std.testing.expectEqual(1, shreds.items.len);
-
-    // const shred_payload_2 = shreds.items[0].payload();
-    // try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
+    const shred_payload_2 = shreds.items[0].payload();
+    try std.testing.expectEqualSlices(u8, shred.payload(), shred_payload_2);
 }
 
 test "getDataShred" {
@@ -1783,19 +1798,15 @@ test "getDataShred" {
     var iter = try db.iterator(schema.data_shred, .forward, null);
     defer iter.deinit();
 
-    // // TODO: this is broken
-    // var count: u64 = 0;
-    // while (try iter.next()) |data_shred| {
-    //     _ = data_shred;
-    //     count += 1;
-    // }
-    // try std.testing.expectEqual(1, count);
+    var shreds = try reader.getDataShredsForSlot(shred_slot, shred_index);
+    defer {
+        for (shreds.items) |*s| {
+            s.deinit();
+        }
+        shreds.deinit();
+    }
+    try std.testing.expectEqual(1, shreds.items.len);
 
-    // // TODO: this is broken
-    // var shreds = try reader.getDataShredsForSlot(shred_slot, shred_index);
-    // defer shreds.deinit();
-    // try std.testing.expectEqual(1, shreds.items.len);
-
-    // const shred_payload_2 = shreds.items[0].payload();
-    // try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
+    const shred_payload_2 = shreds.items[0].payload();
+    try std.testing.expectEqualSlices(u8, shred_payload, shred_payload_2);
 }

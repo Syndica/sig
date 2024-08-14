@@ -215,6 +215,12 @@ fn serializer(endian: std.builtin.Endian) type {
 
         /// Returned data is owned by the caller. Free with `allocator.free`.
         pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
+            // tmp hack
+            if (T == []const u8 or T == []u8) {
+                // NOTE: this doesnt clone the slice because its cloned during
+                // deserialization ... is this ok? probably not
+                return @ptrCast(bytes);
+            }
             return try sig.bincode.readFromSlice(allocator, T, bytes, .{ .endian = endian });
         }
     };

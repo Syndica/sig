@@ -158,8 +158,8 @@ pub const CodingShred = struct {
     const Self = @This();
     const consts = coding_shred;
 
-    pub fn default(allocator: std.mem.Allocator) Self {
-        return .{ .fields = Fields.default(allocator) };
+    pub fn default(allocator: std.mem.Allocator) !Self {
+        return .{ .fields = try Fields.default(allocator) };
     }
 
     /// agave: ShredCode::from_recovered_shard
@@ -245,8 +245,8 @@ pub const DataShred = struct {
     const Self = @This();
     pub const constants = data_shred;
 
-    pub fn default(allocator: std.mem.Allocator) Self {
-        return .{ .fields = Fields.default(allocator) };
+    pub fn default(allocator: std.mem.Allocator) !Self {
+        return .{ .fields = try Fields.default(allocator) };
     }
 
     /// agave: ShredData::from_recovered_shard
@@ -335,12 +335,13 @@ pub fn GenericShred(
 
         pub const constants = constants_;
 
-        pub fn default(allocator: std.mem.Allocator) Self {
+        pub fn default(allocator: std.mem.Allocator) !Self {
+            const payload = try allocator.alloc(u8, constants.payload_size);
             return .{
                 .common = CommonHeader.default(),
                 .custom = CustomHeader.default(),
                 .allocator = allocator,
-                .payload = undefined,
+                .payload = payload,
             };
         }
 
@@ -839,7 +840,7 @@ pub const ShredVariant = struct {
 
     const Self = @This();
 
-    fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
+    pub fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
         return switch (byte & 0xF0) {
             0x40 => .{
                 .shred_type = .code,
@@ -883,7 +884,7 @@ pub const ShredVariant = struct {
         };
     }
 
-    fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
+    pub fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
         if (self.proof_size & 0xF0 != 0) return error.IllegalProof;
         const big_end: u8 =
             if (self.shred_type == .code and
@@ -915,7 +916,7 @@ pub const ShredVariant = struct {
         return big_end | self.proof_size;
     }
 
-    fn constants(self: Self) ShredConstants {
+    pub fn constants(self: Self) ShredConstants {
         return switch (self.shred_type) {
             .data => data_shred,
             .code => coding_shred,
@@ -966,16 +967,16 @@ pub const ShredConstants = struct {
 };
 
 pub const layout = struct {
-    const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
-    const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
-    const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;
-    const SIZE_OF_SIGNATURE: usize = sig.core.SIGNATURE_LENGTH;
-    const SIZE_OF_SHRED_VARIANT: usize = 1;
-    const SIZE_OF_SHRED_SLOT: usize = 8;
+    pub const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
+    pub const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
+    pub const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;
+    pub const SIZE_OF_SIGNATURE: usize = sig.core.SIGNATURE_LENGTH;
+    pub const SIZE_OF_SHRED_VARIANT: usize = 1;
+    pub const SIZE_OF_SHRED_SLOT: usize = 8;
 
-    const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
-    const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
-    const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
+    pub const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
+    pub const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
+    pub const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
 
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;

@@ -170,6 +170,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 defer key_bytes.deinit();
                 const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
                 defer val_bytes.deinit();
+
                 self.inner.put(
                     self.cf_handles[cf.find(column_families)],
                     key_bytes.data,
@@ -221,9 +222,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
 
                 pub fn next(self: *@This()) anyerror!?cf.Entry() {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
-                    return if (entry) |kv| .{
-                        try key_serializer.deserialize(cf.Key, self.allocator, kv[0].data),
-                        try value_serializer.deserialize(cf.Value, self.allocator, kv[1].data),
+                    return if (entry) |kv| {
+                        return .{
+                            try key_serializer.deserialize(cf.Key, self.allocator, kv[0].data),
+                            try value_serializer.deserialize(cf.Value, self.allocator, kv[1].data),
+                        };
                     } else null;
                 }
 
