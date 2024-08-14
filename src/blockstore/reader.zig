@@ -226,53 +226,32 @@ pub const BlockstoreReader = struct {
         end_index: u64,
         max_missing: usize,
     ) !ArrayList(u64) {
-        // TODO: this directly calls bincode: revisit this after database serializer is figured out
-        const serde = struct {
-            const key_serialized_size = sig.bincode.sizeOf(schema.data_shred.Key, .{});
-
-            fn serializeKey(buf: []u8, key: schema.data_shred.Key) ![]u8 {
-                return try sig.bincode.writeToSlice(buf, key, .{});
-            }
-            fn deserializeKey(allocator: Allocator, buf: []const u8) !schema.data_shred.Key {
-                return try sig.bincode
-                    .readFromSlice(allocator, schema.data_shred.Key, buf, .{});
-            }
-        };
-
-        var db_iterator = try self.db.rawIterator(schema.data_shred);
-
         if (start_index >= end_index or max_missing == 0) {
             return ArrayList(u64).init(self.allocator);
         }
+
+        var iter = try self.db.iterator(schema.data_shred, .forward, .{ slot, start_index });
 
         var missing_indexes = ArrayList(u64).init(self.allocator);
         const now = @as(u64, @intCast(std.time.milliTimestamp()));
         const ticks_since_first_insert = DEFAULT_TICKS_PER_SECOND * (now -| first_timestamp) / 1000;
 
-        // Seek to the first shred with index >= start_index
-        var key_buf: [serde.key_serialized_size]u8 = undefined;
-        const key_bytes = try serde.serializeKey(&key_buf, .{ slot, start_index });
-        db_iterator.seek(key_bytes);
-
         // The index of the first missing shred in the slot
         var prev_index = start_index;
         while (true) {
-            if (!db_iterator.valid()) {
+            const slot_and_index, const payload = (try iter.next()) orelse {
                 const num_to_take = max_missing - missing_indexes.items.len;
                 try appendIntegers(&missing_indexes, prev_index, end_index, num_to_take);
                 break;
-            }
-            const key = db_iterator.key() orelse return error.IteratorMissingKey;
-            defer key.deinit();
-            const current_slot, const index = try serde.deserializeKey(self.allocator, key.data);
+            };
 
+            const current_slot = slot_and_index[0];
+            const index = slot_and_index[1];
             const current_index = if (current_slot > slot) end_index else index;
 
             const upper_index = @min(current_index, end_index);
             // the tick that will be used to figure out the timeout for this hole
-            const data = db_iterator.value() orelse return error.IteratorMissingValue;
-            defer data.deinit();
-            const reference_tick: u64 = @intCast(try shred_layout.getReferenceTick(data.data));
+            const reference_tick: u64 = @intCast(try shred_layout.getReferenceTick(payload));
             if (ticks_since_first_insert < reference_tick + defer_threshold_ticks) {
                 // The higher index holes have not timed out yet
                 break;
@@ -289,7 +268,6 @@ pub const BlockstoreReader = struct {
             }
 
             prev_index = current_index + 1;
-            db_iterator.next();
         }
 
         return missing_indexes;
@@ -1620,12 +1598,10 @@ test "findMissingDataIndexes" {
     defer state.deinit();
     var db = state.db;
 
-    // var reader = try BlockstoreReader.init(allocator, logger, db, registry);
-    const reader = try BlockstoreReader.init(allocator, logger, db, registry);
-    _ = reader;
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
 
     const shred_slot = 10;
-    const shred_index = 10;
+    const shred_index = 2;
 
     var shred = Shred{ .data = try DataShred.default(allocator) };
     defer shred.deinit();
@@ -1643,7 +1619,7 @@ test "findMissingDataIndexes" {
     try shred.data.fields.writePayload(&(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
-    slot_meta.last_index = 21;
+    slot_meta.last_index = 4;
 
     var write_batch = try db.initWriteBatch();
     try write_batch.put(
@@ -1658,17 +1634,18 @@ test "findMissingDataIndexes" {
     );
     try db.commit(write_batch);
 
-    // // TODO: this is broken
-    // var indexes = try reader.findMissingDataIndexes(
-    //     10,
-    //     0,
-    //     10,
-    //     0,
-    //     100,
-    //     100,
-    // );
-    // defer indexes.deinit();
-    // std.debug.print("indexes: {any}\n", .{indexes});
+    var indexes = try reader.findMissingDataIndexes(
+        slot_meta.slot,
+        0,
+        10,
+        0,
+        slot_meta.last_index.?,
+        100,
+    );
+    defer indexes.deinit();
+
+    try std.testing.expectEqual(slot_meta.last_index.? - 1, indexes.items.len);
+    try std.testing.expectEqualSlices(u64, &.{ 0, 1, 3 }, indexes.items);
 }
 
 test "getCodeShred" {
@@ -1732,9 +1709,7 @@ test "getCodeShred" {
 
     var shreds = try reader.getCodingShredsForSlot(shred_slot, shred_index);
     defer {
-        for (shreds.items) |*s| {
-            s.deinit();
-        }
+        for (shreds.items) |*s| s.deinit();
         shreds.deinit();
     }
 
