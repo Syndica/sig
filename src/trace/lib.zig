@@ -6,3 +6,4 @@ pub const logfmt = @import("logfmt.zig");
 
 pub const Logger = log.Logger;
 pub const Level = level.Level;
+pub const TestLogger = log.TestLogger;
