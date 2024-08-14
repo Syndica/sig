@@ -10,8 +10,8 @@ const IteratorDirection = sig.blockstore.database.IteratorDirection;
 const Logger = sig.trace.Logger;
 const ReturnType = sig.utils.types.ReturnType;
 
-const serializeToRef = sig.blockstore.database.serializer.serializeToRef;
-const deserialize = sig.blockstore.database.serializer.deserialize;
+const key_serializer = sig.blockstore.database.key_serializer;
+const value_serializer = sig.blockstore.database.value_serializer;
 
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
@@ -77,9 +77,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             key: cf.Key,
             value: cf.Value,
         ) anyerror!void {
-            const key_bytes = try serializeToRef(self.allocator, key);
+            const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
-            const val_bytes = try serializeToRef(self.allocator, value);
+            const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
             defer val_bytes.deinit();
             return try callRocks(
                 self.logger,
@@ -96,11 +96,11 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         pub fn get(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?cf.Value {
             const val_bytes = try self.getBytes(cf, key) orelse return null;
             defer val_bytes.deinit();
-            return try deserialize(cf.Value, self.allocator, val_bytes.data);
+            return try value_serializer.deserialize(cf.Value, self.allocator, val_bytes.data);
         }
 
         pub fn getBytes(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!?BytesRef {
-            const key_bytes = try serializeToRef(self.allocator, key);
+            const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
             const val_bytes: rocks.Data = try callRocks(
                 self.logger,
@@ -114,7 +114,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
         }
 
         pub fn delete(self: *Self, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
-            const key_bytes = try serializeToRef(self.allocator, key);
+            const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
             defer key_bytes.deinit();
             return try callRocks(
                 self.logger,
@@ -156,9 +156,9 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 key: cf.Key,
                 value: cf.Value,
             ) anyerror!void {
-                const key_bytes = try serializeToRef(self.allocator, key);
+                const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
                 defer key_bytes.deinit();
-                const val_bytes = try serializeToRef(self.allocator, value);
+                const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
                 defer val_bytes.deinit();
                 self.inner.put(
                     self.cf_handles[cf.find(column_families)],
@@ -172,7 +172,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 comptime cf: ColumnFamily,
                 key: cf.Key,
             ) anyerror!void {
-                const key_bytes = try serializeToRef(self.allocator, key);
+                const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
                 defer key_bytes.deinit();
                 self.inner.delete(self.cf_handles[cf.find(column_families)], key_bytes.data);
             }

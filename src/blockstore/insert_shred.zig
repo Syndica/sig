@@ -39,7 +39,8 @@ const MerkleRootMeta = meta.MerkleRootMeta;
 const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
 
-const serializer = sig.blockstore.database.serializer;
+const key_serializer = sig.blockstore.database.key_serializer;
+const value_serializer = sig.blockstore.database.value_serializer;
 
 pub const ShredInserter = struct {
     allocator: Allocator,
@@ -1513,11 +1514,11 @@ pub const ShredInserter = struct {
         const candidate: ErasureMeta //
         = while (try iter.nextBytes()) |entry| {
             defer for (entry) |e| e.deinit();
-            const key = try serializer.deserialize(ErasureSetId, self.allocator, entry[0].data);
+            const key = try key_serializer.deserialize(ErasureSetId, self.allocator, entry[0].data);
             if (key.slot != slot) return null;
             if (key.fec_set_index != fec_set_index) break .{
                 key,
-                try serializer.deserialize(ErasureMeta, self.allocator, entry[1].data),
+                try value_serializer.deserialize(ErasureMeta, self.allocator, entry[1].data),
             };
         } else return null;
 

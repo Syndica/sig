@@ -161,36 +161,41 @@ pub const ColumnFamily = struct {
     }
 };
 
+pub const key_serializer = serializer(.big);
+pub const value_serializer = serializer(.little);
+
 /// Bincode-based serializer that should be usable by database implementations.
-pub const serializer = struct {
-    /// Returned slice is owned by the caller. Free with `allocator.free`.
-    pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
-        const buf = try allocator.alloc(u8, sig.bincode.sizeOf(item, .{}));
-        return sig.bincode.writeToSlice(buf, item, .{});
-    }
+fn serializer(endian: std.builtin.Endian) type {
+    return struct {
+        /// Returned slice is owned by the caller. Free with `allocator.free`.
+        pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
+            const buf = try allocator.alloc(u8, sig.bincode.sizeOf(item, .{}));
+            return sig.bincode.writeToSlice(buf, item, .{ .endian = endian });
+        }
 
-    /// Returned data may or may not be owned by the caller.
-    /// Do both:
-    ///  - Assume the data is owned by the scope where `item` originated,
-    ///    so finish using the slice before returning from the caller (do not store slice as-is)
-    ///  - Call BytesRef.deinit before returning from the caller (as if you own it).
-    ///
-    /// Use this if the database backend accepts a pointer and immediately calls memcpy.
-    pub fn serializeToRef(allocator: Allocator, item: anytype) !BytesRef {
-        return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) .{
-            .allocator = null,
-            .data = item,
-        } else .{
-            .allocator = allocator,
-            .data = try serializeAlloc(allocator, item),
-        };
-    }
+        /// Returned data may or may not be owned by the caller.
+        /// Do both:
+        ///  - Assume the data is owned by the scope where `item` originated,
+        ///    so finish using the slice before returning from the caller (do not store slice as-is)
+        ///  - Call BytesRef.deinit before returning from the caller (as if you own it).
+        ///
+        /// Use this if the database backend accepts a pointer and immediately calls memcpy.
+        pub fn serializeToRef(allocator: Allocator, item: anytype) !BytesRef {
+            return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) .{
+                .allocator = null,
+                .data = item,
+            } else .{
+                .allocator = allocator,
+                .data = try serializeAlloc(allocator, item),
+            };
+        }
 
-    /// Returned data is owned by the caller. Free with `allocator.free`.
-    pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
-        return try sig.bincode.readFromSlice(allocator, T, bytes, .{});
-    }
-};
+        /// Returned data is owned by the caller. Free with `allocator.free`.
+        pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
+            return try sig.bincode.readFromSlice(allocator, T, bytes, .{ .endian = endian });
+        }
+    };
+}
 
 pub const BytesRef = struct {
     allocator: ?Allocator = null,
