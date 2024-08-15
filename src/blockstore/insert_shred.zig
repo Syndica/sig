@@ -1074,6 +1074,7 @@ pub const ShredInserter = struct {
         reed_solomon_cache: *ReedSolomonCache,
     ) !void {
         var available_shreds = ArrayList(Shred).init(self.allocator);
+        defer available_shreds.deinit();
 
         try getRecoveryShreds(
             self,
@@ -2248,7 +2249,7 @@ test "recovery" {
     const code_shreds = shreds[34..68];
 
     var leader_schedule = OneSlotLeaderProvider{
-        .leader = try Pubkey.fromString("AR4tN1a1iMFNz2JRfG5qZjHW6msZ7kftLRbogCpphrqe"),
+        .leader = try Pubkey.fromString("2iWGQbhdWWAA15KTBJuqvAxCdKmEvY26BoFRBU4419Sn"),
     };
 
     const is_repairs = try allocator.alloc(bool, code_shreds.len);
