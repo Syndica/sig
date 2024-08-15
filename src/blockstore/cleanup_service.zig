@@ -38,7 +38,7 @@ pub fn run(
     while (!exit.load(.unordered)) {
         const last_check_time_elapsed_nanos = (try Instant.now()).since(last_check_time);
         if (last_check_time_elapsed_nanos > LOOP_LIMITER.asNanos()) {
-            last_purge_slot = try cleanup_ledger(
+            last_purge_slot = try cleanBlockstore(
                 allocator,
                 &blockstore_reader,
                 &blockstore_writer,
@@ -71,8 +71,8 @@ pub fn run(
 ///   simply return `Ok` without actually running the ledger cleanup.
 ///   In this case, `purge_interval` will remain unchanged.
 ///
-/// Also see `blockstore::purge_slot`.
-pub fn cleanup_ledger(
+/// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
+pub fn cleanBlockstore(
     allocator: std.mem.Allocator,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
@@ -83,7 +83,7 @@ pub fn cleanup_ledger(
     const root = blockstore_reader.max_root.load(.unordered);
     if (root - last_purge_slot <= purge_interval) return last_purge_slot;
 
-    const slots_to_clean, const lowest_cleanup_slot, _ = find_slots_to_clean(
+    const slots_to_clean, const lowest_cleanup_slot, _ = findSlotsToClean(
         allocator,
         blockstore_reader,
         root,
@@ -111,7 +111,9 @@ pub fn cleanup_ledger(
 ///   cleaned up.
 /// - `total_shreds` (u64): the total estimated number of shreds before the
 ///   `root`.
-fn find_slots_to_clean(
+///
+/// Analogous to the [`find_slots_to_clean`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L103)
+fn findSlotsToClean(
     allocator: std.mem.Allocator,
     blockstore_reader: *BlockstoreReader,
     root: Slot,
@@ -120,9 +122,11 @@ fn find_slots_to_clean(
     const data_shred_cf_name = Schema.data_shred.name;
 
     const live_files = try blockstore_reader.db.db.liveFiles(allocator);
-    const num_shreds = 0;
-    for (live_files) |live_file| {
-        if (live_file.column_family_name == data_shred_cf_name) {
+    defer live_files.deinit();
+
+    var num_shreds: u64 = 0;
+    for (live_files.items) |live_file| {
+        if (std.mem.eql(u8, live_file.column_family_name, data_shred_cf_name)) {
             num_shreds += live_file.num_entries;
         }
     }
@@ -147,7 +151,7 @@ fn find_slots_to_clean(
     // With healthy cluster operation, the minimum ledger size ensures
     // that purged slots will be quite old in relation to the newest root.
     const lowest_slot = try blockstore_reader.lowestSlot();
-    const highest_slot = try blockstore_reader.highestSlot();
+    const highest_slot = try blockstore_reader.highestSlot() orelse lowest_slot;
 
     if (highest_slot < lowest_slot) return .{ false, 0, num_shreds };
 
@@ -158,13 +162,38 @@ fn find_slots_to_clean(
 
     if (num_shreds <= max_ledger_shreds) return .{ false, 0, num_shreds };
 
-    // Add an extra (mean_shreds_per_slot - 1) in the numerator
-    // so that our integer division rounds up
     if (mean_shreds_per_slot > 0) {
-        const num_slots_to_clean = (num_shreds - max_ledger_shreds + mean_shreds_per_slot - 1) / mean_shreds_per_slot;
+        // Add an extra (mean_shreds_per_slot - 1) in the numerator
+        // so that our integer division rounds up
+        const num_slots_to_clean = (num_shreds - max_ledger_shreds + (mean_shreds_per_slot - 1)) / mean_shreds_per_slot;
         const lowest_cleanup_slot = @min(lowest_slot + num_slots_to_clean - 1, root);
         return .{ true, lowest_cleanup_slot, num_shreds };
+    } else {
+        return .{ false, 0, num_shreds };
     }
+}
 
-    return .{ false, 0, num_shreds };
+const bincode = sig.bincode;
+const Blockstore = sig.blockstore.BlockstoreDB;
+const ShredInserter = sig.blockstore.ShredInserter;
+const CodingShred = sig.shred_collector.shred.CodingShred;
+const TestState = sig.blockstore.insert_shred.TestState;
+
+test "findSlotsToClean" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("findSlotsToClean");
+    defer state.deinit();
+    const db = state.db;
+
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+    );
+
+    _ = try findSlotsToClean(allocator, &reader, 0, 100);
 }
