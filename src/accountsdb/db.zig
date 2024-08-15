@@ -568,8 +568,7 @@ pub const AccountsDB = struct {
                     ref_slice,
                 );
                 counting_alloc.count += 1;
-
-                try reference_memory.putNoClobber(slot, ref_list);
+                reference_memory.putAssumeCapacityNoClobber(slot, ref_list);
             }
 
             const file_id = file_info.id;
@@ -605,7 +604,7 @@ pub const AccountsDB = struct {
                 const bin, var bin_lg = bin_rw.writeWithLock();
                 defer bin_lg.unlock();
 
-                try bin.ensureTotalCapacity(@intCast(count));
+                try bin.ensureTotalCapacity(count);
                 total_accounts += count;
             }
         }
@@ -752,11 +751,11 @@ pub const AccountsDB = struct {
                 const index_bin, var index_bin_lg = index_bin_rw.writeWithLock();
                 defer index_bin_lg.unlock();
 
-                try index_bin.ensureTotalCapacity(@intCast(bin_n_accounts));
+                try index_bin.ensureTotalCapacity(bin_n_accounts);
             }
 
             for (thread_dbs) |*thread_db| {
-                var bin_rw = thread_db.account_index.getBin(bin_index);
+                const bin_rw = thread_db.account_index.getBin(bin_index);
                 const bin, var bin_lg = bin_rw.readWithLock();
                 defer bin_lg.unlock();
 
@@ -1779,7 +1778,7 @@ pub const AccountsDB = struct {
             var offset: usize = 0;
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = &(account_iter.next().?);
+                const account = account_iter.next().?;
                 if (is_alive) {
                     offsets.appendAssumeCapacity(offset);
                     offset += account.writeToBuf(new_memory[offset..]);
@@ -1788,6 +1787,10 @@ pub const AccountsDB = struct {
 
             {
                 // add file to map
+                const file_map, var file_map_lg = self.disk_accounts.file_map.writeWithLock();
+                defer file_map_lg.unlock();
+                try file_map.ensureUnusedCapacity(self.allocator, 1);
+
                 var new_account_file = try AccountFile.init(
                     new_file,
                     .{ .id = new_file_id, .length = offset },
@@ -1795,9 +1798,7 @@ pub const AccountsDB = struct {
                 );
                 new_account_file.number_of_accounts = accounts_alive_count;
 
-                const file_map, var file_map_lg = self.disk_accounts.file_map.writeWithLock();
-                defer file_map_lg.unlock();
-                try file_map.putNoClobber(self.allocator, new_file_id, new_account_file);
+                file_map.putAssumeCapacityNoClobber(new_file_id, new_account_file);
             }
 
             // update the references
@@ -1810,7 +1811,7 @@ pub const AccountsDB = struct {
             var offset_index: u64 = 0;
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = &(account_iter.next().?);
+                const account = account_iter.next().?;
                 if (is_alive) {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
@@ -2278,7 +2279,7 @@ pub const AccountsDB = struct {
 
             const new_len = bin_counts[bin_index] + bin.count();
             if (new_len > 0) {
-                try bin.ensureTotalCapacity(@intCast(new_len));
+                try bin.ensureTotalCapacity(new_len);
             }
         }
 
@@ -3520,7 +3521,7 @@ test "purge accounts in cache works" {
 
     // ref backing memory is cleared
     {
-        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
         defer reference_memory_lg.unlock();
 
         try std.testing.expect(reference_memory.count() == 0);
