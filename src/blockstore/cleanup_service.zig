@@ -83,16 +83,16 @@ pub fn cleanBlockstore(
     const root = blockstore_reader.max_root.load(.unordered);
     if (root - last_purge_slot <= purge_interval) return last_purge_slot;
 
-    const slots_to_clean, const lowest_cleanup_slot, _ = findSlotsToClean(
+    const result = findSlotsToClean(
         allocator,
         blockstore_reader,
         root,
         max_ledger_shreds,
     );
 
-    if (slots_to_clean) {
-        blockstore_writer.setLowestCleanupSlot(lowest_cleanup_slot);
-        blockstore_writer.purgeSlots(0, lowest_cleanup_slot);
+    if (result.should_clean) {
+        blockstore_writer.setLowestCleanupSlot(result.lowest_cleanup_slot);
+        blockstore_writer.purgeSlots(0, result.lowest_cleanup_slot);
         // blockstore_reader.setMaxExpiredSlot(lowest_cleanup_slot);
     }
 
@@ -118,7 +118,11 @@ fn findSlotsToClean(
     blockstore_reader: *BlockstoreReader,
     root: Slot,
     max_ledger_shreds: u64,
-) !struct { bool, Slot, u64 } {
+) !struct {
+    should_clean: bool,
+    lowest_slot_to_purge: Slot,
+    total_shreds: u64,
+} {
     const data_shred_cf_name = Schema.data_shred.name;
 
     const live_files = try blockstore_reader.db.db.liveFiles(allocator);
@@ -153,23 +157,28 @@ fn findSlotsToClean(
     const lowest_slot = try blockstore_reader.lowestSlot();
     const highest_slot = try blockstore_reader.highestSlot() orelse lowest_slot;
 
-    if (highest_slot < lowest_slot) return .{ false, 0, num_shreds };
+    if (highest_slot < lowest_slot) {
+        return .{ .should_clean = false, .lowest_slot_to_purge = 0, .total_shreds = num_shreds };
+    }
 
     // The + 1 ensures we count the correct number of slots. Additionally,
     // it guarantees num_slots >= 1 for the subsequent division.
     const num_slots = highest_slot - lowest_slot + 1;
     const mean_shreds_per_slot = num_shreds / num_slots;
+    // std.debug.print("num_shreds: {d}, num_slots: {d}, mean_shreds_per_slot: {d}\n", .{num_shreds, num_slots, mean_shreds_per_slot});
 
-    if (num_shreds <= max_ledger_shreds) return .{ false, 0, num_shreds };
+    if (num_shreds <= max_ledger_shreds) {
+        return .{ .should_clean = false, .lowest_slot_to_purge = 0, .total_shreds = num_shreds };
+    }
 
     if (mean_shreds_per_slot > 0) {
         // Add an extra (mean_shreds_per_slot - 1) in the numerator
         // so that our integer division rounds up
         const num_slots_to_clean = (num_shreds - max_ledger_shreds + (mean_shreds_per_slot - 1)) / mean_shreds_per_slot;
         const lowest_cleanup_slot = @min(lowest_slot + num_slots_to_clean - 1, root);
-        return .{ true, lowest_cleanup_slot, num_shreds };
+        return .{ .should_clean = true, .lowest_slot_to_purge = lowest_cleanup_slot, .total_shreds = num_shreds };
     } else {
-        return .{ false, 0, num_shreds };
+        return .{ .should_clean = false, .lowest_slot_to_purge = 0, .total_shreds = num_shreds };
     }
 }
 
@@ -186,7 +195,7 @@ test "findSlotsToClean" {
 
     var state = try TestState.init("findSlotsToClean");
     defer state.deinit();
-    const db = state.db;
+    var db = state.db;
 
     var reader = try BlockstoreReader.init(
         allocator,
@@ -194,9 +203,6 @@ test "findSlotsToClean" {
         db,
         registry,
     );
-
-    // TODO: Add test cases
-    _ = try findSlotsToClean(allocator, &reader, 0, 100);
 
     // set highest and lowest slot by inserting slot_meta
     var lowest_slot_meta = sig.blockstore.meta.SlotMeta.init(allocator, 10, null);
@@ -207,7 +213,29 @@ test "findSlotsToClean" {
     defer highest_slot_meta.deinit();
     highest_slot_meta.received = 20;
 
+    {
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(sig.blockstore.schema.schema.slot_meta, lowest_slot_meta.slot, lowest_slot_meta);
+        try write_batch.put(sig.blockstore.schema.schema.slot_meta, highest_slot_meta.slot, highest_slot_meta);
+        try db.commit(write_batch);
+    }
 
+    const r = try findSlotsToClean(allocator, &reader, 0, 100);
+    try std.testing.expectEqual(false, r.should_clean);
+    try std.testing.expectEqual(0, r.total_shreds);
+    try std.testing.expectEqual(0, r.lowest_slot_to_purge);
 
-    
+    // // TODO: understand how live files are created
+    // // add data shreds
+    // var data_shred = try sig.shred_collector.shred.DataShred.default(allocator);
+    // defer data_shred.fields.deinit();
+    // {
+    //     var write_batch = try db.initWriteBatch();
+    //     for (0..1000) |i| {
+    //         try write_batch.put(sig.blockstore.schema.schema.data_shred, .{ 19, i }, data_shred.fields.payload);
+    //     }
+    //     try db.commit(write_batch);
+    // }
+    // const r2 = try findSlotsToClean(allocator, &reader, 0, 1);
+    // std.debug.print("r2: {any}\n", .{r2});
 }

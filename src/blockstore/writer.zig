@@ -299,17 +299,17 @@ pub const BlockstoreWriter = struct {
         // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
         const purge_to_slot = to_slot + 1;
 
-        var columns_purged = true;
+        var did_purge = true;
         writePurgeRange(&write_batch, from_slot, purge_to_slot) catch {
-            columns_purged = false;
+            did_purge = false;
         };
         try self.db.commit(write_batch);
 
-        if (columns_purged and from_slot == 0) {
+        if (did_purge and from_slot == 0) {
             try self.purgeFilesInRange(from_slot, purge_to_slot);
         }
 
-        return columns_purged;
+        return did_purge;
     }
 
     /// NOTE: this purges the range within [from_slot, to_slot) exclusive
@@ -451,7 +451,7 @@ test "purgeSlots" {
 
     var state = try TestState.init("setRoots");
     defer state.deinit();
-    const db = state.db;
+    var db = state.db;
 
     var writer = BlockstoreWriter{
         .allocator = allocator,
@@ -462,7 +462,54 @@ test "purgeSlots" {
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
     };
 
-    _ = try writer.purgeSlots(0, 100);
+    // write some roots
+    const roots: [10]Slot = .{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+    try writer.setRoots(&roots);
+
+    // purge the range [0, 5]
+    const did_purge = try writer.purgeSlots(0, 5);
+    try std.testing.expectEqual(true, did_purge);
+
+    for (0..5 + 1) |slot| {
+        const is_root = try writer.isRoot(slot);
+        try std.testing.expectEqual(false, is_root);
+    }
+
+    for (6..10 + 1) |slot| {
+        const is_root = try writer.isRoot(slot);
+        try std.testing.expectEqual(true, is_root);
+    }
+
+    // write another type
+    var write_batch = try db.initWriteBatch();
+    for (0..roots.len + 1) |i| {
+        const merkle_root_meta = sig.shred_collector.shred.ErasureSetId{
+            .fec_set_index = i,
+            .slot = i,
+        };
+        const merkle_meta = sig.blockstore.meta.MerkleRootMeta{
+            .merkle_root = null,
+            .first_received_shred_index = 0,
+            .first_received_shred_type = .data,
+        };
+
+        try write_batch.put(schema.merkle_root_meta, merkle_root_meta, merkle_meta);
+    }
+    try db.commit(write_batch);
+
+    // purge the range [0, 5]
+    const did_purge2 = try writer.purgeSlots(0, 5);
+    try std.testing.expectEqual(true, did_purge2);
+
+    for (0..5 + 1) |i| {
+        const r = try db.get(schema.merkle_root_meta, .{ .slot = i, .fec_set_index = i });
+        try std.testing.expectEqual(null, r);
+    }
+
+    for (6..10 + 1) |i| {
+        const r = try db.get(schema.merkle_root_meta, .{ .slot = i, .fec_set_index = i });
+        try std.testing.expect(r != null);
+    }
 }
 
 test "setRoots" {
