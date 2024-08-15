@@ -30,6 +30,7 @@ const SlotMeta = blockstore.meta.SlotMeta;
 const TransactionStatusMeta = blockstore.transaction_status.TransactionStatusMeta;
 
 const schema = blockstore.schema.schema;
+const COLUMN_FAMILIES = blockstore.schema.list;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,
@@ -281,6 +282,38 @@ pub const BlockstoreWriter = struct {
         }
 
         try self.db.commit(write_batch);
+    }
+
+    fn setLowestCleanupSlot(self: *Self, new_slot: Slot) void {
+        const slot, var lock = self.lowest_cleanup_slot.writeWithLock();
+        defer lock.unlock();
+        slot.* = new_slot;
+    }
+
+    pub fn purgeSlots(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
+        const write_batch = try self.db.initWriteBatch();
+        const columns_purged = try purgeRange(write_batch, from_slot, to_slot);
+        try self.db.commit(write_batch);
+        if (columns_purged and from_slot == 0) {
+            self.purgeFilesInRange(from_slot, to_slot);
+        }
+        return columns_purged;
+    }
+
+    pub fn purgeRange(write_batch: BlockstoreDB.WriteBatch, from_slot: Slot, to_slot: Slot) !bool {
+        var columns_purged = true;
+        inline for (COLUMN_FAMILIES) |cf| {
+            columns_purged = columns_purged and (try write_batch.deleteRange(cf, write_batch, from_slot, to_slot));
+        }
+        return columns_purged;
+    }
+
+    pub fn purgeFilesInRange(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
+        var result = true;
+        inline for (COLUMN_FAMILIES) |cf| {
+            result = result and (try self.db.db.deleteFileInRange(cf, from_slot, to_slot, null));
+        }
+        return result;
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {

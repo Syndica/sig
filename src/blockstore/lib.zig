@@ -11,6 +11,7 @@ pub const shredder = @import("shredder.zig");
 pub const transaction_status = @import("transaction_status.zig");
 pub const tests = @import("tests.zig");
 pub const writer = @import("writer.zig");
+pub const cleanup_service = @import("cleanup_service.zig");
 
 pub const BlockstoreDB = blockstore.BlockstoreDB;
 pub const ShredInserter = insert_shred.ShredInserter;

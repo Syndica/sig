@@ -114,6 +114,10 @@ pub fn Database(comptime Impl: type) type {
             pub fn delete(self: *WriteBatch, comptime cf: ColumnFamily, key: cf.Key) anyerror!void {
                 return try self.impl.delete(cf, key);
             }
+
+            pub fn deleteRange(self: *WriteBatch, comptime cf: ColumnFamily, start: cf.Key, end: cf.Key) anyerror!void {
+                return try self.impl.deleteRange(cf, start, end);
+            }
         };
 
         pub fn iterator(

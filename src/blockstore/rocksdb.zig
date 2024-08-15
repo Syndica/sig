@@ -187,6 +187,23 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 defer key_bytes.deinit();
                 self.inner.delete(self.cf_handles[cf.find(column_families)], key_bytes.data);
             }
+
+            pub fn deleteRange(
+                self: *WriteBatch,
+                comptime cf: ColumnFamily,
+                start: cf.Key,
+                end: cf.Key,
+            ) anyerror!void {
+                const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
+                defer start_bytes.deinit();
+                const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
+                defer end_bytes.deinit();
+                self.inner.deleteRange(
+                    self.cf_handles[cf.find(column_families)],
+                    start_bytes.data,
+                    end_bytes.data,
+                );
+            }
         };
 
         pub fn iterator(
