@@ -195,5 +195,6 @@ test "findSlotsToClean" {
         registry,
     );
 
+    // TODO: Add test cases
     _ = try findSlotsToClean(allocator, &reader, 0, 100);
 }

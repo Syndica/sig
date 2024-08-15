@@ -290,30 +290,83 @@ pub const BlockstoreWriter = struct {
         slot.* = new_slot;
     }
 
+    /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
     pub fn purgeSlots(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
-        const write_batch = try self.db.initWriteBatch();
-        const columns_purged = try purgeRange(write_batch, from_slot, to_slot);
-        try self.db.commit(write_batch);
-        if (columns_purged and from_slot == 0) {
-            self.purgeFilesInRange(from_slot, to_slot);
-        }
-        return columns_purged;
-    }
+        var write_batch = try self.db.initWriteBatch();
 
-    pub fn purgeRange(write_batch: BlockstoreDB.WriteBatch, from_slot: Slot, to_slot: Slot) !bool {
         var columns_purged = true;
-        inline for (COLUMN_FAMILIES) |cf| {
-            columns_purged = columns_purged and (try write_batch.deleteRange(cf, write_batch, from_slot, to_slot));
+        writePurgeRange(&write_batch, from_slot, to_slot) catch {
+            columns_purged = false;
+        };
+        try self.db.commit(write_batch);
+
+        if (columns_purged and from_slot == 0) {
+            try self.purgeFilesInRange(from_slot, to_slot);
         }
+
         return columns_purged;
     }
 
-    pub fn purgeFilesInRange(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
-        var result = true;
-        inline for (COLUMN_FAMILIES) |cf| {
-            result = result and (try self.db.db.deleteFileInRange(cf, from_slot, to_slot, null));
-        }
-        return result;
+    /// NOTE: this purges the range within [from_slot, to_slot) exclusive
+    /// is the pseudocode equivalent of the following:
+    /// inline for (COLUMN_FAMILIES) |cf| {
+    ///     try write_batch.deleteRange(cf, from_slot, to_slot);
+    /// }
+    pub fn writePurgeRange(write_batch: *BlockstoreDB.WriteBatch, from_slot: Slot, to_slot: Slot) !void {
+        var delete_count: u32 = 0; // sanity check
+
+        // NOTE: we need to conver the slot into keys for the column families
+        // this is only used in this function and should not change, so its ok to hard code it
+        try purgeRangeWithCount(write_batch, schema.slot_meta, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.dead_slots, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.duplicate_slots, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.roots, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.erasure_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.orphans, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.index, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.transaction_status, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
+        // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason (permalink comment seems incorrect?)
+        // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/blockstore_db.rs#L962
+        try purgeRangeWithCount(write_batch, schema.address_signatures, .{ .slot = from_slot, .address = Pubkey.default(), .transaction_index = 0, .signature = Signature.default() }, .{ .slot = to_slot, .address = Pubkey.default(), .transaction_index = 0, .signature = Signature.default() }, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.transaction_memos, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.transaction_status_index, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.rewards, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.blocktime, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.perf_samples, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.block_height, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.bank_hash, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.optimistic_slots, from_slot, to_slot, &delete_count);
+        try purgeRangeWithCount(write_batch, schema.merkle_root_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+        // slot is not indexed in this method, so this is a full purge
+        // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
+        try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.default(), Pubkey.default(), &delete_count);
+
+        // make sure we covered all the column families
+        std.debug.assert(delete_count == COLUMN_FAMILIES.len);
+    }
+
+    pub fn purgeRangeWithCount(
+        write_batch: *BlockstoreDB.WriteBatch,
+        comptime cf: sig.blockstore.database.ColumnFamily,
+        from_key: cf.Key,
+        to_key: cf.Key,
+        count: *u32,
+    ) !void {
+        try write_batch.deleteRange(cf, from_key, to_key);
+        count.* += 1;
+    }
+
+    pub fn purgeFilesInRange(self: *Self, from_slot: Slot, to_slot: Slot) !void {
+        _ = self;
+        _ = from_slot;
+        _ = to_slot;
+        // var result = true;
+        // inline for (COLUMN_FAMILIES) |cf| {
+        //     result = result and (try self.db.db.deleteFileInRange(cf, from_slot, to_slot, null));
+        // }
+        // return result;
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {
@@ -345,6 +398,27 @@ const ScanAndFixRootsMetrics = struct {
 };
 
 const TestState = sig.blockstore.insert_shred.TestState;
+
+test "purgeSlots" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("setRoots");
+    defer state.deinit();
+    const db = state.db;
+
+    var writer = BlockstoreWriter{
+        .allocator = allocator,
+        .db = db,
+        .logger = logger,
+        .lowest_cleanup_slot = RwMux(Slot).init(0),
+        .max_root = std.atomic.Value(Slot).init(0),
+        .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+    };
+
+    _ = try writer.purgeSlots(0, 100);
+}
 
 test "setRoots" {
     const allocator = std.testing.allocator;

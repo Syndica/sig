@@ -196,8 +196,10 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             ) anyerror!void {
                 const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
                 defer start_bytes.deinit();
+
                 const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
                 defer end_bytes.deinit();
+
                 self.inner.deleteRange(
                     self.cf_handles[cf.find(column_families)],
                     start_bytes.data,
