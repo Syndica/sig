@@ -1102,7 +1102,14 @@ pub const AccountsDB = struct {
                         defer lock_guard.unlock();
 
                         account_hash = switch (account) {
-                            .file => |in_file| in_file.hash().*, // TODO: is this the same as the `.hash` function on `Account`?
+                            .file => |in_file| sig.core.account.hashAccount(
+                                in_file.lamports().*,
+                                in_file.data,
+                                &in_file.owner().data,
+                                in_file.executable().*,
+                                in_file.rent_epoch().*,
+                                &in_file.pubkey().data,
+                            ),
                             .cache => |cached| cached.hash(&key),
                         };
                     }
