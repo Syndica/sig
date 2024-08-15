@@ -32,7 +32,7 @@
             .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/0e131062a7e80240f2ac20f413c80a5d55168673.tar.gz",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/bae444e846be67e4728f774bb580a136622f1c8e.tar.gz",
             .hash = "1220bcbc2e1d5d3d1ce3586d21aabc3ff0f29c122213c928823b6a38da273d39ae9e",
         },
     },
