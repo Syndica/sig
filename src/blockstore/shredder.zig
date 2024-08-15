@@ -98,6 +98,8 @@ pub fn recover(
     defer allocator.free(all_shreds);
     const shards = try allocator.alloc(?[]const u8, num_shards);
     defer allocator.free(shards);
+    for (all_shreds) |*s| s.* = null;
+    for (shards) |*s| s.* = null;
     for (shreds) |shred| {
         const index = shred.erasureShardIndex() catch {
             return error.InvalidIndex;
@@ -123,44 +125,51 @@ pub fn recover(
     // Reconstruct code and data shreds from erasure encoded shards.
     const recovered_shreds = try allocator.alloc(Shred, all_shreds.len);
     defer allocator.free(recovered_shreds);
-    for (all_shreds, shards, 0..) |shred, maybe_shard, index| if (shred == null) {
-        const shard = maybe_shard orelse return error.TooFewShards;
-        if (index < num_data_shreds) {
-            const data_shred = try DataShred.fromRecoveredShard(
-                allocator,
-                common_header.signature,
-                chained_merkle_root,
-                retransmitter_signature,
-                shard,
-            );
-            const c = data_shred.fields.common;
-            if (c.shred_variant.proof_size != proof_size or
-                c.shred_variant.chained != chained or
-                c.shred_variant.resigned != resigned or
-                c.slot != common_header.slot or
-                c.version != common_header.version or
-                c.fec_set_index != common_header.fec_set_index)
-            {
-                return error.InvalidRecoveredShred;
-            }
-            recovered_shreds[index] = .{ .data = data_shred };
+    std.debug.assert(all_shreds.len == shards.len);
+    for (all_shreds, shards, 0..) |maybe_shred, maybe_shard, index| {
+        if (maybe_shred) |shred| {
+            recovered_shreds[index] = shred;
         } else {
-            const offset = index - num_data_shreds;
-            var this_common_header = common_header;
-            var this_coding_header = coding_header;
-            this_common_header.index += @intCast(offset);
-            this_coding_header.position = @intCast(offset);
-            const coding_shred = try CodingShred.fromRecoveredShard(
-                allocator,
-                common_header,
-                coding_header,
-                chained_merkle_root,
-                retransmitter_signature,
-                shard,
-            );
-            recovered_shreds[index] = .{ .code = coding_shred };
+            const shard = maybe_shard orelse return error.TooFewShards;
+            if (index < num_data_shreds) {
+                const data_shred = try DataShred.fromRecoveredShard(
+                    allocator,
+                    common_header.signature,
+                    chained_merkle_root,
+                    retransmitter_signature,
+                    shard,
+                );
+                const c = data_shred.fields.common;
+                if (c.shred_variant.proof_size != proof_size or
+                    c.shred_variant.chained != chained or
+                    c.shred_variant.resigned != resigned or
+                    c.slot != common_header.slot or
+                    c.version != common_header.version or
+                    c.fec_set_index != common_header.fec_set_index)
+                {
+                    return error.InvalidRecoveredShred;
+                }
+                recovered_shreds[index] = .{ .data = data_shred };
+            } else {
+                const offset = index - num_data_shreds;
+                var this_common_header = common_header;
+                var this_coding_header = coding_header;
+                this_common_header.index += @intCast(offset);
+                this_coding_header.position = @intCast(offset);
+                const coding_shred = try CodingShred.fromRecoveredShard(
+                    allocator,
+                    common_header,
+                    coding_header,
+                    chained_merkle_root,
+                    retransmitter_signature,
+                    shard,
+                );
+                recovered_shreds[index] = .{ .code = coding_shred };
+            }
         }
-    };
+        // TODO perf: should this only run in debug mode?
+        try recovered_shreds[index].sanitize();
+    }
 
     // Compute merkle tree
     var tree = try std.ArrayList(Hash).initCapacity(allocator, recovered_shreds.len);
