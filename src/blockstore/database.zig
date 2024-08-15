@@ -81,6 +81,10 @@ pub fn Database(comptime Impl: type) type {
             return try self.impl.delete(cf, key);
         }
 
+        pub fn deleteFilesRange(self: *Self, comptime cf: ColumnFamily, start: cf.Key, end: cf.Key) anyerror!void {
+            return try self.impl.deleteFilesRange(cf, start, end);
+        }
+
         pub fn initWriteBatch(self: *Self) anyerror!WriteBatch {
             return .{ .impl = self.impl.initBatch() };
         }

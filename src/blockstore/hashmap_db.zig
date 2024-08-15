@@ -119,6 +119,18 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = self.maps[cf.find(column_families)].delete(self.allocator, key_bytes);
         }
 
+        pub fn deleteFilesRange(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            start: cf.Key,
+            end: cf.Key,
+        ) anyerror!void {
+            _ = self;
+            _ = start;
+            _ = end;
+            @panic("deleteFilesRange not implemented for SharedHashMapDB");
+        }
+
         pub fn initWriteBatch(self: *Self) error{}!WriteBatch {
             return .{
                 .allocator = self.allocator,

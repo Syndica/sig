@@ -290,18 +290,23 @@ pub const BlockstoreWriter = struct {
         slot.* = new_slot;
     }
 
+    /// NOTE: this purges the range within [from_slot, to_slot] inclusive
+    ///
     /// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
     pub fn purgeSlots(self: *Self, from_slot: Slot, to_slot: Slot) !bool {
         var write_batch = try self.db.initWriteBatch();
 
+        // the methods used below are exclusive [from_slot, to_slot), so we add 1 to purge inclusive
+        const purge_to_slot = to_slot + 1;
+
         var columns_purged = true;
-        writePurgeRange(&write_batch, from_slot, to_slot) catch {
+        writePurgeRange(&write_batch, from_slot, purge_to_slot) catch {
             columns_purged = false;
         };
         try self.db.commit(write_batch);
 
         if (columns_purged and from_slot == 0) {
-            try self.purgeFilesInRange(from_slot, to_slot);
+            try self.purgeFilesInRange(from_slot, purge_to_slot);
         }
 
         return columns_purged;
@@ -316,7 +321,7 @@ pub const BlockstoreWriter = struct {
         var delete_count: u32 = 0; // sanity check
 
         // NOTE: we need to conver the slot into keys for the column families
-        // this is only used in this function and should not change, so its ok to hard code it
+        // this is only used in this and one other function and should not change, so its ok to hard code it
         try purgeRangeWithCount(write_batch, schema.slot_meta, from_slot, to_slot, &delete_count);
         try purgeRangeWithCount(write_batch, schema.dead_slots, from_slot, to_slot, &delete_count);
         try purgeRangeWithCount(write_batch, schema.duplicate_slots, from_slot, to_slot, &delete_count);
@@ -358,15 +363,55 @@ pub const BlockstoreWriter = struct {
         count.* += 1;
     }
 
+    /// NOTE: this purges the range within [from_slot, to_slot) exclusive
+    /// is the pseudocode equivalent of the following:
+    /// inline for (COLUMN_FAMILIES) |cf| {
+    ///     try self.db.deleteFileRange(cf, from_slot, to_slot);
+    /// }
     pub fn purgeFilesInRange(self: *Self, from_slot: Slot, to_slot: Slot) !void {
-        _ = self;
-        _ = from_slot;
-        _ = to_slot;
-        // var result = true;
-        // inline for (COLUMN_FAMILIES) |cf| {
-        //     result = result and (try self.db.db.deleteFileInRange(cf, from_slot, to_slot, null));
-        // }
-        // return result;
+        var delete_count: u32 = 0; // sanity check
+
+        // NOTE: we need to conver the slot into keys for the column families
+        // this is only used in this and one other function and should not change, so its ok to hard code it
+        try purgeFileRangeWithCount(&self.db, schema.slot_meta, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.dead_slots, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.duplicate_slots, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.roots, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.erasure_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.orphans, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.index, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.data_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.code_shred, .{ from_slot, 0 }, .{ to_slot, 0 }, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.transaction_status, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
+        // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason (permalink comment seems incorrect?)
+        // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/blockstore_db.rs#L962
+        try purgeFileRangeWithCount(&self.db, schema.address_signatures, .{ .slot = from_slot, .address = Pubkey.default(), .transaction_index = 0, .signature = Signature.default() }, .{ .slot = to_slot, .address = Pubkey.default(), .transaction_index = 0, .signature = Signature.default() }, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.transaction_memos, .{ Signature.default(), from_slot }, .{ Signature.default(), to_slot }, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.transaction_status_index, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.rewards, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.blocktime, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.perf_samples, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.block_height, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.bank_hash, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.optimistic_slots, from_slot, to_slot, &delete_count);
+        try purgeFileRangeWithCount(&self.db, schema.merkle_root_meta, .{ .slot = from_slot, .fec_set_index = 0 }, .{ .slot = to_slot, .fec_set_index = 0 }, &delete_count);
+        // slot is not indexed in this method, so this is a full purge
+        // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
+        try purgeFileRangeWithCount(&self.db, schema.program_costs, Pubkey.default(), Pubkey.default(), &delete_count);
+
+        // make sure we covered all the column families
+        std.debug.assert(delete_count == COLUMN_FAMILIES.len);
+    }
+
+    pub fn purgeFileRangeWithCount(
+        db: *BlockstoreDB,
+        comptime cf: sig.blockstore.database.ColumnFamily,
+        from_key: cf.Key,
+        to_key: cf.Key,
+        count: *u32,
+    ) !void {
+        try db.deleteFilesRange(cf, from_key, to_key);
+        count.* += 1;
     }
 
     fn isRoot(self: *Self, slot: Slot) !bool {

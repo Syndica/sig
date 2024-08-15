@@ -133,6 +133,25 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
+        pub fn deleteFilesRange(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            start: cf.Key,
+            end: cf.Key,
+        ) anyerror!void {
+            const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
+            defer start_bytes.deinit();
+
+            const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
+            defer end_bytes.deinit();
+
+            return try callRocks(
+                self.logger,
+                rocks.DB.deleteFileInRange,
+                .{ &self.db, self.cf_handles[cf.find(column_families)], start_bytes.data, end_bytes.data },
+            );
+        }
+
         pub fn initWriteBatch(self: *Self) Error!WriteBatch {
             return .{
                 .allocator = self.allocator,
