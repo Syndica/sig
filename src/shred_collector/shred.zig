@@ -241,6 +241,7 @@ pub const DataShred = struct {
             return error.InvalidShardSize;
         }
         const payload = try allocator.alloc(u8, consts.payload_size);
+        errdefer allocator.free(payload);
         @memcpy(payload[0..SIGNATURE_LENGTH], &signature.data);
         @memcpy(payload[SIGNATURE_LENGTH..][0..shard_size], shard);
         var shred = try Fields.fromPayloadOwned(allocator, payload);
@@ -1075,7 +1076,7 @@ test "merkleProof" {
     const shreds = try loadShredsFromFile(
         std.testing.allocator,
         &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
-        "test_data/shreds/recovery_test_shreds_34_data_34_coding.bin",
+        "test_data/shreds/merkle_proof_test_shreds_34_data_34_coding.bin",
     );
     defer for (shreds) |s| s.deinit();
     var i: usize = 0;

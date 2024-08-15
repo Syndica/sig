@@ -98,6 +98,7 @@ pub fn recover(
     defer allocator.free(all_shreds);
     const shards = try allocator.alloc(?[]const u8, num_shards);
     defer allocator.free(shards);
+
     for (all_shreds) |*s| s.* = null;
     for (shards) |*s| s.* = null;
     for (shreds) |shred| {
@@ -108,8 +109,6 @@ pub fn recover(
         all_shreds[index] = shred;
         shards[index] = try shred.erasureShardAsSlice();
     }
-    const rs = try reed_solomon_cache.get(num_data_shreds, num_coding_shreds);
-    try rs.reconstruct(allocator, shards, false);
 
     // identify which shreds were already present and which need to be recovered
     var num_to_recover: usize = 1;
@@ -121,10 +120,33 @@ pub fn recover(
             num_to_recover += 1;
         }
     }
+    defer {
+        // The shards that are created during reconstruct need to be freed.
+        // Existing shards do not need to be freed because they were already owned by calling scope.
+        for (shards, mask) |shard, was_present| {
+            if (shard) |s| {
+                if (!was_present) allocator.free(s);
+            }
+        }
+    }
+
+    // Reconstruct the shard bytes using reed solomon
+    var rs = try reed_solomon_cache.get(num_data_shreds, num_coding_shreds);
+    defer rs.deinit();
+    try rs.reconstruct(allocator, shards, false);
 
     // Reconstruct code and data shreds from erasure encoded shards.
     const recovered_shreds = try allocator.alloc(Shred, all_shreds.len);
     defer allocator.free(recovered_shreds);
+    var num_recovered_so_far: usize = 0;
+    errdefer {
+        // The shreds that are created below need to be freed if there is an error.
+        // If no error, ownership is transfered to calling scope.
+        // Existing shreds do not need to be freed because they were already owned by calling scope.
+        for (recovered_shreds, mask, 0..num_recovered_so_far) |shred, was_present, _| {
+            if (!was_present) shred.deinit();
+        }
+    }
     std.debug.assert(all_shreds.len == shards.len);
     for (all_shreds, shards, 0..) |maybe_shred, maybe_shard, index| {
         if (maybe_shred) |shred| {
@@ -167,12 +189,14 @@ pub fn recover(
                 recovered_shreds[index] = .{ .code = coding_shred };
             }
         }
+        num_recovered_so_far += 1;
         // TODO perf: should this only run in debug mode?
         try recovered_shreds[index].sanitize();
     }
 
     // Compute merkle tree
     var tree = try std.ArrayList(Hash).initCapacity(allocator, recovered_shreds.len);
+    defer tree.deinit();
     for (recovered_shreds) |shred| {
         tree.appendAssumeCapacity(try shred.merkleNode());
     }
@@ -183,6 +207,7 @@ pub fn recover(
         const proof = try makeMerkleProof(allocator, index, num_shards, tree.items) orelse {
             return error.InvalidMerkleProof;
         };
+        defer proof.deinit();
         if (proof.items.len != @as(usize, @intCast(proof_size))) {
             return error.InvalidMerkleProof;
         }
