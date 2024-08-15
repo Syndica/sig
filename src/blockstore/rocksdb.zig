@@ -171,6 +171,8 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 const val_bytes = try value_serializer.serializeToRef(self.allocator, value);
                 defer val_bytes.deinit();
 
+                // std.debug.print("put: {any}\n", .{key_bytes.data});
+
                 self.inner.put(
                     self.cf_handles[cf.find(column_families)],
                     key_bytes.data,
@@ -206,7 +208,7 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                         .forward => .forward,
                         .reverse => .reverse,
                     },
-                    if (start_bytes) |sb| sb.data else null,
+                    if (start_bytes) |s| s.data else null,
                 ),
             };
         }

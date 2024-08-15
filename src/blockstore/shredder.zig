@@ -197,6 +197,7 @@ pub fn recover(
 
     // Compute merkle tree
     var tree = try std.ArrayList(Hash).initCapacity(allocator, recovered_shreds.len);
+    defer tree.deinit();
     for (recovered_shreds) |shred| {
         tree.appendAssumeCapacity(try shred.merkleNode());
     }

@@ -1901,8 +1901,10 @@ pub const TestState = struct {
     // if this leaks, you forgot to call `TestState.deinit`
     _leak_check: []const u8,
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
-    const allocator = gpa.allocator();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
+    // pub const allocator = gpa.allocator();
+
+    pub const allocator = std.testing.allocator;
 
     pub fn init(comptime test_name: []const u8) !TestState {
         return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
@@ -1983,7 +1985,7 @@ pub const TestState = struct {
         self.db.deinit(true);
         self.registry.deinit();
         std.testing.allocator.free(self._leak_check);
-        _ = gpa.detectLeaks();
+        // _ = gpa.detectLeaks();
     }
 };
 
