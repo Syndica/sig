@@ -1894,20 +1894,28 @@ pub const TestState = struct {
     inserter: ShredInserter,
     registry: sig.prometheus.Registry(.{}),
 
+    // if this leaks, you forgot to call `TestState.deinit`
+    _leak_check: []const u8,
+
     var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
     const allocator = gpa.allocator();
 
-    // const allocator = std.testing.allocator;
+    fn init(comptime test_name: []const u8) !TestState {
+        return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
+    }
 
-    pub fn init(comptime test_name: []const u8) !TestState {
+    fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !TestState {
         const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
         try sig.blockstore.tests.freshDir(path);
-        const logger = sig.trace.Logger.init(allocator, .warn);
-        defer logger.deinit();
         const db = try BlockstoreDB.open(allocator, logger, path);
         var registry = sig.prometheus.Registry(.{}).init(allocator);
         const inserter = try ShredInserter.init(allocator, logger, &registry, db);
-        return .{ .db = db, .inserter = inserter, .registry = registry };
+        return .{
+            .db = db,
+            .inserter = inserter,
+            .registry = registry,
+            ._leak_check = try std.testing.allocator.alloc(u8, 1),
+        };
     }
 
     /// Test helper to convert raw bytes into shreds and pass them to insertShreds
@@ -1931,10 +1939,47 @@ pub const TestState = struct {
         return self.inserter.insertShreds(shreds, is_repairs, null, false, null);
     }
 
-    pub fn deinit(self: *@This()) void {
+    fn checkInsertCodingShred(
+        self: *TestState,
+        shred: Shred,
+        write_batch: *WriteBatch,
+        merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
+    ) !struct { bool, ArrayList(PossibleDuplicateShred) } {
+        var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator);
+        var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
+
+        var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator);
+        var index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(allocator);
+        var duplicate_shreds = ArrayList(PossibleDuplicateShred).init(allocator);
+        defer just_inserted_shreds.deinit();
+        defer erasure_metas.deinit();
+        defer deinitMapRecursive(&slot_meta_working_set);
+        defer deinitMapRecursive(&index_working_set);
+
+        var i: usize = 0;
+
+        return .{
+            try self.inserter.checkInsertCodingShred(
+                shred.code,
+                &erasure_metas,
+                merkle_root_metas,
+                &index_working_set,
+                write_batch,
+                &just_inserted_shreds,
+                &i,
+                &duplicate_shreds,
+                false,
+                .turbine,
+            ),
+            duplicate_shreds,
+        };
+    }
+
+    fn deinit(self: *@This()) void {
         self.db.deinit(true);
         self.registry.deinit();
-        _ = gpa.detectLeaks();
+        std.testing.allocator.free(self._leak_check);
+        std.testing.expect(!gpa.detectLeaks()) catch unreachable;
     }
 };
 
@@ -2047,5 +2092,159 @@ test "chaining basic" {
         try std.testing.expect(slot_meta.isConnected());
         try std.testing.expectEqual(1, slot_meta.parent_slot);
         try std.testing.expectEqual(shreds_per_slot - 1, slot_meta.last_index);
+    }
+}
+
+// agave: test_merkle_root_metas_coding
+test "merkle root metas coding" {
+    var state = try TestState.initWithLogger("handle chaining basic", .noop);
+    defer state.deinit();
+    const allocator = TestState.allocator;
+
+    const slot = 1;
+    const start_index = 0;
+
+    const shreds = try loadShredsFromFile(
+        allocator,
+        &[1]usize{1228} ** 3,
+        "test_data/shreds/merkle_root_metas_coding_test_shreds_3_1228.dat",
+    );
+    defer for (shreds) |shred| shred.deinit();
+
+    { // first shred (should succeed)
+        var write_batch = try state.db.initWriteBatch();
+        const this_shred = shreds[0];
+        var merkle_root_metas =
+            AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator);
+        defer merkle_root_metas.deinit();
+
+        const succeeded, //
+        const duplicate_shreds = try state
+            .checkInsertCodingShred(this_shred, &write_batch, &merkle_root_metas);
+        defer duplicate_shreds.deinit();
+        try std.testing.expect(succeeded);
+
+        const erasure_set_id = this_shred.commonHeader().erasureSetId();
+        const merkle_root_meta = merkle_root_metas.get(erasure_set_id).?.asRef();
+        try std.testing.expectEqual(merkle_root_metas.count(), 1);
+        try std.testing.expectEqual(
+            merkle_root_meta.merkle_root.?,
+            try this_shred.merkleRoot(),
+        );
+        try std.testing.expectEqual(merkle_root_meta.first_received_shred_index, start_index);
+        try std.testing.expectEqual(merkle_root_meta.first_received_shred_type, .code);
+
+        var mrm_iter = merkle_root_metas.iterator();
+        while (mrm_iter.next()) |entry| {
+            const erasure_set = entry.key_ptr;
+            const working_merkle_root_meta = entry.value_ptr;
+            try write_batch.put(
+                schema.merkle_root_meta,
+                erasure_set.*,
+                working_merkle_root_meta.asRef().*,
+            );
+        }
+        try state.db.commit(write_batch);
+    }
+
+    var merkle_root_metas = AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)).init(allocator);
+    defer merkle_root_metas.deinit();
+
+    { // second shred (same index as first, should conflict with merkle root)
+        var write_batch = try state.db.initWriteBatch();
+        const this_shred = shreds[1];
+
+        const succeeded, //
+        const duplicate_shreds = try state
+            .checkInsertCodingShred(this_shred, &write_batch, &merkle_root_metas);
+        defer duplicate_shreds.deinit();
+        try std.testing.expect(!succeeded);
+
+        try std.testing.expectEqual(1, duplicate_shreds.items.len);
+        try std.testing.expectEqual(
+            slot,
+            duplicate_shreds.items[0].MerkleRootConflict.original.commonHeader().slot,
+        );
+
+        // Verify that we still have the merkle root meta from the original shred
+        try std.testing.expectEqual(merkle_root_metas.count(), 1);
+        const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
+        const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
+        const original_meta_from_db = (try state.db.get(
+            schema.merkle_root_meta,
+            original_erasure_set_id,
+        )).?;
+        inline for (.{ original_meta_from_map, original_meta_from_db }) |original_meta| {
+            try std.testing.expectEqual(
+                original_meta.merkle_root.?,
+                try shreds[0].merkleRoot(),
+            );
+            try std.testing.expectEqual(original_meta.first_received_shred_index, start_index);
+            try std.testing.expectEqual(original_meta.first_received_shred_type, .code);
+        }
+
+        try state.db.commit(write_batch);
+    }
+
+    { // third shred (different index, should succeed)
+        var write_batch = try state.db.initWriteBatch();
+        const this_shred = shreds[2];
+        const this_index = start_index + 31;
+
+        const succeeded, //
+        const duplicate_shreds = try state
+            .checkInsertCodingShred(this_shred, &write_batch, &merkle_root_metas);
+        defer duplicate_shreds.deinit();
+        try std.testing.expect(succeeded);
+
+        try std.testing.expectEqual(0, duplicate_shreds.items.len);
+
+        // Verify that we still have the merkle root meta from the original shred
+        try std.testing.expectEqual(merkle_root_metas.count(), 2);
+        const original_erasure_set_id = shreds[0].commonHeader().erasureSetId();
+        const original_meta_from_map = merkle_root_metas.get(original_erasure_set_id).?.asRef();
+        const original_meta_from_db = (try state.db.get(
+            schema.merkle_root_meta,
+            original_erasure_set_id,
+        )).?;
+        inline for (.{ original_meta_from_map, original_meta_from_db }) |original_meta| {
+            try std.testing.expectEqual(
+                original_meta.merkle_root.?,
+                try shreds[0].merkleRoot(),
+            );
+            try std.testing.expectEqual(original_meta.first_received_shred_index, start_index);
+            try std.testing.expectEqual(original_meta.first_received_shred_type, .code);
+        }
+
+        const erasure_set_id = this_shred.commonHeader().erasureSetId();
+        const merkle_root_meta = merkle_root_metas.get(erasure_set_id).?.asRef();
+        try std.testing.expectEqual(merkle_root_meta.merkle_root.?, try this_shred.merkleRoot());
+        try std.testing.expectEqual(merkle_root_meta.first_received_shred_index, this_index);
+        try std.testing.expectEqual(merkle_root_meta.first_received_shred_type, .code);
+
+        try state.db.commit(write_batch);
+    }
+}
+
+fn loadShredsFromFile(
+    allocator: Allocator,
+    comptime payload_lens: []const usize,
+    path: []const u8,
+) ![payload_lens.len]Shred {
+    var shreds: [payload_lens.len]Shred = undefined;
+    const file = try std.fs.cwd().openFile(path, .{});
+    for (payload_lens, 0..) |chunk_len, i| {
+        const payload = try allocator.alloc(u8, chunk_len);
+        defer allocator.free(payload);
+        _ = try file.readAll(payload);
+        shreds[i] = try Shred.fromPayload(allocator, payload);
+    }
+    return shreds;
+}
+
+fn writeSlicesToFile(path: []const u8, data: anytype) !void {
+    const file = try std.fs.cwd().createFile(path, .{});
+    for (data) |slice| {
+        try file.writeAll(slice[0..]);
     }
 }

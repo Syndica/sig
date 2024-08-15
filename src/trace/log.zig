@@ -17,6 +17,7 @@ var global: Logger = .{ .standard = undefined };
 
 pub const Logger = union(enum) {
     standard: *StandardErrLogger,
+    test_logger: TestLogger,
     noop,
 
     const Self = @This();
@@ -30,7 +31,7 @@ pub const Logger = union(enum) {
             .standard => |logger| {
                 logger.spawn();
             },
-            .noop => {},
+            .noop, .test_logger => {},
         }
     }
 
@@ -39,13 +40,13 @@ pub const Logger = union(enum) {
             .standard => |logger| {
                 logger.deinit();
             },
-            .noop => {},
+            .noop, .test_logger => {},
         }
     }
 
     pub fn field(self: Self, name: []const u8, value: anytype) Entry {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 return logger.field(name, value);
             },
             .noop => {
@@ -56,7 +57,7 @@ pub const Logger = union(enum) {
 
     pub fn infof(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.infof(fmt, args);
             },
             .noop => {},
@@ -65,7 +66,7 @@ pub const Logger = union(enum) {
 
     pub fn debugf(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.debugf(fmt, args);
             },
             .noop => {},
@@ -74,7 +75,7 @@ pub const Logger = union(enum) {
 
     pub fn warnf(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.warnf(fmt, args);
             },
             .noop => {},
@@ -83,7 +84,7 @@ pub const Logger = union(enum) {
 
     pub fn errf(self: Self, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.errf(fmt, args);
             },
             .noop => {},
@@ -92,7 +93,7 @@ pub const Logger = union(enum) {
 
     pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.logf(level, fmt, args);
             },
             .noop => {},
@@ -101,7 +102,7 @@ pub const Logger = union(enum) {
 
     pub fn info(self: Self, msg: []const u8) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.info(msg);
             },
             .noop => {},
@@ -110,7 +111,7 @@ pub const Logger = union(enum) {
 
     pub fn debug(self: Self, msg: []const u8) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.debug(msg);
             },
             .noop => {},
@@ -119,7 +120,7 @@ pub const Logger = union(enum) {
 
     pub fn warn(self: Self, msg: []const u8) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.warn(msg);
             },
             .noop => {},
@@ -128,7 +129,7 @@ pub const Logger = union(enum) {
 
     pub fn err(self: Self, msg: []const u8) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.err(msg);
             },
             .noop => {},
@@ -137,7 +138,7 @@ pub const Logger = union(enum) {
 
     pub fn log(self: Self, level: Level, msg: []const u8) void {
         switch (self) {
-            .standard => |logger| {
+            inline .standard, .test_logger => |logger| {
                 logger.log(level, msg);
             },
             .noop => {},
@@ -253,6 +254,67 @@ pub const StandardErrLogger = struct {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
             var e = Entry.init(self.allocator, self.channel, self.max_level);
             e.logf(level, fmt, args);
+        }
+    }
+};
+
+/// Directly prints instead of running in a separate thread. This handles issues during tests
+/// where some log messages never get logged because the logger is deinitialized before the
+/// logging thread picks up the log message.
+pub const TestLogger = struct {
+    max_level: Level = .warn,
+
+    const Self = @This();
+
+    pub fn logger(self: TestLogger) Logger {
+        return .{ .test_logger = self };
+    }
+
+    pub fn field(_: Self, _: []const u8, _: anytype) Entry {
+        @panic("`Logger.field` not supported");
+    }
+
+    pub fn info(self: Self, msg: []const u8) void {
+        self.log(.info, msg);
+    }
+
+    pub fn debug(self: Self, msg: []const u8) void {
+        self.log(.debug, msg);
+    }
+
+    pub fn warn(self: Self, msg: []const u8) void {
+        self.log(.warn, msg);
+    }
+
+    pub fn err(self: Self, msg: []const u8) void {
+        self.log(.err, msg);
+    }
+
+    pub fn infof(self: Self, comptime fmt: []const u8, args: anytype) void {
+        self.logf(.info, fmt, args);
+    }
+
+    pub fn debugf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        self.logf(.debug, fmt, args);
+    }
+
+    pub fn warnf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        self.logf(.warn, fmt, args);
+    }
+
+    pub fn errf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        self.logf(.err, fmt, args);
+    }
+
+    pub fn log(self: Self, level: Level, msg: []const u8) void {
+        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
+            std.debug.print("{s}\n", .{msg});
+        }
+    }
+
+    pub fn logf(self: Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+        if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
+            std.debug.print(fmt ++ "\n", args);
         }
     }
 };

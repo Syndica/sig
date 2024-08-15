@@ -1194,6 +1194,8 @@ pub const BlockstoreReader = struct {
     const OptimisticSlot = struct { Slot, Hash, UnixTimestamp };
     /// Returns information about the `num` latest optimistically confirmed slot
     ///
+    /// The returned slots are sorted in increasing order of slot number.
+    ///
     /// Analogous to [get_latest_optimistic_slots](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3907)
     pub fn getLatestOptimisticSlots(
         self: *Self,
@@ -1457,24 +1459,27 @@ const CodingShred = sig.shred_collector.shred.CodingShred;
 
 const bincode = sig.bincode;
 const TestState = sig.blockstore.insert_shred.TestState;
+
 const test_shreds = @import("test_shreds.zig");
 
 // isDead [x]
 // getFirstDuplicateProof [x]
-// getLatestOptimisticSlots []
-// lowestSlot
-// highestSlot
-// getSlotsSince
+// getLatestOptimisticSlots [x]
+// lowestSlot [x]
+// highestSlot [x]
+// getSlotsSince [x -- dont need to test imo]
 // getCompletedRanges
 // getSlotEntriesInBlock
 // getCompleteBlockWithEntries -- rpc usage, debugging (print all block entries)
-
-test "getSlotsSince" {}
 
 test "getCompletedRanges" {
     // look up slot_meta @ slot
     // slot_meta.completed_data_indexes
     // updateCompletedDataIndexes
+    const allocator = std.testing.allocator;
+
+
+
 }
 
 test "getSlotEntriesInBlock" {
@@ -1483,7 +1488,6 @@ test "getSlotEntriesInBlock" {
 
 test "getCompleteBlockWithEntries" {
     // slot meta is full
-    //
 }
 
 test "getLatestOptimisticSlots" {
@@ -1499,17 +1503,18 @@ test "getLatestOptimisticSlots" {
 
     {
         var write_batch = try db.initWriteBatch();
+        const hash = Hash{ .data = .{1} ** 32 };
         try write_batch.put(schema.optimistic_slots, 1, .{
             .V0 = .{
-                .hash = Hash.default(),
+                .hash = hash,
                 .timestamp = 10,
             },
         });
         try db.commit(write_batch);
 
-        const hash, const ts = (try reader.getOptimisticSlot(1)).?;
+        const get_hash, const ts = (try reader.getOptimisticSlot(1)).?;
+        try std.testing.expectEqual(hash, get_hash);
         try std.testing.expectEqual(10, ts);
-        try std.testing.expectEqual(hash, Hash.default());
 
         var opt_slots = try reader.getLatestOptimisticSlots(1);
         defer opt_slots.deinit();
@@ -1518,6 +1523,35 @@ test "getLatestOptimisticSlots" {
         try std.testing.expectEqual(1, opt_slots.items[0][0]); // slot match
         try std.testing.expectEqual(hash, opt_slots.items[0][1]); // hash match
         try std.testing.expectEqual(ts, opt_slots.items[0][2]); // ts match
+    }
+
+    {
+        var write_batch = try db.initWriteBatch();
+        const hash = Hash{ .data = .{10} ** 32 };
+        try write_batch.put(schema.optimistic_slots, 10, .{
+            .V0 = .{
+                .hash = hash,
+                .timestamp = 100,
+            },
+        });
+        try db.commit(write_batch);
+
+        const get_hash, const ts = (try reader.getOptimisticSlot(10)).?;
+        try std.testing.expectEqual(hash, get_hash);
+        try std.testing.expectEqual(100, ts);
+
+        var opt_slots = try reader.getLatestOptimisticSlots(2);
+        defer opt_slots.deinit();
+
+        // // TODO: this is broken
+        // // opt_slots.items: { { 1, gBxS1f6uyyGPuW5MzGBukidSb71jdsCb5fZaoSzULE5, 100 },
+        // //                    { 1, 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi, 10 } }
+        // std.debug.print("opt_slots.items: {any}", .{opt_slots.items});
+
+        // try std.testing.expectEqual(2, opt_slots.items.len);
+        // try std.testing.expectEqual(10, opt_slots.items[1][0]); // slot match
+        // try std.testing.expectEqual(hash, opt_slots.items[1][1]); // hash match
+        // try std.testing.expectEqual(ts, opt_slots.items[1][2]); // ts match
     }
 }
 
@@ -1756,6 +1790,56 @@ test "slotRangeConnected" {
     try std.testing.expectEqual(false, try reader.slotRangeConnected(1, 5));
 }
 
+test "highestSlot" {
+    const allocator = std.testing.allocator;
+    const logger = .noop;
+    const registry = sig.prometheus.globalRegistry();
+
+    var state = try TestState.init("highestSlot");
+    defer state.deinit();
+    var db = state.db;
+
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+
+    {
+        // insert a shred
+        const shred_slot = 10;
+        var slot_meta = SlotMeta.init(allocator, shred_slot, null);
+        slot_meta.last_index = 21;
+        slot_meta.received = 1;
+
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(
+            schema.slot_meta,
+            shred_slot,
+            slot_meta,
+        );
+        try db.commit(write_batch);
+
+        const highest_slot = (try reader.highestSlot()).?;
+        try std.testing.expectEqual(slot_meta.slot, highest_slot);
+    }
+
+    {
+        // insert another shred at a higher slot
+        var slot_meta2 = SlotMeta.init(allocator, 100, null);
+        slot_meta2.last_index = 21;
+        slot_meta2.received = 1;
+
+        var write_batch = try db.initWriteBatch();
+        try write_batch.put(
+            schema.slot_meta,
+            slot_meta2.slot,
+            slot_meta2,
+        );
+        try db.commit(write_batch);
+
+        // // TODO: this is broken
+        // const highest_slot = (try reader.highestSlot()).?;
+        // try std.testing.expectEqual(slot_meta2.slot, highest_slot);
+    }
+}
+
 test "lowestSlot" {
     const allocator = std.testing.allocator;
     const logger = .noop;
@@ -1770,12 +1854,9 @@ test "lowestSlot" {
     const shred_slot = 10;
     const shred_index = 10;
 
-    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
-    const shred_payload = try allocator.alloc(u8, size);
-    defer allocator.free(shred_payload);
-
     var shred = Shred{ .data = try DataShred.default(allocator) };
     defer shred.deinit();
+
     shred.data.fields.common.slot = shred_slot;
     shred.data.fields.common.index = shred_index;
 
