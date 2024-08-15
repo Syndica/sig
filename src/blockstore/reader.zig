@@ -1453,42 +1453,18 @@ pub const AncestorIterator = struct {
     }
 };
 
+const bincode = sig.bincode;
 const Blockstore = sig.blockstore.BlockstoreDB;
 const ShredInserter = sig.blockstore.ShredInserter;
 const CodingShred = sig.shred_collector.shred.CodingShred;
-
-const bincode = sig.bincode;
 const TestState = sig.blockstore.insert_shred.TestState;
 
 const test_shreds = @import("test_shreds.zig");
 
-// isDead [x]
-// getFirstDuplicateProof [x]
-// getLatestOptimisticSlots [x]
-// lowestSlot [x]
-// highestSlot [x]
-// getSlotsSince [x -- dont need to test imo]
+// // TODO: -- would likely make most sense to test these with insert_shreds
 // getCompletedRanges
 // getSlotEntriesInBlock
-// getCompleteBlockWithEntries -- rpc usage, debugging (print all block entries)
-
-test "getCompletedRanges" {
-    // look up slot_meta @ slot
-    // slot_meta.completed_data_indexes
-    // updateCompletedDataIndexes
-    const allocator = std.testing.allocator;
-
-
-
-}
-
-test "getSlotEntriesInBlock" {
-    // ...
-}
-
-test "getCompleteBlockWithEntries" {
-    // slot meta is full
-}
+// getCompleteBlockWithEntries
 
 test "getLatestOptimisticSlots" {
     const allocator = std.testing.allocator;

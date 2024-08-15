@@ -1900,7 +1900,7 @@ pub const TestState = struct {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
     const allocator = gpa.allocator();
 
-    fn init(comptime test_name: []const u8) !TestState {
+    pub fn init(comptime test_name: []const u8) !TestState {
         return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
     }
 
@@ -1975,7 +1975,7 @@ pub const TestState = struct {
         };
     }
 
-    fn deinit(self: *@This()) void {
+    pub fn deinit(self: *@This()) void {
         self.db.deinit(true);
         self.registry.deinit();
         std.testing.allocator.free(self._leak_check);
