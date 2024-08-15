@@ -131,10 +131,55 @@ pub const AccountsDB = struct {
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
     pub const DiskAccounts = struct {
-        /// Any code simply inserting account files into `map` may ignore this field,
-        /// it simply needs to acquire a write lock from the `map` rwmux.
-        /// Any code needing to read and/or write account file data, or remove account
-        /// files, must first acquire this lock, and then the lock on the `map` rwmux.
+        //! CONTEXT:
+        //! The reason these two layers of asymmetric locks exist is to provide
+        //! a simple way to resolve the contention between three categories of
+        //! file map operations, which may occur in parallel:
+        //!
+        //! * Adding account files (ie: snapshot loading, flushing cache):
+        //! A thread which wants only to add account files will never invalidate the
+        //! account files observed by another thread, and as such need only acquire
+        //! an exclusive lock on the file map itself. In this way, account file
+        //! additions are observed in an atomic manner.
+        //!
+        //! * Reading account files (ie: snapshot generation, account queries):
+        //! A thread which wants to read account files must coordinate with threads
+        //! which may invalidate (mutate or remove) them, so all reading threads
+        //! must first acquire a read (shared) lock on the collection of account
+        //! files as a whole, before acquiring a lock on the file map, and observing
+        //! account files. After doing so, the file map may be unlocked, without
+        //! releasing the account files lock, allowing other threads to add new ones,
+        //! whilst preventing the removal of any which have been observed and must
+        //! continue to exist until all reading threads have finished their work.
+        //!
+        //! * Mutating/removing account files (ie: shrinking, cleaning):
+        //! A thread which wants to mutate/remove account files must coordinate with
+        //! threads which need to read, or also mutate/remove, them. As such, all
+        //! potentially invalidating threads must first acquire a write (exclusive)
+        //! lock on the collection of account files as a whole, before acquiring
+        //! a lock on the file map in order to do so.
+
+        /// RULES:
+        /// * Threads that want to add entries to the `file_map` need only to acquire
+        ///   a write (exclusive) lock on `file_map`.
+        ///
+        /// * Threads that want to read account files must first acquire a read (shared)
+        ///   lock on the account files through this lock guard, to ensure no files
+        ///   are mutated or removed by other threads. From there on, all threads
+        ///   with this lock may lock and unlock the `file_map` until releasing this
+        ///   lock; whether the `file_map` is locked in a shared or exclusive manner
+        ///   may influence the contention of a given thread, but is allowed either way.
+        ///
+        /// * Threads that want to mutate account file data or remove account files
+        ///   must first acquire a write (exclusive) lock on the account files through
+        ///   this lock guard, to prevent racing with other threads reading account
+        ///   files, or attempting to do the same. From there on, the thread with this
+        ///   lock may lock and unlock the `file_map` in an exclusive manner, until
+        ///   releasing this lock. A shared lock on the `file_map` may only be used
+        ///   to observe and mutate existing account files, whilst an exclusive lock
+        ///   on the `file_map` may be used to remove account files as well.
+        ///
+        /// See the container doc comment in this struct for further context.
         files_rw: std.Thread.RwLock = .{},
         /// See doc comment on `files_rw` for access rules.
         file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
