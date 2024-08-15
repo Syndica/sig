@@ -175,6 +175,9 @@ pub const GeyserWriter = struct {
                 // no memory available rn - unlock and wait
                 self.io_free_fba.mux.unlock();
                 std.time.sleep(std.time.ns_per_ms);
+                if (self.exit.load(.unordered)) {
+                    return error.MemoryBlockedWithExitSignaled;
+                }
                 self.io_free_fba.mux.lock();
                 continue;
             };

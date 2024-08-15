@@ -39,7 +39,7 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
 
     while (!exit.load(.unordered)) {
         // since the i/o happens in another thread, we cant easily track bytes/second here
-        try geyser_writer.writePayloadToPipe(
+        geyser_writer.writePayloadToPipe(
             VersionedAccountPayload{
                 .AccountPayloadV1 = .{
                     .accounts = accounts,
@@ -47,7 +47,13 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
                     .slot = slot,
                 },
             },
-        );
+        ) catch |err| {
+            if (err == error.MemoryBlockedWithExitSignaled) {
+                break;
+            } else {
+                return err;
+            }
+        };
         slot += 1;
     }
 }
@@ -69,7 +75,9 @@ pub fn runBenchmark() !void {
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
 
     // let it run for ~4 measurements
-    std.time.sleep(MEASURE_RATE.asNanos() * 100);
+    const NUM_MEAUSUREMENTS = 4;
+    std.time.sleep(MEASURE_RATE.asNanos() * NUM_MEAUSUREMENTS);
+    std.debug.print("exiting\n", .{});
     exit.store(true, .unordered);
 
     reader_handle.join();
