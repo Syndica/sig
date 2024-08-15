@@ -803,7 +803,7 @@ pub const ShredInserter = struct {
         assertOk(shred.sanitize());
 
         try write_batch.put(schema.code_shred, .{ slot, shred_index }, shred.fields.payload);
-        try index_meta.code.put(slot);
+        try index_meta.code.put(shred_index);
     }
 
     /// Check if the shred already exists in blockstore
@@ -1071,15 +1071,13 @@ pub const ShredInserter = struct {
         erasure_meta: *const ErasureMeta,
         prev_inserted_shreds: *const AutoHashMap(ShredId, Shred),
         recovered_shreds: *ArrayList(Shred),
-        // data_cf: *const LedgerColumn(schema.shred_data),
-        // code_cf: *const LedgerColumn(schema.shred_code),
         reed_solomon_cache: *ReedSolomonCache,
     ) !void {
         var available_shreds = ArrayList(Shred).init(self.allocator);
 
         try getRecoveryShreds(
             self,
-            schema.data_shred,
+            .data,
             &index.data,
             index.slot,
             erasure_meta.dataShredsIndices(),
@@ -1088,7 +1086,7 @@ pub const ShredInserter = struct {
         );
         try getRecoveryShreds(
             self,
-            schema.code_shred,
+            .code,
             &index.code,
             index.slot,
             erasure_meta.codingShredsIndices(),
@@ -1103,23 +1101,29 @@ pub const ShredInserter = struct {
         )) |shreds| {
             defer self.allocator.free(shreds);
             try recovered_shreds.appendSlice(shreds);
-        } else |_| {
+        } else |e| {
             // TODO: submit_self.metrics
+            // TODO: when refactoring, consider returning error from here
+            self.logger.errf("shred recovery error: {}", .{e});
         }
     }
 
     // agave: get_recovery_data_shreds and get_recovery_coding_shreds
     fn getRecoveryShreds(
         self: *Self,
-        comptime column_family: bs.database.ColumnFamily,
+        comptime shred_type: sig.shred_collector.shred.ShredType,
         index: *const ShredIndex,
         slot: Slot,
         shred_indices: [2]u64,
         prev_inserted_shreds: *const AutoHashMap(ShredId, Shred),
         available_shreds: *ArrayList(Shred),
     ) !void {
+        const column_family = switch (shred_type) {
+            .data => schema.data_shred,
+            .code => schema.code_shred,
+        };
         for (shred_indices[0]..shred_indices[1]) |i| {
-            const key = ShredId{ .slot = slot, .index = @intCast(i), .shred_type = .data };
+            const key = ShredId{ .slot = slot, .index = @intCast(i), .shred_type = shred_type };
             if (prev_inserted_shreds.get(key)) |shred| {
                 try available_shreds.append(shred);
             } else if (index.contains(i)) {
@@ -1931,7 +1935,7 @@ pub const TestState = struct {
         for (shred_payloads, 0..) |payload, i| {
             shreds[i] = try Shred.fromPayload(allocator, payload);
         }
-        const is_repairs = try allocator.alloc(bool, shred_payloads.len);
+        const is_repairs = try allocator.alloc(bool, shreds.len);
         defer allocator.free(is_repairs);
         for (0..shreds.len) |i| {
             is_repairs[i] = false;
@@ -1979,7 +1983,7 @@ pub const TestState = struct {
         self.db.deinit(true);
         self.registry.deinit();
         std.testing.allocator.free(self._leak_check);
-        std.testing.expect(!gpa.detectLeaks()) catch unreachable;
+        _ = gpa.detectLeaks();
     }
 };
 
@@ -2107,7 +2111,7 @@ test "merkle root metas coding" {
     const shreds = try loadShredsFromFile(
         allocator,
         &[1]usize{1228} ** 3,
-        "test_data/shreds/merkle_root_metas_coding_test_shreds_3_1228.dat",
+        "test_data/shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
     );
     defer for (shreds) |shred| shred.deinit();
 
@@ -2226,25 +2230,58 @@ test "merkle root metas coding" {
     }
 }
 
-fn loadShredsFromFile(
-    allocator: Allocator,
-    comptime payload_lens: []const usize,
-    path: []const u8,
-) ![payload_lens.len]Shred {
-    var shreds: [payload_lens.len]Shred = undefined;
-    const file = try std.fs.cwd().openFile(path, .{});
-    for (payload_lens, 0..) |chunk_len, i| {
-        const payload = try allocator.alloc(u8, chunk_len);
-        defer allocator.free(payload);
-        _ = try file.readAll(payload);
-        shreds[i] = try Shred.fromPayload(allocator, payload);
+// agave: test_recovery
+test "recovery" {
+    var state = try TestState.init("handle chaining basic");
+    defer state.deinit();
+    const allocator = TestState.allocator;
+
+    const shreds = try loadShredsFromFile(
+        allocator,
+        &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
+        "test_data/shreds/recovery_test_shreds_34_data_34_coding.bin",
+    );
+    defer for (shreds) |s| s.deinit();
+    const data_shreds = shreds[0..34];
+    const code_shreds = shreds[34..68];
+
+    var leader_schedule = OneSlotLeaderProvider{
+        .leader = try Pubkey.fromString("AR4tN1a1iMFNz2JRfG5qZjHW6msZ7kftLRbogCpphrqe"),
+    };
+
+    const is_repairs = try allocator.alloc(bool, code_shreds.len);
+    defer allocator.free(is_repairs);
+    for (0..code_shreds.len) |i| is_repairs[i] = false;
+
+    _ = try state.inserter.insertShreds(
+        code_shreds,
+        is_repairs,
+        leader_schedule.provider(),
+        false,
+        null,
+    );
+
+    for (data_shreds) |data_shred| {
+        const key = .{ data_shred.data.fields.common.slot, data_shred.data.fields.common.index };
+        std.debug.print("trying one: {any}\n", .{key});
+        const actual_shred = try state.db.getBytes(schema.data_shred, key);
+        defer actual_shred.?.deinit();
+        try std.testing.expectEqual(data_shred.payload(), actual_shred.?.data);
     }
-    return shreds;
+
+    // TODO: verify index integrity
 }
 
-fn writeSlicesToFile(path: []const u8, data: anytype) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    for (data) |slice| {
-        try file.writeAll(slice[0..]);
+const OneSlotLeaderProvider = struct {
+    leader: Pubkey,
+
+    fn getLeader(self: *OneSlotLeaderProvider, _: Slot) ?Pubkey {
+        return self.leader;
     }
-}
+
+    fn provider(self: *OneSlotLeaderProvider) SlotLeaderProvider {
+        return SlotLeaderProvider.init(self, OneSlotLeaderProvider.getLeader);
+    }
+};
+
+const loadShredsFromFile = sig.shred_collector.shred.loadShredsFromFile;
