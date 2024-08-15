@@ -197,4 +197,17 @@ test "findSlotsToClean" {
 
     // TODO: Add test cases
     _ = try findSlotsToClean(allocator, &reader, 0, 100);
+
+    // set highest and lowest slot by inserting slot_meta
+    var lowest_slot_meta = sig.blockstore.meta.SlotMeta.init(allocator, 10, null);
+    defer lowest_slot_meta.deinit();
+    lowest_slot_meta.received = 10;
+
+    var highest_slot_meta = sig.blockstore.meta.SlotMeta.init(allocator, 20, null);
+    defer highest_slot_meta.deinit();
+    highest_slot_meta.received = 20;
+
+
+
+    
 }
