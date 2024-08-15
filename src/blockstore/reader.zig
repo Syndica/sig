@@ -1519,29 +1519,25 @@ test "getLatestOptimisticSlots" {
         var opt_slots = try reader.getLatestOptimisticSlots(2);
         defer opt_slots.deinit();
 
-        // // TODO: this is broken
-        // // opt_slots.items: { { 1, gBxS1f6uyyGPuW5MzGBukidSb71jdsCb5fZaoSzULE5, 100 },
-        // //                    { 1, 4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi, 10 } }
-        // std.debug.print("opt_slots.items: {any}", .{opt_slots.items});
-
-        // try std.testing.expectEqual(2, opt_slots.items.len);
-        // try std.testing.expectEqual(10, opt_slots.items[1][0]); // slot match
-        // try std.testing.expectEqual(hash, opt_slots.items[1][1]); // hash match
-        // try std.testing.expectEqual(ts, opt_slots.items[1][2]); // ts match
+        try std.testing.expectEqual(2, opt_slots.items.len);
+        try std.testing.expectEqual(10, opt_slots.items[0][0]); // slot match
+        try std.testing.expectEqual(hash, opt_slots.items[0][1]); // hash match
+        try std.testing.expectEqual(ts, opt_slots.items[0][2]); // ts match
     }
 }
 
 test "getFirstDuplicateProof" {
     const allocator = std.testing.allocator;
+
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getFirstDuplicateProof");
-    defer state.deinit();
-    var db = state.db;
+    const path = std.fmt.comptimePrint("{s}/{s}", .{ "test_data/blockstore/insert_shred", "getFirstDuplicateProof" });
+    try sig.blockstore.tests.freshDir(path);
+    var db = try BlockstoreDB.open(allocator, logger, path);
+    defer db.deinit(true);
 
-    const reader = try BlockstoreReader.init(allocator, logger, db, registry);
-    _ = reader;
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
 
     {
         const proof = DuplicateSlotProof{
@@ -1552,13 +1548,12 @@ test "getFirstDuplicateProof" {
         try write_batch.put(schema.duplicate_slots, 19, proof);
         try db.commit(write_batch);
 
-        // // TODO: this is broken when trying to free the proof ?
-        // const slot, const proof2 = (try reader.getFirstDuplicateProof()).?;
-        // defer bincode.free(allocator, proof2);
+        const slot, const proof2 = (try reader.getFirstDuplicateProof()).?;
+        defer bincode.free(allocator, proof2);
 
-        // try std.testing.expectEqual(19, slot);
-        // try std.testing.expectEqualSlices(u8, proof.shred1, proof2.shred1);
-        // try std.testing.expectEqualSlices(u8, proof.shred2, proof2.shred2);
+        try std.testing.expectEqual(19, slot);
+        try std.testing.expectEqualSlices(u8, proof.shred1, proof2.shred1);
+        try std.testing.expectEqualSlices(u8, proof.shred2, proof2.shred2);
     }
 }
 
@@ -1698,9 +1693,7 @@ test "rootedSlotIterator" {
     defer state.deinit();
     var db = state.db;
 
-    // var reader = try BlockstoreReader.init(allocator, logger, db, registry);
-    const reader = try BlockstoreReader.init(allocator, logger, db, registry);
-    _ = reader;
+    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
 
     var write_batch = try db.initWriteBatch();
     const roots: [3]Slot = .{ 2, 3, 4 };
@@ -1709,12 +1702,12 @@ test "rootedSlotIterator" {
     }
     try db.commit(write_batch);
 
-    // // TODO: this is broken -- output is {3, 4, 4}
-    // var iter = try reader.rootedSlotIterator(0);
-    // var iter = try db.iterator(schema.roots, .forward, null);
-    // while (try iter.next()) |slot| {
-    //     std.debug.print("slot: {any}\n", .{slot});
-    // }
+    var iter = try reader.rootedSlotIterator(0);
+    var i: u64 = 0;
+    while (try iter.next()) |entry| {
+        try std.testing.expectEqual(roots[i], entry[0]);
+        i += 1;
+    }
 }
 
 test "slotRangeConnected" {
@@ -1810,9 +1803,8 @@ test "highestSlot" {
         );
         try db.commit(write_batch);
 
-        // // TODO: this is broken
-        // const highest_slot = (try reader.highestSlot()).?;
-        // try std.testing.expectEqual(slot_meta2.slot, highest_slot);
+        const highest_slot = (try reader.highestSlot()).?;
+        try std.testing.expectEqual(slot_meta2.slot, highest_slot);
     }
 }
 

@@ -6,11 +6,12 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
 pub const ReedSolomon = struct {
+    allocator: Allocator,
     data_shard_count: usize,
     parity_shard_count: usize,
     total_shard_count: usize,
     matrix: Matrix,
-    rc: sig.sync.ReferenceCounter = .{},
+    rc: *sig.sync.ReferenceCounter,
     // TODO lru cache of matrices
 
     pub fn init(allocator: Allocator, data_shards: usize, parity_shards: usize) !ReedSolomon {
@@ -26,18 +27,23 @@ pub const ReedSolomon = struct {
         const total_shards = data_shards + parity_shards;
 
         const vandermonde = try Matrix.initVandermonde(allocator, total_shards, data_shards);
-        defer vandermonde.deinit();
+        defer vandermonde.deinit(allocator);
         const top = try vandermonde.subMatrix(allocator, 0, 0, data_shards, data_shards);
-        defer top.deinit();
+        defer top.deinit(allocator);
         const inverted = try top.invert(allocator);
-        defer inverted.deinit();
+        defer inverted.deinit(allocator);
         const matrix = try vandermonde.multiply(allocator, inverted);
 
+        const rc = try allocator.create(sig.sync.ReferenceCounter);
+        rc.* = .{};
+
         return ReedSolomon{
+            .allocator = allocator,
             .data_shard_count = data_shards,
             .total_shard_count = total_shards,
             .parity_shard_count = parity_shards,
             .matrix = matrix,
+            .rc = rc,
         };
     }
 
@@ -46,7 +52,10 @@ pub const ReedSolomon = struct {
     }
 
     pub fn deinit(self: *ReedSolomon) void {
-        if (self.rc.release()) self.matrix.deinit();
+        if (self.rc.release()) {
+            self.allocator.destroy(self.rc);
+            self.matrix.deinit(self.allocator);
+        }
     }
 
     pub fn reconstruct(
@@ -298,15 +307,14 @@ fn codeSingleSlice(
 }
 
 pub const Matrix = struct {
-    allocator: Allocator,
     row_count: usize,
     col_count: usize,
     data: []u8,
 
     const Self = Matrix;
 
-    pub fn deinit(self: Self) void {
-        self.allocator.free(self.data);
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.data);
     }
 
     pub fn initZeros(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Self {
@@ -339,7 +347,6 @@ pub const Matrix = struct {
 
     fn initUndefined(allocator: Allocator, rows: usize, cols: usize) Allocator.Error!Self {
         const self = .{
-            .allocator = allocator,
             .row_count = rows,
             .col_count = cols,
             .data = try allocator.alloc(u8, rows * cols),
@@ -392,9 +399,9 @@ pub const Matrix = struct {
         const col_count = self.col_count;
 
         const identity = try initIdentity(allocator, row_count);
-        defer identity.deinit();
+        defer identity.deinit(allocator);
         var work = try self.augment(allocator, identity);
-        defer work.deinit();
+        defer work.deinit(allocator);
         try work.gaussianElimination();
 
         return try work.subMatrix(allocator, 0, row_count, col_count, col_count * 2);
