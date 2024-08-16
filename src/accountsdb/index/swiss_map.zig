@@ -14,11 +14,9 @@ pub fn SwissMapManaged(
         unmanaged: Unmanaged,
         const Self = @This();
 
-        const GROUP_SIZE = 16;
-
         pub const Unmanaged = SwissMapUnmanaged(Key, Value, hash_fn, eq_fn);
 
-        pub fn init(allocator: std.mem.Allocator) Self {
+        pub inline fn init(allocator: std.mem.Allocator) Self {
             return .{
                 .allocator = allocator,
                 .unmanaged = Unmanaged.init(),
@@ -34,18 +32,18 @@ pub fn SwissMapManaged(
             };
         }
 
-        pub fn ensureTotalCapacity(self: *Self, n: usize) !void {
-            try self.unmanaged.ensureTotalCapacity(self.allocator, n);
+        pub fn ensureTotalCapacity(self: *Self, n: usize) std.mem.Allocator.Error!void {
+            return @call(.always_inline, Unmanaged.ensureTotalCapacity, .{ &self.unmanaged, self.allocator, n });
         }
 
         pub fn deinit(self: *Self) void {
-            self.unmanaged.deinit(self.allocator);
+            return @call(.always_inline, Unmanaged.deinit, .{ &self.unmanaged, self.allocator });
         }
 
         pub const Iterator = Unmanaged.Iterator;
 
-        pub fn iterator(self: *const @This()) Iterator {
-            return .{ .hm = &self.unmanaged };
+        pub inline fn iterator(self: *const @This()) Iterator {
+            return self.unmanaged.iterator();
         }
 
         pub inline fn count(self: *const @This()) usize {
@@ -59,26 +57,26 @@ pub fn SwissMapManaged(
         pub const GetOrPutResult = Unmanaged.GetOrPutResult;
 
         pub fn remove(self: *@This(), key: Key) error{KeyNotFound}!void {
-            return self.unmanaged.remove(key);
+            return @call(.always_inline, Unmanaged.remove, .{ &self.unmanaged, key });
         }
 
         pub fn get(self: *const @This(), key: Key) ?Value {
-            return self.unmanaged.get(key);
+            return @call(.always_inline, Unmanaged.get, .{ &self.unmanaged, key });
         }
 
         pub fn getPtr(self: *const @This(), key: Key) ?*Value {
-            return self.unmanaged.getPtr(key);
+            return @call(.always_inline, Unmanaged.getPtr, .{ &self.unmanaged, key });
         }
 
         /// puts a key into the index with the value
         /// note: this assumes the key is not already in the index, if it is, then
         /// the map might contain two keys, and the behavior is undefined
         pub fn putAssumeCapacity(self: *Self, key: Key, value: Value) void {
-            return self.unmanaged.putAssumeCapacity(key, value);
+            return @call(.always_inline, Unmanaged.putAssumeCapacity, .{ &self.unmanaged, key, value });
         }
 
         pub fn getOrPutAssumeCapacity(self: *Self, key: Key) GetOrPutResult {
-            return self.unmanaged.getOrPutAssumeCapacity(key);
+            return @call(.always_inline, Unmanaged.getOrPutAssumeCapacity, .{ &self.unmanaged, key });
         }
     };
 }
@@ -134,7 +132,7 @@ pub fn SwissMapUnmanaged(
             value_ptr: *Value,
         };
 
-        pub fn init() Self {
+        pub inline fn init() Self {
             return Self{
                 .groups = undefined,
                 .states = undefined,
@@ -256,7 +254,7 @@ pub fn SwissMapUnmanaged(
             }
         };
 
-        pub fn iterator(self: *const @This()) Iterator {
+        pub inline fn iterator(self: *const @This()) Iterator {
             return .{ .hm = self };
         }
 
