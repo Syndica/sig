@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+#
 # to install kcov follow the instructions at:
 #   https://github.com/SimonKagstrom/kcov/blob/master/INSTALL.md
 # to build on mac the following should work:
@@ -10,6 +12,8 @@
 #   make install
 #   export PATH=$PATH:/path/to/kcov/build/src
 #   ```
+
+set -euxo pipefail
 
 echo "=> Cleaning up" 
 rm -rf kcov-output 
