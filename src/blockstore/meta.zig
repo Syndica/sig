@@ -4,7 +4,6 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
-const Shred = sig.shred_collector.shred.Shred;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
