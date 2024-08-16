@@ -324,6 +324,7 @@ pub const ShredInserter = struct {
             };
             // unreachable: Erasure meta was just created, initial shred must exist
             const shred = just_inserted_shreds.get(shred_id) orelse unreachable;
+            // TODO: agave discards the result here. should we also?
             _ = try self.checkForwardChainedMerkleRootConsistency(
                 shred.code,
                 erasure_meta,
@@ -351,6 +352,7 @@ pub const ShredInserter = struct {
             };
             // unreachable: Merkle root meta was just created, initial shred must exist
             const shred = just_inserted_shreds.get(shred_id) orelse unreachable;
+            // TODO: agave discards the result here. should we also?
             _ = try self.checkBackwardsChainedMerkleRootConsistency(
                 shred,
                 &just_inserted_shreds,
