@@ -226,6 +226,7 @@ pub const ShredInserter = struct {
 
         var shred_recovery_timer = try Timer.start();
         var valid_recovered_shreds = ArrayList([]const u8).init(allocator);
+        defer valid_recovered_shreds.deinit();
         if (leader_schedule) |slot_leader_provider| {
             const recovered_shreds = try self.tryShredRecovery(
                 &erasure_metas,
@@ -233,6 +234,12 @@ pub const ShredInserter = struct {
                 &just_inserted_shreds,
                 &reed_solomon_cache,
             );
+            defer {
+                for (recovered_shreds.items) |shred| {
+                    shred.deinit();
+                }
+                recovered_shreds.deinit();
+            }
 
             for (recovered_shreds.items) |shred| {
                 if (shred == .data) {
@@ -267,6 +274,7 @@ pub const ShredInserter = struct {
                     leader_schedule,
                     .recovered,
                 )) |completed_data_sets| {
+                    defer completed_data_sets.deinit();
                     try newly_completed_data_sets.appendSlice(completed_data_sets.items);
                     self.metrics.num_inserted.inc();
                     try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
