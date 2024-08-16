@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const zstd = @import("zstd");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 

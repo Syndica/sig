@@ -1,5 +1,5 @@
 pub const std = @import("std");
-pub const sig = @import("../lib.zig");
+pub const sig = @import("../sig.zig");
 pub const blockstore = @import("lib.zig");
 
 // std

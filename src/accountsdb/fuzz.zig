@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const zstd = @import("zstd");
 
 const AccountsDB = sig.accounts_db.AccountsDB;

@@ -1,4 +1,4 @@
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const ACCOUNT_INDEX_BINS = sig.accounts_db.db.ACCOUNT_INDEX_BINS;
 const ShredCollectorConfig = sig.shred_collector.ShredCollectorConfig;
 const IpAddr = sig.net.IpAddr;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const fmt = std.fmt;
 const hash_map = std.hash_map;
 const heap = std.heap;

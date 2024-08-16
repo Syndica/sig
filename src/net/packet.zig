@@ -1,5 +1,5 @@
 const network = @import("zig-network");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const BitFlags = sig.utils.bitflags.BitFlags;
 

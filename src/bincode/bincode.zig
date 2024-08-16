@@ -7,7 +7,7 @@ pub const int = @import("int.zig");
 
 const std = @import("std");
 const builtin = @import("builtin");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const testing = std.testing;
 
@@ -806,7 +806,7 @@ test "bincode: custom enum" {
 }
 
 test "bincode: default on eof" {
-    const defaultArrayListOnEOFConfig = @import("../lib.zig").bincode.arraylist.defaultArrayListOnEOFConfig;
+    const defaultArrayListOnEOFConfig = @import("../sig.zig").bincode.arraylist.defaultArrayListOnEOFConfig;
     const Foo = struct {
         value: u8 = 0,
         accounts: std.ArrayList(u64),

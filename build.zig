@@ -43,7 +43,7 @@ pub fn build(b: *Build) void {
 
     // expose Sig as a module
     const sig_mod = b.addModule("sig", .{
-        .root_source_file = b.path("src/lib.zig"),
+        .root_source_file = b.path("src/sig.zig"),
     });
     sig_mod.addImport("zig-network", zig_network_module);
     sig_mod.addImport("base58-zig", base58_module);

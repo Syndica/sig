@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 pub const TransactionStatusMeta = struct {
     status: ?TransactionError,

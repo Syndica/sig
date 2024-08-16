@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const blockstore = @import("lib.zig");
 
 const Logger = sig.trace.Logger;

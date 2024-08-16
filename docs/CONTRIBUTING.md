@@ -15,7 +15,7 @@ See the [readme](../readme.md#-setup).
 #### Sig Dependencies
 By convention, all internal dependencies should be defined as aliases of fully qualified paths from the root module. For example, within 'src/gossip/message.zig' we should import types from 'src/gossip/data.zig' in the following manner:
 ```zig
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const GossipData = sig.gossip.data.GossipData;
 ```
@@ -33,7 +33,7 @@ If it improves clarity, split groups into external and sig imports/aliases, othe
 ```zig
 // Import statements
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 // Namespace aliases
 const bincode = sig.bincode;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const Logger = @import("../trace/log.zig").Logger;
 
 // TODO: change to writer interface when logger has improved

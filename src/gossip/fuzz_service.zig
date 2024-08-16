@@ -3,7 +3,7 @@
 //! to stop the fuzzer write any input to stdin and press enter
 
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const bincode = sig.bincode;
 
 const GossipService = sig.gossip.service.GossipService;

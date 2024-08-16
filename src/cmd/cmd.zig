@@ -3,7 +3,7 @@ const base58 = @import("base58-zig");
 const cli = @import("zig-cli");
 const network = @import("zig-network");
 const helpers = @import("helpers.zig");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const config = @import("config.zig");
 
 const Allocator = std.mem.Allocator;

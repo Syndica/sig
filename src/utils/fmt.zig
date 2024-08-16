@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 /// Returns the maximum length applicable for the format string and `Args` tuple,
 /// such that it would be the equivalent to the length of the bounded array returned

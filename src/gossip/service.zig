@@ -1,6 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const bincode = sig.bincode;
 const socket_utils = sig.net.socket_utils;

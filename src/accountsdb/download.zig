@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const curl = @import("curl");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const SlotAndHash = sig.accounts_db.snapshots.SlotAndHash;
 const Pubkey = sig.core.Pubkey;

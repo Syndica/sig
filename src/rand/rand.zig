@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const chacha = @import("chacha.zig");
 
 const Allocator = std.mem.Allocator;
