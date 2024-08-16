@@ -487,6 +487,9 @@ pub const ShredInserter = struct {
         }
         const erasure_meta = erasure_meta_entry.value_ptr.asRef();
 
+        // NOTE perf: maybe this can be skipped for trusted shreds. 
+        // agave runs this regardless of trust, but we can check if it has
+        // a meaningful performance impact to skip this for trusted shreds.
         if (!erasure_meta.checkCodingShred(shred)) {
             self.metrics.num_coding_shreds_invalid_erasure_config.inc();
             if (!try self.hasDuplicateShredsInSlot(slot)) {
