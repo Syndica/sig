@@ -31,7 +31,7 @@ pub const Params = struct {
 
 pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     if (@TypeOf(data) == type) {
-        @panic("sizeOf called with type instead of value");
+        @compileError("sizeOf called with type instead of value");
     }
     var stream = std.io.countingWriter(std.io.null_writer);
     bincode.write(stream.writer(), data, params) catch unreachable;
