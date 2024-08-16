@@ -498,9 +498,8 @@ pub const ShredInserter = struct {
                 )) |conflicting_shred| {
                     // TODO: reduce nesting
                     self.db.put(schema.duplicate_slots, slot, .{
-                        // TODO shred1 and shred2 are correct?
-                        .shred1 = shred.fields.payload,
-                        .shred2 = conflicting_shred,
+                        .shred1 = conflicting_shred,
+                        .shred2 = shred.fields.payload,
                     }) catch |e| {
                         // TODO: only log a database error?
                         self.logger.errf(
