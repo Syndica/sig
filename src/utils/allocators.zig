@@ -10,6 +10,8 @@ pub const RecycleFBA = struct {
     records: std.ArrayList(Record),
 
     // for thread safety
+    // TODO: add a config option to enable threadsafe in all the methods
+    // instead of having to manually lock the allocator outside of the method calls
     mux: std.Thread.Mutex = .{},
 
     const Record = struct { is_free: bool, buf: [*]u8, len: u64 };
