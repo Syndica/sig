@@ -74,6 +74,22 @@ pub fn build(b: *Build) void {
     main_exe_run.addArgs(b.args orelse &.{});
     run_step.dependOn(&main_exe_run.step);
 
+    // docs for the Sig library
+    const sig_obj = b.addObject(.{
+        .name = "sig",
+        .root_source_file = b.path("src/sig.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+
+    const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
+    const install_sig_docs = b.addInstallDirectory(.{
+        .source_dir = sig_obj.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    docs_step.dependOn(&install_sig_docs.step);
+
     // unit tests
     const unit_tests_exe = b.addTest(.{
         .root_source_file = b.path("src/tests.zig"),
