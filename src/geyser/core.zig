@@ -32,6 +32,7 @@ pub const AccountPayload = struct {
     }
 };
 
+// TODO: https://github.com/Syndica/sig/pull/209#discussion_r1719858112
 pub const VersionedAccountPayload = union(enum(u8)) {
     AccountPayloadV1: AccountPayloadV1,
 
