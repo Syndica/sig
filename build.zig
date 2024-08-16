@@ -14,6 +14,7 @@ pub fn build(b: *Build) void {
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const benchmark_step = b.step("benchmark", "Benchmark client");
+    const geyser_reader_step = b.step("geyser_reader", "read data from geyser");
 
     // Dependencies
     const dep_opts = .{ .target = target, .optimize = optimize };
@@ -66,6 +67,7 @@ pub fn build(b: *Build) void {
     sig_exe.root_module.addImport("zig-network", zig_network_module);
     sig_exe.root_module.addImport("zstd", zstd_mod);
     sig_exe.root_module.addImport("rocksdb", rocksdb_mod);
+    sig_exe.linkLibC();
 
     const main_exe_run = b.addRunArtifact(sig_exe);
     main_exe_run.addArgs(b.args orelse &.{});
@@ -85,6 +87,7 @@ pub fn build(b: *Build) void {
     unit_tests_exe.root_module.addImport("zig-network", zig_network_module);
     unit_tests_exe.root_module.addImport("zstd", zstd_mod);
     unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod);
+    unit_tests_exe.linkLibC();
 
     const unit_tests_exe_run = b.addRunArtifact(unit_tests_exe);
     test_step.dependOn(&unit_tests_exe_run.step);
@@ -101,6 +104,7 @@ pub fn build(b: *Build) void {
     fuzz_exe.root_module.addImport("zig-network", zig_network_module);
     fuzz_exe.root_module.addImport("httpz", httpz_mod);
     fuzz_exe.root_module.addImport("zstd", zstd_mod);
+    fuzz_exe.linkLibC();
 
     const fuzz_exe_run = b.addRunArtifact(fuzz_exe);
     fuzz_exe_run.addArgs(b.args orelse &.{});
@@ -118,10 +122,25 @@ pub fn build(b: *Build) void {
     benchmark_exe.root_module.addImport("zig-network", zig_network_module);
     benchmark_exe.root_module.addImport("httpz", httpz_mod);
     benchmark_exe.root_module.addImport("zstd", zstd_mod);
+    benchmark_exe.linkLibC();
 
     const benchmark_exe_run = b.addRunArtifact(benchmark_exe);
     benchmark_exe_run.addArgs(b.args orelse &.{});
     benchmark_step.dependOn(&benchmark_exe_run.step);
+
+    // geyser reader
+    const geyser_reader_exe = b.addExecutable(.{
+        .name = "geyser_reader",
+        .root_source_file = b.path("src/geyser/reader.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(geyser_reader_exe);
+    geyser_reader_exe.root_module.addImport("sig", sig_mod);
+
+    const geyser_reader_exe_run = b.addRunArtifact(geyser_reader_exe);
+    geyser_reader_exe_run.addArgs(b.args orelse &.{});
+    geyser_reader_step.dependOn(&geyser_reader_exe_run.step);
 }
 
 /// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/

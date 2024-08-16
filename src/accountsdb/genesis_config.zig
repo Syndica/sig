@@ -234,6 +234,7 @@ pub const GenesisConfig = struct {
     ) !GenesisConfig {
         var file = try std.fs.cwd().openFile(genesis_path, .{});
         defer file.close();
+
         return try bincode.read(allocator, GenesisConfig, file.reader(), .{});
     }
 

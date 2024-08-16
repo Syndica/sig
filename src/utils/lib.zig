@@ -12,3 +12,4 @@ pub const tar = @import("tar.zig");
 pub const thread = @import("thread.zig");
 pub const types = @import("types.zig");
 pub const fmt = @import("fmt.zig");
+pub const allocators = @import("allocators.zig");

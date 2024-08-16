@@ -7,6 +7,7 @@ const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
+const GeyserWriter = sig.geyser.GeyserWriter;
 const Hash = sig.core.Hash;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
@@ -89,11 +90,17 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
     var last_full_snapshot_validated_slot: Slot = 0;
     var last_inc_snapshot_validated_slot: Slot = 0;
 
-    var accounts_db = try AccountsDB.init(gpa, logger, snapshot_dir, .{
-        .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
-        .use_disk_index = use_disk,
-        // TODO: other things we can fuzz (number of bins, ...)
-    });
+    var accounts_db = try AccountsDB.init(
+        gpa,
+        logger,
+        snapshot_dir,
+        .{
+            .number_of_index_bins = sig.accounts_db.db.ACCOUNT_INDEX_BINS,
+            .use_disk_index = use_disk,
+            // TODO: other things we can fuzz (number of bins, ...)
+        },
+        null,
+    );
     defer accounts_db.deinit(true);
 
     const exit = try gpa.create(std.atomic.Value(bool));
@@ -170,6 +177,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 }
                 defer for (accounts) |account| account.deinit(gpa);
 
+                // write to accounts_db
                 try accounts_db.putAccountSlice(
                     &accounts,
                     &pubkeys,
@@ -319,7 +327,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
             defer snapshot_fields.deinit(allocator);
 
-            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config);
+            var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
             _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
