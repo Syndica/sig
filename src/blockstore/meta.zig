@@ -4,7 +4,6 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
-const Shred = sig.shred_collector.shred.Shred;
 const CodingShred = sig.shred_collector.shred.CodingShred;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -17,7 +16,7 @@ pub const SlotMeta = struct {
     /// The total number of consecutive shreds starting from index 0 we have received for this slot.
     /// At the same time, it is also an index of the first missing shred for this slot, while the
     /// slot is incomplete.
-    consumed: u64,
+    consecutive_received_from_0: u64,
     /// The index *plus one* of the highest shred received for this slot.  Useful
     /// for checking if the slot has received any shreds yet, and to calculate the
     /// range where there is one or more holes: `(consumed..received)`.
@@ -52,7 +51,7 @@ pub const SlotMeta = struct {
             .slot = slot,
             .parent_slot = parent_slot,
             .connected_flags = connected_flags,
-            .consumed = 0,
+            .consecutive_received_from_0 = 0,
             .received = 0,
             .first_shred_timestamp = 0,
             .last_index = null,
@@ -61,8 +60,9 @@ pub const SlotMeta = struct {
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *Self) void {
         self.next_slots.deinit();
+        self.completed_data_indexes.deinit();
     }
 
     pub fn clone(self: Self, allocator: Allocator) Allocator.Error!Self {
@@ -72,7 +72,7 @@ pub const SlotMeta = struct {
             .slot = self.slot,
             .parent_slot = self.parent_slot,
             .connected_flags = self.connected_flags,
-            .consumed = self.consumed,
+            .consecutive_received_from_0 = self.consecutive_received_from_0,
             .received = self.received,
             .first_shred_timestamp = self.first_shred_timestamp,
             .last_index = self.last_index,
@@ -83,7 +83,7 @@ pub const SlotMeta = struct {
 
     pub fn eql(self: *Self, other: *Self) bool {
         return self.slot == other.slot and
-            self.consumed == other.consumed and
+            self.consecutive_received_from_0 == other.consecutive_received_from_0 and
             self.received == other.received and
             self.first_shred_timestamp == other.first_shred_timestamp and
             self.last_index == other.last_index and
@@ -94,17 +94,19 @@ pub const SlotMeta = struct {
     }
 
     pub fn isFull(self: Self) bool {
-        return if (self.last_index) |last_index|
-            self.consumed > last_index + 1
-        else
-            false;
+        if (self.last_index) |last_index| {
+            std.debug.assert(self.consecutive_received_from_0 <= last_index + 1);
+            return self.consecutive_received_from_0 == last_index + 1;
+        } else {
+            return false;
+        }
     }
 
     pub fn isOrphan(self: Self) bool {
         return self.parent_slot == null;
     }
 
-    pub fn isConnected(self: *Self) bool {
+    pub fn isConnected(self: Self) bool {
         return self.connected_flags.isSet(.connected);
     }
 
@@ -240,7 +242,10 @@ pub const ErasureMeta = struct {
     /// Analogous to [next_fec_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
     pub fn nextFecSetIndex(self: Self) ?u32 {
         const num_data: u32 = @intCast(self.config.num_data);
-        return sig.utils.math.checkedSub(@as(u32, @intCast(self.fec_set_index)), num_data) catch null;
+        return sig.utils.math.checkedAdd(
+            @as(u32, @intCast(self.fec_set_index)),
+            num_data,
+        ) catch null;
     }
 };
 
@@ -262,6 +267,11 @@ pub const Index = struct {
             .data = ShredIndex.init(allocator),
             .code = ShredIndex.init(allocator),
         };
+    }
+
+    pub fn deinit(self: *Index) void {
+        self.data.deinit();
+        self.code.deinit();
     }
 };
 
@@ -324,17 +334,21 @@ pub const MerkleRootMeta = struct {
     /// The shred type of the first received shred
     first_received_shred_type: sig.shred_collector.shred.ShredType,
 
-    pub fn fromShred(shred: Shred) MerkleRootMeta {
-        return .{
+    pub fn fromShred(shred: anytype) MerkleRootMeta {
+        comptime std.debug.assert(
+            @TypeOf(shred) == sig.shred_collector.shred.DataShred or
+                @TypeOf(shred) == sig.shred_collector.shred.CodingShred,
+        );
+        return MerkleRootMeta{
             // An error here after the shred has already sigverified
             // can only indicate that the leader is sending
             // legacy or malformed shreds. We should still store
             // `None` for those cases in blockstore, as a later
             // shred that contains a proper merkle root would constitute
             // a valid duplicate shred proof.
-            .merkle_root = shred.merkleRoot() catch null,
-            .first_received_shred_index = shred.commonHeader().index,
-            .first_received_shred_type = shred,
+            .merkle_root = shred.fields.merkleRoot() catch null,
+            .first_received_shred_index = shred.fields.common.index,
+            .first_received_shred_type = shred.fields.common.shred_variant.shred_type,
         };
     }
 };

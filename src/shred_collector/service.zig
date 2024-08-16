@@ -49,6 +49,7 @@ pub const ShredCollectorDependencies = struct {
     /// Shared state that is read from gossip
     my_shred_version: *const Atomic(u16),
     leader_schedule: SlotLeaderProvider,
+    shred_inserter: sig.blockstore.ShredInserter,
 };
 
 /// Start the Shred Collector.
@@ -111,7 +112,15 @@ pub fn start(
     try service_manager.spawn(
         "Shred Processor",
         shred_collector.shred_processor.runShredProcessor,
-        .{ deps.allocator, deps.exit, deps.logger, verified_shred_channel, shred_tracker },
+        .{
+            deps.allocator,
+            deps.exit,
+            deps.logger,
+            verified_shred_channel,
+            shred_tracker,
+            deps.shred_inserter,
+            deps.leader_schedule,
+        },
     );
 
     // repair (thread)

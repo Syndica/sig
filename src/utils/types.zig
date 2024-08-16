@@ -264,3 +264,74 @@ pub inline fn comptimeZeroSizePtrCast(comptime T: type, comptime ptr: *const any
         return dummy.value;
     }
 }
+
+// config: allocator, pointers
+
+/// Compare equality of two items with the same type.
+pub fn eql(one: anytype, two: anytype) bool {
+    if (@TypeOf(one) != @TypeOf(two)) @compileError("must be the same type");
+    return switch (@typeInfo(@TypeOf(one))) {
+        inline .Void, .Null => true,
+        .Struct => st: {
+            inline for (@typeInfo((@TypeOf(one))).Struct.fields) |field| {
+                const one_value = @field(one, field.name);
+                const two_value = @field(two, field.name);
+                if (!eql(one_value, two_value)) {
+                    break :st false;
+                }
+            }
+            break :st true;
+        },
+        .Array => |array| sliceEql(array.child, &one, &two),
+        .Pointer => |pointer| switch (pointer.size) {
+            .Slice => sliceEql(pointer.child, one, two),
+            else => @compileError("not supported"),
+        },
+        .Optional => one == null and two == null or
+            one != null and two != null and eql(one, two),
+
+        inline .Type,
+        .Bool,
+        .Int,
+        .Float,
+        .ComptimeInt,
+        .ComptimeFloat,
+        .Vector,
+        .Enum,
+        .ErrorSet,
+        .Fn,
+        => one == two,
+
+        inline .NoReturn,
+        .Undefined,
+        .ErrorUnion,
+        .Union,
+        .Opaque,
+        .Frame,
+        .AnyFrame,
+        .EnumLiteral,
+        => @compileError("not supported"),
+    };
+}
+
+/// copy of `std.mem.eql` except it uses `eql` (above) instead of `==`
+fn sliceEql(comptime T: type, a: []const T, b: []const T) bool {
+    if (@sizeOf(T) == 0) return true;
+    const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
+        // The SPIR-V backend does not support the optimized path yet.
+        .stage2_spirv64 => false,
+        // The RISC-V does not support vectors.
+        .stage2_riscv64 => false,
+        else => true,
+    };
+    if (!@inComptime() and std.meta.hasUniqueRepresentation(T) and backend_can_use_eql_bytes)
+        return std.mem.eql(T, a, b);
+
+    if (a.len != b.len) return false;
+    if (a.len == 0 or a.ptr == b.ptr) return true;
+
+    for (a, b) |a_elem, b_elem| {
+        if (eql(a_elem, b_elem)) return false;
+    }
+    return true;
+}

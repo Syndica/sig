@@ -32,8 +32,8 @@
             .hash = "1220f70ac854b59315a8512861e039648d677feb4f9677bd873d6b9b7074a5906485",
         },
         .rocksdb = .{
-            .url = "https://github.com/Syndica/rocksdb-zig/archive/21ac0ae13c9ac38706e6b76117f32bab5158d71f.tar.gz",
-            .hash = "12207bec9b5a101d0ec476fb2bb8877b15afb6cb6edc5c98851be7e3e193d15e5759",
+            .url = "https://github.com/Syndica/rocksdb-zig/archive/fef02eff221902d38975db7ab6db22e70406f7b3.tar.gz",
+            .hash = "12200d7d04cf154ca409040616e78af2b7dc89b1119936186c61e9acd10d3950b30f",
         },
     },
 }

@@ -510,6 +510,19 @@ fn validator() !void {
         try leaderScheduleFromBank(allocator, &snapshot.bank);
     const leader_provider = leader_schedule.provider();
 
+    // blockstore
+    const blockstore_db = try sig.blockstore.BlockstoreDB.open(
+        allocator,
+        app_base.logger,
+        "ledger/blockstore",
+    );
+    const shred_inserter = try sig.blockstore.ShredInserter.init(
+        allocator,
+        app_base.logger,
+        app_base.metrics_registry,
+        blockstore_db,
+    );
+
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
@@ -525,6 +538,7 @@ fn validator() !void {
             .gossip_table_rw = &gossip_service.gossip_table_rw,
             .my_shred_version = &gossip_service.my_shred_version,
             .leader_schedule = leader_provider,
+            .shred_inserter = shred_inserter,
         },
     );
     defer shred_collector_manager.deinit();
@@ -637,6 +651,7 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
 const AppBase = struct {
     exit: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     logger: Logger,
+    metrics_registry: *sig.prometheus.Registry(.{}),
     metrics_thread: std.Thread,
     my_keypair: KeyPair,
     entrypoints: std.ArrayList(SocketAddr),
@@ -648,7 +663,7 @@ const AppBase = struct {
         // var logger: Logger = .noop;
         errdefer logger.deinit();
 
-        const metrics_thread = try spawnMetrics(logger);
+        const metrics_registry, const metrics_thread = try spawnMetrics(logger);
         errdefer metrics_thread.detach();
 
         const my_keypair = try getOrInitIdentity(allocator, logger);
@@ -660,6 +675,7 @@ const AppBase = struct {
 
         return .{
             .logger = logger,
+            .metrics_registry = metrics_registry,
             .metrics_thread = metrics_thread,
             .my_keypair = my_keypair,
             .entrypoints = entrypoints,
@@ -851,11 +867,14 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
 
 /// Initializes the global registry. Returns error if registry was already initialized.
 /// Spawns a thread to serve the metrics over http on the CLI configured port.
-fn spawnMetrics(logger: Logger) !std.Thread {
+fn spawnMetrics(logger: Logger) !struct { *sig.prometheus.Registry(.{}), std.Thread } {
     const metrics_port: u16 = config.current.metrics_port;
     logger.infof("metrics port: {d}", .{metrics_port});
     const registry = globalRegistry();
-    return try std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port });
+    return .{
+        registry,
+        try std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port }),
+    };
 }
 
 fn spawnLogger() !Logger {

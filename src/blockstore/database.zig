@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const blockstore = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -8,12 +9,17 @@ const Logger = sig.trace.Logger;
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
     sig.utils.interface.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
+    sig.utils.interface.assertSameInterface(
+        Database(Impl).Iterator(.forward),
+        Impl.Iterator(.forward),
+        .subset,
+    );
 }
 
 /// Runs all tests in `tests`
-pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) void {
+pub fn testDatabase(comptime Impl: fn ([]const ColumnFamily) type) !void {
     assertIsDatabase(Impl(&.{}));
-    for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
+    inline for (@typeInfo(tests(Impl)).Struct.decls) |decl| {
         try @call(.auto, @field(tests(Impl), decl.name), .{});
     }
 }
@@ -108,8 +114,33 @@ pub fn Database(comptime Impl: type) type {
                 return try self.impl.delete(cf, key);
             }
         };
+
+        pub fn iterator(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            comptime direction: IteratorDirection,
+            start: ?cf.Key,
+        ) anyerror!Iterator(direction) {
+            return .{ .impl = try self.impl.iterator(cf, direction, start) };
+        }
+
+        pub fn Iterator(direction: IteratorDirection) type {
+            return struct {
+                impl: Impl.Iterator(direction),
+
+                pub fn deinit(self: *@This()) void {
+                    return self.impl.deinit();
+                }
+
+                pub fn nextBytes(self: *@This()) anyerror!?[2]BytesRef {
+                    return try self.impl.nextBytes();
+                }
+            };
+        }
     };
 }
+
+pub const IteratorDirection = enum { forward, reverse };
 
 pub const ColumnFamily = struct {
     name: []const u8,
@@ -130,36 +161,41 @@ pub const ColumnFamily = struct {
     }
 };
 
+pub const key_serializer = serializer(.big);
+pub const value_serializer = serializer(.little);
+
 /// Bincode-based serializer that should be usable by database implementations.
-pub const serializer = struct {
-    /// Returned slice is owned by the caller. Free with `allocator.free`.
-    pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
-        const buf = try allocator.alloc(u8, try sig.bincode.sizeOf(item, .{}));
-        return sig.bincode.writeToSlice(item, buf);
-    }
+fn serializer(endian: std.builtin.Endian) type {
+    return struct {
+        /// Returned slice is owned by the caller. Free with `allocator.free`.
+        pub fn serializeAlloc(allocator: Allocator, item: anytype) ![]const u8 {
+            const buf = try allocator.alloc(u8, sig.bincode.sizeOf(item, .{}));
+            return sig.bincode.writeToSlice(buf, item, .{ .endian = endian });
+        }
 
-    /// Returned data may or may not be owned by the caller.
-    /// Do both:
-    ///  - Assume the data is owned by the scope where `item` originated,
-    ///    so finish using the slice before returning from the caller (do not store slice as-is)
-    ///  - Call BytesRef.deinit before returning from the caller (as if you own it).
-    ///
-    /// Use this if the database backend accepts a pointer and immediately calls memcpy.
-    pub fn serializeToRef(allocator: Allocator, item: anytype) !BytesRef {
-        return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) .{
-            .allocator = null,
-            .data = item,
-        } else .{
-            .allocator = allocator,
-            .data = serializeAlloc(allocator, item),
-        };
-    }
+        /// Returned data may or may not be owned by the caller.
+        /// Do both:
+        ///  - Assume the data is owned by the scope where `item` originated,
+        ///    so finish using the slice before returning from the caller (do not store slice as-is)
+        ///  - Call BytesRef.deinit before returning from the caller (as if you own it).
+        ///
+        /// Use this if the database backend accepts a pointer and immediately calls memcpy.
+        pub fn serializeToRef(allocator: Allocator, item: anytype) !BytesRef {
+            return if (@TypeOf(item) == []const u8 or @TypeOf(item) == []u8) .{
+                .allocator = null,
+                .data = item,
+            } else .{
+                .allocator = allocator,
+                .data = try serializeAlloc(allocator, item),
+            };
+        }
 
-    /// Returned data is owned by the caller. Free with `allocator.free`.
-    pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
-        return try sig.bincode.readFromSlice(allocator, T, bytes, .{});
-    }
-};
+        /// Returned data is owned by the caller. Free with `allocator.free`.
+        pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
+            return try sig.bincode.readFromSlice(allocator, T, bytes, .{ .endian = endian });
+        }
+    };
+}
 
 pub const BytesRef = struct {
     allocator: ?Allocator = null,
@@ -172,8 +208,12 @@ pub const BytesRef = struct {
 
 /// Test cases that can be applied to any implementation of Database
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
+    @setEvalBranchQuota(10_000);
+    const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
+    const test_dir = std.fmt.comptimePrint("test_data/blockstore/database/{s}", .{impl_id.buffer});
+
     return struct {
-        fn basic() !void {
+        pub fn basic() !void {
             const Value = struct { hello: u16 };
             const cf1 = ColumnFamily{
                 .name = "one",
@@ -185,14 +225,12 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
                 .Key = u64,
                 .Value = Value,
             };
+            const path = std.fmt.comptimePrint("{s}/basic", .{test_dir});
+            try blockstore.tests.freshDir(path);
             const allocator = std.testing.allocator;
             const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
             defer logger.deinit();
-            var db = try Database(Impl(&.{ cf1, cf2 })).open(
-                allocator,
-                logger,
-                "test_data/bsdb",
-            );
+            var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
             defer db.deinit();
             try db.put(cf1, 123, .{ .hello = 345 });
             const got = try db.get(cf1, 123);
