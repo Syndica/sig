@@ -1808,33 +1808,12 @@ pub const BlockstoreInsertionMetrics = struct {
     num_coding_shreds_inserted: *Counter, // usize
 
     pub fn init(registry: *sig.prometheus.Registry(.{})) !BlockstoreInsertionMetrics {
-        return .{
-            .insert_lock_elapsed_us = try registry.getOrCreateCounter("insert_lock_elapsed_us"),
-            .insert_shreds_elapsed_us = try registry.getOrCreateCounter("insert_shreds_elapsed_us"),
-            .shred_recovery_elapsed_us = try registry.getOrCreateCounter("shred_recovery_elapsed_us"),
-            .chaining_elapsed_us = try registry.getOrCreateCounter("chaining_elapsed_us"),
-            .commit_working_sets_elapsed_us = try registry.getOrCreateCounter("commit_working_sets_elapsed_us"),
-            .write_batch_elapsed_us = try registry.getOrCreateCounter("write_batch_elapsed_us"),
-            .total_elapsed_us = try registry.getOrCreateCounter("total_elapsed_us"),
-            .index_meta_time_us = try registry.getOrCreateCounter("index_meta_time_us"),
-            .num_shreds = try registry.getOrCreateCounter("num_shreds"),
-            .num_inserted = try registry.getOrCreateCounter("num_inserted"),
-            .num_repair = try registry.getOrCreateCounter("num_repair"),
-            .num_recovered = try registry.getOrCreateCounter("num_recovered"),
-            .num_recovered_blockstore_error = try registry.getOrCreateCounter("num_recovered_blockstore_error"),
-            .num_recovered_inserted = try registry.getOrCreateCounter("num_recovered_inserted"),
-            .num_recovered_failed_sig = try registry.getOrCreateCounter("num_recovered_failed_sig"),
-            .num_recovered_failed_invalid = try registry.getOrCreateCounter("num_recovered_failed_invalid"),
-            .num_recovered_exists = try registry.getOrCreateCounter("num_recovered_exists"),
-            .num_repaired_data_shreds_exists = try registry.getOrCreateCounter("num_repaired_data_shreds_exists"),
-            .num_turbine_data_shreds_exists = try registry.getOrCreateCounter("num_turbine_data_shreds_exists"),
-            .num_data_shreds_invalid = try registry.getOrCreateCounter("num_data_shreds_invalid"),
-            .num_data_shreds_blockstore_error = try registry.getOrCreateCounter("num_data_shreds_blockstore_error"),
-            .num_coding_shreds_exists = try registry.getOrCreateCounter("num_coding_shreds_exists"),
-            .num_coding_shreds_invalid = try registry.getOrCreateCounter("num_coding_shreds_invalid"),
-            .num_coding_shreds_invalid_erasure_config = try registry.getOrCreateCounter("num_coding_shreds_invalid_erasure_config"),
-            .num_coding_shreds_inserted = try registry.getOrCreateCounter("num_coding_shreds_inserted"),
-        };
+        var self: BlockstoreInsertionMetrics = undefined;
+        inline for (@typeInfo(BlockstoreInsertionMetrics).Struct.fields) |field| {
+            const name = "shred_inserter_" ++ field.name;
+            @field(self, field.name) = try registry.getOrCreateCounter(name);
+        }
+        return self;
     }
 };
 
