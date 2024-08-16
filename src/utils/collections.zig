@@ -92,6 +92,7 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
         }
 
         pub fn eql(self: *Self, other: *Self) bool {
+            if (self.map.count() != other.map.count()) return false;
             return self.map.eql(&other.map);
         }
 
