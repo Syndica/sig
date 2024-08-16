@@ -65,12 +65,12 @@ pub const RecycleFBA = struct {
         // otherwise, allocate a new one
         const buf = self.alloc_allocator.allocator().rawAlloc(n, log2_align, return_address) orelse {
             // std.debug.print("RecycleFBA alloc error: {}\n", .{ err });
-            return null;
+            @panic("RecycleFBA.alloc: could not allocate buf");
         };
 
         self.records.append(.{ .is_free = false, .buf = buf, .len = n }) catch {
             // std.debug.print("RecycleFBA append error: {}\n", .{ err });
-            return null;
+            @panic("RecycleFBA.alloc: could not append record");
         };
 
         return buf;
