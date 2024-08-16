@@ -31,7 +31,10 @@ pub fn main() !void {
     const maybe_filter = cli_args.next();
     const filter = blk: {
         if (maybe_filter) |filter| {
-            const parsed_filter = std.meta.stringToEnum(FuzzFilter, filter) orelse return error.UnknownFilter;
+            const parsed_filter = std.meta.stringToEnum(FuzzFilter, filter) orelse {
+                std.debug.print("Unknown filter. Supported values are: {s} ", .{std.meta.fieldNames(FuzzFilter)});
+                return error.UnknownFilter;
+            };
             std.debug.print("filtering fuzz testing with prefix: {s}\n", .{filter});
             break :blk parsed_filter;
         } else {
