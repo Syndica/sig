@@ -584,26 +584,6 @@ pub const ShredInserter = struct {
             return maybe_shred;
         }
 
-        // TODO do we need to support old ledger versions?
-        // // If we are using a blockstore created from an earlier version than 1.18.12,
-        // // `index` will be 0 as it was not yet populated, revert to a scan until  we no longer support
-        // // those blockstore versions.
-        // for coding_index in erasure_meta.coding_shreds_indices() {
-        //     let maybe_shred = self.get_coding_shred(slot, coding_index);
-        //     if let Ok(Some(shred_data)) = maybe_shred {
-        //         let potential_shred = Shred::new_from_serialized_shred(shred_data).unwrap();
-        //         if shred.erasure_mismatch(&potential_shred).unwrap() {
-        //             return Some(Cow::Owned(potential_shred.into_payload()));
-        //         }
-        //     } else if let Some(potential_shred) = {
-        //         let key = ShredId::new(slot, u32::try_from(coding_index).unwrap(), ShredType::Code);
-        //         just_received_shreds.get(&key)
-        //     } {
-        //         if shred.erasure_mismatch(potential_shred).unwrap() {
-        //             return Some(Cow::Borrowed(potential_shred.payload()));
-        //         }
-        //     }
-        // }
         return null;
     }
 
