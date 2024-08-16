@@ -1033,7 +1033,6 @@ pub const ShredInserter = struct {
         // 2. For new data shreds, check if an erasure set exists. If not, don't try recovery
         // 3. Before trying recovery, check if enough number of shreds have been received
         // 3a. Enough number of shreds = (#data + #coding shreds) > erasure.num_data
-        var recovered_shreds = std.ArrayList(Shred).init(self.allocator);
         const keys, const values = erasure_metas.items();
         // let index = &mut index_meta_entry.index;
         for (keys, values) |erasure_set, *working_erasure_meta| {
@@ -1042,13 +1041,10 @@ pub const ShredInserter = struct {
                 return error.Unwrap; // TODO: consider all the unwraps
             };
             switch (erasure_meta.status(&index_meta_entry.index)) {
-                .can_recover => try self.recoverShreds(
+                .can_recover => return try self.recoverShreds(
                     &index_meta_entry.index,
                     erasure_meta,
                     prev_inserted_shreds,
-                    &recovered_shreds,
-                    // &self.data_shred_cf,
-                    // &self.code_shred_cf,
                     reed_solomon_cache,
                 ),
                 .data_full => {
@@ -1059,7 +1055,7 @@ pub const ShredInserter = struct {
                 },
             }
         }
-        return recovered_shreds;
+        return std.ArrayList(Shred).init(self.allocator);
     }
 
     /// agave: recover_shreds
@@ -1068,9 +1064,8 @@ pub const ShredInserter = struct {
         index: *const Index,
         erasure_meta: *const ErasureMeta,
         prev_inserted_shreds: *const AutoHashMap(ShredId, Shred),
-        recovered_shreds: *ArrayList(Shred),
         reed_solomon_cache: *ReedSolomonCache,
-    ) !void {
+    ) !std.ArrayList(Shred) {
         var available_shreds = ArrayList(Shred).init(self.allocator);
         defer available_shreds.deinit();
 
@@ -1098,12 +1093,12 @@ pub const ShredInserter = struct {
             available_shreds.items,
             reed_solomon_cache,
         )) |shreds| {
-            defer self.allocator.free(shreds);
-            try recovered_shreds.appendSlice(shreds);
+            return shreds;
         } else |e| {
             // TODO: submit_self.metrics
-            // TODO: when refactoring, consider returning error from here
+            // TODO: consider returning error (agave does not return an error or log)
             self.logger.errf("shred recovery error: {}", .{e});
+            return std.ArrayList(Shred).init(self.allocator);
         }
     }
 
@@ -2267,10 +2262,9 @@ test "recovery" {
 
     for (data_shreds) |data_shred| {
         const key = .{ data_shred.data.fields.common.slot, data_shred.data.fields.common.index };
-        std.debug.print("trying one: {any}\n", .{key});
         const actual_shred = try state.db.getBytes(schema.data_shred, key);
         defer actual_shred.?.deinit();
-        try std.testing.expectEqual(data_shred.payload(), actual_shred.?.data);
+        try std.testing.expectEqualSlices(u8, data_shred.payload(), actual_shred.?.data);
     }
 
     // TODO: verify index integrity
