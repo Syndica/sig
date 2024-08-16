@@ -257,8 +257,10 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 inner: rocks.Iterator,
                 logger: Logger,
 
-                /// This is a noop, but you should still call it when you're done with the iterator.
-                pub fn deinit(_: *@This()) void {}
+                /// Calling this will free all slices returned by the iterator
+                pub fn deinit(self: *@This()) void {
+                    self.inner.deinit();
+                }
 
                 pub fn next(self: *@This()) anyerror!?cf.Entry() {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
@@ -286,21 +288,16 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                         null;
                 }
 
+                /// Returned data does not outlive the iterator.
                 pub fn nextBytes(self: *@This()) Error!?[2]BytesRef {
                     const entry = try callRocks(self.logger, rocks.Iterator.next, .{&self.inner});
                     return if (entry) |kv| .{
-                        .{ .allocator = self.allocator, .data = kv[0].data },
-                        .{ .allocator = self.allocator, .data = kv[1].data },
+                        .{ .allocator = null, .data = kv[0].data },
+                        .{ .allocator = null, .data = kv[1].data },
                     } else null;
                 }
             };
         }
-
-        pub fn rawIterator(self: *Self, comptime cf: ColumnFamily) Error!RawIterator {
-            return self.db.rawIterator(self.cf_handles[cf.find(column_families)]);
-        }
-
-        pub const RawIterator = rocks.RawIterator;
 
         const Error = error{
             RocksDBOpen,

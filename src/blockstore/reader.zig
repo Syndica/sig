@@ -41,7 +41,7 @@ const TransactionError = blockstore.transaction_status.TransactionError;
 const UnixTimestamp = blockstore.meta.UnixTimestamp;
 
 const schema = blockstore.schema.schema;
-const serializer = blockstore.database.serializer;
+const key_serializer = blockstore.database.key_serializer;
 const shredder = blockstore.shredder;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
@@ -185,13 +185,19 @@ pub const BlockstoreReader = struct {
         var iterator = try self.db.iterator(cf, .forward, .{ slot, start_index });
         defer iterator.deinit();
         var shreds = std.ArrayList(Shred).init(self.allocator);
-        while (try iterator.next()) |shred_entry| {
-            const slot_and_index, const payload = shred_entry;
-            if (slot_and_index[0] != slot) {
+        while (try iterator.nextBytes()) |shred_entry| {
+            const key, const payload = shred_entry;
+            defer key.deinit();
+            defer payload.deinit();
+            const found_slot, _ = try key_serializer.deserialize(
+                cf.Key,
+                self.allocator,
+                key.data,
+            );
+            if (found_slot != slot) {
                 break;
             }
-            // NOTE perf: memcpy
-            try shreds.append(try Shred.fromPayload(self.allocator, payload));
+            try shreds.append(try Shred.fromPayload(self.allocator, payload.data));
         }
         return shreds;
     }
@@ -231,6 +237,7 @@ pub const BlockstoreReader = struct {
         }
 
         var iter = try self.db.iterator(schema.data_shred, .forward, .{ slot, start_index });
+        defer iter.deinit();
 
         var missing_indexes = ArrayList(u64).init(self.allocator);
         const now = @as(u64, @intCast(std.time.milliTimestamp()));
@@ -238,20 +245,21 @@ pub const BlockstoreReader = struct {
 
         // The index of the first missing shred in the slot
         var prev_index = start_index;
-        while (true) {
-            const slot_and_index, const payload = (try iter.next()) orelse {
-                const num_to_take = max_missing - missing_indexes.items.len;
-                try appendIntegers(&missing_indexes, prev_index, end_index, num_to_take);
-                break;
-            };
+        while (try iter.nextBytes()) |kv_pair| {
+            const key, const payload = kv_pair;
+            defer key.deinit();
+            defer payload.deinit();
+            const current_slot, const index = try key_serializer.deserialize(
+                schema.data_shred.Key,
+                self.allocator,
+                key.data,
+            );
 
-            const current_slot = slot_and_index[0];
-            const index = slot_and_index[1];
             const current_index = if (current_slot > slot) end_index else index;
 
             const upper_index = @min(current_index, end_index);
             // the tick that will be used to figure out the timeout for this hole
-            const reference_tick: u64 = @intCast(try shred_layout.getReferenceTick(payload));
+            const reference_tick: u64 = @intCast(try shred_layout.getReferenceTick(payload.data));
             if (ticks_since_first_insert < reference_tick + defer_threshold_ticks) {
                 // The higher index holes have not timed out yet
                 break;
@@ -268,6 +276,9 @@ pub const BlockstoreReader = struct {
             }
 
             prev_index = current_index + 1;
+        } else {
+            const num_to_take = max_missing - missing_indexes.items.len;
+            try appendIntegers(&missing_indexes, prev_index, end_index, num_to_take);
         }
 
         return missing_indexes;
@@ -983,7 +994,7 @@ pub const BlockstoreReader = struct {
             self.allocator,
             @intCast(start_index),
             &slot_meta.completed_data_indexes,
-            @intCast(slot_meta.consumed),
+            @intCast(slot_meta.consecutive_received_from_0),
         );
 
         return .{ completed_ranges, slot_meta };
@@ -1069,7 +1080,7 @@ pub const BlockstoreReader = struct {
                             .{
                                 slot,
                                 index,
-                                slot_meta.consumed,
+                                slot_meta.consecutive_received_from_0,
                                 slot_meta.completed_data_indexes,
                                 all_ranges_start_index,
                                 all_ranges_end_index,
@@ -1659,7 +1670,7 @@ test "slotMetaIterator" {
         var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = slot_meta.last_index.? + 1;
+        slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
             try slot_meta.next_slots.append(roots[i + 1]);
@@ -1731,7 +1742,7 @@ test "slotRangeConnected" {
         defer slot_meta.deinit();
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = slot_meta.last_index.? + 1;
+        slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
             try slot_meta.next_slots.append(roots[i + 1]);

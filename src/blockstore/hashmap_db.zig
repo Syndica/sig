@@ -320,14 +320,6 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 }
             };
         }
-
-        pub fn rawIterator(self: *Self, comptime cf: ColumnFamily) error{}!RawIterator {
-            _ = self; // autofix
-            _ = cf; // autofix
-            unreachable;
-        }
-
-        pub const RawIterator = struct {};
     };
 }
 

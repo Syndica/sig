@@ -3,14 +3,15 @@ const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CodingShredHeader = sig.shred_collector.shred.CodingShredHeader;
-const DataShred = sig.shred_collector.shred.DataShred;
 const CodingShred = sig.shred_collector.shred.CodingShred;
+const CodingShredHeader = sig.shred_collector.shred.CodingShredHeader;
+const CommonHeader = sig.shred_collector.shred.CommonHeader;
+const DataShred = sig.shred_collector.shred.DataShred;
 const Hash = sig.core.Hash;
 const Lru = sig.common.lru.LruCacheCustom;
+const MerkleProofEntryList = sig.shred_collector.shred.MerkleProofEntryList;
 const ReedSolomon = sig.blockstore.reed_solomon.ReedSolomon;
 const Shred = sig.shred_collector.shred.Shred;
-const CommonHeader = sig.shred_collector.shred.CommonHeader;
 const Signature = sig.core.Signature;
 
 const checkedSub = sig.utils.math.checkedSub;
@@ -85,7 +86,7 @@ pub fn recover(
     allocator: Allocator,
     shreds: []const Shred,
     reed_solomon_cache: *ReedSolomonCache,
-) ![]const Shred {
+) !std.ArrayList(Shred) {
     // Grab {common, coding} headers from first coding shred.
     // Incoming shreds are resigned immediately after signature verification,
     // so we can just grab the retransmitter signature from one of the
@@ -160,21 +161,21 @@ pub fn recover(
     try rs.reconstruct(allocator, shards, false);
 
     // Reconstruct code and data shreds from erasure encoded shards.
-    const recovered_shreds = try allocator.alloc(Shred, all_shreds.len);
-    defer allocator.free(recovered_shreds);
+    const all_including_recovered = try allocator.alloc(Shred, all_shreds.len);
+    defer allocator.free(all_including_recovered);
     var num_recovered_so_far: usize = 0;
     errdefer {
         // The shreds that are created below need to be freed if there is an error.
         // If no error, ownership is transfered to calling scope.
         // Existing shreds do not need to be freed because they were already owned by calling scope.
-        for (recovered_shreds, mask, 0..num_recovered_so_far) |shred, was_present, _| {
+        for (all_including_recovered, mask, 0..num_recovered_so_far) |shred, was_present, _| {
             if (!was_present) shred.deinit();
         }
     }
     std.debug.assert(all_shreds.len == shards.len);
     for (all_shreds, shards, 0..) |maybe_shred, maybe_shard, index| {
         if (maybe_shred) |shred| {
-            recovered_shreds[index] = shred;
+            all_including_recovered[index] = shred;
         } else {
             const shard = maybe_shard orelse return error.TooFewShards;
             if (index < num_data_shreds) {
@@ -195,7 +196,7 @@ pub fn recover(
                 {
                     return error.InvalidRecoveredShred;
                 }
-                recovered_shreds[index] = .{ .data = data_shred };
+                all_including_recovered[index] = .{ .data = data_shred };
             } else {
                 const offset = index - num_data_shreds;
                 var this_common_header = common_header;
@@ -210,51 +211,57 @@ pub fn recover(
                     retransmitter_signature,
                     shard,
                 );
-                recovered_shreds[index] = .{ .code = coding_shred };
+                all_including_recovered[index] = .{ .code = coding_shred };
             }
         }
         num_recovered_so_far += 1;
         // TODO perf: should this only run in debug mode?
-        try recovered_shreds[index].sanitize();
+        try all_including_recovered[index].sanitize();
     }
 
     // Compute merkle tree
-    var tree = try std.ArrayList(Hash).initCapacity(allocator, recovered_shreds.len);
+    var tree = try std.ArrayList(Hash).initCapacity(allocator, all_including_recovered.len);
     defer tree.deinit();
-    for (recovered_shreds) |shred| {
+    for (all_including_recovered) |shred| {
         tree.appendAssumeCapacity(try shred.merkleNode());
     }
     try makeMerkleTree(&tree);
 
     // set the merkle proof on the recovered shreds.
-    for (recovered_shreds, mask, 0..) |*shred, was_present, index| {
-        const proof = try makeMerkleProof(allocator, index, num_shards, tree.items) orelse {
-            return error.InvalidMerkleProof;
-        };
-        defer proof.deinit();
-        if (proof.items.len != @as(usize, @intCast(proof_size))) {
+    for (all_including_recovered, mask, 0..) |*shred, was_present, index| {
+        const proof: MerkleProofEntryList = try makeMerkleProof(
+            allocator,
+            index,
+            num_shards,
+            tree.items,
+        ) orelse return error.InvalidMerkleProof;
+        defer proof.deinit(allocator);
+        if (proof.len != @as(usize, @intCast(proof_size))) {
             return error.InvalidMerkleProof;
         }
         if (was_present) {
-            var expected_proof = (try shred.merkleProof()).iterator();
+            const expected_proof = try shred.merkleProof();
+            var expected_proof_iterator = expected_proof.iterator();
             var i: usize = 0;
-            while (expected_proof.next()) |expected_entry| : (i += 1) {
-                if (!std.mem.eql(u8, &expected_entry, proof.items[i])) {
+            while (expected_proof_iterator.next()) |expected_entry| : (i += 1) {
+                const actual_entry = proof.get(i) orelse return error.InvalidMerkleProof;
+                if (!std.mem.eql(u8, expected_entry, &actual_entry)) {
                     return error.InvalidMerkleProof;
                 }
             }
         } else {
-            try shred.setMerkleProof(proof.items);
+            try shred.setMerkleProof(proof);
             std.debug.assert(if (shred.sanitize()) |_| true else |_| false);
             // TODO: Assert that shred payload is fully populated.
         }
     }
 
     // Assemble list that excludes the shreds we already had
-    const ret = try allocator.alloc(Shred, num_to_recover);
-    for (recovered_shreds, mask, 0..) |shred, was_present, i| {
+    var ret = try std.ArrayList(Shred).initCapacity(allocator, num_to_recover);
+    for (all_including_recovered, mask) |shred, was_present| {
         if (!was_present) {
-            ret[i] = shred;
+            try shred.sanitize();
+            ret.appendAssumeCapacity(shred);
         }
     }
     return ret;

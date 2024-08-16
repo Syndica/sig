@@ -130,7 +130,7 @@ pub const Shred = union(ShredType) {
         };
     }
 
-    pub fn setMerkleProof(self: *Self, proof: []const *const MerkleProofEntry) !void {
+    pub fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
         return switch (self.*) {
             inline .data, .code => |*s| s.fields.setMerkleProof(proof),
         };
@@ -265,6 +265,7 @@ pub const DataShred = struct {
         errdefer allocator.free(payload);
         @memcpy(payload[0..SIGNATURE_LENGTH], &signature.data);
         @memcpy(payload[SIGNATURE_LENGTH..][0..shard_size], shard);
+        @memset(payload[SIGNATURE_LENGTH + shard_size ..], 0);
         var shred = try Fields.fromPayloadOwned(allocator, payload);
         if (shard_size != try capacity(coding_shred, shred.common.shred_variant)) {
             return error.InvalidShardSize;
@@ -470,7 +471,8 @@ pub fn GenericShred(
         }
 
         /// agave: set_merkle_proof
-        pub fn setMerkleProof(self: *Self, proof: []const *const MerkleProofEntry) !void {
+        pub fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
+            try proof.sanitize();
             const proof_size = self.common.shred_variant.proof_size;
             if (proof.len != proof_size) {
                 return error.InvalidMerkleProof;
@@ -480,7 +482,8 @@ pub fn GenericShred(
                 return error.InvalidProofSize;
             }
             var start = offset;
-            for (proof) |entry| {
+            var proof_iterator = proof.iterator();
+            while (proof_iterator.next()) |entry| {
                 // TODO test: agave uses bincode here. does that make any difference?
                 const end = merkle_proof_entry_size + start;
                 @memcpy(self.payload[start..end], entry);
@@ -576,12 +579,12 @@ fn getMerkleNode(shred: []const u8, start: usize, end: usize) !Hash {
 fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofEntryList) !Hash {
     var index = start_index;
     var node = start_node;
-    var iterator = proof.iterator();
-    while (iterator.next()) |other| {
+    for (0..proof.len) |i| {
+        const other = proof.get(i) orelse unreachable;
         node = if (index % 2 == 0)
-            joinNodes(&node.data, &other)
+            joinNodes(&node.data, other[0..])
         else
-            joinNodes(&other, &node.data);
+            joinNodes(other[0..], &node.data);
         index = index >> 1;
     }
     if (index != 0) return error.InvalidMerkleProof;
@@ -610,7 +613,7 @@ pub fn makeMerkleTree(nodes: *std.ArrayList(Hash)) !void {
 
 /// agave: make_merkle_proof
 ///
-/// return points to `tree`
+/// return is owned
 pub fn makeMerkleProof(
     allocator: Allocator,
     /// leaf index ~ shred's erasure shard index.
@@ -618,29 +621,39 @@ pub fn makeMerkleProof(
     /// number of leaves ~ erasure batch size.
     size_: usize,
     tree: []const Hash,
-) !?std.ArrayList(*const MerkleProofEntry) {
+) !?MerkleProofEntryList {
     var index = index_;
     var size = size_;
     if (index >= size) {
         return null;
     }
     var offset: usize = 0;
-    var proof = std.ArrayList(*const MerkleProofEntry).init(allocator);
-    errdefer proof.deinit();
+    var proof = try allocator.alloc(u8, 140); // 140 is a guess. will realloc as needed
+    errdefer allocator.free(proof);
+    var write_cursor: usize = 0;
     while (size > 1) {
         const i = offset + @min(index ^ 1, size - 1);
         if (i >= tree.len) return null;
         const node = tree[i];
-        const entry: *const MerkleProofEntry = @ptrCast(node.data[0..merkle_proof_entry_size]);
-        try proof.append(entry);
+        if (write_cursor + merkle_proof_entry_size > proof.len) {
+            proof = try allocator.realloc(proof, proof.len * 2);
+        }
+        @memcpy(
+            proof[write_cursor..][0..merkle_proof_entry_size],
+            node.data[0..merkle_proof_entry_size],
+        );
         offset += size;
         size = (size + 1) >> 1;
         index >>= 1;
+        write_cursor += merkle_proof_entry_size;
     }
     if (offset + 1 == tree.len) {
-        return proof;
+        return .{
+            .bytes = try allocator.realloc(proof, write_cursor),
+            .len = write_cursor / merkle_proof_entry_size,
+        };
     } else {
-        proof.deinit();
+        allocator.free(proof);
         return null;
     }
 }
@@ -715,25 +728,26 @@ fn dataIndex(shred: []const u8) ?usize {
 const MerkleProofEntry = [merkle_proof_entry_size]u8;
 const merkle_proof_entry_size: usize = 20;
 
-const MerkleProofIterator = Iterator(MerkleProofEntryList, MerkleProofEntry);
+const MerkleProofIterator = ChunkIterator(u8, merkle_proof_entry_size);
 
-pub fn Iterator(comptime Collection: type, comptime Item: type) type {
+pub fn ChunkIterator(comptime T: type, chunk_size: usize) type {
     return struct {
-        list: Collection,
-        index: usize,
+        slice: []const T,
+        cursor: usize = 0,
 
-        pub fn next(self: *@This()) ?Item {
-            if (self.index >= self.list.len) {
+        pub fn next(self: *@This()) ?*const [chunk_size]T {
+            const end = self.cursor + chunk_size;
+            if (end > self.slice.len) {
                 return null;
             }
-            defer self.index += 1;
-            return self.list.get(self.index);
+            defer self.cursor = end;
+            return @ptrCast(self.slice[self.cursor..end]);
         }
     };
 }
 
-/// This is a reference. It does not own the data. Be careful with its lifetime.
-const MerkleProofEntryList = struct {
+/// This contains a slice that may or may not be owned. Be careful with its lifetime.
+pub const MerkleProofEntryList = struct {
     bytes: []const u8,
     len: usize,
 
@@ -743,7 +757,13 @@ const MerkleProofEntryList = struct {
         allocator.free(self.bytes);
     }
 
-    pub fn get(self: *Self, index: usize) ?MerkleProofEntry {
+    pub fn sanitize(self: Self) !void {
+        if (self.len * merkle_proof_entry_size != self.bytes.len) {
+            return error.InvalidMerkleProof;
+        }
+    }
+
+    pub fn get(self: *const Self, index: usize) ?MerkleProofEntry {
         if (index > self.len) return null;
         const start = index * merkle_proof_entry_size;
         const end = start + merkle_proof_entry_size;
@@ -753,7 +773,7 @@ const MerkleProofEntryList = struct {
     }
 
     pub fn iterator(self: Self) MerkleProofIterator {
-        return .{ .list = self, .index = 0 };
+        return .{ .slice = self.bytes };
     }
 
     pub fn eql(self: Self, other: Self) bool {
@@ -1198,8 +1218,38 @@ test "merkleProof" {
         const proof = try shred.merkleProof();
         var iterator = proof.iterator();
         while (iterator.next()) |entry| {
-            try std.testing.expectEqualSlices(u8, &test_proof[i], &entry);
+            try std.testing.expectEqualSlices(u8, &test_proof[i], entry[0..]);
             i += 1;
+        }
+    }
+}
+
+test "merkle tree round trip" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(123);
+    const random = rng.random();
+    const size = 100;
+
+    var nodes = try std.ArrayList(Hash).initCapacity(allocator, size);
+    defer nodes.deinit();
+    for (0..size) |_| {
+        nodes.appendAssumeCapacity(Hash.random(random));
+    }
+    var tree = try nodes.clone();
+    defer tree.deinit();
+    try makeMerkleTree(&tree);
+    const root = tree.items[tree.items.len - 1];
+    for (0..size) |index| {
+        const owned_proof = try makeMerkleProof(allocator, index, size, tree.items) orelse unreachable;
+        defer owned_proof.deinit(allocator);
+        for (nodes.items, 0..) |node, k| {
+            if (k == index) {
+                const recalculated_root = try calculateMerkleRoot(k, node, owned_proof);
+                try std.testing.expectEqual(root.data, recalculated_root.data);
+            } else {
+                const recalculated_root = try calculateMerkleRoot(k, node, owned_proof);
+                try std.testing.expect(!sig.utils.types.eql(root, recalculated_root));
+            }
         }
     }
 }

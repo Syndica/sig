@@ -158,12 +158,6 @@ pub fn Database(comptime Impl: type) type {
                 }
             };
         }
-
-        pub fn rawIterator(self: *Self, comptime cf: ColumnFamily) anyerror!RawIterator {
-            return .{ .impl = try self.impl.rawIterator(cf) };
-        }
-
-        pub const RawIterator = struct {};
     };
 }
 
@@ -223,12 +217,15 @@ fn serializer(endian: std.builtin.Endian) type {
 
         /// Returned data is owned by the caller. Free with `allocator.free`.
         pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
-            // tmp hack
-            if (T == []const u8 or T == []u8) {
-                // NOTE: this doesnt clone the slice because its cloned during
-                // deserialization ... is this ok? probably not
-                return @ptrCast(bytes);
-            }
+            comptime if (T == []const u8 or T == []u8) {
+                // it's probably a mistake to call deserialize in this case because it would
+                // need to memcpy the bytes to satisfy the ownership contract, but that's
+                // probably not what you actually want, since it is wasteful. so this is
+                // currently not supported, just to avoid mistakes. if needed, it can be
+                // implemented with memcpy, or by writing a separate function that explicitly
+                // returns references.
+                @compileError("not supported");
+            };
             return try sig.bincode.readFromSlice(allocator, T, bytes, .{ .endian = endian });
         }
     };
