@@ -1116,7 +1116,7 @@ pub const ShredInserter = struct {
             if (prev_inserted_shreds.get(key)) |shred| {
                 try available_shreds.append(shred);
             } else if (index.contains(i)) {
-                const shred = try self.db.get(column_family, .{ slot, i }) orelse {
+                const shred = try self.db.getBytes(column_family, .{ slot, i }) orelse {
                     self.logger.errf(
                         \\Unable to read the {s} with slot {}, index {} for shred
                         \\recovery. The shred is marked present in the slot's {s} index,
@@ -1124,8 +1124,8 @@ pub const ShredInserter = struct {
                     , .{ column_family.name, slot, i, column_family.name, column_family.name });
                     continue;
                 };
-                // TODO lifetime
-                try available_shreds.append(try Shred.fromPayload(self.allocator, shred));
+                defer shred.deinit();
+                try available_shreds.append(try Shred.fromPayload(self.allocator, shred.data));
             }
         }
     }
