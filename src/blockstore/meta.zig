@@ -17,7 +17,7 @@ pub const SlotMeta = struct {
     /// The total number of consecutive shreds starting from index 0 we have received for this slot.
     /// At the same time, it is also an index of the first missing shred for this slot, while the
     /// slot is incomplete.
-    consumed: u64,
+    consecutive_received_from_0: u64,
     /// The index *plus one* of the highest shred received for this slot.  Useful
     /// for checking if the slot has received any shreds yet, and to calculate the
     /// range where there is one or more holes: `(consumed..received)`.
@@ -52,7 +52,7 @@ pub const SlotMeta = struct {
             .slot = slot,
             .parent_slot = parent_slot,
             .connected_flags = connected_flags,
-            .consumed = 0,
+            .consecutive_received_from_0 = 0,
             .received = 0,
             .first_shred_timestamp = 0,
             .last_index = null,
@@ -73,7 +73,7 @@ pub const SlotMeta = struct {
             .slot = self.slot,
             .parent_slot = self.parent_slot,
             .connected_flags = self.connected_flags,
-            .consumed = self.consumed,
+            .consecutive_received_from_0 = self.consecutive_received_from_0,
             .received = self.received,
             .first_shred_timestamp = self.first_shred_timestamp,
             .last_index = self.last_index,
@@ -84,7 +84,7 @@ pub const SlotMeta = struct {
 
     pub fn eql(self: *Self, other: *Self) bool {
         return self.slot == other.slot and
-            self.consumed == other.consumed and
+            self.consecutive_received_from_0 == other.consecutive_received_from_0 and
             self.received == other.received and
             self.first_shred_timestamp == other.first_shred_timestamp and
             self.last_index == other.last_index and
@@ -96,8 +96,8 @@ pub const SlotMeta = struct {
 
     pub fn isFull(self: Self) bool {
         if (self.last_index) |last_index| {
-            std.debug.assert(self.consumed <= last_index + 1);
-            return self.consumed == last_index + 1;
+            std.debug.assert(self.consecutive_received_from_0 <= last_index + 1);
+            return self.consecutive_received_from_0 == last_index + 1;
         } else {
             return false;
         }

@@ -822,7 +822,8 @@ pub const ShredInserter = struct {
         data_index: *meta.ShredIndex,
     ) bool {
         const shred_index: u64 = @intCast(shred.fields.common.index);
-        return shred_index < slot_meta.consumed or data_index.contains(shred_index);
+        return shred_index < slot_meta.consecutive_received_from_0 or
+            data_index.contains(shred_index);
     }
 
     /// agave: should_insert_data_shred
@@ -982,13 +983,13 @@ pub const ShredInserter = struct {
         const index_u32 = shred.fields.common.index;
         const index: u64 = @intCast(index_u32);
 
-        const new_consumed = if (slot_meta.consumed == index) blk: {
+        const new_consecutive = if (slot_meta.consecutive_received_from_0 == index) blk: {
             var current_index = index + 1;
             while (data_index.contains(current_index)) {
                 current_index += 1;
             }
             break :blk current_index;
-        } else slot_meta.consumed;
+        } else slot_meta.consecutive_received_from_0;
 
         try write_batch.put(schema.data_shred, .{ slot, index }, shred.fields.payload);
         try data_index.put(index);
@@ -1000,7 +1001,7 @@ pub const ShredInserter = struct {
             shred.dataComplete(),
             slot_meta,
             index_u32,
-            new_consumed,
+            new_consecutive,
             shred.referenceTick(),
             data_index,
         );
@@ -1615,7 +1616,8 @@ fn chainNewSlotToPrevSlot(
 fn isNewlyCompletedSlot(slot_meta: *const SlotMeta, backup_slot_meta: *const ?SlotMeta) bool {
     return slot_meta.isFull() and ( //
         backup_slot_meta.* == null or
-        slot_meta.consumed != (backup_slot_meta.* orelse unreachable).consumed);
+        slot_meta.consecutive_received_from_0 !=
+        (backup_slot_meta.* orelse unreachable).consecutive_received_from_0);
     // TODO unreachable: explain or fix
 }
 
@@ -1629,11 +1631,13 @@ fn slotHasUpdates(slot_meta: *const SlotMeta, slot_meta_backup: *const ?SlotMeta
         // Then,
         // If the slot didn't exist in the db before, any consecutive shreds
         // at the start of the slot are ready to be replayed.
-        ((slot_meta_backup.* == null and slot_meta.consumed != 0) or
+        ((slot_meta_backup.* == null and slot_meta.consecutive_received_from_0 != 0) or
         // Or,
         // If the slot has more consecutive shreds than it last did from the
         // last update, those shreds are new and also ready to be replayed.
-        (slot_meta_backup.* != null and slot_meta_backup.*.?.consumed != slot_meta.consumed));
+        (slot_meta_backup.* != null and
+        slot_meta_backup.*.?.consecutive_received_from_0 !=
+        slot_meta.consecutive_received_from_0));
 }
 
 fn verifyShredSlots(slot: Slot, parent: Slot, root: Slot) bool {
@@ -1661,7 +1665,7 @@ fn updateSlotMeta(
     is_last_in_data: bool,
     slot_meta: *SlotMeta,
     index: u32,
-    new_consumed: u64,
+    new_consecutive_received_from_0: u64,
     reference_tick: u8,
     received_data_shreds: *meta.ShredIndex,
 ) Allocator.Error!ArrayList([2]u32) {
@@ -1674,7 +1678,7 @@ fn updateSlotMeta(
         const slot_time_elapsed = @as(u64, @intCast(reference_tick)) * 1000 / DEFAULT_TICKS_PER_SECOND;
         slot_meta.first_shred_timestamp = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
     }
-    slot_meta.consumed = new_consumed;
+    slot_meta.consecutive_received_from_0 = new_consecutive_received_from_0;
     // If the last index in the slot hasn't been set before, then
     // set it to this shred index
     if (is_last_in_slot and slot_meta.last_index == null) {
