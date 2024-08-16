@@ -983,7 +983,7 @@ pub const BlockstoreReader = struct {
             self.allocator,
             @intCast(start_index),
             &slot_meta.completed_data_indexes,
-            @intCast(slot_meta.consumed),
+            @intCast(slot_meta.consecutive_received_from_0),
         );
 
         return .{ completed_ranges, slot_meta };
@@ -1069,7 +1069,7 @@ pub const BlockstoreReader = struct {
                             .{
                                 slot,
                                 index,
-                                slot_meta.consumed,
+                                slot_meta.consecutive_received_from_0,
                                 slot_meta.completed_data_indexes,
                                 all_ranges_start_index,
                                 all_ranges_end_index,
@@ -1659,7 +1659,7 @@ test "slotMetaIterator" {
         var slot_meta = SlotMeta.init(allocator, slot, parent_slot);
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = slot_meta.last_index.? + 1;
+        slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
             try slot_meta.next_slots.append(roots[i + 1]);
@@ -1731,7 +1731,7 @@ test "slotRangeConnected" {
         defer slot_meta.deinit();
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = slot_meta.last_index.? + 1;
+        slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < roots.len) {
             try slot_meta.next_slots.append(roots[i + 1]);

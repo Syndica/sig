@@ -317,7 +317,7 @@ pub fn eql(one: anytype, two: anytype) bool {
 /// copy of `std.mem.eql` except it uses `eql` (above) instead of `==`
 fn sliceEql(comptime T: type, a: []const T, b: []const T) bool {
     if (@sizeOf(T) == 0) return true;
-    const backend_can_use_eql_bytes = switch (std.builtin.zig_backend) {
+    const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
         // The SPIR-V backend does not support the optimized path yet.
         .stage2_spirv64 => false,
         // The RISC-V does not support vectors.
@@ -325,7 +325,7 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T) bool {
         else => true,
     };
     if (!@inComptime() and std.meta.hasUniqueRepresentation(T) and backend_can_use_eql_bytes)
-        return std.mem.eql(a, b);
+        return std.mem.eql(T, a, b);
 
     if (a.len != b.len) return false;
     if (a.len == 0 or a.ptr == b.ptr) return true;

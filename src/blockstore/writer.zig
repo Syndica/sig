@@ -426,7 +426,7 @@ test "setAndChainConnectedOnRootAndNextSlots" {
 
         // ensure isFull() is true
         slot_meta.last_index = 1;
-        slot_meta.consumed = slot_meta.last_index.? + 1;
+        slot_meta.consecutive_received_from_0 = slot_meta.last_index.? + 1;
         // update next slots
         if (i + 1 < other_roots.len) {
             try slot_meta.next_slots.append(other_roots[i + 1]);
@@ -474,7 +474,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     var slot_meta_1 = SlotMeta.init(allocator, 1, null);
     defer slot_meta_1.deinit();
     slot_meta_1.last_index = 1;
-    slot_meta_1.consumed = 1 + 1;
+    slot_meta_1.consecutive_received_from_0 = 1 + 1;
     try slot_meta_1.next_slots.append(2);
     try write_batch.put(schema.slot_meta, slot_meta_1.slot, slot_meta_1);
 
@@ -482,7 +482,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     var slot_meta_2 = SlotMeta.init(allocator, 2, 1);
     defer slot_meta_2.deinit();
     slot_meta_2.last_index = 1;
-    slot_meta_2.consumed = 0; // ! NOT FULL
+    slot_meta_2.consecutive_received_from_0 = 0; // ! NOT FULL
     try slot_meta_2.next_slots.append(3);
     try write_batch.put(schema.slot_meta, slot_meta_2.slot, slot_meta_2);
 
@@ -490,7 +490,7 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     var slot_meta_3 = SlotMeta.init(allocator, 3, 2);
     defer slot_meta_3.deinit();
     slot_meta_3.last_index = 1;
-    slot_meta_3.consumed = 1 + 1;
+    slot_meta_3.consecutive_received_from_0 = 1 + 1;
     try write_batch.put(schema.slot_meta, slot_meta_3.slot, slot_meta_3);
 
     try db.commit(write_batch);
