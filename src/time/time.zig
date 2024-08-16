@@ -550,6 +550,10 @@ pub const Duration = struct {
     pub fn eql(self: Duration, other: Duration) bool {
         return self.ns == other.ns;
     }
+
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
+        return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
+    }
 };
 
 pub const Timer = struct {

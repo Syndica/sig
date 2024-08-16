@@ -212,6 +212,14 @@ this approach generates the index with zero locks
 <img src="imgs/2024-03-21-09-15-08.png" width="520" height="340">
 </div>
 
+### geyser during load
+
+when loading and verifying account files in `loadAndVerifyAccountsFiles`, we also stream the 
+accounts out to geyser (more docs in `src/geyser/readme.md`).
+
+for each account file, we track the associated Accounts and pubkey in the `GeyserTmpStorage` during 
+indexing and then we push them to the pipe and reset the storage.
+
 
 ## validating a snapshot
 

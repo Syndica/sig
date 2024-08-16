@@ -5,6 +5,7 @@ const sig = @import("../lib.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
 const bincode = sig.bincode;
+const sysvars = sig.accounts_db.sysvars;
 
 const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
@@ -15,7 +16,6 @@ const Hash = sig.core.hash.Hash;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 
-const sysvars = sig.accounts_db.sysvars;
 const AccountsDbFields = sig.accounts_db.snapshots.AccountsDbFields;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 const AccountFile = sig.accounts_db.accounts_file.AccountFile;
@@ -28,13 +28,9 @@ const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
 const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
-const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
-const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
-const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
-const globalRegistry = sig.prometheus.registry.globalRegistry;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
 const ClientVersion = sig.version.ClientVersion;
@@ -42,12 +38,20 @@ const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
+const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
+const GeyserWriter = sig.geyser.GeyserWriter;
+const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
+
+const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
+const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
+const printTimeEstimate = sig.time.estimate.printTimeEstimate;
+const globalRegistry = sig.prometheus.registry.globalRegistry;
 
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
 
-pub const DB_PROGRESS_UPDATES_NS = 5 * std.time.ns_per_s;
-pub const DB_MANAGER_UPDATE_NS = 5 * std.time.ns_per_s;
+pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
+pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
@@ -86,6 +90,8 @@ pub const AccountsDB = struct {
     /// track per-slot for purge/flush
     account_cache: RwMux(AccountCache),
     file_map: RwMux(FileMap),
+
+    geyser_writer: ?*GeyserWriter,
 
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
@@ -133,6 +139,7 @@ pub const AccountsDB = struct {
         logger: Logger,
         snapshot_dir: std.fs.Dir,
         config: InitConfig,
+        geyser_writer: ?*GeyserWriter,
     ) !Self {
         const maybe_disk_allocator_ptr: ?*DiskMemoryAllocator, //
         const reference_allocator: std.mem.Allocator //
@@ -184,6 +191,7 @@ pub const AccountsDB = struct {
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .stats = stats,
+            .geyser_writer = geyser_writer,
         };
     }
 
@@ -242,25 +250,22 @@ pub const AccountsDB = struct {
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
-        var timer = try std.time.Timer.start();
-        self.logger.infof("loading from snapshot...", .{});
-        try self.loadFromSnapshot(
+        const load_duration = try self.loadFromSnapshot(
             snapshot_fields.accounts_db_fields,
             n_threads,
             std.heap.page_allocator,
         );
-        self.logger.infof("loaded from snapshot in {}", .{std.fmt.fmtDuration(timer.read())});
+        self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
         if (validate) {
-            timer.reset();
             const full_snapshot = snapshot_fields_and_paths.full;
-            try self.validateLoadFromSnapshot(
+            const validate_duration = try self.validateLoadFromSnapshot(
                 snapshot_fields.bank_fields_inc.snapshot_persistence,
                 full_snapshot.bank_fields.slot,
                 full_snapshot.bank_fields.capitalization,
                 snapshot_fields.accounts_db_fields.bank_hash_info.accounts_hash,
             );
-            self.logger.infof("validated from snapshot in {}", .{std.fmt.fmtDuration(timer.read())});
+            self.logger.infof("validated from snapshot in {s}", .{validate_duration});
         }
 
         return snapshot_fields;
@@ -273,7 +278,9 @@ pub const AccountsDB = struct {
         snapshot_manifest: AccountsDbFields,
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
-    ) !void {
+    ) !sig.time.Duration {
+        self.logger.infof("loading from snapshot...", .{});
+
         // used to read account files
         const n_parse_threads = n_threads;
         // used to merge thread results
@@ -282,8 +289,7 @@ pub const AccountsDB = struct {
         var accounts_dir = try self.snapshot_dir.openDir("accounts", .{});
         defer accounts_dir.close();
 
-        var timer = std.time.Timer.start() catch unreachable;
-        timer.reset();
+        var timer = try sig.time.Timer.start();
 
         const n_account_files = snapshot_manifest.file_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
@@ -313,7 +319,8 @@ pub const AccountsDB = struct {
                 n_account_files,
                 true,
             );
-            return;
+
+            return timer.read();
         }
 
         // setup the parallel indexing
@@ -328,6 +335,7 @@ pub const AccountsDB = struct {
                 self.logger,
                 self.snapshot_dir,
                 self.config,
+                self.geyser_writer,
             );
 
             // set the disk allocator after init() doesnt create a new one
@@ -358,7 +366,6 @@ pub const AccountsDB = struct {
         }
 
         self.logger.infof("reading and indexing accounts...", .{});
-
         {
             var handles = std.ArrayList(std.Thread).init(self.allocator);
             defer {
@@ -378,14 +385,14 @@ pub const AccountsDB = struct {
                 n_parse_threads,
             );
         }
-
-        self.logger.infof("total time: {s}", .{std.fmt.fmtDuration(timer.read())});
-        timer.reset();
+        self.logger.infof("total time: {s}", .{timer.read()});
 
         self.logger.infof("combining thread accounts...", .{});
+        var merge_timer = try sig.time.Timer.start();
         try self.mergeMultipleDBs(loading_threads.items, n_combine_threads);
-        self.logger.debugf("combining thread indexes took: {s}", .{std.fmt.fmtDuration(timer.read())});
-        timer.reset();
+        self.logger.debugf("combining thread indexes took: {s}", .{merge_timer.read()});
+
+        return timer.read();
     }
 
     /// multithread entrypoint into parseAndBinAccountFiles.
@@ -437,9 +444,10 @@ pub const AccountsDB = struct {
 
         // allocate all the references in one shot with a wrapper allocator
         // without this large allocation, snapshot loading is very slow
+        const n_accounts_estimate = n_account_files * accounts_per_file_est;
         var references = try ArrayList(AccountRef).initCapacity(
             self.account_index.reference_allocator,
-            n_account_files * accounts_per_file_est,
+            n_accounts_estimate,
         );
 
         const references_ptr = references.items.ptr;
@@ -448,21 +456,11 @@ pub const AccountsDB = struct {
             std.debug.assert(references.items.ptr == references_ptr);
         }
 
-        const counting_alloc_ptr = try self.allocator.create(CountingAllocator);
-        defer {
-            if (counting_alloc_ptr.alloc_count == 0) {
-                self.allocator.destroy(counting_alloc_ptr);
-            }
-        }
-        counting_alloc_ptr.* = .{
-            .self_allocator = self.allocator,
-            .references = references,
-            .alloc_count = 0,
-        };
+        const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
+        defer counting_alloc.deinitIfSafe();
 
-        const ref_timer = try std.time.Timer.start();
-        var timer = ref_timer;
-        var progress_timer = ref_timer;
+        var timer = try sig.time.Timer.start();
+        var progress_timer = try sig.time.Timer.start();
 
         if (n_account_files > std.math.maxInt(AccountIndex.ReferenceMemory.Size)) {
             return error.FileMapTooBig;
@@ -473,6 +471,22 @@ pub const AccountsDB = struct {
         defer reference_memory_lg.unlock();
         try reference_memory.ensureTotalCapacity(@intCast(n_account_files));
 
+        // init storage which holds temporary account data per slot
+        // which is eventually written to geyser
+        var geyser_slot_storage: ?*GeyserTmpStorage = null;
+        const geyser_is_enabled = self.geyser_writer != null;
+        if (geyser_is_enabled) {
+            // TODO: make size config value
+            geyser_slot_storage = try self.allocator.create(GeyserTmpStorage);
+            geyser_slot_storage.?.* = try GeyserTmpStorage.init(self.allocator, n_accounts_estimate);
+        }
+        defer {
+            if (geyser_slot_storage) |storage| {
+                storage.deinit();
+                self.allocator.destroy(storage);
+            }
+        }
+
         for (
             file_info_map.keys()[file_map_start_index..file_map_end_index],
             file_info_map.values()[file_map_start_index..file_map_end_index],
@@ -481,6 +495,7 @@ pub const AccountsDB = struct {
             // read accounts file
             var accounts_file = blk: {
                 const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
+                errdefer std.debug.print("failed to open file: {s}\n", .{file_name_bounded.constSlice()});
 
                 const accounts_file_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
                     self.logger.errf("Failed to open accounts/{s}", .{file_name_bounded.constSlice()});
@@ -495,7 +510,13 @@ pub const AccountsDB = struct {
             };
             errdefer accounts_file.deinit();
 
-            self.account_index.validateAccountFile(&accounts_file, bin_counts, &references) catch |err| {
+            indexAndValidateAccountFile(
+                &accounts_file,
+                self.account_index.pubkey_bin_calculator,
+                bin_counts,
+                &references,
+                geyser_slot_storage,
+            ) catch |err| {
                 switch (err) {
                     error.OutOfReferenceMemory => {
                         // TODO: support retry - error for now
@@ -512,6 +533,23 @@ pub const AccountsDB = struct {
                 return err;
             };
 
+            if (geyser_is_enabled) {
+                var geyser_storage = geyser_slot_storage.?; // SAFE: will always be set if geyser_is_enabled
+                const geyser_writer = self.geyser_writer.?; // SAFE: will always be set if geyser_is_enabled
+
+                // ! reset memory for the next slot
+                defer geyser_storage.reset();
+
+                const data_versioned = sig.geyser.core.VersionedAccountPayload{
+                    .AccountPayloadV1 = .{
+                        .accounts = geyser_storage.accounts.items,
+                        .pubkeys = geyser_storage.pubkeys.items,
+                        .slot = slot,
+                    },
+                };
+                try geyser_writer.writePayloadToPipe(data_versioned);
+            }
+
             if (accounts_file.number_of_accounts > 0) {
                 // the last `number_of_accounts` is associated with this file
                 const start_index = references.items.len - accounts_file.number_of_accounts;
@@ -519,10 +557,10 @@ pub const AccountsDB = struct {
                 const ref_slice = references.items[start_index..end_index];
                 const ref_list = ArrayList(AccountRef).fromOwnedSlice(
                     // deinit allocator uses the counting allocator
-                    counting_alloc_ptr.allocator(),
+                    counting_alloc.allocator(),
                     ref_slice,
                 );
-                counting_alloc_ptr.alloc_count += 1;
+                counting_alloc.count += 1;
 
                 try reference_memory.putNoClobber(slot, ref_list);
             }
@@ -534,7 +572,7 @@ pub const AccountsDB = struct {
             _ = self.largest_rooted_slot.fetchMax(slot, .monotonic);
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -577,14 +615,14 @@ pub const AccountsDB = struct {
                 ref_count += 1;
             }
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read().asNanos() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
                     total_accounts,
                     ref_count,
                     "building index",
-                    null,
+                    "thread0",
                 );
                 progress_timer.reset();
             }
@@ -674,7 +712,7 @@ pub const AccountsDB = struct {
         thread_id: usize,
     ) !void {
         const total_bins = bin_end_index - bin_start_index;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         const print_progress = thread_id == 0;
 
@@ -716,7 +754,7 @@ pub const AccountsDB = struct {
                 }
             }
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     logger,
                     &timer,
@@ -827,7 +865,9 @@ pub const AccountsDB = struct {
         full_snapshot_slot: Slot,
         expected_full_lamports: u64,
         expected_accounts_hash: Hash,
-    ) !void {
+    ) !sig.time.Duration {
+        var timer = try sig.time.Timer.start();
+
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
         const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
@@ -852,7 +892,10 @@ pub const AccountsDB = struct {
         }
 
         // validate the incremental snapshot
-        if (incremental_snapshot_persistence == null) return;
+        if (incremental_snapshot_persistence == null) {
+            return timer.read();
+        }
+
         self.logger.infof("validating the incremental snapshot", .{});
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
@@ -878,6 +921,8 @@ pub const AccountsDB = struct {
             , .{ expected_accounts_delta_hash, accounts_delta_hash });
             return error.IncorrectAccountsDeltaHash;
         }
+
+        return timer.read();
     }
 
     /// multithread entrypoint for getHashesFromIndex
@@ -930,7 +975,7 @@ pub const AccountsDB = struct {
         defer self.allocator.free(keys);
 
         var local_total_lamports: u64 = 0;
-        var timer = try std.time.Timer.start();
+        var timer = try sig.time.Timer.start();
         var progress_timer = try std.time.Timer.start();
         for (thread_bins, 1..) |*bin_rw, count| {
             // get and sort pubkeys in bin
@@ -1004,7 +1049,7 @@ pub const AccountsDB = struct {
                 local_total_lamports += lamports;
             }
 
-            if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
+            if (print_progress and progress_timer.read() > DB_LOG_RATE.asNanos()) {
                 printTimeEstimate(
                     self.logger,
                     &timer,
@@ -1103,8 +1148,8 @@ pub const AccountsDB = struct {
         while (!exit.load(.monotonic)) {
             defer {
                 const elapsed = timer.lap();
-                if (elapsed < DB_MANAGER_UPDATE_NS) {
-                    const delay = DB_MANAGER_UPDATE_NS - elapsed;
+                if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
+                    const delay = DB_MANAGER_LOOP_MIN.asNanos() - elapsed;
                     std.time.sleep(delay);
                 }
             }
@@ -1929,7 +1974,7 @@ pub const AccountsDB = struct {
         const account_in_file = account_file.readAccount(offset) catch {
             return error.InvalidOffset;
         };
-        const account = try account_in_file.toAccount();
+        const account = account_in_file.toAccount();
 
         return .{ account, account_file_lg };
     }
@@ -2011,6 +2056,8 @@ pub const AccountsDB = struct {
         );
     }
 
+    /// index and validate an account file.
+    /// NOTE: should only be called in tests/benchmarks
     pub fn putAccountFile(
         self: *Self,
         account_file: *AccountFile,
@@ -2024,7 +2071,16 @@ pub const AccountsDB = struct {
             self.account_index.reference_allocator,
             n_accounts,
         );
-        try self.account_index.validateAccountFile(account_file, bin_counts, &references);
+
+        try indexAndValidateAccountFile(
+            account_file,
+            self.account_index.pubkey_bin_calculator,
+            bin_counts,
+            &references,
+            // NOTE: this method should only be called in tests/benchmarks so we dont need
+            // to support geyser
+            null,
+        );
         try self.account_index.putReferenceBlock(account_file.slot, references);
 
         {
@@ -2096,6 +2152,8 @@ pub const AccountsDB = struct {
     ) !void {
         std.debug.assert(accounts.len == pubkeys.len);
         if (accounts.len == 0) return;
+
+        // TODO(x19): support geyser writes
 
         {
             const accounts_duped = try self.allocator.alloc(Account, accounts.len);
@@ -2628,16 +2686,129 @@ pub const AccountsDB = struct {
     }
 };
 
-/// allocator which frees the underlying arraylist after multiple free calls.
-/// useful for when you want to allocate a large Arraylist and split it across
-/// multiple different ArrayLists -- alloc and resize are not implemented.
-const CountingAllocator = struct {
+/// this is used when loading from a snapshot. it uses a fixed buffer allocator
+/// to allocate memory which is used to clone account data slices of account files.
+/// the memory is serialized into bincode and sent through the pipe.
+/// after this, the memory is freed and re-used for the next account file/slot's data.
+pub const GeyserTmpStorage = struct {
+    accounts: ArrayList(Account),
+    pubkeys: ArrayList(Pubkey),
+
+    const Self = @This();
+
+    pub const Error = error{
+        OutOfGeyserFBAMemory,
+        OutOfGeyserArrayMemory,
+    };
+
+    pub fn init(allocator: std.mem.Allocator, n_accounts_estimate: usize) !Self {
+        return .{
+            .accounts = try ArrayList(Account).initCapacity(allocator, n_accounts_estimate),
+            .pubkeys = try ArrayList(Pubkey).initCapacity(allocator, n_accounts_estimate),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.accounts.deinit();
+        self.pubkeys.deinit();
+    }
+
+    pub fn reset(self: *Self) void {
+        self.accounts.clearRetainingCapacity();
+        self.pubkeys.clearRetainingCapacity();
+    }
+
+    pub fn cloneAndTrack(self: *Self, account_in_file: AccountInFile) Error!void {
+        // NOTE: this works because we mmap the account files - this will not work once we remove mmaps
+        const account = account_in_file.toAccount();
+
+        self.accounts.append(account) catch return Error.OutOfGeyserArrayMemory;
+        self.pubkeys.append(account_in_file.pubkey().*) catch return Error.OutOfGeyserArrayMemory;
+    }
+};
+
+pub const ValidateAccountFileError = error{
+    BinCountMismatch,
+    InvalidAccountFileLength,
+    OutOfReferenceMemory,
+} || AccountInFile.ValidateError || GeyserTmpStorage.Error;
+
+pub fn indexAndValidateAccountFile(
+    accounts_file: *AccountFile,
+    pubkey_bin_calculator: PubkeyBinCalculator,
+    bin_counts: []usize,
+    account_refs: *ArrayList(AccountRef),
+    geyser_storage: ?*GeyserTmpStorage,
+) ValidateAccountFileError!void {
+    var offset: usize = 0;
+    var number_of_accounts: usize = 0;
+
+    if (bin_counts.len != pubkey_bin_calculator.n_bins) {
+        return error.BinCountMismatch;
+    }
+
+    while (true) {
+        const account = accounts_file.readAccount(offset) catch break;
+        try account.validate();
+
+        if (geyser_storage) |storage| {
+            try storage.cloneAndTrack(account);
+        }
+
+        account_refs.append(.{
+            .pubkey = account.store_info.pubkey,
+            .slot = accounts_file.slot,
+            .location = .{
+                .File = .{
+                    .file_id = accounts_file.id,
+                    .offset = offset,
+                },
+            },
+        }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfReferenceMemory,
+        };
+
+        const pubkey = &account.store_info.pubkey;
+        const bin_index = pubkey_bin_calculator.binIndex(pubkey);
+        bin_counts[bin_index] += 1;
+
+        offset = offset + account.len;
+        number_of_accounts += 1;
+    }
+
+    const aligned_length = std.mem.alignForward(usize, accounts_file.length, @sizeOf(u64));
+    if (offset != aligned_length) {
+        return error.InvalidAccountFileLength;
+    }
+
+    accounts_file.number_of_accounts = number_of_accounts;
+}
+
+/// allocator which counts the number of times free is called. when count
+/// reaches 0, it will deinit the full arraylist. useful for when you want
+/// to allocate a large Arraylist and split it across multiple different
+/// ArrayLists -- alloc and resize are not implemented.
+///
+/// see `loadAndVerifyAccountsFiles` for an example of how to use this allocator
+const FreeCounterAllocator = struct {
     /// optional heap allocator to deinit the ptr on deinit
     self_allocator: std.mem.Allocator,
     references: ArrayList(AccountRef),
-    alloc_count: usize,
+    count: usize,
 
-    pub fn allocator(self: *CountingAllocator) std.mem.Allocator {
+    const Self = @This();
+
+    pub fn init(self_allocator: std.mem.Allocator, references: ArrayList(AccountRef)) !*Self {
+        const self = try self_allocator.create(Self);
+        self.* = .{
+            .self_allocator = self_allocator,
+            .references = references,
+            .count = 0,
+        };
+        return self;
+    }
+
+    pub fn allocator(self: *Self) std.mem.Allocator {
         return std.mem.Allocator{
             .ptr = self,
             .vtable = &.{
@@ -2648,12 +2819,18 @@ const CountingAllocator = struct {
         };
     }
 
-    pub fn deinit(self: *CountingAllocator) void {
+    pub fn deinitIfSafe(self: *Self) void {
+        if (self.count == 0) {
+            self.deinit();
+        }
+    }
+
+    pub fn deinit(self: *Self) void {
         // this shouldnt happen often but just in case
-        if (self.alloc_count != 0) {
+        if (self.count != 0) {
             std.debug.print(
-                "Reference Counting Allocator deinit with count = {}\n",
-                .{self.alloc_count},
+                "Reference Counting Allocator deinit with count = {} (!= 0)\n",
+                .{self.count},
             );
         }
         self.references.deinit();
@@ -2683,11 +2860,9 @@ const CountingAllocator = struct {
         _ = log2_align;
         _ = return_address;
 
-        const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.alloc_count -|= 1;
-        if (self.alloc_count == 0) {
-            self.deinit();
-        }
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.count -|= 1;
+        self.deinitIfSafe();
     }
 };
 
@@ -2770,7 +2945,7 @@ fn testWriteSnapshotFull(
     var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
+    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -2807,7 +2982,7 @@ fn testWriteSnapshotFull(
         try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         null,
         slot,
         snapshot_gen_info.capitalization,
@@ -2830,7 +3005,7 @@ fn testWriteSnapshotIncremental(
     var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
+    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -2868,7 +3043,7 @@ fn testWriteSnapshotIncremental(
     }
     try std.testing.expectEqual(incremental_persistence.incremental_hash, snapshot_gen_info.hash);
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         incremental_persistence,
         incremental_persistence.full_slot,
         incremental_persistence.full_capitalization,
@@ -2901,14 +3076,14 @@ test "testWriteSnapshot" {
     var accounts_db = try AccountsDB.init(std.testing.allocator, .noop, tmp_snap_dir, .{
         .number_of_index_bins = ACCOUNT_INDEX_BINS,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     try testWriteSnapshotFull(&accounts_db, snap_files.full_snapshot.slot, snap_files.full_snapshot.hash);
     try testWriteSnapshotIncremental(&accounts_db, snap_files.incremental_snapshot.?.slot, snap_files.incremental_snapshot.?.hash);
 }
 
-fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
+fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
     var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
@@ -2938,6 +3113,15 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
             true,
         );
     }
+}
+
+fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
+    std.debug.assert(builtin.is_test); // should only be used in tests
+
+    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    defer dir.close();
+
+    try unpackTestSnapshot(allocator, n_threads);
 
     const snapshot_files = try SnapshotFiles.find(allocator, dir);
 
@@ -2951,12 +3135,89 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     var accounts_db = try AccountsDB.init(allocator, logger, dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = use_disk,
-    });
+    }, null);
     errdefer accounts_db.deinit(true);
 
-    try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator);
+    _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator);
 
     return .{ accounts_db, snapshots };
+}
+
+// NOTE: this is a memory leak test - geyser correctness is tested in the geyser tests
+test "geyser stream on load" {
+    const allocator = std.testing.allocator;
+
+    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    defer dir.close();
+    try unpackTestSnapshot(allocator, 2);
+
+    const snapshot_files = try SnapshotFiles.find(allocator, dir);
+
+    const logger = Logger{ .noop = {} };
+    // var logger = Logger.init(std.heap.page_allocator, .debug);
+
+    var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
+    errdefer snapshots.deinit(allocator);
+
+    const geyser_pipe_path = "test_data/geyser.pipe";
+    var geyser_writer: ?*GeyserWriter = null;
+
+    const geyser_exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(geyser_exit);
+    geyser_exit.* = std.atomic.Value(bool).init(false);
+
+    geyser_writer = try allocator.create(GeyserWriter);
+    geyser_writer.?.* = try GeyserWriter.init(
+        allocator,
+        geyser_pipe_path,
+        geyser_exit,
+        1 << 20,
+    );
+    defer {
+        if (geyser_writer) |writer| {
+            writer.deinit();
+            allocator.destroy(writer);
+        }
+    }
+
+    // start the geyser writer
+    try geyser_writer.?.spawnIOLoop();
+
+    const reader_handle = try std.Thread.spawn(.{}, sig.geyser.core.streamReader, .{
+        geyser_exit,
+        geyser_pipe_path,
+        null,
+        null,
+    });
+    defer {
+        geyser_exit.store(true, .unordered);
+        _ = reader_handle.join();
+    }
+
+    const snapshot = try snapshots.collapse();
+    var accounts_db = try AccountsDB.init(
+        allocator,
+        logger,
+        dir,
+        .{
+            .number_of_index_bins = 4,
+            .use_disk_index = false,
+        },
+        geyser_writer,
+    );
+    defer {
+        accounts_db.deinit(true);
+        snapshots.deinit(allocator);
+    }
+
+    var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
+    defer accounts_dir.close();
+
+    _ = try accounts_db.loadFromSnapshot(
+        snapshot.accounts_db_fields,
+        1,
+        allocator,
+    );
 }
 
 test "write and read an account" {
@@ -3005,7 +3266,7 @@ test "load and validate from test snapshot using disk index" {
         snapshots.deinit(allocator);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
@@ -3022,7 +3283,7 @@ test "load and validate from test snapshot parallel" {
         snapshots.deinit(allocator);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
@@ -3039,7 +3300,7 @@ test "load and validate from test snapshot" {
         snapshots.deinit(allocator);
     }
 
-    try accounts_db.validateLoadFromSnapshot(
+    _ = try accounts_db.validateLoadFromSnapshot(
         snapshots.incremental.?.bank_fields_inc.snapshot_persistence,
         snapshots.full.bank_fields.slot,
         snapshots.full.bank_fields.capitalization,
@@ -3098,7 +3359,7 @@ test "flushing slots works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3150,7 +3411,7 @@ test "purge accounts in cache works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3208,7 +3469,7 @@ test "clean to shrink account file works with zero-lamports" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3284,7 +3545,7 @@ test "clean to shrink account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3352,7 +3613,7 @@ test "full clean account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3437,7 +3698,7 @@ test "shrink account file works" {
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
         .use_disk_index = false,
-    });
+    }, null);
     defer accounts_db.deinit(true);
 
     var random = std.rand.DefaultPrng.init(19);
@@ -3565,15 +3826,15 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
     pub const args = [_]BenchArgs{
         BenchArgs{
+            .name = "RAM index",
             .use_disk = false,
-            .n_threads = 2,
-            .name = "RAM (2 threads)",
+            .n_threads = 10,
         },
-        BenchArgs{
-            .use_disk = true,
-            .n_threads = 2,
-            .name = "DISK (2 threads)",
-        },
+        // BenchArgs{
+        //     .use_disk = true,
+        //     .n_threads = 2,
+        //     .name = "DISK (2 threads)",
+        // },
     };
 
     pub fn loadSnapshot(bench_args: BenchArgs) !u64 {
@@ -3618,19 +3879,17 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_bins = 32,
             .use_disk_index = bench_args.use_disk,
-        });
-        // defer accounts_db.deinit(false);
+        }, null);
+        defer accounts_db.deinit(false);
 
         var accounts_dir = try std.fs.cwd().openDir(accounts_path, .{ .iterate = true });
         defer accounts_dir.close();
 
-        var timer = try sig.time.Timer.start();
-        try accounts_db.loadFromSnapshot(
+        const duration = try accounts_db.loadFromSnapshot(
             snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
         );
-        const elapsed = timer.read();
 
         // sanity check
         const accounts_hash, const total_lamports = try accounts_db.computeAccountHashesAndLamports(.{
@@ -3640,7 +3899,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         });
         std.debug.print("r: hash: {}, lamports: {}\n", .{ accounts_hash, total_lamports });
 
-        return elapsed.asNanos();
+        return duration.asNanos();
     }
 };
 
@@ -3803,7 +4062,7 @@ pub const BenchmarkAccountsDB = struct {
         var accounts_db: AccountsDB = try AccountsDB.init(allocator, logger, snapshot_dir, .{
             .number_of_index_bins = ACCOUNT_INDEX_BINS,
             .use_disk_index = bench_args.index == .disk,
-        });
+        }, null);
         defer accounts_db.deinit(true);
 
         var random = std.Random.DefaultPrng.init(19);
