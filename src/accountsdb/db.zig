@@ -3,6 +3,7 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 const builtin = @import("builtin");
+const zstd = @import("zstd");
 const bincode = sig.bincode;
 
 const ArrayList = std.ArrayList;
@@ -40,6 +41,7 @@ const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
+const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
 pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
@@ -77,26 +79,37 @@ pub const AccountsDBStats = struct {
 pub const AccountsDB = struct {
     allocator: std.mem.Allocator,
 
-    // maps a pubkey to the account location
+    /// maps a pubkey to the account location
     account_index: AccountIndex,
     disk_allocator_ptr: ?*DiskMemoryAllocator = null,
 
-    // track per-slot for purge/flush
+    /// track per-slot for purge/flush
     account_cache: RwMux(AccountCache),
     file_map: RwMux(FileMap),
 
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
-    // used for filenames when flushing accounts to disk
+    /// Used for filenames when flushing accounts to disk.
     // TODO: do we need this? since flushed slots will be unique
     largest_file_id: FileId = FileId.fromInt(0),
 
-    // used for flushing/cleaning/purging/shrinking
-    // TODO: when working on consensus, we'll swap this out
-    largest_root_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
+    // TODO: when working on consensus, we'll swap the main rooted slot field out,
+    // and evaluate the rest.
+
+    /// Used for flushing/cleaning/purging/shrinking.
+    largest_rooted_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
+    /// Represents the largest slot for which all account data has been flushed to disk.
+    /// Always `<= largest_rooted_slot`.
+    largest_flushed_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
+    /// Represents the largest slot info used to generate a full snapshot, which currently exists.
+    /// Always `.slot <= largest_flushed_slot`.
+    latest_full_snapshot_info: RwMux(?FullSnapshotGenerationInfo) = RwMux(?FullSnapshotGenerationInfo).init(null),
+    latest_incremental_snapshot_info: RwMux(?IncSnapshotGenerationInfo) = RwMux(?IncSnapshotGenerationInfo).init(null),
 
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
+
+    bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
     stats: AccountsDBStats,
     logger: Logger,
@@ -108,6 +121,7 @@ pub const AccountsDB = struct {
     pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
     pub const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
+    pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
 
     pub const InitConfig = struct {
         number_of_index_bins: usize,
@@ -211,6 +225,12 @@ pub const AccountsDB = struct {
             defer dead_accounts_counter_lg.unlock();
             dead_accounts_counter.deinit();
         }
+
+        {
+            const bank_hash_stats, var bank_hash_stats_lg = self.bank_hash_stats.writeWithLock();
+            defer bank_hash_stats_lg.unlock();
+            bank_hash_stats.deinit(self.allocator);
+        }
     }
 
     /// easier to use load function
@@ -225,7 +245,7 @@ pub const AccountsDB = struct {
         var timer = try std.time.Timer.start();
         self.logger.infof("loading from snapshot...", .{});
         try self.loadFromSnapshot(
-            snapshot_fields.accounts_db_fields.file_map,
+            snapshot_fields.accounts_db_fields,
             n_threads,
             std.heap.page_allocator,
         );
@@ -249,8 +269,8 @@ pub const AccountsDB = struct {
     /// loads the account files and gernates the account index from a snapshot
     pub fn loadFromSnapshot(
         self: *Self,
-        /// fields from the snapshot
-        file_info_map: AccountsDbFields.FileMap,
+        /// Account file info map from the snapshot manifest.
+        snapshot_manifest: AccountsDbFields,
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
     ) !void {
@@ -265,10 +285,16 @@ pub const AccountsDB = struct {
         var timer = std.time.Timer.start() catch unreachable;
         timer.reset();
 
-        const n_account_files: usize = file_info_map.count();
+        const n_account_files = snapshot_manifest.file_map.count();
         self.logger.infof("found {d} account files", .{n_account_files});
 
         std.debug.assert(n_account_files > 0);
+
+        {
+            const bhs, var bhs_lg = try self.getOrInitBankHashStats(snapshot_manifest.slot);
+            defer bhs_lg.unlock();
+            bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
+        }
 
         const use_disk_index = self.config.use_disk_index;
         if (self.config.use_disk_index) {
@@ -282,9 +308,9 @@ pub const AccountsDB = struct {
             try self.loadAndVerifyAccountsFiles(
                 accounts_dir,
                 ACCOUNTS_PER_FILE_EST,
-                file_info_map,
+                snapshot_manifest.file_map,
                 0,
-                file_info_map.count(),
+                n_account_files,
                 true,
             );
             return;
@@ -346,9 +372,9 @@ pub const AccountsDB = struct {
                 .{
                     loading_threads.items,
                     accounts_dir,
-                    file_info_map,
+                    snapshot_manifest.file_map,
                 },
-                file_info_map.count(),
+                n_account_files,
                 n_parse_threads,
             );
         }
@@ -505,7 +531,8 @@ pub const AccountsDB = struct {
 
             file_map.putAssumeCapacityNoClobber(file_id, RwMux(AccountFile).init(accounts_file));
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
-            _ = self.largest_root_slot.fetchMax(slot, .monotonic);
+            _ = self.largest_rooted_slot.fetchMax(slot, .monotonic);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
 
             if (print_progress and progress_timer.read() > DB_PROGRESS_UPDATES_NS) {
                 printTimeEstimate(
@@ -610,19 +637,19 @@ pub const AccountsDB = struct {
         for (thread_dbs) |*thread_db| {
             // combine file maps
             {
-                var thread_file_map, var thread_file_map_lg = thread_db.file_map.readWithLock();
+                const thread_file_map: *const FileMap, var thread_file_map_lg = thread_db.file_map.readWithLock();
                 defer thread_file_map_lg.unlock();
 
-                var thread_file_iter = thread_file_map.iterator();
-                while (thread_file_iter.next()) |thread_entry| {
-                    try file_map.putNoClobber(thread_entry.key_ptr.*, thread_entry.value_ptr.*);
+                for (thread_file_map.keys(), thread_file_map.values()) |file_id, *account_file_rw| {
+                    try file_map.putNoClobber(file_id, account_file_rw.*);
                 }
             }
             self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
-            _ = self.largest_root_slot.fetchMax(thread_db.largest_root_slot.load(.unordered), .monotonic);
+            _ = self.largest_rooted_slot.fetchMax(thread_db.largest_rooted_slot.load(.unordered), .monotonic);
+            self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
 
             // combine underlying memory
-            var thread_reference_memory, var thread_reference_memory_lg = thread_db.account_index.reference_memory.readWithLock();
+            const thread_reference_memory, var thread_reference_memory_lg = thread_db.account_index.reference_memory.readWithLock();
             defer thread_reference_memory_lg.unlock();
 
             var thread_ref_iter = thread_reference_memory.iterator();
@@ -704,20 +731,34 @@ pub const AccountsDB = struct {
     }
 
     pub const AccountHashesConfig = union(enum) {
-        // compute hash from (..., max_slot]
+        /// compute hash from `(min_slot?, max_slot]`
         FullAccountHash: struct {
+            min_slot: ?Slot = null,
             max_slot: Slot,
         },
-        // compute hash from (min_slot, ...)
+        /// compute hash from `(min_slot, max_slot?]`
         IncrementalAccountHash: struct {
             min_slot: Slot,
+            max_slot: ?Slot = null,
         },
     };
 
-    /// computes a hash across all accounts in the db, and total lamports of those accounts
-    /// using index data. depending on the config, this can compute
-    /// either full or incremental snapshot values.
-    pub fn computeAccountHashesAndLamports(self: *Self, config: AccountHashesConfig) !struct { accounts_hash: Hash, total_lamports: u64 } {
+    pub const ComputeAccountHashesAndLamportsError =
+        std.mem.Allocator.Error ||
+        std.time.Timer.Error ||
+        std.Thread.CpuCountError ||
+        std.Thread.SpawnError ||
+        error{DivisionByZero} ||
+        error{EmptyHashList};
+
+    /// Computes a hash across all accounts in the db, and total lamports of those accounts
+    /// using index data. depending on the config, this can compute either full or incremental
+    /// snapshot values.
+    /// Returns `.{ accounts_hash, total_lamports }`.
+    pub fn computeAccountHashesAndLamports(
+        self: *Self,
+        config: AccountHashesConfig,
+    ) ComputeAccountHashesAndLamportsError!struct { Hash, u64 } {
         var timer = try std.time.Timer.start();
         const n_threads = @as(u32, @truncate(try std.Thread.getCpuCount())) * 2;
 
@@ -771,8 +812,8 @@ pub const AccountsDB = struct {
         }
 
         return .{
-            .accounts_hash = accounts_hash.*,
-            .total_lamports = total_lamports,
+            accounts_hash.*,
+            total_lamports,
         };
     }
 
@@ -789,14 +830,11 @@ pub const AccountsDB = struct {
     ) !void {
         // validate the full snapshot
         self.logger.infof("validating the full snapshot", .{});
-        const full_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
+        const accounts_hash, const total_lamports = try self.computeAccountHashesAndLamports(.{
             .FullAccountHash = .{
                 .max_slot = full_snapshot_slot,
             },
         });
-
-        const total_lamports = full_result.total_lamports;
-        const accounts_hash = full_result.accounts_hash;
 
         if (expected_accounts_hash.order(&accounts_hash) != .eq) {
             self.logger.errf(
@@ -819,13 +857,11 @@ pub const AccountsDB = struct {
         const expected_accounts_delta_hash = incremental_snapshot_persistence.?.incremental_hash;
         const expected_incremental_lamports = incremental_snapshot_persistence.?.incremental_capitalization;
 
-        const incremental_result = try self.computeAccountHashesAndLamports(AccountHashesConfig{
+        const accounts_delta_hash, const incremental_lamports = try self.computeAccountHashesAndLamports(.{
             .IncrementalAccountHash = .{
                 .min_slot = full_snapshot_slot,
             },
         });
-        const incremental_lamports = incremental_result.total_lamports;
-        const accounts_delta_hash = incremental_result.accounts_hash;
 
         if (expected_incremental_lamports != incremental_lamports) {
             self.logger.errf(
@@ -933,15 +969,15 @@ pub const AccountsDB = struct {
 
             // get the hashes
             for (bin_pubkeys) |key| {
-                var ref_head_rw = bin.get(key).?;
+                const ref_head_rw = bin.getPtr(key).?;
                 const ref_head, var ref_head_lg = ref_head_rw.readWithLock();
                 defer ref_head_lg.unlock();
 
                 // get the most recent state of the account
                 const ref_ptr = ref_head.ref_ptr;
                 const max_slot_ref = switch (config) {
-                    .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, null, full_config.max_slot),
-                    .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, null),
+                    .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
+                    .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
                 } orelse continue;
                 const result = try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
 
@@ -1017,9 +1053,23 @@ pub const AccountsDB = struct {
         return .{ file, file_id, memory };
     }
 
-    /// periodically runs flush/clean/shrink
-    pub fn runManagerLoop(self: *Self, exit: *std.atomic.Value(bool)) !void {
+    pub const ManagerLoopConfig = struct {
+        exit: *std.atomic.Value(bool),
+        slots_per_full_snapshot: u64,
+        slots_per_incremental_snapshot: u64,
+    };
+
+    /// periodically runs flush/clean/shrink, and generates snapshots.
+    pub fn runManagerLoop(
+        self: *Self,
+        config: ManagerLoopConfig,
+    ) !void {
+        const exit = config.exit;
+        const slots_per_full_snapshot = config.slots_per_full_snapshot;
+        const slots_per_incremental_snapshot = config.slots_per_incremental_snapshot;
+
         var timer = try std.time.Timer.start();
+
         var flush_slots = ArrayList(Slot).init(self.allocator);
         defer flush_slots.deinit();
 
@@ -1035,7 +1085,22 @@ pub const AccountsDB = struct {
         var delete_account_files = std.AutoArrayHashMap(FileId, void).init(self.allocator);
         defer delete_account_files.deinit();
 
-        while (!exit.load(.unordered)) {
+        const zstd_compressor = try zstd.Compressor.init(.{});
+        defer zstd_compressor.deinit();
+
+        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
+        const zstd_sfba = zstd_sfba_state.get();
+
+        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
+        defer zstd_sfba.free(zstd_buffer);
+
+        // TODO: get rid of this once `makeFullSnapshotGenerationPackage` can actually
+        // derive this data correctly by itself.
+        var rand = std.Random.DefaultPrng.init(1234);
+        var tmp_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
+        defer tmp_bank_fields.deinit(self.allocator);
+
+        while (!exit.load(.monotonic)) {
             defer {
                 const elapsed = timer.lap();
                 if (elapsed < DB_MANAGER_UPDATE_NS) {
@@ -1044,13 +1109,21 @@ pub const AccountsDB = struct {
                 }
             }
 
-            const root_slot = self.largest_root_slot.load(.unordered);
-
-            // flush slots <= root slot
             {
                 const account_cache, var account_cache_lg = self.account_cache.readWithLock();
                 defer account_cache_lg.unlock();
 
+                // we're careful to load this value only after acquiring a read lock on the
+                // account cache, such as to avoid the edge case where:
+                // * we load the largest rooted slot value.
+                // * the account cache lock is acquired by a different thread.
+                // * another thread increments the largest rooted slot value while
+                //   we're waiting on the account cache lock.
+                // * we eventually acquire the lock, but have already read a now-stale
+                //   largest rooted slot value.
+                const root_slot = self.largest_rooted_slot.load(.monotonic);
+
+                // flush slots <= root slot
                 var cache_slot_iter = account_cache.keyIterator();
                 while (cache_slot_iter.next()) |cache_slot| {
                     if (cache_slot.* <= root_slot) {
@@ -1062,8 +1135,10 @@ pub const AccountsDB = struct {
                 }
             }
 
-            if (flush_slots.items.len > 0) {
-                self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
+            const must_flush_slots = flush_slots.items.len > 0;
+
+            if (must_flush_slots) {
+                // self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
                 defer {
                     flush_slots.clearRetainingCapacity();
                     unclean_account_files.clearRetainingCapacity();
@@ -1072,16 +1147,106 @@ pub const AccountsDB = struct {
                 }
 
                 // flush the slots
+                try unclean_account_files.ensureTotalCapacityPrecise(flush_slots.items.len);
+
+                var largest_flushed_slot: Slot = 0;
                 for (flush_slots.items) |flush_slot| {
-                    self.flushSlot(flush_slot, &unclean_account_files) catch |err| {
+                    const unclean_file_id = self.flushSlot(flush_slot) catch |err| {
                         // flush fail = loss of account data on slot -- should never happen
                         self.logger.errf("flushing slot {d} error: {s}", .{ flush_slot, @errorName(err) });
+                        continue;
                     };
+                    unclean_account_files.appendAssumeCapacity(unclean_file_id);
+                    largest_flushed_slot = @max(largest_flushed_slot, flush_slot);
+                }
+                _ = self.largest_flushed_slot.fetchMax(largest_flushed_slot, .seq_cst);
+            }
+
+            const largest_flushed_slot = self.largest_flushed_slot.load(.seq_cst);
+
+            const latest_full_snapshot_slot = blk: {
+                const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
+                defer latest_full_snapshot_info_lg.unlock();
+                break :blk if (latest_full_snapshot_info.*) |info| info.slot else 0;
+            };
+            if (largest_flushed_slot - latest_full_snapshot_slot >= slots_per_full_snapshot) {
+                self.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{largest_flushed_slot});
+
+                var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
+                    largest_flushed_slot,
+                    &tmp_bank_fields,
+                    rand.random().int(u64),
+                    0,
+                );
+                defer snapshot_gen_pkg.deinit();
+
+                const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                    .slot = snapshot_gen_info.slot,
+                    .hash = snapshot_gen_info.hash,
+                    .compression = .zstd,
+                });
+                const archive_file_name = archive_file_name_bounded.constSlice();
+                const archive_file = try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+                defer archive_file.close();
+
+                const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
+
+                try snapshot_gen_pkg.write(zstd_write_ctx.writer());
+                try zstd_write_ctx.finish();
+
+                try self.commitFullSnapshotInfo(snapshot_gen_info, .delete_old);
+            }
+
+            const latest_incremental_snapshot_slot = blk: {
+                const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.readWithLock();
+                defer latest_incremental_snapshot_info_lg.unlock();
+                break :blk if (latest_incremental_snapshot_info.*) |info| info.slot else 0;
+            };
+            if (largest_flushed_slot - latest_incremental_snapshot_slot >= slots_per_incremental_snapshot) inc_blk: {
+                {
+                    const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
+                    defer latest_full_snapshot_info_lg.unlock();
+                    // no full snapshot, nothing to do
+                    if (latest_full_snapshot_info.* == null) break :inc_blk;
+                    // not enough new slots since last full snapshot, nothing to do
+                    if (largest_flushed_slot < latest_full_snapshot_info.*.?.slot + slots_per_incremental_snapshot) break :inc_blk;
                 }
 
+                self.logger.infof("accountsdb[manager]: generating incremental snapshot from {d} to {d}", .{
+                    latest_full_snapshot_slot,
+                    largest_flushed_slot,
+                });
+
+                var inc_snapshot_pkg, const snapshot_gen_info = try self.makeIncrementalSnapshotGenerationPackage(
+                    largest_flushed_slot,
+                    &tmp_bank_fields,
+                    rand.random().int(u64),
+                    0,
+                );
+                defer inc_snapshot_pkg.deinit();
+
+                const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+                    .base_slot = snapshot_gen_info.base_slot,
+                    .slot = snapshot_gen_info.slot,
+                    .hash = snapshot_gen_info.hash,
+                    .compression = .zstd,
+                });
+                const archive_file_name = archive_file_name_bounded.constSlice();
+                const archive_file = try self.snapshot_dir.createFile(archive_file_name, .{ .read = true });
+                errdefer archive_file.close();
+
+                const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
+
+                try inc_snapshot_pkg.write(zstd_write_ctx.writer());
+                try zstd_write_ctx.finish();
+
+                try self.commitIncrementalSnapshotInfo(snapshot_gen_info, .delete_old);
+            }
+
+            if (must_flush_slots) {
                 // clean the flushed slots account files
                 const clean_result = try self.cleanAccountFiles(
-                    root_slot,
+                    latest_full_snapshot_slot,
                     unclean_account_files.items,
                     &shrink_account_files,
                     &delete_account_files,
@@ -1089,7 +1254,7 @@ pub const AccountsDB = struct {
                 self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                const shrink_results = try self.shrinkAccountFiles(&shrink_account_files);
+                const shrink_results = try self.shrinkAccountFiles(shrink_account_files.keys());
                 self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
@@ -1101,11 +1266,12 @@ pub const AccountsDB = struct {
     /// flushes a slot account data from the cache onto disk, and updates the index
     /// note: this deallocates the []account and []pubkey data from the cache, as well
     /// as the data field ([]u8) for each account.
-    pub fn flushSlot(self: *Self, slot: Slot, unclean_account_files: *ArrayList(FileId)) !void {
+    /// Returns the unclean file id.
+    pub fn flushSlot(self: *Self, slot: Slot) !FileId {
         defer self.stats.number_files_flushed.inc();
 
         const pubkeys, const accounts: []const Account = blk: {
-            // NOTE: flush should the only function to delete/free cache slices of a flushed slot
+            // NOTE: flush should be the only function to delete/free cache slices of a flushed slot
             // -- purgeSlot removes slices but we should never purge rooted slots
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
             defer account_cache_lg.unlock();
@@ -1124,16 +1290,17 @@ pub const AccountsDB = struct {
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
         defer self.allocator.free(offsets);
-        var offset: usize = 0;
-        for (0..accounts.len) |i| {
-            offsets[i] = offset;
+
+        var current_offset: u64 = 0;
+        for (offsets, accounts, pubkeys) |*offset, account, pubkey| {
+            offset.* = current_offset;
             // write the account to the file
-            offset += accounts[i].writeToBuf(&pubkeys[i], memory[offset..]);
+            current_offset += account.writeToBuf(&pubkey, memory[current_offset..]);
         }
 
         var account_file = try AccountFile.init(file, .{
             .id = file_id,
-            .length = offset,
+            .length = current_offset,
         }, slot);
         account_file.number_of_accounts = accounts.len;
 
@@ -1145,8 +1312,8 @@ pub const AccountsDB = struct {
         }
 
         // update the reference AFTER the data exists
-        for (0..accounts.len) |i| {
-            var head_reference_rw = self.account_index.getReference(&pubkeys[i]) orelse return error.PubkeyNotFound;
+        for (pubkeys, offsets) |pubkey, offset| {
+            var head_reference_rw = self.account_index.getReference(&pubkey) orelse return error.PubkeyNotFound;
             const head_ref, var head_reference_lg = head_reference_rw.writeWithLock();
             defer head_reference_lg.unlock();
 
@@ -1155,7 +1322,7 @@ pub const AccountsDB = struct {
             var curr_ref: ?*AccountRef = head_ref.ref_ptr;
             while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
                 if (ref.slot == slot) {
-                    ref.location = .{ .File = .{ .file_id = file_id, .offset = offsets[i] } };
+                    ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
                     did_update = true;
                     // NOTE: we break here because we dont allow multiple account states per slot
                     // NOTE: if there are multiple states, then it will likely break during clean
@@ -1184,8 +1351,8 @@ pub const AccountsDB = struct {
             self.allocator.free(pubkeys);
         }
 
-        // queue for cleaning
-        try unclean_account_files.append(file_id);
+        // return to queue for cleaning
+        return file_id;
     }
 
     /// removes stale accounts and zero-lamport accounts from disk
@@ -1242,8 +1409,7 @@ pub const AccountsDB = struct {
                 const pubkey = account.pubkey().*;
 
                 // check if already cleaned
-                if (cleaned_pubkeys.get(pubkey)) |_| continue;
-                try cleaned_pubkeys.put(pubkey, {});
+                if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
 
                 // SAFE: this should always succeed or something is wrong
                 var head_reference_rw = self.account_index.getReference(&pubkey).?;
@@ -1422,10 +1588,10 @@ pub const AccountsDB = struct {
     /// resizes account files to reduce disk usage and remove dead accounts.
     pub fn shrinkAccountFiles(
         self: *Self,
-        shrink_account_files: *const std.AutoArrayHashMap(FileId, void),
+        shrink_account_files: []const FileId,
     ) !struct { num_accounts_deleted: usize } {
         defer {
-            const number_of_files = shrink_account_files.count();
+            const number_of_files = shrink_account_files.len;
             self.stats.number_files_shrunk.add(number_of_files);
         }
 
@@ -1433,7 +1599,7 @@ pub const AccountsDB = struct {
         defer alive_pubkeys.deinit();
 
         var total_accounts_deleted: u64 = 0;
-        for (shrink_account_files.keys()) |shrink_file_id| {
+        for (shrink_account_files) |shrink_file_id| {
             var shrink_account_file_rw = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
@@ -1869,6 +2035,20 @@ pub const AccountsDB = struct {
                 account_file.id,
                 RwMux(AccountFile).init(account_file.*),
             );
+
+            // we update the bank hash stats while locking the file map to avoid
+            // reading accounts from the file map and getting inaccurate/stale
+            // bank hash stats.
+            var account_iter = account_file.iterator();
+            while (account_iter.next()) |account_in_file| {
+                const bhs, var bhs_lg = try self.getOrInitBankHashStats(account_file.slot);
+                defer bhs_lg.unlock();
+                bhs.update(.{
+                    .lamports = account_in_file.lamports().*,
+                    .data_len = account_in_file.data.len,
+                    .executable = account_in_file.executable().*,
+                });
+            }
         }
 
         // allocate enough memory here
@@ -1924,6 +2104,14 @@ pub const AccountsDB = struct {
             for (accounts_duped, accounts, 0..) |*account, original, i| {
                 errdefer for (accounts_duped[0..i]) |prev| prev.deinit(self.allocator);
                 account.* = try original.clone(self.allocator);
+
+                const bhs, var bhs_lg = try self.getOrInitBankHashStats(slot);
+                defer bhs_lg.unlock();
+                bhs.update(.{
+                    .lamports = account.lamports,
+                    .data_len = account.data.len,
+                    .executable = account.executable,
+                });
             }
 
             const pubkeys_duped = try self.allocator.dupe(Pubkey, pubkeys);
@@ -1991,6 +2179,17 @@ pub const AccountsDB = struct {
         try self.account_index.putReferenceBlock(slot, references);
     }
 
+    /// Returns a pointer to the bank hash stats for the given slot, and a lock guard on the
+    /// bank hash stats map, which should be unlocked after mutating the bank hash stats.
+    fn getOrInitBankHashStats(self: *Self, slot: Slot) !struct { *BankHashStats, RwMux(BankHashStatsMap).WLockGuard } {
+        const bank_hash_stats, var bank_hash_stats_lg = self.bank_hash_stats.writeWithLock();
+        errdefer bank_hash_stats_lg.unlock();
+
+        const gop = try bank_hash_stats.getOrPut(self.allocator, slot);
+        if (!gop.found_existing) gop.value_ptr.* = BankHashStats.zero_init;
+        return .{ gop.value_ptr, bank_hash_stats_lg };
+    }
+
     pub inline fn slotListMaxWithinBounds(
         ref_ptr: *AccountRef,
         min_slot: ?Slot,
@@ -2011,43 +2210,104 @@ pub const AccountsDB = struct {
         return biggest;
     }
 
-    /// TODO: a number of these parameters are temporary stand-ins for data that will be derived from the state
-    /// of AccountsDB, which currently doesn't all exist.
-    pub fn writeSnapshotTarFull(
+    pub const FullSnapshotGenerationInfo = struct {
+        slot: Slot,
+        hash: Hash,
+        capitalization: u64,
+    };
+
+    pub const FullSnapshotGenerationPackage = struct {
+        slot: Slot,
+        lamports_per_signature: u64,
+        bank_hash_info: BankHashInfo,
+        bank_fields: BankFields,
+        /// This is no longer a meaningful field, but it is useful for testing where you load a snapshot,
+        /// write it back, and test that the generated output is equivalent to the original data.
+        deprecated_stored_meta_write_version: u64,
+
+        file_infos_map: std.AutoArrayHashMap(Slot, AccountFileInfo),
+        file_map_rw: RwMux(FileMap).RLockGuard,
+
+        /// Writes the snapshot in tar archive format to `archive_writer`.
+        pub fn write(package: *const FullSnapshotGenerationPackage, archive_writer: anytype) !void {
+            const snapshot_fields: SnapshotFields = .{
+                .bank_fields = package.bank_fields,
+                .accounts_db_fields = .{
+                    .file_map = package.file_infos_map,
+
+                    .stored_meta_write_version = package.deprecated_stored_meta_write_version,
+
+                    .slot = package.slot,
+                    .bank_hash_info = package.bank_hash_info,
+
+                    .rooted_slots = .{},
+                    .rooted_slot_hashes = .{},
+                },
+                .lamports_per_signature = package.lamports_per_signature,
+                .bank_fields_inc = .{}, // default to null for full snapshot,
+            };
+
+            try writeSnapshotTarWithFields(
+                archive_writer,
+                sig.version.CURRENT_CLIENT_VERSION,
+                .{ .bank_slot_deltas = &.{} },
+                snapshot_fields,
+                package.file_map_rw.get(),
+            );
+        }
+
+        /// Should be called after the snapshot archive has been written. Unlocks the file map.
+        pub fn deinit(self: *FullSnapshotGenerationPackage) void {
+            self.file_infos_map.deinit();
+            self.file_map_rw.unlock();
+        }
+    };
+
+    /// Locks the file map, generates the rest of the data required to write the archive, as
+    /// well as the snapshot generation info (which can be used to generate the name).
+    /// The file map will remain locked until the snapshot generation package `deinit`s.
+    pub fn makeFullSnapshotGenerationPackage(
         /// Although this is a mutable pointer, this method performs no mutations;
         /// the mutable reference is simply needed in order to obtain a lock on some
         /// fields.
         self: *Self,
-        /// `std.io.GenericWriter(...)` | `std.io.AnyWriter`
-        archive_writer: anytype,
+        /// The slot to generate a snapshot for.
+        /// Must be a flushed slot (`<= self.largest_flushed_slot.load(...)`).
+        /// Must be greater than the most recently generated full snapshot.
+        /// Must exist explicitly in the database.
+        target_slot: Slot,
         /// Temporary: See above TODO
-        status_cache: StatusCache,
-        /// Temporary: See above TODO
-        bank_fields: BankFields,
-        /// Temporary: See above TODO
+        bank_fields: *BankFields,
         lamports_per_signature: u64,
-        /// Temporary: See above TODO
-        bank_hash_info: BankHashInfo,
         /// For tests against older snapshots. Should just be 0 during normal operation.
-        stored_meta_write_version: u64,
-    ) !void {
-        // NOTE: we hold the lock for the entire duration of the function to ensure
-        // flush and clean do not create files while generating a snapshot.
-        const file_map, var file_map_lg = self.file_map.readWithLock();
-        defer file_map_lg.unlock();
+        deprecated_stored_meta_write_version: u64,
+    ) !struct { FullSnapshotGenerationPackage, FullSnapshotGenerationInfo } {
+        var file_map_rw = self.file_map.read();
+        errdefer file_map_rw.unlock();
+        const file_map = file_map_rw.get();
 
-        const max_rooted_slot = self.largest_root_slot.load(.unordered);
-        const version = sig.version.CURRENT_CLIENT_VERSION;
+        std.debug.assert(target_slot <= self.largest_flushed_slot.load(.monotonic));
 
         var serializable_file_map = std.AutoArrayHashMap(Slot, AccountFileInfo).init(self.allocator);
-        defer serializable_file_map.deinit();
+        errdefer serializable_file_map.deinit();
         try serializable_file_map.ensureTotalCapacity(file_map.count());
 
+        var bank_hash_stats = BankHashStats.zero_init;
+
         for (file_map.values()) |*account_file_rw| {
-            const account_file, var account_file_lg = account_file_rw.readWithLock();
+            const account_file: *const AccountFile, var account_file_lg = account_file_rw.readWithLock();
             defer account_file_lg.unlock();
 
-            if (account_file.slot > max_rooted_slot) continue;
+            if (account_file.slot > target_slot) continue;
+
+            const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
+            defer bank_hash_stats_map_lg.unlock();
+
+            if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
+                bank_hash_stats.accumulate(other_stats);
+            } else {
+                self.logger.warnf("No bank hash stats for slot {}.", .{account_file.slot});
+            }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
                 .id = account_file.id,
@@ -2055,24 +2315,278 @@ pub const AccountsDB = struct {
             });
         }
 
-        const snapshot_fields: SnapshotFields = .{
-            .bank_fields = bank_fields,
-            .accounts_db_fields = .{
-                .file_map = serializable_file_map,
-
-                .stored_meta_write_version = stored_meta_write_version,
-
-                .slot = max_rooted_slot,
-                .bank_hash_info = bank_hash_info,
-
-                .rooted_slots = .{},
-                .rooted_slot_hashes = .{},
+        const full_hash, const full_capitalization = try self.computeAccountHashesAndLamports(.{
+            .FullAccountHash = .{
+                .max_slot = target_slot,
             },
+        });
+
+        // TODO: this is a temporary value
+        const delta_hash = Hash.default();
+
+        bank_fields.slot = target_slot; // !
+        bank_fields.capitalization = full_capitalization; // !
+
+        const package: FullSnapshotGenerationPackage = .{
+            .slot = target_slot,
+
             .lamports_per_signature = lamports_per_signature,
-            .bank_fields_inc = .{}, // default to null for full snapshot
+            .bank_hash_info = .{
+                .accounts_delta_hash = delta_hash,
+                .accounts_hash = full_hash,
+                .stats = bank_hash_stats,
+            },
+            .bank_fields = bank_fields.*,
+            .deprecated_stored_meta_write_version = deprecated_stored_meta_write_version,
+
+            .file_infos_map = serializable_file_map,
+            .file_map_rw = file_map_rw,
+        };
+        const info: FullSnapshotGenerationInfo = .{
+            .slot = target_slot,
+            .hash = full_hash,
+            .capitalization = full_capitalization,
         };
 
-        try writeSnapshotTarWithFields(archive_writer, version, status_cache, snapshot_fields, file_map);
+        return .{ package, info };
+    }
+
+    /// Should be called after writing the snapshot archive from a `makeFullSnapshotGenerationPackage`
+    /// on its associated `SnapshotGenerationInfo`.
+    pub fn commitFullSnapshotInfo(
+        self: *Self,
+        snapshot_gen_info: FullSnapshotGenerationInfo,
+        old_snapshot_action: enum {
+            /// Ignore the previous snapshot.
+            ignore_old,
+            /// Delete the previous snapshot.
+            delete_old,
+        },
+    ) std.fs.Dir.DeleteFileError!void {
+        const latest_full_snapshot_info, var latest_full_snapshot_info_lg = self.latest_full_snapshot_info.writeWithLock();
+        defer latest_full_snapshot_info_lg.unlock();
+
+        const maybe_old_snapshot_info: ?FullSnapshotGenerationInfo = latest_full_snapshot_info.*;
+        latest_full_snapshot_info.* = snapshot_gen_info;
+        if (maybe_old_snapshot_info) |old_snapshot_info| {
+            std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
+        }
+
+        switch (old_snapshot_action) {
+            .ignore_old => {},
+            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
+                const old_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+                    .slot = old_snapshot_info.slot,
+                    .hash = old_snapshot_info.hash,
+                    .compression = .zstd,
+                });
+                const old_name = old_name_bounded.constSlice();
+
+                self.logger.infof("deleting old full snapshot archive: {s}", .{old_name});
+                try self.snapshot_dir.deleteFile(old_name);
+            },
+        }
+    }
+
+    pub const IncSnapshotGenerationInfo = struct {
+        base_slot: Slot,
+        slot: Slot,
+        hash: Hash,
+        capitalization: u64,
+    };
+
+    pub const IncSnapshotGenerationPackage = struct {
+        slot: Slot,
+        lamports_per_signature: u64,
+        bank_hash_info: BankHashInfo,
+        bank_fields: BankFields,
+        snapshot_persistence: BankIncrementalSnapshotPersistence,
+        /// This is no longer a meaningful field, but it is useful for testing where you load a snapshot,
+        /// write it back, and test that the generated output is equivalent to the original data.
+        deprecated_stored_meta_write_version: u64,
+
+        file_infos_map: std.AutoArrayHashMap(Slot, AccountFileInfo),
+        file_map_rw: RwMux(FileMap).RLockGuard,
+
+        /// Writes the snapshot in tar archive format to `archive_writer`.
+        pub fn write(package: *const IncSnapshotGenerationPackage, archive_writer: anytype) !void {
+            const snapshot_fields: SnapshotFields = .{
+                .bank_fields = package.bank_fields,
+                .accounts_db_fields = .{
+                    .file_map = package.file_infos_map,
+
+                    .stored_meta_write_version = package.deprecated_stored_meta_write_version,
+
+                    .slot = package.slot,
+                    .bank_hash_info = package.bank_hash_info,
+
+                    .rooted_slots = .{},
+                    .rooted_slot_hashes = .{},
+                },
+                .lamports_per_signature = package.lamports_per_signature,
+                .bank_fields_inc = .{
+                    .snapshot_persistence = package.snapshot_persistence,
+                    // TODO: the other fields default to null, but this may not always be correct.
+                },
+            };
+
+            try writeSnapshotTarWithFields(
+                archive_writer,
+                sig.version.CURRENT_CLIENT_VERSION,
+                .{ .bank_slot_deltas = &.{} },
+                snapshot_fields,
+                package.file_map_rw.get(),
+            );
+        }
+
+        /// Should be called after the snapshot archive has been written. Unlocks the file map.
+        pub fn deinit(self: *IncSnapshotGenerationPackage) void {
+            self.file_infos_map.deinit();
+            self.file_map_rw.unlock();
+        }
+    };
+
+    pub const MakeIncSnapshotPackgeError = error{NoFullSnapshotExists} || ComputeAccountHashesAndLamportsError || std.mem.Allocator.Error;
+
+    /// Locks the file map, generates the rest of the data required to write the archive, as
+    /// well as the snapshot generation info (which can be used to generate the name).
+    /// The file map will remain locked until the snapshot generation package `deinit`s.
+    /// There must have been at least one full snapshot generated before calling this,
+    /// otherwise it will return `error.NoFullSnapshotExists`.
+    pub fn makeIncrementalSnapshotGenerationPackage(
+        /// Although this is a mutable pointer, this method performs no mutations;
+        /// the mutable reference is simply needed in order to obtain a lock on some
+        /// fields.
+        self: *Self,
+        /// The slot to generate a snapshot for.
+        /// Must be a flushed slot (`<= self.largest_flushed_slot.load(...)`).
+        /// Must be greater than the most recently generated full snapshot.
+        /// Must exist explicitly in the database.
+        target_slot: Slot,
+        /// Temporary: See above TODO
+        bank_fields: *BankFields,
+        lamports_per_signature: u64,
+        /// For tests against older snapshots. Should just be 0 during normal operation.
+        deprecated_stored_meta_write_version: u64,
+    ) MakeIncSnapshotPackgeError!struct { IncSnapshotGenerationPackage, IncSnapshotGenerationInfo } {
+        // NOTE: we hold the lock for the entire duration of the function to ensure
+        // flush and clean do not create files while generating a snapshot.
+        var file_map_rw = self.file_map.read();
+        errdefer file_map_rw.unlock();
+        const file_map = file_map_rw.get();
+
+        const p_maybe_full_snapshot_info, var full_snapshot_info_lg = self.latest_full_snapshot_info.readWithLock();
+        defer full_snapshot_info_lg.unlock();
+        const full_snapshot_info = p_maybe_full_snapshot_info.* orelse return error.NoFullSnapshotExists;
+
+        var serializable_file_map = std.AutoArrayHashMap(Slot, AccountFileInfo).init(self.allocator);
+        errdefer serializable_file_map.deinit();
+        try serializable_file_map.ensureTotalCapacity(file_map.count());
+
+        var bank_hash_stats = BankHashStats.zero_init;
+
+        for (file_map.values()) |*account_file_rw| {
+            const account_file: *const AccountFile, var account_file_lg = account_file_rw.readWithLock();
+            defer account_file_lg.unlock();
+
+            if (account_file.slot <= full_snapshot_info.slot) continue;
+            if (account_file.slot > target_slot) continue;
+
+            const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
+            defer bank_hash_stats_map_lg.unlock();
+
+            if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
+                bank_hash_stats.accumulate(other_stats);
+            } else {
+                self.logger.warnf("No bank hash stats for slot {}.", .{account_file.slot});
+            }
+
+            serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
+                .id = account_file.id,
+                .length = account_file.length,
+            });
+        }
+
+        const incremental_hash, //
+        const incremental_capitalization //
+        = try self.computeAccountHashesAndLamports(.{
+            .IncrementalAccountHash = .{
+                .min_slot = full_snapshot_info.slot,
+                .max_slot = target_slot,
+            },
+        });
+
+        // TODO: compute the correct value during account writes
+        const delta_hash = Hash.default();
+
+        bank_fields.slot = target_slot; // !
+
+        const package: IncSnapshotGenerationPackage = .{
+            .slot = target_slot,
+
+            .lamports_per_signature = lamports_per_signature,
+            .bank_hash_info = .{
+                .accounts_delta_hash = delta_hash,
+                .accounts_hash = Hash.default(),
+                .stats = bank_hash_stats,
+            },
+            .bank_fields = bank_fields.*,
+            .snapshot_persistence = .{
+                .full_slot = full_snapshot_info.slot,
+                .full_hash = full_snapshot_info.hash,
+                .full_capitalization = full_snapshot_info.capitalization,
+                .incremental_hash = incremental_hash,
+                .incremental_capitalization = incremental_capitalization,
+            },
+            .deprecated_stored_meta_write_version = deprecated_stored_meta_write_version,
+
+            .file_infos_map = serializable_file_map,
+            .file_map_rw = file_map_rw,
+        };
+        const info: IncSnapshotGenerationInfo = .{
+            .base_slot = full_snapshot_info.slot,
+            .slot = target_slot,
+            .hash = incremental_hash,
+            .capitalization = incremental_capitalization,
+        };
+
+        return .{ package, info };
+    }
+
+    pub fn commitIncrementalSnapshotInfo(
+        self: *Self,
+        snapshot_gen_info: IncSnapshotGenerationInfo,
+        old_snapshot_action: enum {
+            /// Ignore the previous snapshot.
+            ignore_old,
+            /// Delete the previous snapshot.
+            delete_old,
+        },
+    ) std.fs.Dir.DeleteFileError!void {
+        const latest_incremental_snapshot_info, var latest_incremental_snapshot_info_lg = self.latest_incremental_snapshot_info.writeWithLock();
+        defer latest_incremental_snapshot_info_lg.unlock();
+
+        const maybe_old_snapshot_info: ?IncSnapshotGenerationInfo = latest_incremental_snapshot_info.*;
+        latest_incremental_snapshot_info.* = snapshot_gen_info;
+        if (maybe_old_snapshot_info) |old_snapshot_info| {
+            std.debug.assert(old_snapshot_info.slot <= snapshot_gen_info.slot);
+        }
+
+        switch (old_snapshot_action) {
+            .ignore_old => {},
+            .delete_old => if (maybe_old_snapshot_info) |old_snapshot_info| {
+                const old_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+                    .base_slot = old_snapshot_info.base_slot,
+                    .slot = old_snapshot_info.slot,
+                    .hash = old_snapshot_info.hash,
+                    .compression = .zstd,
+                });
+                const old_name = old_name_bounded.constSlice();
+
+                self.logger.infof("deleting old incremental snapshot archive: {s}", .{old_name});
+                try self.snapshot_dir.deleteFile(old_name);
+            },
+        }
     }
 
     inline fn lessThanIf(
@@ -2242,73 +2756,127 @@ pub fn writeSnapshotTarWithFields(
 }
 
 fn testWriteSnapshotFull(
-    snapshot_dir: std.fs.Dir,
+    accounts_db: *AccountsDB,
     slot: Slot,
+    maybe_expected_hash: ?Hash,
 ) !void {
     const allocator = std.testing.allocator;
+    const snapshot_dir = accounts_db.snapshot_dir;
 
     const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
     const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
     defer manifest_file.close();
 
-    const snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    const status_cache_file = try snapshot_dir.openFile("snapshots/status_cache", .{});
-    defer status_cache_file.close();
-
-    const status_cache = try StatusCache.decodeFromBincode(allocator, status_cache_file.reader());
-    defer status_cache.deinit(allocator);
-
-    var accounts_db = try AccountsDB.init(allocator, .noop, snapshot_dir, .{
-        .number_of_index_bins = ACCOUNT_INDEX_BINS,
-        .use_disk_index = false,
-    });
-    defer accounts_db.deinit(true);
-
-    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields.file_map, 1, allocator);
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
     const tmp_dir = tmp_dir_root.dir;
 
-    const archive_file = try tmp_dir.createFile("snapshot.tar", .{ .read = true });
-    defer archive_file.close();
+    const snapshot_gen_info = blk: {
+        var snapshot_gen_pkg, const snapshot_gen_info = try accounts_db.makeFullSnapshotGenerationPackage(
+            slot,
+            &snap_fields.bank_fields,
+            snap_fields.lamports_per_signature,
+            snap_fields.accounts_db_fields.stored_meta_write_version,
+        );
+        defer snapshot_gen_pkg.deinit();
 
-    try accounts_db.writeSnapshotTarFull(
-        archive_file.writer(),
-        status_cache,
-        snap_fields.bank_fields,
-        snap_fields.lamports_per_signature,
-        snap_fields.accounts_db_fields.bank_hash_info,
-        snap_fields.accounts_db_fields.stored_meta_write_version,
-    );
+        const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            .slot = snapshot_gen_info.slot,
+            .hash = snapshot_gen_info.hash,
+            .compression = .zstd,
+        });
+        const archive_file_name = archive_file_name_bounded.constSlice();
+        const archive_file = try tmp_dir.createFile(archive_file_name, .{ .read = true });
+        errdefer archive_file.close();
 
-    var actual_snapshot_dir = try tmp_dir.makeOpenPath("output", .{ .iterate = true });
-    defer actual_snapshot_dir.close();
+        var buffered_state = std.io.bufferedWriter(archive_file.writer());
+        try snapshot_gen_pkg.write(buffered_state.writer());
+        try buffered_state.flush();
 
-    try archive_file.seekTo(0);
-    try std.tar.pipeToFileSystem(actual_snapshot_dir, archive_file.reader(), .{});
+        try accounts_db.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
 
-    {
-        try manifest_file.seekTo(0);
-        const expected_manifest_bytes = try manifest_file.readToEndAlloc(allocator, 1 << 21);
-        defer allocator.free(expected_manifest_bytes);
-
-        const actual_manifest_file = try actual_snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
-        defer actual_manifest_file.close();
-
-        const actual_manifest_bytes = try actual_manifest_file.readToEndAlloc(allocator, 1 << 21);
-        defer allocator.free(actual_manifest_bytes);
-
-        const actual_manifest = try bincode.readFromSlice(allocator, SnapshotFields, actual_manifest_bytes, .{});
-        defer bincode.free(allocator, actual_manifest);
-
-        try std.testing.expectEqualSlices(u8, expected_manifest_bytes, actual_manifest_bytes);
+        break :blk snapshot_gen_info;
+    };
+    try std.testing.expectEqual(slot, snapshot_gen_info.slot);
+    if (maybe_expected_hash) |expected_hash| {
+        try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
     }
+
+    try accounts_db.validateLoadFromSnapshot(
+        null,
+        slot,
+        snapshot_gen_info.capitalization,
+        snapshot_gen_info.hash,
+    );
 }
 
-test testWriteSnapshotFull {
+fn testWriteSnapshotIncremental(
+    accounts_db: *AccountsDB,
+    slot: Slot,
+    maybe_expected_incremental_hash: ?Hash,
+) !void {
+    const allocator = std.testing.allocator;
+    const snapshot_dir = accounts_db.snapshot_dir;
+
+    const manifest_path_bounded = sig.utils.fmt.boundedFmt("snapshots/{0}/{0}", .{slot});
+    const manifest_file = try snapshot_dir.openFile(manifest_path_bounded.constSlice(), .{});
+    defer manifest_file.close();
+
+    var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
+    defer snap_fields.deinit(allocator);
+
+    try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
+
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    const snapshot_gen_info, const incremental_persistence: BankIncrementalSnapshotPersistence = blk: {
+        var snapshot_gen_pkg, const snapshot_gen_info = try accounts_db.makeIncrementalSnapshotGenerationPackage(
+            slot,
+            &snap_fields.bank_fields,
+            snap_fields.lamports_per_signature,
+            snap_fields.accounts_db_fields.stored_meta_write_version,
+        );
+        defer snapshot_gen_pkg.deinit();
+
+        const archive_file_name_bounded = sig.accounts_db.snapshots.IncrementalSnapshotFileInfo.snapshotNameStr(.{
+            .base_slot = snapshot_gen_info.base_slot,
+            .slot = snapshot_gen_info.slot,
+            .hash = snapshot_gen_info.hash,
+            .compression = .zstd,
+        });
+        const archive_file_name = archive_file_name_bounded.constSlice();
+        const archive_file = try tmp_dir.createFile(archive_file_name, .{ .read = true });
+        errdefer archive_file.close();
+
+        var buffered_state = std.io.bufferedWriter(archive_file.writer());
+        try snapshot_gen_pkg.write(buffered_state.writer());
+        try buffered_state.flush();
+
+        break :blk .{ snapshot_gen_info, snapshot_gen_pkg.snapshot_persistence };
+    };
+
+    try std.testing.expectEqual(slot, snapshot_gen_info.slot);
+    if (maybe_expected_incremental_hash) |expected_hash| {
+        try std.testing.expectEqual(expected_hash, snapshot_gen_info.hash);
+    }
+    try std.testing.expectEqual(incremental_persistence.incremental_hash, snapshot_gen_info.hash);
+
+    try accounts_db.validateLoadFromSnapshot(
+        incremental_persistence,
+        incremental_persistence.full_slot,
+        incremental_persistence.full_capitalization,
+        incremental_persistence.full_hash,
+    );
+}
+
+test "testWriteSnapshot" {
     var test_data_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
     defer test_data_dir.close();
 
@@ -2330,9 +2898,14 @@ test testWriteSnapshotFull {
         try parallelUnpackZstdTarBall(std.testing.allocator, .noop, archive_file, tmp_snap_dir, 4, false);
     }
 
-    try testWriteSnapshotFull(tmp_snap_dir, 10);
-    // TODO: write the test for incremental snapshots as well
-    // try testWriteSnapshot(tmp_snap_dir, 25);
+    var accounts_db = try AccountsDB.init(std.testing.allocator, .noop, tmp_snap_dir, .{
+        .number_of_index_bins = ACCOUNT_INDEX_BINS,
+        .use_disk_index = false,
+    });
+    defer accounts_db.deinit(true);
+
+    try testWriteSnapshotFull(&accounts_db, snap_files.full_snapshot.slot, snap_files.full_snapshot.hash);
+    try testWriteSnapshotIncremental(&accounts_db, snap_files.incremental_snapshot.?.slot, snap_files.incremental_snapshot.?.hash);
 }
 
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
@@ -2381,11 +2954,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     });
     errdefer accounts_db.deinit(true);
 
-    try accounts_db.loadFromSnapshot(
-        snapshot.accounts_db_fields.file_map,
-        n_threads,
-        allocator,
-    );
+    try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator);
 
     return .{ accounts_db, snapshots };
 }
@@ -2553,7 +3122,7 @@ test "flushing slots works" {
     // this writes to disk
     var unclean_account_files = ArrayList(FileId).init(std.testing.allocator);
     defer unclean_account_files.deinit();
-    try accounts_db.flushSlot(slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
     // try the validation
     const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
@@ -2677,12 +3246,12 @@ test "clean to shrink account file works with zero-lamports" {
     var unclean_account_files = ArrayList(FileId).init(allocator);
     defer unclean_account_files.deinit();
 
-    try accounts_db.flushSlot(slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
     // write new state
     const new_slot: u64 = 500;
     try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
-    try accounts_db.flushSlot(new_slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(new_slot));
 
     var shrink_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
     defer shrink_account_files.deinit();
@@ -2755,12 +3324,12 @@ test "clean to shrink account file works" {
     var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
     defer delete_account_files.deinit();
 
-    try accounts_db.flushSlot(slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
     // write new state
     const new_slot: u64 = 500;
     try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
-    try accounts_db.flushSlot(new_slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(new_slot));
 
     const r = try accounts_db.cleanAccountFiles(
         new_slot + 100,
@@ -2800,7 +3369,7 @@ test "full clean account file works" {
     }
     defer for (accounts) |account| account.deinit(allocator);
 
-    const slot = @as(u64, @intCast(200));
+    const slot: u64 = 200;
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     // duplicate before the flush/deinit
@@ -2822,7 +3391,7 @@ test "full clean account file works" {
     var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
     defer delete_account_files.deinit();
 
-    try accounts_db.flushSlot(slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
     var r = try accounts_db.cleanAccountFiles(0, unclean_account_files.items, &shrink_account_files, &delete_account_files); // zero is rooted so no files should be cleaned
     try std.testing.expect(r.num_old_states == 0);
@@ -2833,9 +3402,9 @@ test "full clean account file works" {
     try std.testing.expect(r.num_zero_lamports == 0);
 
     // write new state
-    const new_slot = @as(u64, @intCast(500));
+    const new_slot: u64 = 500;
     try accounts_db.putAccountSlice(&accounts2, &pubkeys2, new_slot);
-    try accounts_db.flushSlot(new_slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(new_slot));
 
     r = try accounts_db.cleanAccountFiles(new_slot + 100, unclean_account_files.items, &shrink_account_files, &delete_account_files);
     try std.testing.expect(r.num_old_states == n_accounts);
@@ -2910,7 +3479,7 @@ test "shrink account file works" {
     var delete_account_files = std.AutoArrayHashMap(FileId, void).init(allocator);
     defer delete_account_files.deinit();
 
-    try accounts_db.flushSlot(slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
     // write new state
     const new_slot = @as(u64, @intCast(500));
@@ -2919,7 +3488,7 @@ test "shrink account file works" {
         &pubkeys2,
         new_slot,
     );
-    try accounts_db.flushSlot(new_slot, &unclean_account_files);
+    try unclean_account_files.append(try accounts_db.flushSlot(new_slot));
 
     // clean the account files - slot is queued for shrink
     const clean_result = try accounts_db.cleanAccountFiles(
@@ -2952,7 +3521,7 @@ test "shrink account file works" {
     }
 
     // test: files were shrunk
-    const r = try accounts_db.shrinkAccountFiles(&shrink_account_files);
+    const r = try accounts_db.shrinkAccountFiles(shrink_account_files.keys());
     try std.testing.expectEqual(9, r.num_accounts_deleted);
 
     // test: new account file is shrunk
@@ -3057,17 +3626,19 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 
         var timer = try sig.time.Timer.start();
         try accounts_db.loadFromSnapshot(
-            snapshot.accounts_db_fields.file_map,
+            snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
         );
         const elapsed = timer.read();
 
         // sanity check
-        const r = try accounts_db.computeAccountHashesAndLamports(.{ .FullAccountHash = .{
-            .max_slot = accounts_db.largest_root_slot.raw,
-        } });
-        std.debug.print("r: {any}\n", .{r});
+        const accounts_hash, const total_lamports = try accounts_db.computeAccountHashesAndLamports(.{
+            .FullAccountHash = .{
+                .max_slot = accounts_db.largest_rooted_slot.load(.monotonic),
+            },
+        });
+        std.debug.print("r: hash: {}, lamports: {}\n", .{ accounts_hash, total_lamports });
 
         return elapsed.asNanos();
     }
