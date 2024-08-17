@@ -9,9 +9,10 @@ const Logger = sig.trace.Logger;
 pub fn assertIsDatabase(comptime Impl: type) void {
     sig.utils.interface.assertSameInterface(Database(Impl), Impl, .subset);
     sig.utils.interface.assertSameInterface(Database(Impl).WriteBatch, Impl.WriteBatch, .subset);
+    const dummy_cf = ColumnFamily{ .name = "", .Key = void, .Value = void };
     sig.utils.interface.assertSameInterface(
-        Database(Impl).Iterator(.forward),
-        Impl.Iterator(.forward),
+        Database(Impl).Iterator(dummy_cf, .forward),
+        Impl.Iterator(dummy_cf, .forward),
         .subset,
     );
 }
@@ -41,8 +42,8 @@ pub fn Database(comptime Impl: type) type {
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.impl.deinit();
+        pub fn deinit(self: *Self, delete_mem: bool) void {
+            self.impl.deinit(delete_mem);
         }
 
         pub fn put(
@@ -120,16 +121,28 @@ pub fn Database(comptime Impl: type) type {
             comptime cf: ColumnFamily,
             comptime direction: IteratorDirection,
             start: ?cf.Key,
-        ) anyerror!Iterator(direction) {
+        ) anyerror!Iterator(cf, direction) {
             return .{ .impl = try self.impl.iterator(cf, direction, start) };
         }
 
-        pub fn Iterator(direction: IteratorDirection) type {
+        pub fn Iterator(cf: ColumnFamily, direction: IteratorDirection) type {
             return struct {
-                impl: Impl.Iterator(direction),
+                impl: Impl.Iterator(cf, direction),
 
                 pub fn deinit(self: *@This()) void {
                     return self.impl.deinit();
+                }
+
+                pub fn next(self: *@This()) anyerror!?cf.Entry() {
+                    return try self.impl.next();
+                }
+
+                pub fn nextKey(self: *@This()) anyerror!?cf.Key {
+                    return try self.impl.nextKey();
+                }
+
+                pub fn nextValue(self: *@This()) anyerror!?cf.Value {
+                    return try self.impl.nextValue();
                 }
 
                 pub fn nextBytes(self: *@This()) anyerror!?[2]BytesRef {
@@ -148,6 +161,10 @@ pub const ColumnFamily = struct {
     Value: type,
 
     const Self = @This();
+
+    pub fn Entry(self: Self) type {
+        return struct { self.Key, self.Value };
+    }
 
     /// At comptime, find this family in a slice. Useful for for fast runtime
     /// accesses of data in other slices that are one-to-one with this slice.
@@ -192,6 +209,15 @@ fn serializer(endian: std.builtin.Endian) type {
 
         /// Returned data is owned by the caller. Free with `allocator.free`.
         pub fn deserialize(comptime T: type, allocator: Allocator, bytes: []const u8) !T {
+            comptime if (T == []const u8 or T == []u8) {
+                // it's probably a mistake to call deserialize in this case because it would
+                // need to memcpy the bytes to satisfy the ownership contract, but that's
+                // probably not what you actually want, since it is wasteful. so this is
+                // currently not supported, just to avoid mistakes. if needed, it can be
+                // implemented with memcpy, or by writing a separate function that explicitly
+                // returns references.
+                @compileError("not supported");
+            };
             return try sig.bincode.readFromSlice(allocator, T, bytes, .{ .endian = endian });
         }
     };
@@ -231,7 +257,8 @@ fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
             const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
             defer logger.deinit();
             var db = try Database(Impl(&.{ cf1, cf2 })).open(allocator, logger, path);
-            defer db.deinit();
+            defer db.deinit(true);
+
             try db.put(cf1, 123, .{ .hello = 345 });
             const got = try db.get(cf1, 123);
             try std.testing.expect(345 == got.?.hello);

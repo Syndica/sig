@@ -31,6 +31,9 @@ pub const Params = struct {
 };
 
 pub fn sizeOf(data: anytype, params: bincode.Params) usize {
+    if (@TypeOf(data) == type) {
+        @compileError("sizeOf called with type instead of value");
+    }
     var stream = std.io.countingWriter(std.io.null_writer);
     bincode.write(stream.writer(), data, params) catch unreachable;
     return @as(usize, @intCast(stream.bytes_written));
@@ -316,9 +319,13 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                 };
             }
         },
-        .fixed => return switch (params.endian) {
-            .little => reader.readInt(T, .little),
-            .big => reader.readInt(T, .big),
+        .fixed => switch (params.endian) {
+            .little => {
+                return reader.readInt(T, .little);
+            },
+            .big => {
+                return reader.readInt(T, .big);
+            },
         },
     }
 }

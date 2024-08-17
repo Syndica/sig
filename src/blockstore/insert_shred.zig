@@ -42,12 +42,14 @@ const SlotMeta = meta.SlotMeta;
 const key_serializer = sig.blockstore.database.key_serializer;
 const value_serializer = sig.blockstore.database.value_serializer;
 
+const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
+
 pub const ShredInserter = struct {
     allocator: Allocator,
     logger: sig.trace.Logger,
     db: BlockstoreDB,
     lock: Mutex,
-    max_root: Atomic(u64),
+    max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
 
     const Self = @This();
@@ -953,7 +955,7 @@ pub const ShredInserter = struct {
     }
 
     /// agave: insert_data_shred
-    fn insertDataShred(
+    pub fn insertDataShred(
         self: *const Self,
         slot_meta: *SlotMeta,
         data_index: *meta.ShredIndex,
@@ -1114,7 +1116,7 @@ pub const ShredInserter = struct {
             if (prev_inserted_shreds.get(key)) |shred| {
                 try available_shreds.append(shred);
             } else if (index.contains(i)) {
-                const shred = try self.db.get(column_family, .{ slot, i }) orelse {
+                const shred = try self.db.getBytes(column_family, .{ slot, i }) orelse {
                     self.logger.errf(
                         \\Unable to read the {s} with slot {}, index {} for shred
                         \\recovery. The shred is marked present in the slot's {s} index,
@@ -1122,8 +1124,8 @@ pub const ShredInserter = struct {
                     , .{ column_family.name, slot, i, column_family.name, column_family.name });
                     continue;
                 };
-                // TODO lifetime
-                try available_shreds.append(try Shred.fromPayload(self.allocator, shred));
+                defer shred.deinit();
+                try available_shreds.append(try Shred.fromPayload(self.allocator, shred.data));
             }
         }
     }
@@ -1635,11 +1637,6 @@ fn slotLeader(provider: ?SlotLeaderProvider, slot: Slot) ?Pubkey {
     return if (provider) |p| if (p.call(slot)) |l| l else null else null;
 }
 
-/// The default tick rate that the cluster attempts to achieve (160 per second).
-///
-/// Note that the actual tick rate at any given time should be expected to drift.
-const DEFAULT_TICKS_PER_SECOND: u64 = 160;
-
 /// update_slot_meta
 fn updateSlotMeta(
     allocator: Allocator,
@@ -1658,7 +1655,7 @@ fn updateSlotMeta(
     if (first_insert) {
         // predict the timestamp of what would have been the first shred in this slot
         const slot_time_elapsed = @as(u64, @intCast(reference_tick)) * 1000 / DEFAULT_TICKS_PER_SECOND;
-        slot_meta.first_shred_timestamp = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
+        slot_meta.first_shred_timestamp_milli = @as(u64, @intCast(std.time.milliTimestamp())) -| slot_time_elapsed;
     }
     slot_meta.consecutive_received_from_0 = new_consecutive_received_from_0;
     // If the last index in the slot hasn't been set before, then
@@ -1875,10 +1872,12 @@ pub const TestState = struct {
     // if this leaks, you forgot to call `TestState.deinit`
     _leak_check: []const u8,
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
-    const allocator = gpa.allocator();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
+    // pub const allocator = gpa.allocator();
 
-    fn init(comptime test_name: []const u8) !TestState {
+    pub const allocator = std.testing.allocator;
+
+    pub fn init(comptime test_name: []const u8) !TestState {
         return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
     }
 
@@ -1953,11 +1952,11 @@ pub const TestState = struct {
         };
     }
 
-    fn deinit(self: *@This()) void {
-        self.db.deinit();
+    pub fn deinit(self: *@This()) void {
+        self.db.deinit(true);
         self.registry.deinit();
         std.testing.allocator.free(self._leak_check);
-        _ = gpa.detectLeaks();
+        // _ = gpa.detectLeaks();
     }
 };
 

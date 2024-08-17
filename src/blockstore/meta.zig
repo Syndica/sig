@@ -22,7 +22,7 @@ pub const SlotMeta = struct {
     /// range where there is one or more holes: `(consumed..received)`.
     received: u64,
     /// The timestamp of the first time a shred was added for this slot
-    first_shred_timestamp: u64,
+    first_shred_timestamp_milli: u64,
     /// The index of the shred that is flagged as the last shred for this slot.
     /// None until the shred with LAST_SHRED_IN_SLOT flag is received.
     last_index: ?u64,
@@ -53,7 +53,7 @@ pub const SlotMeta = struct {
             .connected_flags = connected_flags,
             .consecutive_received_from_0 = 0,
             .received = 0,
-            .first_shred_timestamp = 0,
+            .first_shred_timestamp_milli = 0,
             .last_index = null,
             .next_slots = std.ArrayList(Slot).init(allocator),
             .completed_data_indexes = SortedSet(u32).init(allocator),
@@ -74,7 +74,7 @@ pub const SlotMeta = struct {
             .connected_flags = self.connected_flags,
             .consecutive_received_from_0 = self.consecutive_received_from_0,
             .received = self.received,
-            .first_shred_timestamp = self.first_shred_timestamp,
+            .first_shred_timestamp_milli = self.first_shred_timestamp_milli,
             .last_index = self.last_index,
             .next_slots = next_slots,
             .completed_data_indexes = try self.completed_data_indexes.clone(),
@@ -85,7 +85,7 @@ pub const SlotMeta = struct {
         return self.slot == other.slot and
             self.consecutive_received_from_0 == other.consecutive_received_from_0 and
             self.received == other.received and
-            self.first_shred_timestamp == other.first_shred_timestamp and
+            self.first_shred_timestamp_milli == other.first_shred_timestamp_milli and
             self.last_index == other.last_index and
             self.parent_slot == other.parent_slot and
             std.mem.eql(Slot, self.next_slots.items, other.next_slots.items) and
@@ -294,7 +294,7 @@ pub const UnixTimestamp = i64;
 
 // TODO consider union
 pub const PerfSample = struct {
-    tag: u32 = 1, // for binary compatibility with rust enum serialization
+    version: u32 = 1, // for binary compatibility with rust enum serialization
     // `PerfSampleV1` part
     num_transactions: u64,
     num_slots: u64,
@@ -309,7 +309,19 @@ pub const ProgramCost = struct {
 };
 
 pub const FrozenHashVersioned = union(enum) {
-    Current: FrozenHashStatus,
+    current: FrozenHashStatus,
+
+    pub fn isDuplicateConfirmed(self: @This()) bool {
+        return switch (self) {
+            .current => |c| c.is_duplicate_confirmed,
+        };
+    }
+
+    pub fn frozenHash(self: @This()) sig.core.Hash {
+        return switch (self) {
+            .current => |c| c.frozen_hash,
+        };
+    }
 };
 
 pub const FrozenHashStatus = struct {

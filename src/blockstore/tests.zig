@@ -6,22 +6,24 @@ const Logger = sig.trace.Logger;
 
 const BlockstoreDB = blockstore.BlockstoreDB;
 const schema = blockstore.schema.schema;
+const TestState = sig.blockstore.insert_shred.TestState;
 
 test "put/get data consistency for merkle root" {
-    const path = "test_data/bsdb merkle root database consistency";
     const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
     defer logger.deinit();
     var rng = std.Random.DefaultPrng.init(100);
     const random = rng.random();
-    try freshDir(path);
+
+    var state = try TestState.init("bsdbMerkleRootDatabaseConsistency");
+    defer state.deinit();
+    var db = state.db;
 
     const id = sig.shred_collector.shred.ErasureSetId{
         .slot = 1234127498,
         .fec_set_index = 4932874234,
     };
     const root = sig.core.Hash.random(random);
-    var db = try BlockstoreDB.open(std.testing.allocator, logger, path);
-    defer db.deinit();
+
     try db.put(
         schema.merkle_root_meta,
         id,

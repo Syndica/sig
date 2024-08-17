@@ -72,7 +72,7 @@ pub const schema = struct {
     };
     pub const transaction_memos: ColumnFamily = .{
         .name = "transaction_memos",
-        .Key = Signature,
+        .Key = struct { Signature, Slot },
         .Value = []const u8,
     };
     pub const transaction_status_index: ColumnFamily = .{
@@ -83,7 +83,10 @@ pub const schema = struct {
     pub const rewards: ColumnFamily = .{
         .name = "rewards",
         .Key = Slot,
-        .Value = []const meta.Reward,
+        .Value = struct {
+            rewards: []const meta.Reward,
+            num_partitions: ?u64,
+        },
     };
     pub const blocktime: ColumnFamily = .{
         .name = "blocktime",

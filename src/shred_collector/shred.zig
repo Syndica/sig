@@ -135,15 +135,32 @@ pub const Shred = union(ShredType) {
             inline .data, .code => |*s| s.fields.setMerkleProof(proof),
         };
     }
+
+    pub fn id(self: Self) ShredId {
+        return switch (self) {
+            inline .data, .code => |s| s.fields.id(),
+        };
+    }
+
+    pub fn retransmitterSignature(self: Self) !Signature {
+        return switch (self) {
+            inline .data, .code => |s| s.fields.retransmitterSignature(),
+        };
+    }
 };
 
 /// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
 pub const CodingShred = struct {
+    // TODO(x19): pull out the generics
     fields: Fields,
     const Fields = GenericShred(CodingShredHeader, coding_shred);
 
     const Self = @This();
     const consts = coding_shred;
+
+    pub fn default(allocator: std.mem.Allocator) !Self {
+        return .{ .fields = try Fields.default(allocator) };
+    }
 
     /// agave: ShredCode::from_recovered_shard
     pub fn fromRecoveredShard(
@@ -226,7 +243,11 @@ pub const DataShred = struct {
     const Fields = GenericShred(DataShredHeader, data_shred);
 
     const Self = @This();
-    const consts = data_shred;
+    pub const constants = data_shred;
+
+    pub fn default(allocator: std.mem.Allocator) !Self {
+        return .{ .fields = try Fields.default(allocator) };
+    }
 
     /// agave: ShredData::from_recovered_shard
     pub fn fromRecoveredShard(
@@ -237,10 +258,10 @@ pub const DataShred = struct {
         shard: []const u8,
     ) !Self {
         const shard_size = shard.len;
-        if (shard_size + SIGNATURE_LENGTH > consts.payload_size) {
+        if (shard_size + SIGNATURE_LENGTH > constants.payload_size) {
             return error.InvalidShardSize;
         }
-        const payload = try allocator.alloc(u8, consts.payload_size);
+        const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
         @memcpy(payload[0..SIGNATURE_LENGTH], &signature.data);
         @memcpy(payload[SIGNATURE_LENGTH..][0..shard_size], shard);
@@ -262,17 +283,17 @@ pub const DataShred = struct {
         _ = try self.parent();
     }
 
-    fn data(self: *const Self) ![]const u8 {
-        const data_buffer_size = try capacity(consts, self.fields.common.shred_variant);
+    pub fn data(self: *const Self) ![]const u8 {
+        const data_buffer_size = try capacity(constants, self.fields.common.shred_variant);
         const size = self.fields.custom.size;
         if (size > self.fields.payload.len or
-            size < consts.headers_size or
-            size > consts.headers_size + data_buffer_size)
+            size < constants.headers_size or
+            size > constants.headers_size + data_buffer_size)
         {
             return error.InvalidDataSize;
         }
 
-        return self.fields.payload[consts.headers_size..size];
+        return self.fields.payload[constants.headers_size..size];
     }
 
     pub fn parent(self: *const Self) error{InvalidParentOffset}!Slot {
@@ -316,11 +337,38 @@ pub fn GenericShred(
 
         pub const constants = constants_;
 
+        pub fn default(allocator: std.mem.Allocator) !Self {
+            const payload = try allocator.alloc(u8, constants.payload_size);
+            return .{
+                .common = CommonHeader.default(),
+                .custom = CustomHeader.default(),
+                .allocator = allocator,
+                .payload = payload,
+            };
+        }
+
         pub fn deinit(self: Self) void {
             self.allocator.free(self.payload);
         }
 
+        pub fn writePayload(self: *Self, data: []const u8) !void {
+            if (self.payload.len < constants.payload_size) {
+                return error.InvalidPayloadSize;
+            }
+            @memset(self.payload, 0);
+
+            var buf = std.io.fixedBufferStream(self.payload[0..constants.payload_size]);
+            const writer = buf.writer();
+
+            try bincode.write(writer, self.common, .{});
+            try bincode.write(writer, self.custom, .{});
+
+            const offset = writer.context.pos;
+            @memcpy(self.payload[offset .. offset + data.len], data);
+        }
+
         pub fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
+            // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is 1207 bytes
             if (payload.len < constants.payload_size) {
                 return error.InvalidPayloadSize;
             }
@@ -445,7 +493,7 @@ pub fn GenericShred(
 
         /// agave: retransmitter_signature
         pub fn retransmitterSignature(self: Self) !Signature {
-            const offset = try retransmitterSignatureOffset(constants, self.common.shred_variant);
+            const offset = try retransmitterSignatureOffset(self.common.shred_variant);
             const end = offset + SIGNATURE_LENGTH;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
@@ -457,7 +505,7 @@ pub fn GenericShred(
 
         /// agave: setRetransmitterSignature
         pub fn setRetransmitterSignature(self: *Self, signature: Signature) !void {
-            const offset = try retransmitterSignatureOffset(constants, self.common.shred_variant);
+            const offset = try retransmitterSignatureOffset(self.common.shred_variant);
             const end = offset + SIGNATURE_LENGTH;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
@@ -642,11 +690,11 @@ pub fn getChainedMerkleRootOffset(variant: ShredVariant) !usize {
 }
 
 /// agave: retransmitter_signature_offset and get_retransmitter_signature_offset
-fn retransmitterSignatureOffset(constants: ShredConstants, variant: ShredVariant) !usize {
+fn retransmitterSignatureOffset(variant: ShredVariant) !usize {
     if (!variant.resigned) {
         return error.InvalidShredVariant;
     }
-    return try proofOffset(constants, variant) + variant.proof_size + merkle_proof_entry_size;
+    return try proofOffset(variant.constants(), variant) + variant.proof_size + merkle_proof_entry_size;
 }
 
 fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
@@ -744,6 +792,19 @@ pub const CommonHeader = struct {
 
     pub const @"!bincode-config:shred_variant" = ShredVariantConfig;
 
+    const Self = @This();
+
+    pub fn default() Self {
+        return .{
+            .signature = Signature{ .data = undefined },
+            .shred_variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
+            .slot = 0,
+            .index = 0,
+            .version = 0,
+            .fec_set_index = 0,
+        };
+    }
+
     // Identifier for the erasure coding set that the shred belongs to.
     pub fn erasureSetId(self: @This()) ErasureSetId {
         return ErasureSetId{
@@ -757,12 +818,32 @@ pub const DataShredHeader = struct {
     parent_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
+
+    const Self = @This();
+
+    pub fn default() Self {
+        return .{
+            .parent_offset = 0,
+            .flags = .{},
+            .size = 0,
+        };
+    }
 };
 
 pub const CodingShredHeader = struct {
     num_data_shreds: u16,
     num_coding_shreds: u16,
     position: u16, // [0..num_coding_shreds)
+
+    const Self = @This();
+
+    pub fn default() Self {
+        return .{
+            .num_data_shreds = 0,
+            .num_coding_shreds = 0,
+            .position = 0,
+        };
+    }
 };
 
 pub const ShredType = enum(u8) {
@@ -785,7 +866,7 @@ pub const ShredVariant = struct {
 
     const Self = @This();
 
-    fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
+    pub fn fromByte(byte: u8) error{ UnknownShredVariant, LegacyShredVariant }!Self {
         return switch (byte & 0xF0) {
             0x40 => .{
                 .shred_type = .code,
@@ -829,7 +910,7 @@ pub const ShredVariant = struct {
         };
     }
 
-    fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
+    pub fn toByte(self: Self) error{ UnknownShredVariant, LegacyShredVariant, IllegalProof }!u8 {
         if (self.proof_size & 0xF0 != 0) return error.IllegalProof;
         const big_end: u8 =
             if (self.shred_type == .code and
@@ -859,6 +940,13 @@ pub const ShredVariant = struct {
         else
             return error.UnknownShredVariant;
         return big_end | self.proof_size;
+    }
+
+    pub fn constants(self: Self) ShredConstants {
+        return switch (self.shred_type) {
+            .data => data_shred,
+            .code => coding_shred,
+        };
     }
 };
 
@@ -905,16 +993,16 @@ pub const ShredConstants = struct {
 };
 
 pub const layout = struct {
-    const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
-    const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
-    const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;
-    const SIZE_OF_SIGNATURE: usize = sig.core.SIGNATURE_LENGTH;
-    const SIZE_OF_SHRED_VARIANT: usize = 1;
-    const SIZE_OF_SHRED_SLOT: usize = 8;
+    pub const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
+    pub const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
+    pub const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;
+    pub const SIZE_OF_SIGNATURE: usize = sig.core.SIGNATURE_LENGTH;
+    pub const SIZE_OF_SHRED_VARIANT: usize = 1;
+    pub const SIZE_OF_SHRED_SLOT: usize = 8;
 
-    const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE;
-    const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT;
-    const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT;
+    pub const OFFSET_OF_SHRED_VARIANT: usize = SIZE_OF_SIGNATURE; // 64
+    pub const OFFSET_OF_SHRED_SLOT: usize = SIZE_OF_SIGNATURE + SIZE_OF_SHRED_VARIANT; // 64 + 1 = 65
+    pub const OFFSET_OF_SHRED_INDEX: usize = OFFSET_OF_SHRED_SLOT + SIZE_OF_SHRED_SLOT; // 65 + 8 = 73
 
     pub fn getShred(packet: *const Packet) ?[]const u8 {
         if (getShredSize(packet) > packet.data.len) return null;
@@ -975,6 +1063,27 @@ pub const layout = struct {
         const end = offset +| SIZE_OF_MERKLE_ROOT;
         if (shred.len < end) return null;
         return Hash.fromSizedSlice(shred[offset..][0..SIZE_OF_MERKLE_ROOT]);
+    }
+
+    pub fn setRetransmitterSignature(
+        shred: []u8,
+        signature: Signature,
+    ) !void {
+        const variant = getShredVariant(shred) orelse return error.UnknownVariant;
+        const offset = try retransmitterSignatureOffset(variant);
+        const end = offset + SIGNATURE_LENGTH;
+        if (shred.len < end) {
+            return error.InvalidPayloadSize;
+        }
+        @memcpy(shred[offset..end], &signature.data);
+    }
+
+    /// agave: get_reference_tick
+    pub fn getReferenceTick(shred: []const u8) !u8 {
+        const variant = getShredVariant(shred) orelse return error.InvalidShredVariant;
+        if (variant.shred_type != .data) return error.NotDataShred;
+        if (shred.len < 86) return error.InvalidPayloadSize;
+        return shred[85] & @intFromEnum(ShredFlags.Flag.shred_tick_reference_mask);
     }
 };
 
@@ -1056,6 +1165,11 @@ test "getSignedData" {
         33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,
     };
     try std.testing.expect(std.mem.eql(u8, &expected_signed_data, &signed_data.data));
+}
+
+test "fromPayload" {
+    const shred = try Shred.fromPayload(std.testing.allocator, &test_data_shred);
+    defer shred.deinit();
 }
 
 pub const test_data_shred = [_]u8{
