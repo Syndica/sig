@@ -36,9 +36,8 @@ pub const BlockstoreWriter = struct {
     allocator: Allocator,
     logger: Logger,
     db: BlockstoreDB,
-    // reader: BlockstoreReader,
-    lowest_cleanup_slot: RwMux(Slot), // TODO shared
-    max_root: std.atomic.Value(Slot), // TODO shared
+    lowest_cleanup_slot: *RwMux(Slot),
+    max_root: *std.atomic.Value(Slot),
     scan_and_fix_roots_metrics: ScanAndFixRootsMetrics,
 
     const Self = @This();
@@ -453,12 +452,14 @@ test "purgeSlots" {
     defer state.deinit();
     var db = state.db;
 
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
-        .lowest_cleanup_slot = RwMux(Slot).init(0),
-        .max_root = std.atomic.Value(Slot).init(0),
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
     };
 
@@ -521,12 +522,14 @@ test "setRoots" {
     defer state.deinit();
     const db = state.db;
 
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
-        .lowest_cleanup_slot = RwMux(Slot).init(0),
-        .max_root = std.atomic.Value(Slot).init(0),
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
     };
 
@@ -548,12 +551,14 @@ test "scanAndFixRoots" {
     defer state.deinit();
     var db = state.db;
 
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
-        .lowest_cleanup_slot = RwMux(Slot).init(0),
-        .max_root = std.atomic.Value(Slot).init(0),
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
     };
 
@@ -588,12 +593,14 @@ test "setAndChainConnectedOnRootAndNextSlots" {
     defer state.deinit();
     var db = state.db;
 
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
-        .lowest_cleanup_slot = RwMux(Slot).init(0),
-        .max_root = std.atomic.Value(Slot).init(0),
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
     };
 
@@ -655,17 +662,18 @@ test "setAndChainConnectedOnRootAndNextSlots: disconnected" {
     defer state.deinit();
     var db = state.db;
 
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
     var writer = BlockstoreWriter{
         .allocator = allocator,
         .db = db,
         .logger = logger,
-        .lowest_cleanup_slot = RwMux(Slot).init(0),
-        .max_root = std.atomic.Value(Slot).init(0),
+        .lowest_cleanup_slot = &lowest_cleanup_slot,
+        .max_root = &max_root,
         .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
     };
 
     // 1 is a root and full
-
     var write_batch = try db.initWriteBatch();
     const roots: [3]Slot = .{ 1, 2, 3 };
     try writer.setRoots(&roots);
