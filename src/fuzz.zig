@@ -28,8 +28,8 @@ pub fn main() !void {
     defer cli_args.deinit();
 
     _ = cli_args.skip();
-    const maybe_filter = cli_args.next();
     const filter = blk: {
+        const maybe_filter = cli_args.next();
         if (maybe_filter) |filter| {
             const parsed_filter = std.meta.stringToEnum(FuzzFilter, filter) orelse {
                 std.debug.print("Unknown filter. Supported values are: {s} ", .{std.meta.fieldNames(FuzzFilter)});
@@ -43,8 +43,8 @@ pub fn main() !void {
         }
     };
 
-    const maybe_seed = cli_args.next();
     const seed = blk: {
+        const maybe_seed = cli_args.next();
         if (maybe_seed) |seed_str| {
             break :blk try std.fmt.parseInt(u64, seed_str, 10);
         } else {
