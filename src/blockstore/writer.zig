@@ -30,6 +30,7 @@ const SlotMeta = blockstore.meta.SlotMeta;
 const TransactionStatusMeta = blockstore.transaction_status.TransactionStatusMeta;
 
 const schema = blockstore.schema.schema;
+const schema_list = blockstore.schema.list;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,
@@ -347,7 +348,7 @@ pub const BlockstoreWriter = struct {
         try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.default(), Pubkey.default(), &delete_count);
 
         // make sure we covered all the column families
-        std.debug.assert(delete_count == COLUMN_FAMILIES.len);
+        std.debug.assert(delete_count == schema_list.len);
     }
 
     pub fn purgeRangeWithCount(
@@ -398,7 +399,7 @@ pub const BlockstoreWriter = struct {
         try purgeFileRangeWithCount(&self.db, schema.program_costs, Pubkey.default(), Pubkey.default(), &delete_count);
 
         // make sure we covered all the column families
-        std.debug.assert(delete_count == COLUMN_FAMILIES.len);
+        std.debug.assert(delete_count == schema_list.len);
     }
 
     pub fn purgeFileRangeWithCount(

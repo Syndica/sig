@@ -197,11 +197,15 @@ test "findSlotsToClean" {
     defer state.deinit();
     var db = state.db;
 
+    var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
     var reader = try BlockstoreReader.init(
         allocator,
         logger,
         db,
         registry,
+        &lowest_cleanup_slot,
+        &max_root,
     );
 
     // set highest and lowest slot by inserting slot_meta
