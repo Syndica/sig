@@ -227,6 +227,31 @@ pub fn run() !void {
         .value_name = "number_of_index_bins",
     };
 
+    // geyser options
+    var enable_geyser_option = cli.Option{
+        .long_name = "enable-geyser",
+        .help = "enable geyser",
+        .value_ref = cli.mkRef(&config.current.geyser.enable),
+        .required = false,
+        .value_name = "enable_geyser",
+    };
+
+    var geyser_pipe_path_option = cli.Option{
+        .long_name = "geyser-pipe-path",
+        .help = "path to the geyser pipe",
+        .value_ref = cli.mkRef(&config.current.geyser.pipe_path),
+        .required = false,
+        .value_name = "geyser_pipe_path",
+    };
+
+    var geyser_writer_fba_bytes_option = cli.Option{
+        .long_name = "geyser-writer-fba-bytes",
+        .help = "number of bytes to allocate for the geyser writer",
+        .value_ref = cli.mkRef(&config.current.geyser.writer_fba_bytes),
+        .required = false,
+        .value_name = "geyser_writer_fba_bytes",
+    };
+
     const app = cli.App{
         .version = "0.2.0",
         .author = "Syndica & Contributors",
@@ -308,6 +333,10 @@ pub fn run() !void {
                             &trusted_validators_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            // geyser
+                            &enable_geyser_option,
+                            &geyser_pipe_path_option,
+                            &geyser_writer_fba_bytes_option,
                             // general
                             &leader_schedule_option,
                         },
@@ -360,6 +389,10 @@ pub fn run() !void {
                             &force_unpack_snapshot_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            // geyser
+                            &enable_geyser_option,
+                            &geyser_pipe_path_option,
+                            &geyser_writer_fba_bytes_option,
                         },
                         .target = .{
                             .action = .{
@@ -455,12 +488,21 @@ fn validator() !void {
     });
     defer gossip_manager.deinit();
 
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    defer {
+        if (geyser_writer) |geyser| {
+            geyser.deinit();
+            allocator.destroy(geyser.exit);
+        }
+    }
+
     const snapshot = try loadSnapshot(
         allocator,
         app_base.logger,
         gossip_service,
         true,
         false,
+        geyser_writer,
     );
 
     // leader schedule
@@ -505,6 +547,35 @@ fn validator() !void {
     shred_collector_manager.join();
 }
 
+const GeyserWriter = sig.geyser.GeyserWriter;
+const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
+const RecycleFBA = sig.utils.allocators.RecycleFBA;
+
+fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
+    var geyser_writer: ?*GeyserWriter = null;
+    if (config.current.geyser.enable) {
+        logger.info("Starting GeyserWriter...");
+
+        const exit = try allocator.create(Atomic(bool));
+        exit.* = Atomic(bool).init(false);
+
+        geyser_writer = try allocator.create(GeyserWriter);
+        geyser_writer.?.* = try GeyserWriter.init(
+            allocator,
+            config.current.geyser.pipe_path,
+            exit,
+            config.current.geyser.writer_fba_bytes,
+        );
+
+        // start the geyser writer
+        try geyser_writer.?.spawnIOLoop();
+    } else {
+        logger.info("GeyserWriter is disabled.");
+    }
+
+    return geyser_writer;
+}
+
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
     const app_base = try AppBase.init(allocator);
@@ -513,12 +584,21 @@ fn validateSnapshot() !void {
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
     defer snapshot_dir.close();
 
+    const geyser_writer = try buildGeyserWriter(allocator, app_base.logger);
+    defer {
+        if (geyser_writer) |geyser| {
+            geyser.deinit();
+            allocator.destroy(geyser.exit);
+        }
+    }
+
     const snapshot_result = try loadSnapshot(
         allocator,
         app_base.logger,
         null,
         true,
         false,
+        geyser_writer,
     );
     defer snapshot_result.deinit();
 }
@@ -536,6 +616,7 @@ fn printLeaderSchedule() !void {
             null,
             true,
             false,
+            null,
         ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
                 app_base.logger.err(
@@ -579,6 +660,7 @@ const AppBase = struct {
 
     fn init(allocator: Allocator) !AppBase {
         var logger = try spawnLogger();
+        // var logger: Logger = .noop;
         errdefer logger.deinit();
 
         const metrics_registry, const metrics_thread = try spawnMetrics(logger);
@@ -826,6 +908,8 @@ fn loadSnapshot(
     validate_snapshot: bool,
     /// whether to validate the genesis config against the bank (to remove when genesis validation works on all clusters)
     validate_genesis: bool,
+    /// optional geyser to write snapshot data to
+    geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
@@ -874,6 +958,7 @@ fn loadSnapshot(
             .number_of_index_bins = config.current.accounts_db.number_of_index_bins,
             .use_disk_index = config.current.accounts_db.use_disk_index,
         },
+        geyser_writer,
     );
     errdefer result.accounts_db.deinit(false);
 
@@ -1083,9 +1168,19 @@ fn getOrDownloadSnapshots(
         };
     }
 
-    const should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
+    var should_unpack_snapshot = !accounts_path_exists or force_unpack_snapshot;
     if (!should_unpack_snapshot) {
-        logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+        // number of files in accounts/
+        var accounts_dir = try snapshot_dir.openDir("accounts", .{});
+        defer accounts_dir.close();
+
+        const dir_size = (try accounts_dir.stat()).size;
+        if (dir_size <= 100) {
+            should_unpack_snapshot = true;
+            logger.infof("empty accounts/ directory found, will unpack snapshot...", .{});
+        } else {
+            logger.infof("accounts/ directory found, will not unpack snapshot...", .{});
+        }
     }
 
     var timer = try std.time.Timer.start();

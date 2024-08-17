@@ -116,9 +116,9 @@ pub fn BlockRng(
 
 pub fn errorValue(rand: std.Random, comptime ErrorSet: type) ErrorSet {
     if (ErrorSet == anyerror) @compileError("Can't return a random instance of " ++ @typeName(anyerror));
-    return switch (rand.enumValue(std.meta.FieldEnum(ErrorSet))) {
-        inline else => |itag| @field(ErrorSet, @tagName(itag)),
-    };
+    switch (rand.enumValue(std.meta.FieldEnum(ErrorSet))) {
+        inline else => |itag| return @field(ErrorSet, @tagName(itag)),
+    }
 }
 
 /// Empties the provided hashmap, and then fills it with `hm_len` entries,

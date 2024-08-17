@@ -30,7 +30,6 @@ const SlotMeta = blockstore.meta.SlotMeta;
 const TransactionStatusMeta = blockstore.transaction_status.TransactionStatusMeta;
 
 const schema = blockstore.schema.schema;
-const COLUMN_FAMILIES = blockstore.schema.list;
 
 pub const BlockstoreWriter = struct {
     allocator: Allocator,

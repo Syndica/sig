@@ -48,7 +48,8 @@ jobs:
         uses: goto-bus-stop/setup-zig@v1
         with:
           version: 0.13.0
-
+      - name: prevent rocksdb from depending on libraries that won't be provided by the linker
+        run: sudo apt remove liblz4-dev libzstd-dev
       - name: test
         run: zig build test
 
@@ -81,6 +82,9 @@ jobs:
           cmake ..
           make
           sudo make install
+
+      - name: prevent rocksdb from depending on libraries that won't be provided by the linker
+        run: sudo apt remove liblz4-dev libzstd-dev
 
       - name: Run kcov
         run: |
@@ -122,6 +126,9 @@ jobs:
         uses: goto-bus-stop/setup-zig@v1
         with:
           version: 0.13.0
+
+      - name: prevent rocksdb from depending on libraries that won't be provided by the linker
+        run: sudo apt remove liblz4-dev libzstd-dev
 
       - name: build release 
         run: zig build -Doptimize=ReleaseSafe 

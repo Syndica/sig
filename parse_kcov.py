@@ -1,7 +1,8 @@
-import json 
+import json
 
 # read path from cli
 import sys
+
 if len(sys.argv) != 2:
     print("Usage: python parse_kcov.py <path_to_coverage.json>")
     sys.exit(1)
@@ -18,7 +19,11 @@ coverage["files"].sort(key=lambda x: float(x["percent_covered"]), reverse=False)
 output = ""
 for file_info in coverage["files"]:
     path = file_info["file"]
-    path = path.split("sig/")[2]
+    split_path = path.split("sig/")
+    if len(split_path) < 2:
+        # this means the file is not part of sig, so we can ignore it
+        continue
+    path = split_path[1]
     file_coverage = float(file_info["percent_covered"])
 
     # Determine the color based on the coverage percentage
