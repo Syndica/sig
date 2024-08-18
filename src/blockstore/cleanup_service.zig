@@ -108,6 +108,9 @@ pub fn cleanBlockstore(
         } else {
             logger.info("No slots purged");
         }
+        // // TODO: Is this needed, it updates the OldestSlot data structure in
+        // // agave which is owned and used by the blockstore database backend.
+        // // We do not have an analogous data structure in the blockstore database
         // blockstore_reader.setMaxExpiredSlot(...);
     }
 
