@@ -543,11 +543,13 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
-                        .name = "test-tfs",
+                        .name = "test-transaction-sender",
                         .description = .{
-                            .one_line = "Run transaction forwarding service test",
+                            .one_line = "Test transaction sender service",
                             .detailed =
-                            \\Starts a transaction forwarding service test.
+                            \\Simulates a stream of transaction being sent to the transaction sender by 
+                            \\running a mock transaction generator thread. For the moment this just sends
+                            \\transfer transactions between to hard coded testnet accounts.
                             ,
                         },
                         .options = &.{
