@@ -87,6 +87,13 @@ pub const LeaderInfo = struct {
             .commitment = .processed,
         });
 
+        // TODO: Improve transition to new epoch
+        if (current_slot > self.epoch_info.slotsInEpoch + self.leader_schedule.start_slot) {
+            self.epoch_info = try rpc_client.getEpochInfo(&rpc_arena, null, .{ .commitment = .processed });
+            self.leader_schedule = try getLeaderSchedule(allocator, &self.epoch_info, &rpc_client);
+            self.updateLeaderAddressesCache();
+        }
+
         var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
         for (0..config.max_leaders_to_send_to) |i| {
             const slot = current_slot + i * config.number_of_consecutive_leader_slots;
