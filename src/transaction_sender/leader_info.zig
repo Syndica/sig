@@ -39,7 +39,7 @@ const TransactionInfo = sig.transaction_sender.TransactionInfo;
 /// It uses the RpcClient to get the epoch info and leader schedule.
 /// It also uses the GossipTable to get the leader addresses.
 /// TODO:
-///     - Update leader schedule on Epoch boundary
+/// - Update leader schedule on Epoch boundary
 pub const LeaderInfo = struct {
     epoch_info: RpcEpochInfo,
     leader_schedule: LeaderSchedule,

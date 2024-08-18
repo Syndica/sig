@@ -14,7 +14,7 @@ const Duration = sig.time.Duration;
 /// Mock transaction generator that sends a transaction every 10 seconds
 /// Used to test the transaction sender
 /// TODO:
-///     - Pass sender keypair and receiver pubkey
+/// - Pass sender keypair and receiver pubkey
 pub fn run(
     allocator: std.mem.Allocator,
     sender: *Channel(TransactionInfo),

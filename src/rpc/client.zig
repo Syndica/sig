@@ -236,7 +236,6 @@ pub const Client = struct {
         });
     }
 
-    // pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
     pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
 
     pub const GetLeaderScheduleConfig = struct {

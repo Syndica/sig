@@ -32,10 +32,10 @@ const TransactionPool = std.AutoArrayHashMap(Signature, TransactionInfo);
 /// The leader schedule and current slot are loaded via RPC calls to the cluster.
 /// The leader TPU addresses are loaded from the gossip table.
 /// TODO:
-///     - Add logging
-///     - Add stats tracking
-///     - Add nonce handling
-///     - Remove RPC calls
+/// - Add logging
+/// - Add stats tracking
+/// - Add nonce handling
+/// - Remove RPC calls
 pub fn run(
     allocator: std.mem.Allocator,
     config: Config,
@@ -78,6 +78,7 @@ pub fn run(
             &cluster_info_rw,
             &transaction_pool_rw,
             exit,
+            logger,
         },
     );
 
@@ -91,6 +92,7 @@ pub fn run(
             &cluster_info_rw,
             &transaction_pool_rw,
             exit,
+            logger,
         },
     );
 
@@ -107,6 +109,7 @@ fn receiveTransactionsThread(
     cluster_info_rw: *RwMux(LeaderInfo),
     transaction_pool_rw: *RwMux(TransactionPool),
     exit: *AtomicBool,
+    logger: Logger,
 ) !void {
     errdefer exit.store(true, .unordered);
 
@@ -143,10 +146,13 @@ fn receiveTransactionsThread(
             var transaction_pool: *TransactionPool, var transaction_pool_lock = transaction_pool_rw.writeWithLock();
             defer transaction_pool_lock.unlock();
 
+            logger.infof("Adding {d} new transactions to pool.", .{transaction_batch.count()});
             for (transaction_batch.values()) |_tx| {
+                if (transaction_pool.count() >= config.pool_max_size) {
+                    logger.warnf("Transaction pool is full, dropping transaction: signature={s}", .{_tx.signature});
+                    continue;
+                }
                 var tx = _tx; // Is there a nicer way to do this?
-                if (transaction_pool.contains(tx.signature)) continue;
-                if (transaction_pool.count() >= config.pool_max_size) break;
                 tx.last_sent_time = last_batch_sent;
                 try transaction_pool.put(tx.signature, tx);
             }
@@ -162,6 +168,7 @@ fn processTransactionsThread(
     cluster_info_rw: *RwMux(LeaderInfo),
     transaction_pool_rw: *RwMux(TransactionPool),
     exit: *AtomicBool,
+    logger: Logger,
 ) !void {
     errdefer exit.store(true, .unordered);
 
@@ -179,6 +186,7 @@ fn processTransactionsThread(
             config,
             cluster_info_rw,
             transaction_pool,
+            logger,
         );
     }
 }
@@ -189,6 +197,7 @@ fn processTransactions(
     config: Config,
     cluster_info_rw: *RwMux(LeaderInfo),
     transaction_pool: *TransactionPool,
+    logger: Logger,
 ) !void {
     var successful_signatures = std.ArrayList(Signature).init(allocator);
     defer successful_signatures.deinit();
@@ -269,6 +278,16 @@ fn processTransactions(
         }
     }
 
+    logger.infof(
+        "Processed {d} transactions: {d} successful, {d} retry, {d} drop",
+        .{
+            successful_signatures.len + retry_signatures.len + drop_signatures.len,
+            successful_signatures.len,
+            retry_signatures.len,
+            drop_signatures.len,
+        },
+    );
+
     // Retry transactions
     if (retry_signatures.items.len > 0) {
         var retry_transactions = try allocator.alloc(TransactionInfo, retry_signatures.items.len);
@@ -288,6 +307,7 @@ fn processTransactions(
                 config,
                 cluster_info_rw,
                 batch,
+                logger,
             );
             start_index = end_index;
         }
@@ -305,6 +325,7 @@ fn sendTransactions(
     config: Config,
     cluster_info_rw: *RwMux(LeaderInfo),
     transactions: []TransactionInfo,
+    logger: Logger,
 ) !void {
     const leader_addresses = blk: {
         const cluster_info: *LeaderInfo, var cluster_info_lock = cluster_info_rw.writeWithLock();
@@ -313,6 +334,7 @@ fn sendTransactions(
     };
     defer leader_addresses.deinit();
 
+    logger.infof("Sending {d} transactions to {d} leaders", .{ transactions.len, leader_addresses.items.len });
     for (leader_addresses.items) |leader_address| {
         var packets = try std.ArrayList(Packet).initCapacity(allocator, transactions.len);
         for (transactions) |tx| {
