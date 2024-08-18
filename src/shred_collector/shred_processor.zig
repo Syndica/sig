@@ -32,6 +32,9 @@ pub fn runShredProcessor(
     var shreds = ArrayListUnmanaged(Shred){};
     var is_repaired = ArrayListUnmanaged(bool){};
     var error_context = ErrorContext{};
+
+    var shreds_processed: u64 = 0;
+
     while (!exit.load(.unordered)) {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
@@ -41,6 +44,8 @@ pub fn runShredProcessor(
             continue;
         }
         for (packet_buf.items) |packet_batch| {
+            shreds_processed += packet_batch.items.len;
+
             for (packet_batch.items) |*packet| if (!packet.flags.isSet(.discard)) {
                 processShred(
                     allocator,

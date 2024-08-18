@@ -50,6 +50,7 @@ pub const BlockstoreReader = struct {
     allocator: Allocator,
     logger: Logger,
     db: BlockstoreDB,
+    // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(u64),
     // highest_primary_index_slot: RwMux(?Slot), // TODO shared

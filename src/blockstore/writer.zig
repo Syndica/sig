@@ -36,6 +36,7 @@ pub const BlockstoreWriter = struct {
     allocator: Allocator,
     logger: Logger,
     db: BlockstoreDB,
+    // TODO: change naming to 'highest_slot_cleaned'
     lowest_cleanup_slot: *RwMux(Slot),
     max_root: *std.atomic.Value(Slot),
     scan_and_fix_roots_metrics: ScanAndFixRootsMetrics,
@@ -283,7 +284,7 @@ pub const BlockstoreWriter = struct {
         try self.db.commit(write_batch);
     }
 
-    fn setLowestCleanupSlot(self: *Self, new_slot: Slot) void {
+    pub fn setLowestCleanupSlot(self: *Self, new_slot: Slot) void {
         const slot, var lock = self.lowest_cleanup_slot.writeWithLock();
         defer lock.unlock();
         slot.* = new_slot;
@@ -418,7 +419,7 @@ pub const BlockstoreWriter = struct {
     }
 };
 
-const ScanAndFixRootsMetrics = struct {
+pub const ScanAndFixRootsMetrics = struct {
     find_missing_roots_us: *Histogram,
     num_roots_to_fix: *Histogram,
     fix_roots_us: *Histogram,

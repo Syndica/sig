@@ -27,6 +27,7 @@ const LOOP_LIMITER = Duration.fromMillis(DEFAULT_CLEANUP_SLOT_INTERVAL * DEFAULT
 
 pub fn run(
     allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
     max_ledger_shreds: u64,
@@ -35,13 +36,15 @@ pub fn run(
     var last_purge_slot: Slot = 0;
     var last_check_time = try Instant.now();
 
+    logger.info("Starting blockstore cleanup service\n");
     while (!exit.load(.unordered)) {
         const last_check_time_elapsed_nanos = (try Instant.now()).since(last_check_time);
         if (last_check_time_elapsed_nanos > LOOP_LIMITER.asNanos()) {
             last_purge_slot = try cleanBlockstore(
                 allocator,
-                &blockstore_reader,
-                &blockstore_writer,
+                logger,
+                blockstore_reader,
+                blockstore_writer,
                 max_ledger_shreds,
                 last_purge_slot,
                 DEFAULT_CLEANUP_SLOT_INTERVAL,
@@ -74,26 +77,38 @@ pub fn run(
 /// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanBlockstore(
     allocator: std.mem.Allocator,
+    logger: sig.trace.Logger,
     blockstore_reader: *BlockstoreReader,
     blockstore_writer: *BlockstoreWriter,
     max_ledger_shreds: u64,
     last_purge_slot: u64,
     purge_interval: u64,
 ) !Slot {
-    const root = blockstore_reader.max_root.load(.unordered);
-    if (root - last_purge_slot <= purge_interval) return last_purge_slot;
+    // // TODO: add back when max_root is implemented with consensus
+    // const root = blockstore_reader.max_root.load(.unordered);
+    // if (root - last_purge_slot <= purge_interval) return last_purge_slot;
+    _ = last_purge_slot;
+    _ = purge_interval;
 
-    const result = findSlotsToClean(
+    // NOTE: this will clean everything past the lowest slot in the blockstore
+    const root: Slot = try blockstore_reader.lowestSlot();
+    const result = try findSlotsToClean(
         allocator,
         blockstore_reader,
         root,
         max_ledger_shreds,
     );
+    logger.infof("findSlotsToClean result: {any}", .{result});
 
     if (result.should_clean) {
-        blockstore_writer.setLowestCleanupSlot(result.lowest_cleanup_slot);
-        blockstore_writer.purgeSlots(0, result.lowest_cleanup_slot);
-        // blockstore_reader.setMaxExpiredSlot(lowest_cleanup_slot);
+        blockstore_writer.setLowestCleanupSlot(result.highest_slot_to_purge);
+        const did_purge = try blockstore_writer.purgeSlots(0, result.highest_slot_to_purge);
+        if (did_purge) {
+            logger.info("Purged slots...");
+        } else {
+            logger.info("No slots purged");
+        }
+        // blockstore_reader.setMaxExpiredSlot(...);
     }
 
     return root;
@@ -106,8 +121,8 @@ pub fn cleanBlockstore(
 /// - `slots_to_clean` (bool): a boolean value indicating whether there
 ///   are any slots to clean.  If true, then `cleanup_ledger` function
 ///   will then proceed with the ledger cleanup.
-/// - `lowest_slot_to_purge` (Slot): the lowest slot to purge.  Any
-///   slot which is older or equal to `lowest_slot_to_purge` will be
+/// - `highest_slot_to_purge` (Slot): the highest slot to purge.  Any
+///   slot which is smaller or equal to `highest_slot_to_purge` will be
 ///   cleaned up.
 /// - `total_shreds` (u64): the total estimated number of shreds before the
 ///   `root`.
@@ -116,11 +131,11 @@ pub fn cleanBlockstore(
 fn findSlotsToClean(
     allocator: std.mem.Allocator,
     blockstore_reader: *BlockstoreReader,
-    root: Slot,
+    max_root: Slot,
     max_ledger_shreds: u64,
 ) !struct {
     should_clean: bool,
-    lowest_slot_to_purge: Slot,
+    highest_slot_to_purge: Slot,
     total_shreds: u64,
 } {
     const data_shred_cf_name = Schema.data_shred.name;
@@ -158,7 +173,7 @@ fn findSlotsToClean(
     const highest_slot = try blockstore_reader.highestSlot() orelse lowest_slot;
 
     if (highest_slot < lowest_slot) {
-        return .{ .should_clean = false, .lowest_slot_to_purge = 0, .total_shreds = num_shreds };
+        return .{ .should_clean = false, .highest_slot_to_purge = 0, .total_shreds = num_shreds };
     }
 
     // The + 1 ensures we count the correct number of slots. Additionally,
@@ -168,17 +183,17 @@ fn findSlotsToClean(
     // std.debug.print("num_shreds: {d}, num_slots: {d}, mean_shreds_per_slot: {d}\n", .{num_shreds, num_slots, mean_shreds_per_slot});
 
     if (num_shreds <= max_ledger_shreds) {
-        return .{ .should_clean = false, .lowest_slot_to_purge = 0, .total_shreds = num_shreds };
+        return .{ .should_clean = false, .highest_slot_to_purge = 0, .total_shreds = num_shreds };
     }
 
     if (mean_shreds_per_slot > 0) {
         // Add an extra (mean_shreds_per_slot - 1) in the numerator
         // so that our integer division rounds up
         const num_slots_to_clean = (num_shreds - max_ledger_shreds + (mean_shreds_per_slot - 1)) / mean_shreds_per_slot;
-        const lowest_cleanup_slot = @min(lowest_slot + num_slots_to_clean - 1, root);
-        return .{ .should_clean = true, .lowest_slot_to_purge = lowest_cleanup_slot, .total_shreds = num_shreds };
+        const highest_slot_to_purge = @min(lowest_slot + num_slots_to_clean - 1, max_root);
+        return .{ .should_clean = true, .highest_slot_to_purge = highest_slot_to_purge, .total_shreds = num_shreds };
     } else {
-        return .{ .should_clean = false, .lowest_slot_to_purge = 0, .total_shreds = num_shreds };
+        return .{ .should_clean = false, .highest_slot_to_purge = 0, .total_shreds = num_shreds };
     }
 }
 
@@ -199,6 +214,7 @@ test "findSlotsToClean" {
 
     var lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
+
     var reader = try BlockstoreReader.init(
         allocator,
         logger,
@@ -227,7 +243,7 @@ test "findSlotsToClean" {
     const r = try findSlotsToClean(allocator, &reader, 0, 100);
     try std.testing.expectEqual(false, r.should_clean);
     try std.testing.expectEqual(0, r.total_shreds);
-    try std.testing.expectEqual(0, r.lowest_slot_to_purge);
+    try std.testing.expectEqual(0, r.highest_slot_to_purge);
 
     // // TODO: understand how live files are created
     // // add data shreds
