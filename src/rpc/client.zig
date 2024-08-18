@@ -6,12 +6,13 @@ const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 pub const Client = struct {
-    cluster: Cluster,
+    cluster: ClusterType,
     client: std.http.Client,
 
-    pub fn init(allocator: std.mem.Allocator, cluster: Cluster) Client {
+    pub fn init(allocator: std.mem.Allocator, cluster: ClusterType) Client {
         return .{
             .cluster = cluster,
             .client = std.http.Client{ .allocator = allocator },
@@ -365,7 +366,7 @@ pub const Client = struct {
 
         const result = try self.client.fetch(.{
             .location = .{
-                .url = self.cluster.httpEndpoint(),
+                .url = clusterHttpEndpoint(self.cluster),
             },
             .method = .POST,
             .headers = .{
@@ -411,19 +412,14 @@ pub const Client = struct {
         return error.RpcRequestFailed;
     }
 
-    pub const Cluster = enum {
-        Mainnet,
-        Testnet,
-        Devnet,
-
-        pub fn httpEndpoint(self: Cluster) []const u8 {
-            return switch (self) {
-                .Mainnet => "https://api.mainnet.solana.com",
-                .Testnet => "https://api.testnet.solana.com",
-                .Devnet => "https://api.devnet.solana.com",
-            };
-        }
-    };
+    pub fn clusterHttpEndpoint(cluster_type: ClusterType) []const u8 {
+        return switch (cluster_type) {
+            .MainnetBeta => "https://api.mainnet-beta.solana.com",
+            .Testnet => "https://api.testnet.solana.com",
+            .Devnet => "https://api.devnet.solana.com",
+            .Development => @panic("Unsupported cluster type 'Development'"),
+        };
+    }
 
     const Commitment = enum {
         finalized,

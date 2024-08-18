@@ -2,11 +2,11 @@ const sig = @import("../sig.zig");
 
 const SocketAddr = sig.net.SocketAddr;
 const Duration = sig.time.Duration;
-const RpcCluster = sig.rpc.Client.Cluster;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 pub const Config = struct {
     // Cluster type
-    cluster: RpcCluster,
+    cluster: ClusterType,
     // Socket to send transactions from
     socket: SocketAddr,
     // Maximum number of transactions to send in a batch
