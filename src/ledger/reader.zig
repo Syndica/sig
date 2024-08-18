@@ -1741,6 +1741,7 @@ test "slotMetaIterator" {
     try db.commit(write_batch);
 
     var iter = try reader.slotMetaIterator(0);
+    defer iter.deinit();
     var index: u64 = 0;
     while (try iter.next()) |entry| {
         var slot_meta = entry[1];
@@ -1780,6 +1781,7 @@ test "rootedSlotIterator" {
     try db.commit(write_batch);
 
     var iter = try reader.rootedSlotIterator(0);
+    defer iter.deinit();
     var i: u64 = 0;
     while (try iter.next()) |entry| {
         try std.testing.expectEqual(roots[i], entry[0]);
