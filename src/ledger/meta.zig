@@ -360,7 +360,7 @@ pub const MerkleRootMeta = struct {
             // a valid duplicate shred proof.
             .merkle_root = shred.fields.merkleRoot() catch null,
             .first_received_shred_index = shred.fields.common.index,
-            .first_received_shred_type = shred.fields.common.shred_variant.shred_type,
+            .first_received_shred_type = shred.fields.common.variant.shred_type,
         };
     }
 };

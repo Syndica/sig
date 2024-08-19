@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 
 const CodingShred = sig.ledger.shred.CodeShred;
-const CodingShredHeader = sig.ledger.shred.CodeShredHeader;
+const CodingShredHeader = sig.ledger.shred.CodeHeader;
 const CommonHeader = sig.ledger.shred.CommonHeader;
 const DataShred = sig.ledger.shred.DataShred;
 const Hash = sig.core.Hash;
@@ -109,9 +109,9 @@ pub fn recover(
             break .{ common_header, code_header, chained_merkle_root, retransmitter_signature };
         }
     } else return error.TooFewParityShards;
-    const proof_size = common_header.shred_variant.proof_size;
-    const chained = common_header.shred_variant.chained;
-    const resigned = common_header.shred_variant.resigned;
+    const proof_size = common_header.variant.proof_size;
+    const chained = common_header.variant.chained;
+    const resigned = common_header.variant.resigned;
     std.debug.assert(!resigned or retransmitter_signature != null);
     std.debug.assert(verifyErasureBatch(common_header, code_header, shreds));
     const num_data_shreds: usize = @intCast(code_header.num_data_shreds);
@@ -187,9 +187,9 @@ pub fn recover(
                     shard,
                 );
                 const c = data_shred.fields.common;
-                if (c.shred_variant.proof_size != proof_size or
-                    c.shred_variant.chained != chained or
-                    c.shred_variant.resigned != resigned or
+                if (c.variant.proof_size != proof_size or
+                    c.variant.chained != chained or
+                    c.variant.resigned != resigned or
                     c.slot != common_header.slot or
                     c.version != common_header.version or
                     c.fec_set_index != common_header.fec_set_index)
@@ -280,9 +280,9 @@ fn verifyErasureBatch(
             expect.slot == actual.slot and
             expect.version == actual.version and
             expect.fec_set_index == actual.fec_set_index and
-            expect.shred_variant.proof_size == actual.shred_variant.proof_size and
-            expect.shred_variant.chained == actual.shred_variant.chained and
-            expect.shred_variant.resigned == actual.shred_variant.resigned and
+            expect.variant.proof_size == actual.variant.proof_size and
+            expect.variant.chained == actual.variant.chained and
+            expect.variant.resigned == actual.variant.resigned and
             (shred == .data or
             code.num_data_shreds == shred.code.fields.custom.num_data_shreds and
             code.num_code_shreds == shred.code.fields.custom.num_code_shreds)))

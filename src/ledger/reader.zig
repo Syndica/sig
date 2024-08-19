@@ -2038,7 +2038,7 @@ test "findMissingDataIndexes" {
         .chained = false,
         .resigned = false,
     };
-    shred.data.fields.common.shred_variant = variant;
+    shred.data.fields.common.variant = variant;
     try shred.data.fields.writePayload(&(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
@@ -2105,7 +2105,7 @@ test "getCodeShred" {
         .chained = false,
         .resigned = false,
     };
-    shred.code.fields.common.shred_variant = variant;
+    shred.code.fields.common.variant = variant;
     try shred.code.fields.writePayload(&(.{2} ** 100));
 
     const shred_slot = shred.commonHeader().slot;
