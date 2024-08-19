@@ -15,8 +15,6 @@ const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
 pub const default_logger: *Logger = &global;
 var global: Logger = .{ .standard = undefined };
 
-const LogConfig = struct { max_level: Level, scope: ?[]const u8 };
-
 pub const Logger = union(enum) {
     standard: *StandardErrLogger,
     test_logger: TestLogger,
