@@ -8,7 +8,7 @@ const Mutex = std.Thread.Mutex;
 
 const Slot = sig.core.Slot;
 
-const MAX_SHREDS_PER_SLOT: usize = shred_collector.shred.MAX_SHREDS_PER_SLOT;
+const MAX_SHREDS_PER_SLOT: usize = sig.ledger.shred.MAX_SHREDS_PER_SLOT;
 
 const MIN_SLOT_AGE_TO_REPORT_AS_MISSING: u64 = 200;
 

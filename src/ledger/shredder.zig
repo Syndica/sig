@@ -3,22 +3,22 @@ const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CodingShred = sig.shred_collector.shred.CodingShred;
-const CodingShredHeader = sig.shred_collector.shred.CodingShredHeader;
-const CommonHeader = sig.shred_collector.shred.CommonHeader;
-const DataShred = sig.shred_collector.shred.DataShred;
+const CodingShred = sig.ledger.shred.CodingShred;
+const CodingShredHeader = sig.ledger.shred.CodingShredHeader;
+const CommonHeader = sig.ledger.shred.CommonHeader;
+const DataShred = sig.ledger.shred.DataShred;
 const Hash = sig.core.Hash;
 const Lru = sig.common.lru.LruCacheCustom;
-const MerkleProofEntryList = sig.shred_collector.shred.MerkleProofEntryList;
-const ReedSolomon = sig.blockstore.reed_solomon.ReedSolomon;
-const Shred = sig.shred_collector.shred.Shred;
+const MerkleProofEntryList = sig.ledger.shred.MerkleProofEntryList;
+const ReedSolomon = sig.ledger.reed_solomon.ReedSolomon;
+const Shred = sig.ledger.shred.Shred;
 const Signature = sig.core.Signature;
 
 const checkedSub = sig.utils.math.checkedSub;
-const makeMerkleTree = sig.shred_collector.shred.makeMerkleTree;
-const makeMerkleProof = sig.shred_collector.shred.makeMerkleProof;
+const makeMerkleTree = sig.ledger.shred.makeMerkleTree;
+const makeMerkleProof = sig.ledger.shred.makeMerkleProof;
 
-const DATA_SHREDS_PER_FEC_BLOCK = sig.shred_collector.shred.DATA_SHREDS_PER_FEC_BLOCK;
+const DATA_SHREDS_PER_FEC_BLOCK = sig.ledger.shred.DATA_SHREDS_PER_FEC_BLOCK;
 
 pub const ReedSolomonCache = struct {
     cache: Cache,

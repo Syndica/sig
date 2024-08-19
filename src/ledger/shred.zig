@@ -518,7 +518,7 @@ pub fn GenericShred(
 pub const ShredId = struct {
     slot: Slot,
     index: u32,
-    shred_type: sig.shred_collector.shred.ShredType,
+    shred_type: sig.ledger.shred.ShredType,
 };
 
 pub const ErasureSetId = struct {

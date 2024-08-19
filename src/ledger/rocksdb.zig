@@ -4,14 +4,14 @@ const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const BytesRef = sig.blockstore.database.BytesRef;
-const ColumnFamily = sig.blockstore.database.ColumnFamily;
-const IteratorDirection = sig.blockstore.database.IteratorDirection;
+const BytesRef = sig.ledger.database.BytesRef;
+const ColumnFamily = sig.ledger.database.ColumnFamily;
+const IteratorDirection = sig.ledger.database.IteratorDirection;
 const Logger = sig.trace.Logger;
 const ReturnType = sig.utils.types.ReturnType;
 
-const key_serializer = sig.blockstore.database.key_serializer;
-const value_serializer = sig.blockstore.database.value_serializer;
+const key_serializer = sig.ledger.database.key_serializer;
+const value_serializer = sig.ledger.database.value_serializer;
 
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
@@ -133,6 +133,25 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
             );
         }
 
+        pub fn deleteFilesRange(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            start: cf.Key,
+            end: cf.Key,
+        ) anyerror!void {
+            const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
+            defer start_bytes.deinit();
+
+            const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
+            defer end_bytes.deinit();
+
+            return try callRocks(
+                self.logger,
+                rocks.DB.deleteFileInRange,
+                .{ &self.db, self.cf_handles[cf.find(column_families)], start_bytes.data, end_bytes.data },
+            );
+        }
+
         pub fn initWriteBatch(self: *Self) Error!WriteBatch {
             return .{
                 .allocator = self.allocator,
@@ -186,6 +205,25 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 const key_bytes = try key_serializer.serializeToRef(self.allocator, key);
                 defer key_bytes.deinit();
                 self.inner.delete(self.cf_handles[cf.find(column_families)], key_bytes.data);
+            }
+
+            pub fn deleteRange(
+                self: *WriteBatch,
+                comptime cf: ColumnFamily,
+                start: cf.Key,
+                end: cf.Key,
+            ) anyerror!void {
+                const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
+                defer start_bytes.deinit();
+
+                const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
+                defer end_bytes.deinit();
+
+                self.inner.deleteRange(
+                    self.cf_handles[cf.find(column_families)],
+                    start_bytes.data,
+                    end_bytes.data,
+                );
             }
         };
 
@@ -280,5 +318,5 @@ fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@
 }
 
 test "rocksdb database" {
-    try sig.blockstore.database.testDatabase(RocksDB);
+    try sig.ledger.database.testDatabase(RocksDB);
 }

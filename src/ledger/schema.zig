@@ -1,10 +1,10 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
-const meta = sig.blockstore.meta;
+const meta = sig.ledger.meta;
 
-const ColumnFamily = sig.blockstore.database.ColumnFamily;
-const ErasureSetId = sig.shred_collector.shred.ErasureSetId;
+const ColumnFamily = sig.ledger.database.ColumnFamily;
+const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
@@ -63,6 +63,7 @@ pub const schema = struct {
     pub const address_signatures: ColumnFamily = .{
         .name = "address_signatures",
         .Key = struct {
+            // NOTE: rn we sort by pubkey first, maybe we want to sort by slot first?
             address: Pubkey,
             slot: Slot,
             transaction_index: u32,

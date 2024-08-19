@@ -6,7 +6,7 @@ const Logger = sig.trace.Logger;
 
 const BlockstoreDB = blockstore.BlockstoreDB;
 const schema = blockstore.schema.schema;
-const TestState = sig.blockstore.insert_shred.TestState;
+const TestState = sig.ledger.insert_shred.TestState;
 
 test "put/get data consistency for merkle root" {
     const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
@@ -18,7 +18,7 @@ test "put/get data consistency for merkle root" {
     defer state.deinit();
     var db = state.db;
 
-    const id = sig.shred_collector.shred.ErasureSetId{
+    const id = sig.ledger.shred.ErasureSetId{
         .slot = 1234127498,
         .fec_set_index = 4932874234,
     };
@@ -27,13 +27,13 @@ test "put/get data consistency for merkle root" {
     try db.put(
         schema.merkle_root_meta,
         id,
-        sig.blockstore.meta.MerkleRootMeta{
+        sig.ledger.meta.MerkleRootMeta{
             .merkle_root = root,
             .first_received_shred_index = 100,
             .first_received_shred_type = .data,
         },
     );
-    const output: sig.blockstore.meta.MerkleRootMeta = (try db.get(schema.merkle_root_meta, id)).?;
+    const output: sig.ledger.meta.MerkleRootMeta = (try db.get(schema.merkle_root_meta, id)).?;
     try std.testing.expectEqualSlices(u8, &root.data, &output.merkle_root.?.data);
 }
 

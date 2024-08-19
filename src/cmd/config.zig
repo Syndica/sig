@@ -11,6 +11,7 @@ pub const Config = struct {
     accounts_db: AccountsDBConfig = .{},
     geyser: GeyserConfig = .{},
 
+    max_shreds: u64 = 1_000,
     leader_schedule_path: ?[]const u8 = null,
     genesis_file_path: ?[]const u8 = null,
     // general config

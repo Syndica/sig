@@ -24,10 +24,10 @@ const Transaction = sig.core.Transaction;
 const VersionedTransaction = sig.core.VersionedTransaction;
 
 // shred
-const Shred = sig.shred_collector.shred.Shred;
-const DataShred = sig.shred_collector.shred.DataShred;
+const Shred = sig.ledger.shred.Shred;
+const DataShred = sig.ledger.shred.DataShred;
 
-const shred_layout = sig.shred_collector.shred.layout;
+const shred_layout = sig.ledger.shred.layout;
 
 // blockstore
 const BytesRef = blockstore.database.BytesRef;
@@ -50,8 +50,9 @@ pub const BlockstoreReader = struct {
     allocator: Allocator,
     logger: Logger,
     db: BlockstoreDB,
-    lowest_cleanup_slot: RwMux(Slot),
-    max_root: std.atomic.Value(u64), // TODO shared
+    // TODO: change naming to 'highest_slot_cleaned'
+    lowest_cleanup_slot: *RwMux(Slot),
+    max_root: *std.atomic.Value(u64),
     // highest_primary_index_slot: RwMux(?Slot), // TODO shared
     rpc_api_metrics: BlockstoreRpcApiMetrics,
     metrics: BlockstoreReaderMetrics,
@@ -63,15 +64,17 @@ pub const BlockstoreReader = struct {
         logger: Logger,
         db: BlockstoreDB,
         registry: *Registry(.{}),
+        lowest_cleanup_slot: *RwMux(Slot),
+        max_root: *std.atomic.Value(u64),
     ) !Self {
         return .{
             .allocator = allocator,
             .logger = logger,
             .db = db,
-            .lowest_cleanup_slot = RwMux(Slot).init(0),
-            .max_root = std.atomic.Value(u64).init(0),
             .rpc_api_metrics = try BlockstoreRpcApiMetrics.init(registry),
             .metrics = try BlockstoreReaderMetrics.init(registry),
+            .lowest_cleanup_slot = lowest_cleanup_slot,
+            .max_root = max_root,
         };
     }
 
@@ -1465,10 +1468,10 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Blockstore = sig.blockstore.BlockstoreDB;
-const ShredInserter = sig.blockstore.ShredInserter;
-const CodingShred = sig.shred_collector.shred.CodingShred;
-const TestState = sig.blockstore.insert_shred.TestState;
+const Blockstore = sig.ledger.BlockstoreDB;
+const ShredInserter = sig.ledger.ShredInserter;
+const CodingShred = sig.ledger.shred.CodingShred;
+const TestState = sig.ledger.insert_shred.TestState;
 
 const test_shreds = @import("test_shreds.zig");
 
@@ -1486,7 +1489,16 @@ test "getLatestOptimisticSlots" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     {
         var write_batch = try db.initWriteBatch();
@@ -1543,11 +1555,21 @@ test "getFirstDuplicateProof" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getFirstDuplicateProof");
-    defer state.deinit();
-    var db = state.db;
+    const path = std.fmt.comptimePrint("{s}/{s}", .{ "test_data/blockstore/insert_shred", "getFirstDuplicateProof" });
+    try sig.ledger.tests.freshDir(path);
+    var db = try BlockstoreDB.open(allocator, logger, path);
+    defer db.deinit(true);
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     {
         const proof = DuplicateSlotProof{
@@ -1576,7 +1598,16 @@ test "isDead" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     {
         var write_batch = try db.initWriteBatch();
@@ -1602,7 +1633,16 @@ test "getBlockHeight" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     var write_batch = try db.initWriteBatch();
     try write_batch.put(schema.block_height, 19, 19);
@@ -1622,7 +1662,16 @@ test "getRootedBlockTime" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     var write_batch = try db.initWriteBatch();
     try write_batch.put(schema.blocktime, 19, 19);
@@ -1651,7 +1700,16 @@ test "slotMetaIterator" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     var slot_metas = ArrayList(SlotMeta).init(allocator);
     defer {
@@ -1703,7 +1761,16 @@ test "rootedSlotIterator" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     var write_batch = try db.initWriteBatch();
     const roots: [3]Slot = .{ 2, 3, 4 };
@@ -1729,7 +1796,16 @@ test "slotRangeConnected" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     var write_batch = try db.initWriteBatch();
     const roots: [3]Slot = .{ 1, 2, 3 };
@@ -1778,7 +1854,16 @@ test "highestSlot" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     {
         // insert a shred
@@ -1827,7 +1912,16 @@ test "lowestSlot" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     const shred_slot = 10;
     const shred_index = 10;
@@ -1864,12 +1958,21 @@ test "isShredDuplicate" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     const shred_slot = 10;
     const shred_index = 10;
 
-    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
+    const size = sig.ledger.shred.DataShred.constants.payload_size;
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
@@ -1907,7 +2010,16 @@ test "findMissingDataIndexes" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     const shred_slot = 10;
     const shred_index = 2;
@@ -1918,7 +2030,7 @@ test "findMissingDataIndexes" {
     shred.data.fields.common.index = shred_index;
 
     // set the variant
-    const variant = sig.shred_collector.shred.ShredVariant{
+    const variant = sig.ledger.shred.ShredVariant{
         .shred_type = .data,
         .proof_size = 100 & 0x0F,
         .chained = false,
@@ -1966,7 +2078,16 @@ test "getCodeShred" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
     var shred = Shred{ .code = try CodingShred.default(allocator) };
     defer shred.deinit();
@@ -1976,7 +2097,7 @@ test "getCodeShred" {
     try std.testing.expect(shred == .code);
 
     // set the variant
-    const variant = sig.shred_collector.shred.ShredVariant{
+    const variant = sig.ledger.shred.ShredVariant{
         .shred_type = .code,
         .proof_size = 100 & 0x0F,
         .chained = false,
@@ -2037,15 +2158,24 @@ test "getDataShred" {
     defer state.deinit();
     var db = state.db;
 
-    var reader = try BlockstoreReader.init(allocator, logger, db, registry);
+    var lowest_cleanup_slot = RwMux(Slot).init(0);
+    var max_root = std.atomic.Value(Slot).init(0);
+    var reader = try BlockstoreReader.init(
+        allocator,
+        logger,
+        db,
+        registry,
+        &lowest_cleanup_slot,
+        &max_root,
+    );
 
-    var shred_vec = sig.shred_collector.shred.test_data_shred; // local copy
-    const shred_payload = shred_vec[0..sig.shred_collector.shred.DataShred.constants.payload_size];
+    var shred_vec = sig.ledger.shred.test_data_shred; // local copy
+    const shred_payload = shred_vec[0..sig.ledger.shred.DataShred.constants.payload_size];
     const shred_slot = shred_layout.getSlot(shred_payload) orelse return error.InvalidShredData;
     // shred_payload[73] = 0; // zero-th shred index
     const shred_index = shred_layout.getIndex(shred_payload) orelse return error.InvalidShredData;
 
-    var shred = try sig.shred_collector.shred.Shred.fromPayload(allocator, shred_payload);
+    var shred = try sig.ledger.shred.Shred.fromPayload(allocator, shred_payload);
     defer shred.deinit();
 
     var write_batch = try db.initWriteBatch();
