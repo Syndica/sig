@@ -556,6 +556,7 @@ pub const ThreadPool = struct {
                 // Wake up any threads sleeping on the idle_event.
                 // TODO: I/O polling notification here.
                 if (sync.idle > 0) self.idle_event.shutdown();
+                if (sync.spawned == 0) self.join_event.notify();
                 return;
             }));
         }
