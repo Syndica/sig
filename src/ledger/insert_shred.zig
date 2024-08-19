@@ -21,7 +21,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Shred = sig.ledger.shred.Shred;
-const CodingShred = sig.ledger.shred.CodingShred;
+const CodingShred = sig.ledger.shred.CodeShred;
 const DataShred = sig.ledger.shred.DataShred;
 const ReedSolomonCache = bs.shredder.ReedSolomonCache;
 const ShredId = sig.ledger.shred.ShredId;
@@ -89,7 +89,7 @@ pub const ShredInserter = struct {
     ///     It means there's an alternate version of this slot. See
     ///     `check_insert_data_shred` for more details.
     ///   - [`schema.shred_data`]: stores data shreds (in check_insert_data_shreds).
-    ///   - [`schema.shred_code`]: stores coding shreds (in check_insert_coding_shreds).
+    ///   - [`schema.shred_code`]: stores code shreds (in check_insert_code_shreds).
     ///   - [`schema.slot_meta`]: the SlotMeta of the input `shreds` and their related
     ///     shreds are updated.  Specifically:
     ///     - `handle_chaining()` updates `schema.slot_meta` in two ways.  First, it
@@ -102,10 +102,10 @@ pub const ShredInserter = struct {
     ///       by both `check_insert_data_shred()` and `handle_chaining()`.
     ///   - [`schema.orphans`]: add or remove the ID of a slot to `schema.orphans`
     ///     if it becomes / is no longer an orphan slot in `handle_chaining()`.
-    ///   - [`schema.erasure_meta`]: the associated ErasureMeta of the coding and data
+    ///   - [`schema.erasure_meta`]: the associated ErasureMeta of the code and data
     ///     shreds inside `shreds` will be updated and committed to
     ///     `schema.erasure_meta`.
-    ///   - [`schema.merkle_root_meta`]: the associated MerkleRootMeta of the coding and data
+    ///   - [`schema.merkle_root_meta`]: the associated MerkleRootMeta of the code and data
     ///     shreds inside `shreds` will be updated and committed to
     ///     `schema.merkle_root_meta`.
     ///   - [`schema.index`]: stores (slot id, index to the index_working_set_entry)
@@ -207,10 +207,10 @@ pub const ShredInserter = struct {
                         else => return e, // TODO explicit
                     }
                 },
-                .code => |coding_shred| {
+                .code => |code_shred| {
                     // TODO error handling?
                     _ = try self.checkInsertCodingShred(
-                        coding_shred,
+                        code_shred,
                         &erasure_metas,
                         &merkle_root_metas,
                         &index_working_set,
@@ -256,7 +256,7 @@ pub const ShredInserter = struct {
                     continue;
                 }
                 // Since the data shreds are fully recovered from the
-                // erasure batch, no need to store coding shreds in
+                // erasure batch, no need to store code shreds in
                 // blockstore.
                 if (shred == .code) {
                     try valid_recovered_shreds.append(shred.payload()); // TODO lifetime
@@ -318,10 +318,10 @@ pub const ShredInserter = struct {
             if (try self.hasDuplicateShredsInSlot(slot)) {
                 continue;
             }
-            // First coding shred from this erasure batch, check the forward merkle root chaining
+            // First code shred from this erasure batch, check the forward merkle root chaining
             const shred_id = ShredId{
                 .slot = slot,
-                .index = @intCast(erasure_meta.first_received_coding_index),
+                .index = @intCast(erasure_meta.first_received_code_index),
                 .shred_type = .code,
             };
             // unreachable: Erasure meta was just created, initial shred must exist
@@ -446,17 +446,17 @@ pub const ShredInserter = struct {
             }
         }
 
-        // This gives the index of first coding shred in this FEC block
-        // So, all coding shreds in a given FEC block will have the same set index
+        // This gives the index of first code shred in this FEC block
+        // So, all code shreds in a given FEC block will have the same set index
         if (!is_trusted) {
             if (index_meta.code.contains(shred_index)) {
-                self.metrics.num_coding_shreds_exists.inc();
+                self.metrics.num_code_shreds_exists.inc();
                 try duplicate_shreds.append(.{ .Exists = .{ .code = shred } });
                 return false;
             }
 
             if (!shouldInsertCodingShred(&shred, self.max_root.load(.unordered))) {
-                self.metrics.num_coding_shreds_invalid.inc();
+                self.metrics.num_code_shreds_invalid.inc();
                 return false;
             }
 
@@ -493,7 +493,7 @@ pub const ShredInserter = struct {
         // agave runs this regardless of trust, but we can check if it has
         // a meaningful performance impact to skip this for trusted shreds.
         if (!erasure_meta.checkCodingShred(shred)) {
-            self.metrics.num_coding_shreds_invalid_erasure_config.inc();
+            self.metrics.num_code_shreds_invalid_erasure_config.inc();
             if (!try self.hasDuplicateShredsInSlot(slot)) {
                 if (try self.findConflictingCodingShred(
                     shred,
@@ -522,7 +522,7 @@ pub const ShredInserter = struct {
                 } else {
                     self.logger.errf(
                     // TODO: clean up newlines from all logs in this file
-                        \\Unable to find the conflicting coding shred that set {any}.
+                        \\Unable to find the conflicting code shred that set {any}.
                         \\This should only happen in extreme cases where blockstore cleanup has
                         \\caught up to the root. Skipping the erasure meta duplicate shred check
                     , .{erasure_meta});
@@ -557,7 +557,7 @@ pub const ShredInserter = struct {
 
         const shred_entry = try just_received_shreds.getOrPut(shred.fields.id());
         if (!shred_entry.found_existing) {
-            self.metrics.num_coding_shreds_inserted.inc();
+            self.metrics.num_code_shreds_inserted.inc();
             shred_entry.value_ptr.* = .{ .code = shred }; // TODO lifetime
         }
 
@@ -580,7 +580,7 @@ pub const ShredInserter = struct {
     ) !?[]const u8 { // TODO consider lifetime
         // Search for the shred which set the initial erasure config, either inserted,
         // or in the current batch in just_received_shreds.
-        const index: u32 = @intCast(erasure_meta.first_received_coding_index);
+        const index: u32 = @intCast(erasure_meta.first_received_code_index);
         const shred_id = ShredId{ .slot = slot, .index = index, .shred_type = .code };
         const maybe_shred = try self.getShredFromJustInsertedOrDb(just_received_shreds, shred_id);
 
@@ -885,7 +885,7 @@ pub const ShredInserter = struct {
     fn getDataShred(self: *Self, slot: Slot, index: u64) !?[]const u8 {
         if (try self.db.getBytes(schema.data_shred, .{ slot, index })) |shred| {
             const payload = shred.payload();
-            std.debug.assert(payload.len == shred_mod.data_shred.payload_size);
+            std.debug.assert(payload.len == shred_mod.data_shred_constants.payload_size);
             return payload;
         }
     }
@@ -1024,10 +1024,10 @@ pub const ShredInserter = struct {
         reed_solomon_cache: *ReedSolomonCache,
     ) !ArrayList(Shred) {
         // Recovery rules:
-        // 1. Only try recovery around indexes for which new data or coding shreds are received
+        // 1. Only try recovery around indexes for which new data or code shreds are received
         // 2. For new data shreds, check if an erasure set exists. If not, don't try recovery
         // 3. Before trying recovery, check if enough number of shreds have been received
-        // 3a. Enough number of shreds = (#data + #coding shreds) > erasure.num_data
+        // 3a. Enough number of shreds = (#data + #code shreds) > erasure.num_data
         const keys, const values = erasure_metas.items();
         // let index = &mut index_meta_entry.index;
         for (keys, values) |erasure_set, *working_erasure_meta| {
@@ -1078,7 +1078,7 @@ pub const ShredInserter = struct {
             .code,
             &index.code,
             index.slot,
-            erasure_meta.codingShredsIndices(),
+            erasure_meta.codeShredsIndices(),
             prev_inserted_shreds,
             &available_shreds,
         );
@@ -1437,7 +1437,7 @@ pub const ShredInserter = struct {
 
         const prev_shred_id = ShredId{
             .slot = slot,
-            .index = @intCast(prev_erasure_meta.first_received_coding_index),
+            .index = @intCast(prev_erasure_meta.first_received_code_index),
             .shred_type = .code,
         };
         const prev_shred =
@@ -1456,7 +1456,7 @@ pub const ShredInserter = struct {
         if (!checkChaining(merkle_root, chained_merkle_root)) {
             self.logger.warnf(
                 \\Received conflicting chained merkle roots for slot: {}, shred {any} type {any} \
-                \\chains to merkle root {any}, however previous fec set coding \
+                \\chains to merkle root {any}, however previous fec set code \
                 \\shred {any} has merkle root {any}. Reporting as duplicate
             , .{
                 slot,
@@ -1754,7 +1754,7 @@ pub const CompletedDataSetInfo = struct {
 const PossibleDuplicateShred = union(enum) {
     Exists: Shred, // Blockstore has another shred in its spot
     LastIndexConflict: ShredConflict, // The index of this shred conflicts with `slot_meta.last_index`
-    ErasureConflict: ShredConflict, // The coding shred has a conflict in the erasure_meta
+    ErasureConflict: ShredConflict, // The code shred has a conflict in the erasure_meta
     MerkleRootConflict: ShredConflict, // Merkle root conflict in the same fec set
     ChainedMerkleRootConflict: ShredConflict, // Merkle root chaining conflict with previous fec set
 };
@@ -1801,10 +1801,10 @@ pub const BlockstoreInsertionMetrics = struct {
     num_turbine_data_shreds_exists: *Counter, // usize
     num_data_shreds_invalid: *Counter, // usize
     num_data_shreds_blockstore_error: *Counter, // usize
-    num_coding_shreds_exists: *Counter, // usize
-    num_coding_shreds_invalid: *Counter, // usize
-    num_coding_shreds_invalid_erasure_config: *Counter, // usize
-    num_coding_shreds_inserted: *Counter, // usize
+    num_code_shreds_exists: *Counter, // usize
+    num_code_shreds_invalid: *Counter, // usize
+    num_code_shreds_invalid_erasure_config: *Counter, // usize
+    num_code_shreds_inserted: *Counter, // usize
 
     pub fn init(registry: *sig.prometheus.Registry(.{})) !BlockstoreInsertionMetrics {
         var self: BlockstoreInsertionMetrics = undefined;

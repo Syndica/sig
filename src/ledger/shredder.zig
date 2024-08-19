@@ -3,8 +3,8 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CodingShred = sig.ledger.shred.CodingShred;
-const CodingShredHeader = sig.ledger.shred.CodingShredHeader;
+const CodingShred = sig.ledger.shred.CodeShred;
+const CodingShredHeader = sig.ledger.shred.CodeShredHeader;
 const CommonHeader = sig.ledger.shred.CommonHeader;
 const DataShred = sig.ledger.shred.DataShred;
 const Hash = sig.core.Hash;
@@ -87,12 +87,12 @@ pub fn recover(
     shreds: []const Shred,
     reed_solomon_cache: *ReedSolomonCache,
 ) !std.ArrayList(Shred) {
-    // Grab {common, coding} headers from first coding shred.
+    // Grab {common, code} headers from first code shred.
     // Incoming shreds are resigned immediately after signature verification,
     // so we can just grab the retransmitter signature from one of the
     // available shreds and attach it to the recovered shreds.
     const common_header: CommonHeader, //
-    const coding_header: CodingShredHeader, //
+    const code_header: CodingShredHeader, //
     const chained_merkle_root: ?Hash, //
     const retransmitter_signature: ?Signature =
         for (shreds) |shred|
@@ -103,20 +103,20 @@ pub fn recover(
             const retransmitter_signature = code_shred.fields.retransmitterSignature() catch null;
             const position = code_shred.fields.custom.position;
             var common_header = code_shred.fields.common;
-            var coding_header = code_shred.fields.custom;
+            var code_header = code_shred.fields.custom;
             common_header.index = try checkedSub(common_header.index, position);
-            coding_header.position = 0;
-            break .{ common_header, coding_header, chained_merkle_root, retransmitter_signature };
+            code_header.position = 0;
+            break .{ common_header, code_header, chained_merkle_root, retransmitter_signature };
         }
     } else return error.TooFewParityShards;
     const proof_size = common_header.shred_variant.proof_size;
     const chained = common_header.shred_variant.chained;
     const resigned = common_header.shred_variant.resigned;
     std.debug.assert(!resigned or retransmitter_signature != null);
-    std.debug.assert(verifyErasureBatch(common_header, coding_header, shreds));
-    const num_data_shreds: usize = @intCast(coding_header.num_data_shreds);
-    const num_coding_shreds: usize = @intCast(coding_header.num_coding_shreds);
-    const num_shards = num_data_shreds + num_coding_shreds;
+    std.debug.assert(verifyErasureBatch(common_header, code_header, shreds));
+    const num_data_shreds: usize = @intCast(code_header.num_data_shreds);
+    const num_code_shreds: usize = @intCast(code_header.num_code_shreds);
+    const num_shards = num_data_shreds + num_code_shreds;
 
     // Obtain erasure encoded shards from shreds.
     const all_shreds = try allocator.alloc(?Shred, num_shards);
@@ -156,7 +156,7 @@ pub fn recover(
     }
 
     // Reconstruct the shard bytes using reed solomon
-    var rs = try reed_solomon_cache.get(num_data_shreds, num_coding_shreds);
+    var rs = try reed_solomon_cache.get(num_data_shreds, num_code_shreds);
     defer rs.deinit();
     try rs.reconstruct(allocator, shards, false);
 
@@ -200,18 +200,18 @@ pub fn recover(
             } else {
                 const offset = index - num_data_shreds;
                 var this_common_header = common_header;
-                var this_coding_header = coding_header;
+                var this_code_header = code_header;
                 this_common_header.index += @intCast(offset);
-                this_coding_header.position = @intCast(offset);
-                const coding_shred = try CodingShred.fromRecoveredShard(
+                this_code_header.position = @intCast(offset);
+                const code_shred = try CodingShred.fromRecoveredShard(
                     allocator,
                     common_header,
-                    coding_header,
+                    code_header,
                     chained_merkle_root,
                     retransmitter_signature,
                     shard,
                 );
-                all_including_recovered[index] = .{ .code = coding_shred };
+                all_including_recovered[index] = .{ .code = code_shred };
             }
         }
         num_recovered_so_far += 1;
@@ -285,7 +285,7 @@ fn verifyErasureBatch(
             expect.shred_variant.resigned == actual.shred_variant.resigned and
             (shred == .data or
             code.num_data_shreds == shred.code.fields.custom.num_data_shreds and
-            code.num_coding_shreds == shred.code.fields.custom.num_coding_shreds)))
+            code.num_code_shreds == shred.code.fields.custom.num_code_shreds)))
         {
             return false;
         }
