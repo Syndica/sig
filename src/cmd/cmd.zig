@@ -218,7 +218,7 @@ pub fn run() !void {
         .help = "path to the genesis file",
         .short_alias = 'g',
         .value_ref = cli.mkRef(&config.current.genesis_file_path),
-        .required = false,
+        .required = true,
         .value_name = "genesis_file_path",
     };
 
@@ -1104,7 +1104,7 @@ fn loadSnapshot(
 
     result.allocator = allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db.snapshot_dir, .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db.snapshot_dir, .{ .iterate = true });
     defer snapshot_dir.close();
 
     var snapshots, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{

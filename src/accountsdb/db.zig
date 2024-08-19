@@ -47,7 +47,8 @@ const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
-pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
+pub const ACCOUNTS_PER_FILE_EST: usize = 1_500; // devnet/testnet
+// pub const ACCOUNTS_PER_FILE_EST: usize = 3_000; // mainnet
 
 pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
 pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
@@ -445,15 +446,12 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
         var references = try ArrayList(AccountRef).initCapacity(
+            // TODO: wrap in FBA for correct OOM OR use UnmanagedArrayList instead
             self.account_index.reference_allocator,
             n_accounts_estimate,
         );
 
         const references_ptr = references.items.ptr;
-        defer {
-            // rn we dont support resizing - something went wrong if we resized
-            std.debug.assert(references.items.ptr == references_ptr);
-        }
 
         const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
         defer counting_alloc.deinitIfSafe();
@@ -582,6 +580,11 @@ pub const AccountsDB = struct {
                 );
                 progress_timer.reset();
             }
+        }
+
+        // rn we dont support resizing - something went wrong if we resized
+        if (references.items.ptr != references_ptr) {
+            std.debug.panic("ACCOUNTS_PER_FILE_EST too small, increase and try again...", .{});
         }
 
         // allocate enough memory for the bins
@@ -1296,11 +1299,13 @@ pub const AccountsDB = struct {
                     &shrink_account_files,
                     &delete_account_files,
                 );
-                self.logger.debugf("clean_result: {any}", .{clean_result});
+                _ = clean_result;
+                // self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                const shrink_results = try self.shrinkAccountFiles(shrink_account_files.keys());
-                self.logger.debugf("shrink_results: {any}", .{shrink_results});
+                const shrink_result = try self.shrinkAccountFiles(shrink_account_files.keys());
+                _ = shrink_result;
+                // self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
                 self.deleteAccountFiles(delete_account_files.keys());
@@ -2219,10 +2224,10 @@ pub const AccountsDB = struct {
 
             const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref_ptr);
             if (!was_inserted) {
-                self.logger.warnf(
-                    "duplicate reference not inserted: slot: {d} pubkey: {s}",
-                    .{ ref_ptr.slot, ref_ptr.pubkey },
-                );
+                // self.logger.warnf(
+                //     "duplicate reference not inserted: slot: {d} pubkey: {s}",
+                //     .{ ref_ptr.slot, ref_ptr.pubkey },
+                // );
                 accounts_dead_count += 1;
             }
 
