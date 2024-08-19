@@ -100,7 +100,7 @@ pub fn recover(
         if (shred == .code) {
             const code_shred = shred.code;
             const chained_merkle_root = code_shred.fields.chainedMerkleRoot() catch null;
-            const retransmitter_signature = code_shred.fields.retransmitterSignature() catch null;
+            const retransmitter_signature = code_shred.retransmitterSignature() catch null;
             const position = code_shred.fields.custom.position;
             var common_header = code_shred.fields.common;
             var code_header = code_shred.fields.custom;
