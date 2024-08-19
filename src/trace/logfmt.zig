@@ -4,7 +4,9 @@ const Entry = @import("./entry.zig").StandardEntry;
 pub fn formatter(e: *const Entry, writer: anytype) !void {
     // format time as ISO8601
     const utc_format = "YYYY-MM-DDTHH:mm:ss";
-    try std.fmt.format(writer, "[{?s}] ", .{e.scope});
+    if (e.scope_tag) |scope_tag| {
+        try std.fmt.format(writer, "[{s}] ", .{scope_tag});
+    }
     try std.fmt.format(writer, "time=", .{});
     try e.time.format(utc_format, .{}, writer);
     try std.fmt.format(writer, "Z ", .{});

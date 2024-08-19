@@ -28,22 +28,19 @@ pub const Logger = union(enum) {
         return .{ .standard = StandardErrLogger.init(allocator, max_level) };
     }
 
-    pub fn _init(allocator: std.mem.Allocator, config: LogConfig) Self {
-        const stdErrlogger = blk: {
-            const stdErrlogger = StandardErrLogger.init(allocator, config.max_level);
-            if (config.scope) |scope| {
-                stdErrlogger.scoped(scope);
-            }
-            break :blk stdErrlogger;
-        };
-
-        return .{ .standard = stdErrlogger };
-    }
-
     pub fn spawn(self: Self) void {
         switch (self) {
             .standard => |logger| {
                 logger.spawn();
+            },
+            .noop, .test_logger => {},
+        }
+    }
+
+    pub fn scope(self: Self, scope_tag: []const u8) void {
+        switch (self) {
+            .standard => |logger| {
+                logger.scope_tag = scope_tag;
             },
             .noop, .test_logger => {},
         }
@@ -170,7 +167,7 @@ pub const StandardErrLogger = struct {
     exit_sig: AtomicBool,
     handle: ?std.Thread,
     channel: *Channel(*StandardEntry),
-    scope: ?[]const u8,
+    scope_tag: ?[]const u8,
 
     const Self = @This();
 
@@ -182,13 +179,9 @@ pub const StandardErrLogger = struct {
             .exit_sig = AtomicBool.init(false),
             .handle = null,
             .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
-            .scope = null,
+            .scope_tag = null,
         };
         return self;
-    }
-
-    pub fn scoped(self: *Self, scope: ?[]const u8) void {
-        self.scope = scope;
     }
 
     pub fn spawn(self: *Self) void {
@@ -228,7 +221,10 @@ pub const StandardErrLogger = struct {
 
     pub fn field(self: *Self, name: []const u8, value: anytype) Entry {
         var e = Entry.init(self.allocator, self.channel, self.max_level);
-        return e.scoped(self.scope).field(name, value);
+        if (self.scope_tag) |scope_tag| {
+            return e.scope(scope_tag).field(name, value);
+        }
+        return e.field(name, value);
     }
 
     pub fn info(self: *Self, msg: []const u8) void {
@@ -265,7 +261,11 @@ pub const StandardErrLogger = struct {
 
     pub fn log(self: *Self, level: Level, msg: []const u8) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
+            // TODO change Entry.init to take a config struct.
             var e = Entry.init(self.allocator, self.channel, self.max_level);
+            if (self.scope_tag) |scope_tag| {
+                e = e.scope(scope_tag);
+            }
             e.log(level, msg);
         }
     }
@@ -273,6 +273,9 @@ pub const StandardErrLogger = struct {
     pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
             var e = Entry.init(self.allocator, self.channel, self.max_level);
+            if (self.scope_tag) |scope_tag| {
+                e = e.scope(scope_tag);
+            }
             e.logf(level, fmt, args);
         }
     }
@@ -355,8 +358,8 @@ pub const StdErrSink = struct {
 
 test "trace.logger: works" {
     // var logger: Logger = .noop; // uncomment below to run visual test
-    // var logger = Logger.init(testing.allocator, .debug);
-    var logger = Logger._init(testing.allocator, .{ .max_level = .debug, .scope = "TEST" });
+    var logger = Logger.init(testing.allocator, .debug);
+    logger.scope("log");
     logger.spawn();
     defer logger.deinit();
 
@@ -379,6 +382,18 @@ test "trace.logger: works" {
         .field("tmp2", 456)
         .field("tmp2", s)
         .info("new push message");
+
+    logger
+        .info("new push message");
+
+    logger.infof("operation was done", .{});
+    logger.warnf("api call received at {d} not authorized", .{10004});
+    logger.errf("api call received at {d} broke the system!", .{10005});
+
+    logger.debug("request with id succeeded");
+    logger.info("operation was done");
+    logger.warn("api call received at not authorized");
+    logger.err("api call received broke the system!");
 
     std.time.sleep(std.time.ns_per_ms * 100);
 }

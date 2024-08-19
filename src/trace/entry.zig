@@ -27,10 +27,10 @@ pub const Entry = union(enum) {
         }
     }
 
-    pub fn scoped(self: Self, scope: ?[]const u8) Self {
+    pub fn scope(self: Self, scope_tag: []const u8) Self {
         switch (self) {
             .standard => |entry| {
-                _ = entry.scoped(scope);
+                _ = entry.scope(scope_tag);
                 return self;
             },
             .noop => {
@@ -135,7 +135,7 @@ pub const StandardEntry = struct {
     time: time.DateTime,
     message: std.ArrayList(u8),
     channel: *Channel(*StandardEntry),
-    scope: ?[]const u8,
+    scope_tag: ?[]const u8,
 
     const Self = @This();
 
@@ -149,13 +149,13 @@ pub const StandardEntry = struct {
             .channel = channel,
             .time = time.DateTime.epoch_unix,
             .message = std.ArrayList(u8).init(allocator),
-            .scope = null,
+            .scope_tag = null,
         };
         return self;
     }
 
-    pub fn scoped(self: *Self, scope: ?[]const u8) *Self {
-        self.scope = scope;
+    pub fn scope(self: *Self, scope_tag: []const u8) *Self {
+        self.scope_tag = scope_tag;
         return self;
     }
 
