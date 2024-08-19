@@ -63,6 +63,7 @@ pub const schema = struct {
     pub const address_signatures: ColumnFamily = .{
         .name = "address_signatures",
         .Key = struct {
+            // NOTE: rn we sort by pubkey first, maybe we want to sort by slot first?
             address: Pubkey,
             slot: Slot,
             transaction_index: u32,

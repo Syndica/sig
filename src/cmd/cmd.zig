@@ -35,6 +35,9 @@ const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
+const BlockstoreReader = sig.blockstore.BlockstoreReader;
+const BlockstoreWriter = sig.blockstore.BlockstoreWriter;
+
 const SocketTag = sig.gossip.SocketTag;
 
 // TODO: use better allocator, unless GPA becomes more performant.
@@ -87,6 +90,14 @@ pub fn run() !void {
         .value_ref = cli.mkRef(&config.current.leader_schedule_path),
         .required = false,
         .value_name = "Leader schedule source",
+    };
+
+    var max_shreds_option = cli.Option{
+        .long_name = "max-shreds",
+        .help = "Max number of shreds to store in the blockstore",
+        .value_ref = cli.mkRef(&config.current.leader_schedule_path),
+        .required = false,
+        .value_name = "max shreds",
     };
 
     var test_repair_option = cli.Option{
@@ -322,6 +333,8 @@ pub fn run() !void {
                             &turbine_recv_port_option,
                             &repair_port_option,
                             &test_repair_option,
+                            // blockstore cleanup service
+                            &max_shreds_option,
                             // accounts-db
                             &snapshot_dir_option,
                             &use_disk_index_option,
@@ -343,6 +356,42 @@ pub fn run() !void {
                         .target = .{
                             .action = .{
                                 .exec = validator,
+                            },
+                        },
+                    },
+
+                    &cli.Command{
+                        .name = "shred-collector",
+                        .description = .{ .one_line = "Run the shred collector to collect and store shreds", .detailed = 
+                        \\ This command runs the shred collector without running the full validator 
+                        \\ (mainly excluding the accounts-db setup).
+                        \\
+                        \\ NOTE: this means that this command *requires* a leader schedule to be provided
+                        \\ (which would usually be derived from the accountsdb snapshot).
+                        \\
+                        \\ NOTE: this command also requires `start_slot` (`--test-repair-for-slot`) to be given as well (
+                        \\ which is usually derived from the accountsdb snapshot). This can be done 
+                        \\ with `--test-repair-for-slot $(solana slot -u testnet)` for testnet or another `-u` for mainnet/devnet.
+                        },
+                        .options = &.{
+                            // gossip
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                            // repair
+                            &turbine_recv_port_option,
+                            &repair_port_option,
+                            &test_repair_option,
+                            // blockstore cleanup service
+                            &max_shreds_option,
+                            // general
+                            &leader_schedule_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = shredCollector,
                             },
                         },
                     },
@@ -523,9 +572,150 @@ fn validator() !void {
         blockstore_db,
     );
 
+    // cleanup service
+    const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
+    lowest_cleanup_slot.* = sig.sync.RwMux(sig.core.Slot).init(0);
+    defer allocator.destroy(lowest_cleanup_slot);
+
+    const max_root = try allocator.create(std.atomic.Value(sig.core.Slot));
+    max_root.* = std.atomic.Value(sig.core.Slot).init(0);
+    defer allocator.destroy(max_root);
+
+    const blockstore_writer = try allocator.create(BlockstoreWriter);
+    defer allocator.destroy(blockstore_writer);
+    blockstore_writer.* = BlockstoreWriter{
+        .allocator = allocator,
+        .db = blockstore_db,
+        .logger = app_base.logger,
+        .lowest_cleanup_slot = lowest_cleanup_slot,
+        .max_root = max_root,
+        .scan_and_fix_roots_metrics = try sig.blockstore.writer.ScanAndFixRootsMetrics.init(
+            app_base.metrics_registry,
+        ),
+    };
+
+    const blockstore_reader = try allocator.create(BlockstoreReader);
+    defer allocator.destroy(blockstore_reader);
+    blockstore_reader.* = try BlockstoreReader.init(
+        allocator,
+        app_base.logger,
+        blockstore_db,
+        app_base.metrics_registry,
+        lowest_cleanup_slot,
+        max_root,
+    );
+
+    var cleanup_service_handle = try std.Thread.spawn(.{}, sig.blockstore.cleanup_service.run, .{
+        allocator,
+        app_base.logger,
+        blockstore_reader,
+        blockstore_writer,
+        config.current.max_shreds,
+        &app_base.exit,
+    });
+    defer cleanup_service_handle.join();
+
     // shred collector
     var shred_col_conf = config.current.shred_collector;
     shred_col_conf.start_slot = shred_col_conf.start_slot orelse snapshot.bank.bank_fields.slot;
+    var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
+    var shred_collector_manager = try sig.shred_collector.start(
+        shred_col_conf,
+        ShredCollectorDependencies{
+            .allocator = allocator,
+            .logger = app_base.logger,
+            .random = rng.random(),
+            .my_keypair = &app_base.my_keypair,
+            .exit = &app_base.exit,
+            .gossip_table_rw = &gossip_service.gossip_table_rw,
+            .my_shred_version = &gossip_service.my_shred_version,
+            .leader_schedule = leader_provider,
+            .shred_inserter = shred_inserter,
+        },
+    );
+    defer shred_collector_manager.deinit();
+
+    gossip_manager.join();
+    shred_collector_manager.join();
+}
+
+fn shredCollector() !void {
+    const allocator = gpa_allocator;
+    var app_base = try AppBase.init(allocator);
+
+    const repair_port: u16 = config.current.shred_collector.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
+
+    var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
+        .{ .tag = .repair, .port = repair_port },
+        .{ .tag = .turbine_recv, .port = turbine_recv_port },
+    });
+    defer gossip_manager.deinit();
+
+    // leader schedule
+    // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
+    var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
+    const leader_provider = leader_schedule.provider();
+
+    // blockstore
+    const blockstore_db = try sig.blockstore.BlockstoreDB.open(
+        allocator,
+        app_base.logger,
+        "ledger/blockstore",
+    );
+    const shred_inserter = try sig.blockstore.ShredInserter.init(
+        allocator,
+        app_base.logger,
+        app_base.metrics_registry,
+        blockstore_db,
+    );
+
+    // cleanup service
+    const lowest_cleanup_slot = try allocator.create(sig.sync.RwMux(sig.core.Slot));
+    lowest_cleanup_slot.* = sig.sync.RwMux(sig.core.Slot).init(0);
+    defer allocator.destroy(lowest_cleanup_slot);
+
+    const max_root = try allocator.create(std.atomic.Value(sig.core.Slot));
+    max_root.* = std.atomic.Value(sig.core.Slot).init(0);
+    defer allocator.destroy(max_root);
+
+    const blockstore_writer = try allocator.create(BlockstoreWriter);
+    defer allocator.destroy(blockstore_writer);
+    blockstore_writer.* = BlockstoreWriter{
+        .allocator = allocator,
+        .db = blockstore_db,
+        .logger = app_base.logger,
+        .lowest_cleanup_slot = lowest_cleanup_slot,
+        .max_root = max_root,
+        .scan_and_fix_roots_metrics = try sig.blockstore.writer.ScanAndFixRootsMetrics.init(
+            app_base.metrics_registry,
+        ),
+    };
+
+    const blockstore_reader = try allocator.create(BlockstoreReader);
+    defer allocator.destroy(blockstore_reader);
+    blockstore_reader.* = try BlockstoreReader.init(
+        allocator,
+        app_base.logger,
+        blockstore_db,
+        app_base.metrics_registry,
+        lowest_cleanup_slot,
+        max_root,
+    );
+
+    var cleanup_service_handle = try std.Thread.spawn(.{}, sig.blockstore.cleanup_service.run, .{
+        allocator,
+        app_base.logger,
+        blockstore_reader,
+        blockstore_writer,
+        config.current.max_shreds,
+        &app_base.exit,
+    });
+    defer cleanup_service_handle.join();
+
+    // shred collector
+    var shred_col_conf = config.current.shred_collector;
+    shred_col_conf.start_slot = shred_col_conf.start_slot orelse @panic("No start slot found");
     var rng = std.rand.DefaultPrng.init(@bitCast(std.time.timestamp()));
     var shred_collector_manager = try sig.shred_collector.start(
         shred_col_conf,

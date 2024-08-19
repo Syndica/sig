@@ -11,6 +11,12 @@ pub const Signature = struct {
 
     const Self = @This();
 
+    pub fn default() Self {
+        return Self{
+            .data = [_]u8{0} ** SIGNATURE_LENGTH,
+        };
+    }
+
     pub fn init(bytes: [SIGNATURE_LENGTH]u8) Self {
         return Self{
             .data = bytes,

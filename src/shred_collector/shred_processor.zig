@@ -16,6 +16,8 @@ const Packet = sig.net.Packet;
 const Shred = shred_collector.shred.Shred;
 const ShredInserter = sig.blockstore.ShredInserter;
 
+// TODO: add metrics (e.g. total count of shreds processed)
+
 /// Analogous to [WindowService](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L395)
 pub fn runShredProcessor(
     allocator: Allocator,
@@ -32,6 +34,7 @@ pub fn runShredProcessor(
     var shreds = ArrayListUnmanaged(Shred){};
     var is_repaired = ArrayListUnmanaged(bool){};
     var error_context = ErrorContext{};
+
     while (!exit.load(.unordered)) {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();

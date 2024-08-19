@@ -119,6 +119,17 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = self.maps[cf.find(column_families)].delete(self.allocator, key_bytes);
         }
 
+        pub fn deleteFilesRange(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            start: cf.Key,
+            end: cf.Key,
+        ) anyerror!void {
+            _ = self;
+            _ = start;
+            _ = end;
+        }
+
         pub fn initWriteBatch(self: *Self) error{}!WriteBatch {
             return .{
                 .allocator = self.allocator,
@@ -142,6 +153,10 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                         const cf_index, const key = delete_ix;
                         self.maps[cf_index].delete(batch.allocator, key);
                     },
+                    .delete_range => {
+                        // TODO
+                        @panic("not implemented");
+                    },
                 }
             }
         }
@@ -163,6 +178,7 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             const Instruction = union(enum) {
                 put: struct { usize, []const u8, []const u8 },
                 delete: struct { usize, []const u8 },
+                delete_range: struct { usize, []const u8, []const u8 },
             };
 
             fn deinit(self: WriteBatch) void {
@@ -195,6 +211,23 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 return try self.instructions.append(
                     self.allocator,
                     .{ .delete = .{ cf.find(column_families), k_bytes } },
+                );
+            }
+
+            pub fn deleteRange(
+                self: *WriteBatch,
+                comptime cf: ColumnFamily,
+                start: cf.Key,
+                end: cf.Key,
+            ) anyerror!void {
+                const start_bytes = try key_serializer.serializeAlloc(self.allocator, start);
+                errdefer self.allocator.free(start_bytes);
+                const end_bytes = try key_serializer.serializeAlloc(self.allocator, end);
+                errdefer self.allocator.free(end_bytes);
+                const cf_index = cf.find(column_families);
+                self.instructions.append(
+                    self.allocator,
+                    .{ .delete_range = .{ cf_index, start_bytes, end_bytes } },
                 );
             }
         };

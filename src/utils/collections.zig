@@ -167,6 +167,7 @@ pub fn SortedMapCustom(
         }
 
         pub fn eql(self: *Self, other: *Self) bool {
+            if (self.count() != other.count()) return false;
             self.sort();
             other.sort();
             for (self.inner.keys(), self.inner.values(), other.inner.keys(), other.inner.values()) |sk, sv, ok, ov| {
