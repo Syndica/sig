@@ -128,7 +128,6 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = self;
             _ = start;
             _ = end;
-            @panic("deleteFilesRange not implemented for SharedHashMapDB");
         }
 
         pub fn initWriteBatch(self: *Self) error{}!WriteBatch {
@@ -153,6 +152,10 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                     .delete => |delete_ix| {
                         const cf_index, const key = delete_ix;
                         self.maps[cf_index].delete(batch.allocator, key);
+                    },
+                    .delete_range => {
+                        // TODO
+                        @panic("not implemented");
                     },
                 }
             }
@@ -211,7 +214,12 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
                 );
             }
 
-            pub fn deleteRange(self: *WriteBatch, comptime cf: ColumnFamily, start: cf.Key, end: cf.Key) anyerror!void {
+            pub fn deleteRange(
+                self: *WriteBatch,
+                comptime cf: ColumnFamily,
+                start: cf.Key,
+                end: cf.Key,
+            ) anyerror!void {
                 const start_bytes = try key_serializer.serializeAlloc(self.allocator, start);
                 errdefer self.allocator.free(start_bytes);
                 const end_bytes = try key_serializer.serializeAlloc(self.allocator, end);

@@ -92,7 +92,6 @@ pub fn SortedSetCustom(comptime T: type, comptime config: SortedMapConfig(T)) ty
         }
 
         pub fn eql(self: *Self, other: *Self) bool {
-            if (self.map.count() != other.map.count()) return false;
             return self.map.eql(&other.map);
         }
 
@@ -168,6 +167,7 @@ pub fn SortedMapCustom(
         }
 
         pub fn eql(self: *Self, other: *Self) bool {
+            if (self.count() != other.count()) return false;
             self.sort();
             other.sort();
             for (self.inner.keys(), self.inner.values(), other.inner.keys(), other.inner.values()) |sk, sv, ok, ov| {

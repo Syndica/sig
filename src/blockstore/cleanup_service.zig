@@ -34,24 +34,19 @@ pub fn run(
     exit: *AtomicBool,
 ) !void {
     var last_purge_slot: Slot = 0;
-    var last_check_time = try Instant.now();
 
-    logger.info("Starting blockstore cleanup service\n");
+    logger.info("Starting blockstore cleanup service");
     while (!exit.load(.unordered)) {
-        const last_check_time_elapsed_nanos = (try Instant.now()).since(last_check_time);
-        if (last_check_time_elapsed_nanos > LOOP_LIMITER.asNanos()) {
-            last_purge_slot = try cleanBlockstore(
-                allocator,
-                logger,
-                blockstore_reader,
-                blockstore_writer,
-                max_ledger_shreds,
-                last_purge_slot,
-                DEFAULT_CLEANUP_SLOT_INTERVAL,
-            );
-            last_check_time = try Instant.now();
-        }
-        std.time.sleep(Duration.fromSecs(1).asNanos());
+        last_purge_slot = try cleanBlockstore(
+            allocator,
+            logger,
+            blockstore_reader,
+            blockstore_writer,
+            max_ledger_shreds,
+            last_purge_slot,
+            DEFAULT_CLEANUP_SLOT_INTERVAL,
+        );
+        std.time.sleep(LOOP_LIMITER.asNanos());
     }
 }
 
