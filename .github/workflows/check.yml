@@ -32,7 +32,7 @@ jobs:
         with: 
           python-version: "3.10"         
       - name: remove unused imports
-        run: python remove_unused.py src/
+        run: python scripts/remove_unused.py src/
 
   test:
     strategy:
@@ -92,7 +92,7 @@ jobs:
 
       - name: Print coverage report
         run: |
-          python parse_kcov.py kcov-output/test/coverage.json
+          python scripts/parse_kcov.py kcov-output/test/coverage.json
 
   benchmarks:
     strategy:

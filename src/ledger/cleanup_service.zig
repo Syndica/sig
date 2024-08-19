@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 
 const AtomicBool = std.atomic.Value(bool);
-const Instant = std.time.Instant;
 
 const BlockstoreReader = sig.ledger.reader.BlockstoreReader;
 const BlockstoreWriter = sig.ledger.writer.BlockstoreWriter;
@@ -195,10 +194,7 @@ fn findSlotsToClean(
     }
 }
 
-const bincode = sig.bincode;
 const Blockstore = sig.ledger.BlockstoreDB;
-const ShredInserter = sig.ledger.ShredInserter;
-const CodingShred = sig.ledger.shred.CodingShred;
 const TestState = sig.ledger.insert_shred.TestState;
 
 test "findSlotsToClean" {

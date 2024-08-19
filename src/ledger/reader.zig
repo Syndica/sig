@@ -1469,7 +1469,6 @@ pub const AncestorIterator = struct {
 
 const bincode = sig.bincode;
 const Blockstore = sig.ledger.BlockstoreDB;
-const ShredInserter = sig.ledger.ShredInserter;
 const CodingShred = sig.ledger.shred.CodingShred;
 const TestState = sig.ledger.insert_shred.TestState;
 

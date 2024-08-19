@@ -66,3 +66,5 @@ while lines_removed_this_time > 0:
     print()
 
 print("total lines removed:", total_num_lines_removed)
+if (total_num_lines_removed > 0):
+    exit(1)
