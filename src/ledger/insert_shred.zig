@@ -1,11 +1,11 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
 
-const bs = sig.blockstore;
+const bs = sig.ledger;
 const meta = bs.meta;
 const schema = bs.schema.schema;
-const shred_mod = sig.shred_collector.shred;
-const shredder = sig.blockstore.shredder;
+const shred_mod = sig.ledger.shred;
+const shredder = sig.ledger.shredder;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -16,15 +16,15 @@ const Mutex = std.Thread.Mutex;
 const PointerClosure = sig.utils.closure.PointerClosure;
 
 const Counter = sig.prometheus.Counter;
-const ErasureSetId = sig.shred_collector.shred.ErasureSetId;
+const ErasureSetId = sig.ledger.shred.ErasureSetId;
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
-const Shred = sig.shred_collector.shred.Shred;
-const CodingShred = sig.shred_collector.shred.CodingShred;
-const DataShred = sig.shred_collector.shred.DataShred;
+const Shred = sig.ledger.shred.Shred;
+const CodingShred = sig.ledger.shred.CodingShred;
+const DataShred = sig.ledger.shred.DataShred;
 const ReedSolomonCache = bs.shredder.ReedSolomonCache;
-const ShredId = sig.shred_collector.shred.ShredId;
+const ShredId = sig.ledger.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
@@ -39,8 +39,8 @@ const MerkleRootMeta = meta.MerkleRootMeta;
 const ShredIndex = meta.ShredIndex;
 const SlotMeta = meta.SlotMeta;
 
-const key_serializer = sig.blockstore.database.key_serializer;
-const value_serializer = sig.blockstore.database.value_serializer;
+const key_serializer = sig.ledger.database.key_serializer;
+const value_serializer = sig.ledger.database.value_serializer;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -1100,7 +1100,7 @@ pub const ShredInserter = struct {
     // agave: get_recovery_data_shreds and get_recovery_coding_shreds
     fn getRecoveryShreds(
         self: *Self,
-        comptime shred_type: sig.shred_collector.shred.ShredType,
+        comptime shred_type: sig.ledger.shred.ShredType,
         index: *const ShredIndex,
         slot: Slot,
         shred_indices: [2]u64,
@@ -1883,7 +1883,7 @@ pub const TestState = struct {
 
     fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !TestState {
         const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
-        try sig.blockstore.tests.freshDir(path);
+        try sig.ledger.tests.freshDir(path);
         const db = try BlockstoreDB.open(allocator, logger, path);
         var registry = sig.prometheus.Registry(.{}).init(allocator);
         const inserter = try ShredInserter.init(allocator, logger, &registry, db);
@@ -1964,7 +1964,7 @@ test "insertShreds single shred" {
     var state = try TestState.init("insertShreds single shred");
     defer state.deinit();
     const allocator = std.testing.allocator;
-    const shred = try Shred.fromPayload(allocator, &sig.shred_collector.shred.test_data_shred);
+    const shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
     defer shred.deinit();
     _ = try state.inserter.insertShreds(&.{shred}, &.{false}, null, false, null);
     const stored_shred = try state.db.getBytes(
@@ -2256,4 +2256,4 @@ const OneSlotLeaderProvider = struct {
     }
 };
 
-const loadShredsFromFile = sig.shred_collector.shred.loadShredsFromFile;
+const loadShredsFromFile = sig.ledger.shred.loadShredsFromFile;

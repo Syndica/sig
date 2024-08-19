@@ -35,8 +35,8 @@ const requestIpEcho = sig.net.requestIpEcho;
 const servePrometheus = sig.prometheus.servePrometheus;
 const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
-const BlockstoreReader = sig.blockstore.BlockstoreReader;
-const BlockstoreWriter = sig.blockstore.BlockstoreWriter;
+const BlockstoreReader = sig.ledger.BlockstoreReader;
+const BlockstoreWriter = sig.ledger.BlockstoreWriter;
 
 const SocketTag = sig.gossip.SocketTag;
 
@@ -560,12 +560,12 @@ fn validator() !void {
     const leader_provider = leader_schedule.provider();
 
     // blockstore
-    const blockstore_db = try sig.blockstore.BlockstoreDB.open(
+    const blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
         "ledger/blockstore",
     );
-    const shred_inserter = try sig.blockstore.ShredInserter.init(
+    const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
         app_base.logger,
         app_base.metrics_registry,
@@ -589,7 +589,7 @@ fn validator() !void {
         .logger = app_base.logger,
         .lowest_cleanup_slot = lowest_cleanup_slot,
         .max_root = max_root,
-        .scan_and_fix_roots_metrics = try sig.blockstore.writer.ScanAndFixRootsMetrics.init(
+        .scan_and_fix_roots_metrics = try sig.ledger.writer.ScanAndFixRootsMetrics.init(
             app_base.metrics_registry,
         ),
     };
@@ -605,7 +605,7 @@ fn validator() !void {
         max_root,
     );
 
-    var cleanup_service_handle = try std.Thread.spawn(.{}, sig.blockstore.cleanup_service.run, .{
+    var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         allocator,
         app_base.logger,
         blockstore_reader,
@@ -658,12 +658,12 @@ fn shredCollector() !void {
     const leader_provider = leader_schedule.provider();
 
     // blockstore
-    const blockstore_db = try sig.blockstore.BlockstoreDB.open(
+    const blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
         "ledger/blockstore",
     );
-    const shred_inserter = try sig.blockstore.ShredInserter.init(
+    const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
         app_base.logger,
         app_base.metrics_registry,
@@ -687,7 +687,7 @@ fn shredCollector() !void {
         .logger = app_base.logger,
         .lowest_cleanup_slot = lowest_cleanup_slot,
         .max_root = max_root,
-        .scan_and_fix_roots_metrics = try sig.blockstore.writer.ScanAndFixRootsMetrics.init(
+        .scan_and_fix_roots_metrics = try sig.ledger.writer.ScanAndFixRootsMetrics.init(
             app_base.metrics_registry,
         ),
     };
@@ -703,7 +703,7 @@ fn shredCollector() !void {
         max_root,
     );
 
-    var cleanup_service_handle = try std.Thread.spawn(.{}, sig.blockstore.cleanup_service.run, .{
+    var cleanup_service_handle = try std.Thread.spawn(.{}, sig.ledger.cleanup_service.run, .{
         allocator,
         app_base.logger,
         blockstore_reader,

@@ -4,7 +4,7 @@ const sig = @import("../lib.zig");
 const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
-const CodingShred = sig.shred_collector.shred.CodingShred;
+const CodingShred = sig.ledger.shred.CodingShred;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 
@@ -277,7 +277,7 @@ pub const Index = struct {
 
 pub const ShredIndex = SortedSet(u64);
 
-pub const TransactionStatusMeta = sig.blockstore.transaction_status.TransactionStatusMeta;
+pub const TransactionStatusMeta = sig.ledger.transaction_status.TransactionStatusMeta;
 
 pub const AddressSignatureMeta = struct {
     writeable: bool,
@@ -288,7 +288,7 @@ pub const TransactionStatusIndexMeta = struct {
     frozen: bool,
 };
 
-pub const Reward = sig.blockstore.transaction_status.Reward;
+pub const Reward = sig.ledger.transaction_status.Reward;
 
 pub const UnixTimestamp = i64;
 
@@ -344,12 +344,12 @@ pub const MerkleRootMeta = struct {
     /// The first received shred index
     first_received_shred_index: u32,
     /// The shred type of the first received shred
-    first_received_shred_type: sig.shred_collector.shred.ShredType,
+    first_received_shred_type: sig.ledger.shred.ShredType,
 
     pub fn fromShred(shred: anytype) MerkleRootMeta {
         comptime std.debug.assert(
-            @TypeOf(shred) == sig.shred_collector.shred.DataShred or
-                @TypeOf(shred) == sig.shred_collector.shred.CodingShred,
+            @TypeOf(shred) == sig.ledger.shred.DataShred or
+                @TypeOf(shred) == sig.ledger.shred.CodingShred,
         );
         return MerkleRootMeta{
             // An error here after the shred has already sigverified

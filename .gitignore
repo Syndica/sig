@@ -3,7 +3,7 @@ zig-cache/
 zig-out/
 data/
 
-ledger/
+/ledger/
 index_storage/
 kcov-output/
 .vscode/

@@ -4,7 +4,7 @@ const sig = @import("../lib.zig");
 const shred_collector = @import("lib.zig");
 
 const bincode = sig.bincode;
-const layout = shred_collector.shred.layout;
+const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -162,11 +162,11 @@ fn shouldDiscardShred(
     if (slot > max_slot) return true;
     switch (variant.shred_type) {
         .code => {
-            if (index >= shred_collector.shred.coding_shred.max_per_slot) return true;
+            if (index >= sig.ledger.shred.coding_shred.max_per_slot) return true;
             if (slot <= root) return true;
         },
         .data => {
-            if (index >= shred_collector.shred.data_shred.max_per_slot) return true;
+            if (index >= sig.ledger.shred.data_shred.max_per_slot) return true;
             const parent_offset = layout.getParentOffset(shred) orelse return true;
             const parent = slot -| @as(Slot, @intCast(parent_offset));
             if (!verifyShredSlots(slot, parent, root)) return true;

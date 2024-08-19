@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 const shred_collector = @import("lib.zig");
 
-const layout = shred_collector.shred.layout;
+const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -13,8 +13,8 @@ const BasicShredTracker = shred_collector.shred_tracker.BasicShredTracker;
 const Channel = sig.sync.Channel;
 const Logger = sig.trace.Logger;
 const Packet = sig.net.Packet;
-const Shred = shred_collector.shred.Shred;
-const ShredInserter = sig.blockstore.ShredInserter;
+const Shred = sig.ledger.shred.Shred;
+const ShredInserter = sig.ledger.ShredInserter;
 
 // TODO: add metrics (e.g. total count of shreds processed)
 

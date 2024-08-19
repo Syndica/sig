@@ -2,7 +2,7 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 const shred_collector = @import("lib.zig");
 
-const shred_layout = shred_collector.shred.layout;
+const shred_layout = sig.ledger.shred.layout;
 
 const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
