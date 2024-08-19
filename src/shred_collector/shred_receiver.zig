@@ -162,11 +162,11 @@ fn shouldDiscardShred(
     if (slot > max_slot) return true;
     switch (variant.shred_type) {
         .code => {
-            if (index >= sig.ledger.shred.coding_shred.max_per_slot) return true;
+            if (index >= sig.ledger.shred.code_shred_constants.max_per_slot) return true;
             if (slot <= root) return true;
         },
         .data => {
-            if (index >= sig.ledger.shred.data_shred.max_per_slot) return true;
+            if (index >= sig.ledger.shred.data_shred_constants.max_per_slot) return true;
             const parent_offset = layout.getParentOffset(shred) orelse return true;
             const parent = slot -| @as(Slot, @intCast(parent_offset));
             if (!verifyShredSlots(slot, parent, root)) return true;

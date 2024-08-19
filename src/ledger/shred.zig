@@ -17,18 +17,18 @@ const checkedSub = sig.utils.math.checkedSub;
 
 const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
 
-pub const MAX_SHREDS_PER_SLOT: usize = coding_shred.max_per_slot + data_shred.max_per_slot;
+pub const MAX_SHREDS_PER_SLOT: usize = code_shred_constants.max_per_slot + data_shred_constants.max_per_slot;
 
 pub const DATA_SHREDS_PER_FEC_BLOCK: usize = 32;
 const SIZE_OF_MERKLE_ROOT: usize = sig.core.HASH_SIZE;
 
-pub const coding_shred = ShredConstants{
+pub const code_shred_constants = ShredConstants{
     .max_per_slot = 32_768,
     .payload_size = 1228, // TODO this can be calculated like solana
     .headers_size = 89,
 };
 
-pub const data_shred = ShredConstants{
+pub const data_shred_constants = ShredConstants{
     .max_per_slot = 32_768,
     .payload_size = 1203, // TODO this can be calculated like solana
     .headers_size = 88,
@@ -36,7 +36,7 @@ pub const data_shred = ShredConstants{
 
 /// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred.rs#L245)
 pub const Shred = union(ShredType) {
-    code: CodingShred,
+    code: CodeShred,
     data: DataShred,
 
     const Self = @This();
@@ -50,7 +50,7 @@ pub const Shred = union(ShredType) {
     pub fn fromPayload(allocator: Allocator, payload_: []const u8) !Self {
         const variant = layout.getShredVariant(payload_) orelse return error.InvalidShredVariant;
         return switch (variant.shred_type) {
-            .code => .{ .code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload_) } },
+            .code => .{ .code = .{ .fields = try CodeShred.Fields.fromPayload(allocator, payload_) } },
             .data => .{ .data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload_) } },
         };
     }
@@ -150,13 +150,13 @@ pub const Shred = union(ShredType) {
 };
 
 /// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
-pub const CodingShred = struct {
+pub const CodeShred = struct {
     // TODO(x19): pull out the generics
     fields: Fields,
-    const Fields = GenericShred(CodingShredHeader, coding_shred);
+    const Fields = GenericShred(CodeShredHeader, code_shred_constants);
 
     const Self = @This();
-    const consts = coding_shred;
+    const consts = code_shred_constants;
 
     pub fn default(allocator: std.mem.Allocator) !Self {
         return .{ .fields = try Fields.default(allocator) };
@@ -166,7 +166,7 @@ pub const CodingShred = struct {
     pub fn fromRecoveredShard(
         allocator: Allocator,
         common_header: CommonHeader,
-        coding_header: CodingShredHeader,
+        code_header: CodeShredHeader,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
@@ -185,11 +185,11 @@ pub const CodingShred = struct {
         var buf = std.io.fixedBufferStream(payload);
         const writer = buf.writer();
         try bincode.write(writer, common_header, .{});
-        try bincode.write(writer, coding_header, .{});
+        try bincode.write(writer, code_header, .{});
         var shred = Fields{
             .allocator = allocator,
             .common = common_header,
-            .custom = coding_header,
+            .custom = code_header,
             .payload = payload,
         };
         if (chained_merkle_root) |hash| try shred.setChainedMerkleRoot(hash);
@@ -200,7 +200,7 @@ pub const CodingShred = struct {
 
     pub fn sanitize(self: *const Self) !void {
         try self.fields.sanitize();
-        if (self.fields.custom.num_coding_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
+        if (self.fields.custom.num_code_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
             return error.InvalidNumCodingShreds;
         }
         _ = try self.erasureShardIndex();
@@ -212,19 +212,19 @@ pub const CodingShred = struct {
         if (try checkedAdd(
             self.fields.common.fec_set_index,
             try checkedSub(@as(u32, @intCast(self.fields.custom.num_data_shreds)), 1),
-        ) >= data_shred.max_per_slot) {
+        ) >= data_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
         if (try checkedAdd(
             try self.firstCodingIndex(),
-            try checkedSub(@as(u32, @intCast(self.fields.custom.num_coding_shreds)), 1),
-        ) >= coding_shred.max_per_slot) {
+            try checkedSub(@as(u32, @intCast(self.fields.custom.num_code_shreds)), 1),
+        ) >= code_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
         const num_data_shreds: usize = @intCast(self.fields.custom.num_data_shreds);
-        const num_coding_shreds: usize = @intCast(self.fields.custom.num_coding_shreds);
+        const num_code_shreds: usize = @intCast(self.fields.custom.num_code_shreds);
         const position: usize = @intCast(self.fields.custom.position);
-        const fec_set_size = try checkedAdd(num_data_shreds, num_coding_shreds);
+        const fec_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
         const index = try checkedAdd(position, num_data_shreds);
         return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
     }
@@ -240,10 +240,10 @@ pub const CodingShred = struct {
 /// Analogous to [ShredData](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L61)
 pub const DataShred = struct {
     fields: Fields,
-    const Fields = GenericShred(DataShredHeader, data_shred);
+    const Fields = GenericShred(DataShredHeader, data_shred_constants);
 
     const Self = @This();
-    pub const constants = data_shred;
+    pub const constants = data_shred_constants;
 
     pub fn default(allocator: std.mem.Allocator) !Self {
         return .{ .fields = try Fields.default(allocator) };
@@ -267,7 +267,7 @@ pub const DataShred = struct {
         @memcpy(payload[SIGNATURE_LENGTH..][0..shard_size], shard);
         @memset(payload[SIGNATURE_LENGTH + shard_size ..], 0);
         var shred = try Fields.fromPayloadOwned(allocator, payload);
-        if (shard_size != try capacity(coding_shred, shred.common.shred_variant)) {
+        if (shard_size != try capacity(code_shred_constants, shred.common.shred_variant)) {
             return error.InvalidShardSize;
         }
         if (chained_merkle_root) |hash| try shred.setChainedMerkleRoot(hash);
@@ -709,7 +709,7 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
 }
 
 /// Shred index in the erasure batch.
-/// This only works for coding shreds.
+/// This only works for code shreds.
 fn codeIndex(shred: []const u8) ?usize {
     const num_data_shreds: usize = @intCast(getInt(u16, shred, 83) orelse return null);
     const position: usize = @intCast(getInt(u16, shred, 87) orelse return null);
@@ -805,7 +805,7 @@ pub const CommonHeader = struct {
         };
     }
 
-    // Identifier for the erasure coding set that the shred belongs to.
+    // Identifier for the erasure code set that the shred belongs to.
     pub fn erasureSetId(self: @This()) ErasureSetId {
         return ErasureSetId{
             .slot = self.slot,
@@ -830,17 +830,17 @@ pub const DataShredHeader = struct {
     }
 };
 
-pub const CodingShredHeader = struct {
+pub const CodeShredHeader = struct {
     num_data_shreds: u16,
-    num_coding_shreds: u16,
-    position: u16, // [0..num_coding_shreds)
+    num_code_shreds: u16,
+    position: u16, // [0..num_code_shreds)
 
     const Self = @This();
 
     pub fn default() Self {
         return .{
             .num_data_shreds = 0,
-            .num_coding_shreds = 0,
+            .num_code_shreds = 0,
             .position = 0,
         };
     }
@@ -852,8 +852,8 @@ pub const ShredType = enum(u8) {
 
     fn constants(self: @This()) ShredConstants {
         return switch (self) {
-            .code => coding_shred,
-            .data => data_shred,
+            .code => code_shred_constants,
+            .data => data_shred_constants,
         };
     }
 };
@@ -944,8 +944,8 @@ pub const ShredVariant = struct {
 
     pub fn constants(self: Self) ShredConstants {
         return switch (self.shred_type) {
-            .data => data_shred,
-            .code => coding_shred,
+            .data => data_shred_constants,
+            .code => code_shred_constants,
         };
     }
 };
@@ -1044,8 +1044,8 @@ pub const layout = struct {
     pub fn getSignedData(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const constants = switch (variant.shred_type) {
-            .code => coding_shred,
-            .data => data_shred,
+            .code => code_shred_constants,
+            .data => data_shred_constants,
         };
         return getMerkleRoot(shred, constants, variant) catch null;
     }
@@ -1139,7 +1139,7 @@ test "getIndex" {
 
 test "getMerkleRoot" {
     const variant = layout.getShredVariant(&test_data_shred).?;
-    const merkle_root = try getMerkleRoot(&test_data_shred, data_shred, variant);
+    const merkle_root = try getMerkleRoot(&test_data_shred, data_shred_constants, variant);
     const expected_signed_data = [_]u8{
         224, 241, 85,  253, 247, 62,  137, 179, 152, 192, 186, 203, 121, 194, 178, 130,
         33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,

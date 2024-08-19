@@ -1470,7 +1470,7 @@ pub const AncestorIterator = struct {
 const bincode = sig.bincode;
 const Blockstore = sig.ledger.BlockstoreDB;
 const ShredInserter = sig.ledger.ShredInserter;
-const CodingShred = sig.ledger.shred.CodingShred;
+const CodingShred = sig.ledger.shred.CodeShred;
 const TestState = sig.ledger.insert_shred.TestState;
 
 const test_shreds = @import("test_shreds.zig");
