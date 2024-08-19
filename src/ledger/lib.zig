@@ -7,6 +7,7 @@ pub const reader = @import("reader.zig");
 pub const reed_solomon = @import("reed_solomon.zig");
 pub const rocksdb = @import("rocksdb.zig");
 pub const schema = @import("schema.zig");
+pub const shred = @import("shred.zig");
 pub const shredder = @import("shredder.zig");
 pub const transaction_status = @import("transaction_status.zig");
 pub const tests = @import("tests.zig");

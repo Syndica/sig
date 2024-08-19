@@ -1,7 +1,7 @@
 const sig = @import("../lib.zig");
 
-pub const BlockstoreDB = sig.blockstore.rocksdb.RocksDB(&sig.blockstore.schema.list);
+pub const BlockstoreDB = sig.ledger.rocksdb.RocksDB(&sig.ledger.schema.list);
 
 test BlockstoreDB {
-    sig.blockstore.database.assertIsDatabase(BlockstoreDB);
+    sig.ledger.database.assertIsDatabase(BlockstoreDB);
 }

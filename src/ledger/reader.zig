@@ -24,10 +24,10 @@ const Transaction = sig.core.Transaction;
 const VersionedTransaction = sig.core.VersionedTransaction;
 
 // shred
-const Shred = sig.shred_collector.shred.Shred;
-const DataShred = sig.shred_collector.shred.DataShred;
+const Shred = sig.ledger.shred.Shred;
+const DataShred = sig.ledger.shred.DataShred;
 
-const shred_layout = sig.shred_collector.shred.layout;
+const shred_layout = sig.ledger.shred.layout;
 
 // blockstore
 const BytesRef = blockstore.database.BytesRef;
@@ -1468,10 +1468,10 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Blockstore = sig.blockstore.BlockstoreDB;
-const ShredInserter = sig.blockstore.ShredInserter;
-const CodingShred = sig.shred_collector.shred.CodingShred;
-const TestState = sig.blockstore.insert_shred.TestState;
+const Blockstore = sig.ledger.BlockstoreDB;
+const ShredInserter = sig.ledger.ShredInserter;
+const CodingShred = sig.ledger.shred.CodingShred;
+const TestState = sig.ledger.insert_shred.TestState;
 
 const test_shreds = @import("test_shreds.zig");
 
@@ -1556,7 +1556,7 @@ test "getFirstDuplicateProof" {
     const registry = sig.prometheus.globalRegistry();
 
     const path = std.fmt.comptimePrint("{s}/{s}", .{ "test_data/blockstore/insert_shred", "getFirstDuplicateProof" });
-    try sig.blockstore.tests.freshDir(path);
+    try sig.ledger.tests.freshDir(path);
     var db = try BlockstoreDB.open(allocator, logger, path);
     defer db.deinit(true);
 
@@ -1972,7 +1972,7 @@ test "isShredDuplicate" {
     const shred_slot = 10;
     const shred_index = 10;
 
-    const size = sig.shred_collector.shred.DataShred.constants.payload_size;
+    const size = sig.ledger.shred.DataShred.constants.payload_size;
     const shred_payload = try allocator.alloc(u8, size);
     defer allocator.free(shred_payload);
 
@@ -2030,7 +2030,7 @@ test "findMissingDataIndexes" {
     shred.data.fields.common.index = shred_index;
 
     // set the variant
-    const variant = sig.shred_collector.shred.ShredVariant{
+    const variant = sig.ledger.shred.ShredVariant{
         .shred_type = .data,
         .proof_size = 100 & 0x0F,
         .chained = false,
@@ -2097,7 +2097,7 @@ test "getCodeShred" {
     try std.testing.expect(shred == .code);
 
     // set the variant
-    const variant = sig.shred_collector.shred.ShredVariant{
+    const variant = sig.ledger.shred.ShredVariant{
         .shred_type = .code,
         .proof_size = 100 & 0x0F,
         .chained = false,
@@ -2169,13 +2169,13 @@ test "getDataShred" {
         &max_root,
     );
 
-    var shred_vec = sig.shred_collector.shred.test_data_shred; // local copy
-    const shred_payload = shred_vec[0..sig.shred_collector.shred.DataShred.constants.payload_size];
+    var shred_vec = sig.ledger.shred.test_data_shred; // local copy
+    const shred_payload = shred_vec[0..sig.ledger.shred.DataShred.constants.payload_size];
     const shred_slot = shred_layout.getSlot(shred_payload) orelse return error.InvalidShredData;
     // shred_payload[73] = 0; // zero-th shred index
     const shred_index = shred_layout.getIndex(shred_payload) orelse return error.InvalidShredData;
 
-    var shred = try sig.shred_collector.shred.Shred.fromPayload(allocator, shred_payload);
+    var shred = try sig.ledger.shred.Shred.fromPayload(allocator, shred_payload);
     defer shred.deinit();
 
     var write_batch = try db.initWriteBatch();

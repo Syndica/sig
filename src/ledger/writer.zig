@@ -354,7 +354,7 @@ pub const BlockstoreWriter = struct {
 
     pub fn purgeRangeWithCount(
         write_batch: *BlockstoreDB.WriteBatch,
-        comptime cf: sig.blockstore.database.ColumnFamily,
+        comptime cf: sig.ledger.database.ColumnFamily,
         from_key: cf.Key,
         to_key: cf.Key,
         count: *u32,
@@ -405,7 +405,7 @@ pub const BlockstoreWriter = struct {
 
     pub fn purgeFileRangeWithCount(
         db: *BlockstoreDB,
-        comptime cf: sig.blockstore.database.ColumnFamily,
+        comptime cf: sig.ledger.database.ColumnFamily,
         from_key: cf.Key,
         to_key: cf.Key,
         count: *u32,
@@ -442,7 +442,7 @@ pub const ScanAndFixRootsMetrics = struct {
     };
 };
 
-const TestState = sig.blockstore.insert_shred.TestState;
+const TestState = sig.ledger.insert_shred.TestState;
 
 test "purgeSlots" {
     const allocator = std.testing.allocator;
@@ -485,11 +485,11 @@ test "purgeSlots" {
     // write another type
     var write_batch = try db.initWriteBatch();
     for (0..roots.len + 1) |i| {
-        const merkle_root_meta = sig.shred_collector.shred.ErasureSetId{
+        const merkle_root_meta = sig.ledger.shred.ErasureSetId{
             .fec_set_index = i,
             .slot = i,
         };
-        const merkle_meta = sig.blockstore.meta.MerkleRootMeta{
+        const merkle_meta = sig.ledger.meta.MerkleRootMeta{
             .merkle_root = null,
             .first_received_shred_index = 0,
             .first_received_shred_type = .data,

@@ -4,14 +4,14 @@ const sig = @import("../lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const BytesRef = sig.blockstore.database.BytesRef;
-const ColumnFamily = sig.blockstore.database.ColumnFamily;
-const IteratorDirection = sig.blockstore.database.IteratorDirection;
+const BytesRef = sig.ledger.database.BytesRef;
+const ColumnFamily = sig.ledger.database.ColumnFamily;
+const IteratorDirection = sig.ledger.database.IteratorDirection;
 const Logger = sig.trace.Logger;
 const ReturnType = sig.utils.types.ReturnType;
 
-const key_serializer = sig.blockstore.database.key_serializer;
-const value_serializer = sig.blockstore.database.value_serializer;
+const key_serializer = sig.ledger.database.key_serializer;
+const value_serializer = sig.ledger.database.value_serializer;
 
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
@@ -318,5 +318,5 @@ fn callRocks(logger: Logger, comptime func: anytype, args: anytype) ReturnType(@
 }
 
 test "rocksdb database" {
-    try sig.blockstore.database.testDatabase(RocksDB);
+    try sig.ledger.database.testDatabase(RocksDB);
 }
