@@ -259,7 +259,6 @@ pub const StandardErrLogger = struct {
 
     pub fn log(self: *Self, level: Level, msg: []const u8) void {
         if (@intFromEnum(self.max_level) >= @intFromEnum(level)) {
-            // TODO change Entry.init to take a config struct.
             var e = Entry.init(self.allocator, self.channel, self.max_level);
             if (self.scope_tag) |scope_tag| {
                 e = e.scope(scope_tag);
