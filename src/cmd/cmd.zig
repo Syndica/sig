@@ -645,10 +645,6 @@ fn shredCollector() !void {
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
     const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
-
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
-    defer snapshot_dir.close();
 
     var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },
@@ -657,7 +653,7 @@ fn shredCollector() !void {
     defer gossip_manager.deinit();
 
     // leader schedule
-    // NOTE: leader schedule is not needed for the shred collector because we skip accounts-db setup
+    // NOTE: leader schedule is needed for the shred collector because we skip accounts-db setup
     var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse @panic("No leader schedule found");
     const leader_provider = leader_schedule.provider();
 
