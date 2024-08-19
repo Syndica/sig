@@ -15,6 +15,8 @@ const INITIAL_ENTRIES_CHANNEL_SIZE: usize = 1024;
 pub const default_logger: *Logger = &global;
 var global: Logger = .{ .standard = undefined };
 
+const LogConfig = struct { max_level: Level, scope: ?[]const u8 };
+
 pub const Logger = union(enum) {
     standard: *StandardErrLogger,
     test_logger: TestLogger,
@@ -24,6 +26,18 @@ pub const Logger = union(enum) {
 
     pub fn init(allocator: std.mem.Allocator, max_level: Level) Self {
         return .{ .standard = StandardErrLogger.init(allocator, max_level) };
+    }
+
+    pub fn _init(allocator: std.mem.Allocator, config: LogConfig) Self {
+        const stdErrlogger = blk: {
+            const stdErrlogger = StandardErrLogger.init(allocator, config.max_level);
+            if (config.scope) |scope| {
+                stdErrlogger.scoped(scope);
+            }
+            break :blk stdErrlogger;
+        };
+
+        return .{ .standard = stdErrlogger };
     }
 
     pub fn spawn(self: Self) void {
@@ -156,6 +170,7 @@ pub const StandardErrLogger = struct {
     exit_sig: AtomicBool,
     handle: ?std.Thread,
     channel: *Channel(*StandardEntry),
+    scope: ?[]const u8,
 
     const Self = @This();
 
@@ -167,8 +182,13 @@ pub const StandardErrLogger = struct {
             .exit_sig = AtomicBool.init(false),
             .handle = null,
             .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
+            .scope = null,
         };
         return self;
+    }
+
+    pub fn scoped(self: *Self, scope: ?[]const u8) void {
+        self.scope = scope;
     }
 
     pub fn spawn(self: *Self) void {
@@ -208,7 +228,7 @@ pub const StandardErrLogger = struct {
 
     pub fn field(self: *Self, name: []const u8, value: anytype) Entry {
         var e = Entry.init(self.allocator, self.channel, self.max_level);
-        return e.field(name, value);
+        return e.scoped(self.scope).field(name, value);
     }
 
     pub fn info(self: *Self, msg: []const u8) void {
@@ -334,8 +354,9 @@ pub const StdErrSink = struct {
 };
 
 test "trace.logger: works" {
-    var logger: Logger = .noop; // uncomment below to run visual test
-    // var logger = Logger.init(testing.allocator, .info);
+    // var logger: Logger = .noop; // uncomment below to run visual test
+    // var logger = Logger.init(testing.allocator, .debug);
+    var logger = Logger._init(testing.allocator, .{ .max_level = .debug, .scope = "TEST" });
     logger.spawn();
     defer logger.deinit();
 

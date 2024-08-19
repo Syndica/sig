@@ -660,7 +660,6 @@ const AppBase = struct {
 
     fn init(allocator: Allocator) !AppBase {
         var logger = try spawnLogger();
-        // var logger: Logger = .noop;
         errdefer logger.deinit();
 
         const metrics_registry, const metrics_thread = try spawnMetrics(logger);

@@ -27,6 +27,18 @@ pub const Entry = union(enum) {
         }
     }
 
+    pub fn scoped(self: Self, scope: ?[]const u8) Self {
+        switch (self) {
+            .standard => |entry| {
+                _ = entry.scoped(scope);
+                return self;
+            },
+            .noop => {
+                return self;
+            },
+        }
+    }
+
     pub fn field(self: Self, name: []const u8, value: anytype) Self {
         switch (self) {
             .standard => |entry| {
@@ -116,13 +128,14 @@ pub const Entry = union(enum) {
 pub const StandardEntry = struct {
     /// Log levels more granular than this will not be logged.
     max_level: Level,
-    /// Level to log this message as.
+    /// Level to log this message as.entries
     level: Level,
     allocator: std.mem.Allocator,
     fields: std.ArrayList(Field),
     time: time.DateTime,
     message: std.ArrayList(u8),
     channel: *Channel(*StandardEntry),
+    scope: ?[]const u8,
 
     const Self = @This();
 
@@ -136,7 +149,13 @@ pub const StandardEntry = struct {
             .channel = channel,
             .time = time.DateTime.epoch_unix,
             .message = std.ArrayList(u8).init(allocator),
+            .scope = null,
         };
+        return self;
+    }
+
+    pub fn scoped(self: *Self, scope: ?[]const u8) *Self {
+        self.scope = scope;
         return self;
     }
 
