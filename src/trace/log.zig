@@ -37,10 +37,10 @@ pub const Logger = union(enum) {
         }
     }
 
-    pub fn scope(self: Self, scope_tag: []const u8) void {
+    pub fn scope(self: Self, comptime scope_tag: type) void {
         switch (self) {
             .standard => |logger| {
-                logger.scope_tag = scope_tag;
+                logger.scope_tag = @typeName(scope_tag);
             },
             .noop, .test_logger => {},
         }
@@ -359,7 +359,7 @@ pub const StdErrSink = struct {
 test "trace.logger: works" {
     // var logger: Logger = .noop; // uncomment below to run visual test
     var logger = Logger.init(testing.allocator, .debug);
-    logger.scope("log");
+    logger.scope(@This());
     logger.spawn();
     defer logger.deinit();
 
