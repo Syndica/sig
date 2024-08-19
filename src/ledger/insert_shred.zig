@@ -1374,7 +1374,7 @@ pub const ShredInserter = struct {
             , .{
                 slot,
                 erasure_set_id,
-                shred.fields.common.shred_variant.shred_type,
+                shred.fields.common.variant.shred_type,
                 merkle_root,
                 next_erasure_set,
                 next_merkle_root_meta.first_received_shred_type,
@@ -1461,7 +1461,7 @@ pub const ShredInserter = struct {
             , .{
                 slot,
                 shred.commonHeader().erasureSetId(),
-                shred.commonHeader().shred_variant.shred_type,
+                shred.commonHeader().variant.shred_type,
                 chained_merkle_root,
                 prev_erasure_set,
                 merkle_root,

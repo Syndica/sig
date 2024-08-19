@@ -68,7 +68,7 @@ pub const Shred = union(ShredType) {
     }
 
     pub fn sanitize(self: *const Self) !void {
-        if (self.commonHeader().shred_variant.shred_type != @as(ShredType, self.*)) {
+        if (self.commonHeader().variant.shred_type != @as(ShredType, self.*)) {
             return error.InconsistentShredVariant;
         }
         switch (self.*) {
@@ -81,7 +81,7 @@ pub const Shred = union(ShredType) {
             inline .code, .data => |s| getMerkleRoot(
                 s.fields.payload,
                 @TypeOf(s.fields).constants,
-                s.fields.common.shred_variant,
+                s.fields.common.variant,
             ),
         };
     }
@@ -153,7 +153,7 @@ pub const Shred = union(ShredType) {
 pub const CodeShred = struct {
     // TODO(x19): pull out the generics
     fields: Fields,
-    const Fields = GenericShred(CodeShredHeader, code_shred_constants);
+    const Fields = GenericShred(CodeHeader, code_shred_constants);
 
     const Self = @This();
     const consts = code_shred_constants;
@@ -166,15 +166,15 @@ pub const CodeShred = struct {
     pub fn fromRecoveredShard(
         allocator: Allocator,
         common_header: CommonHeader,
-        code_header: CodeShredHeader,
+        code_header: CodeHeader,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
     ) !Self {
-        if (common_header.shred_variant.shred_type != .code) {
+        if (common_header.variant.shred_type != .code) {
             return error.InvalidShredVariant;
         }
-        if (shard.len != try capacity(consts, common_header.shred_variant)) {
+        if (shard.len != try capacity(consts, common_header.variant)) {
             return error.InvalidShardSize;
         }
         if (shard.len + consts.headers_size > consts.payload_size) {
@@ -240,7 +240,7 @@ pub const CodeShred = struct {
 /// Analogous to [ShredData](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L61)
 pub const DataShred = struct {
     fields: Fields,
-    const Fields = GenericShred(DataShredHeader, data_shred_constants);
+    const Fields = GenericShred(DataHeader, data_shred_constants);
 
     const Self = @This();
     pub const constants = data_shred_constants;
@@ -267,7 +267,7 @@ pub const DataShred = struct {
         @memcpy(payload[SIGNATURE_LENGTH..][0..shard_size], shard);
         @memset(payload[SIGNATURE_LENGTH + shard_size ..], 0);
         var shred = try Fields.fromPayloadOwned(allocator, payload);
-        if (shard_size != try capacity(code_shred_constants, shred.common.shred_variant)) {
+        if (shard_size != try capacity(code_shred_constants, shred.common.variant)) {
             return error.InvalidShardSize;
         }
         if (chained_merkle_root) |hash| try shred.setChainedMerkleRoot(hash);
@@ -284,7 +284,7 @@ pub const DataShred = struct {
     }
 
     pub fn data(self: *const Self) ![]const u8 {
-        const data_buffer_size = try capacity(constants, self.fields.common.shred_variant);
+        const data_buffer_size = try capacity(constants, self.fields.common.variant);
         const size = self.fields.custom.size;
         if (size > self.fields.payload.len or
             size < constants.headers_size or
@@ -415,17 +415,17 @@ pub fn GenericShred(
             return .{
                 .slot = self.common.slot,
                 .index = self.common.index,
-                .shred_type = self.common.shred_variant.shred_type,
+                .shred_type = self.common.variant.shred_type,
             };
         }
 
         /// The return contains a pointer to data owned by the shred.
         fn merkleProof(self: *const Self) !MerkleProofEntryList {
-            return getMerkleProof(self.payload, constants, self.common.shred_variant);
+            return getMerkleProof(self.payload, constants, self.common.variant);
         }
 
         pub fn merkleNode(self: Self) !Hash {
-            const offset = try proofOffset(constants, self.common.shred_variant);
+            const offset = try proofOffset(constants, self.common.variant);
             return getMerkleNode(self.payload, SIGNATURE_LENGTH, offset);
         }
 
@@ -434,11 +434,11 @@ pub fn GenericShred(
                 return error.InvalidPayloadSize;
             }
             const end = constants.headers_size +
-                try capacity(constants, self.common.shred_variant);
+                try capacity(constants, self.common.variant);
             if (self.payload.len < end) {
                 return error.InsufficientPayloadSize;
             }
-            const start = switch (self.common.shred_variant.shred_type) {
+            const start = switch (self.common.variant.shred_type) {
                 .data => SIGNATURE_LENGTH,
                 .code => constants.headers_size,
             };
@@ -453,7 +453,7 @@ pub fn GenericShred(
 
         /// this is the data that is signed by the signature
         pub fn merkleRoot(self: Self) !Hash {
-            return getMerkleRoot(self.payload, constants, self.common.shred_variant);
+            return getMerkleRoot(self.payload, constants, self.common.variant);
         }
 
         pub fn chainedMerkleRoot(self: Self) !Hash {
@@ -462,7 +462,7 @@ pub fn GenericShred(
 
         /// agave: set_chained_merkle_root
         fn setChainedMerkleRoot(self: *Self, chained_merkle_root: Hash) !void {
-            const offset = try getChainedMerkleRootOffset(self.common.shred_variant);
+            const offset = try getChainedMerkleRootOffset(self.common.variant);
             const end = offset + SIZE_OF_MERKLE_ROOT;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
@@ -473,11 +473,11 @@ pub fn GenericShred(
         /// agave: set_merkle_proof
         pub fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
             try proof.sanitize();
-            const proof_size = self.common.shred_variant.proof_size;
+            const proof_size = self.common.variant.proof_size;
             if (proof.len != proof_size) {
                 return error.InvalidMerkleProof;
             }
-            const offset = try proofOffset(constants, self.common.shred_variant);
+            const offset = try proofOffset(constants, self.common.variant);
             if (self.payload.len < offset + proof.len * merkle_proof_entry_size) {
                 return error.InvalidProofSize;
             }
@@ -493,7 +493,7 @@ pub fn GenericShred(
 
         /// agave: retransmitter_signature
         pub fn retransmitterSignature(self: Self) !Signature {
-            const offset = try retransmitterSignatureOffset(self.common.shred_variant);
+            const offset = try retransmitterSignatureOffset(self.common.variant);
             const end = offset + SIGNATURE_LENGTH;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
@@ -505,7 +505,7 @@ pub fn GenericShred(
 
         /// agave: setRetransmitterSignature
         pub fn setRetransmitterSignature(self: *Self, signature: Signature) !void {
-            const offset = try retransmitterSignatureOffset(self.common.shred_variant);
+            const offset = try retransmitterSignatureOffset(self.common.variant);
             const end = offset + SIGNATURE_LENGTH;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
@@ -784,20 +784,20 @@ pub const MerkleProofEntryList = struct {
 
 pub const CommonHeader = struct {
     signature: Signature,
-    shred_variant: ShredVariant,
+    variant: ShredVariant,
     slot: Slot,
     index: u32,
     version: u16,
     fec_set_index: u32,
 
-    pub const @"!bincode-config:shred_variant" = ShredVariantConfig;
+    pub const @"!bincode-config:variant" = ShredVariantConfig;
 
     const Self = @This();
 
     pub fn default() Self {
         return .{
             .signature = Signature{ .data = undefined },
-            .shred_variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
+            .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
             .slot = 0,
             .index = 0,
             .version = 0,
@@ -814,7 +814,7 @@ pub const CommonHeader = struct {
     }
 };
 
-pub const DataShredHeader = struct {
+pub const DataHeader = struct {
     parent_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
@@ -830,7 +830,7 @@ pub const DataShredHeader = struct {
     }
 };
 
-pub const CodeShredHeader = struct {
+pub const CodeHeader = struct {
     num_data_shreds: u16,
     num_code_shreds: u16,
     position: u16, // [0..num_code_shreds)
