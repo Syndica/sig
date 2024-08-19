@@ -9,9 +9,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Account = sig.core.Account;
 
-
 const SnapshotFields = sig.accounts_db.SnapshotFields;
-
 
 const FileId = sig.accounts_db.accounts_file.FileId;
 
