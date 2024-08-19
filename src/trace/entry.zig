@@ -128,7 +128,7 @@ pub const Entry = union(enum) {
 pub const StandardEntry = struct {
     /// Log levels more granular than this will not be logged.
     max_level: Level,
-    /// Level to log this message as.entries
+    /// Level to log this message as.
     level: Level,
     allocator: std.mem.Allocator,
     fields: std.ArrayList(Field),
