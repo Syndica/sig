@@ -216,7 +216,7 @@ pub const CodeShred = struct {
             return error.InvalidErasureShardIndex;
         }
         if (try checkedAdd(
-            try self.firstCodingIndex(),
+            try self.firstCodeIndex(),
             try checkedSub(@as(u32, @intCast(self.fields.custom.num_code_shreds)), 1),
         ) >= code_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
@@ -229,7 +229,7 @@ pub const CodeShred = struct {
         return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
     }
 
-    pub fn firstCodingIndex(self: *const Self) !u32 {
+    pub fn firstCodeIndex(self: *const Self) !u32 {
         return sig.utils.math.checkedSub(
             self.fields.common.index,
             @as(u32, @intCast(self.fields.custom.position)),
@@ -995,7 +995,7 @@ pub const ShredConstants = struct {
 pub const layout = struct {
     pub const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
     pub const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
-    pub const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;
+    pub const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
     pub const SIZE_OF_SIGNATURE: usize = sig.core.SIGNATURE_LENGTH;
     pub const SIZE_OF_SHRED_VARIANT: usize = 1;
     pub const SIZE_OF_SHRED_SLOT: usize = 8;
@@ -1210,7 +1210,7 @@ test "merkleProof" {
     const shreds = try loadShredsFromFile(
         std.testing.allocator,
         &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
-        "test_data/shreds/merkle_proof_test_shreds_34_data_34_coding.bin",
+        "test_data/shreds/merkle_proof_test_shreds_34_data_34_code.bin",
     );
     defer for (shreds) |s| s.deinit();
     var i: usize = 0;

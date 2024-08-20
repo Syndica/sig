@@ -2230,7 +2230,7 @@ test "recovery" {
     const shreds = try loadShredsFromFile(
         allocator,
         &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
-        "test_data/shreds/recovery_test_shreds_34_data_34_coding.bin",
+        "test_data/shreds/recovery_test_shreds_34_data_34_code.bin",
     );
     defer for (shreds) |s| s.deinit();
     const data_shreds = shreds[0..34];
