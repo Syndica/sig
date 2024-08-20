@@ -578,7 +578,6 @@ fn validator() !void {
         app_base.logger,
         gossip_service,
         true,
-        false,
         geyser_writer,
     );
 
@@ -837,7 +836,6 @@ fn validateSnapshot() !void {
         allocator,
         app_base.logger,
         null,
-        true,
         false,
         geyser_writer,
     );
@@ -850,8 +848,8 @@ fn validateSnapshot() !void {
     while (true) {
         std.debug.print("enter pubkey:\n", .{});
         const input_pubkey_str = try std.io.getStdIn().reader().readUntilDelimiterOrEof(&buf, '\n') orelse continue;
-        const input_pubkey = Pubkey.fromBytes(input_pubkey_str) catch {
-            std.debug.print("invalid pubkey\n", .{});
+        const input_pubkey = Pubkey.fromString(input_pubkey_str) catch {
+            std.debug.print("invalid pubkey: {s}\n", .{input_pubkey_str});
             continue;
         };
 
@@ -861,7 +859,7 @@ fn validateSnapshot() !void {
         };
         defer account.deinit(accounts_db.allocator);
 
-        std.debug.print("account: {any}\n", .{account});
+        std.debug.print("account: {any}\n\n", .{account});
     }
 }
 
@@ -877,7 +875,6 @@ fn printLeaderSchedule() !void {
             app_base.logger,
             null,
             true,
-            false,
             null,
         ) catch |err| {
             if (err == error.SnapshotsNotFoundAndNoGossipService) {
@@ -1236,8 +1233,6 @@ fn loadSnapshot(
     gossip_service: ?*GossipService,
     /// whether to validate the snapshot account data against the metadata
     validate_snapshot: bool,
-    /// whether to validate the genesis config against the bank (to remove when genesis validation works on all clusters)
-    validate_genesis: bool,
     /// optional geyser to write snapshot data to
     geyser_writer: ?*GeyserWriter,
 ) !*LoadedSnapshot {
@@ -1314,15 +1309,7 @@ fn loadSnapshot(
 
     logger.infof("validating bank...", .{});
     result.bank = Bank.init(&result.accounts_db, bank_fields);
-    Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config) catch |e| switch (e) {
-        // TODO: remove when genesis validation works on all clusters
-        error.BankAndGenesisMismatch => if (validate_genesis) {
-            return e;
-        } else {
-            logger.err("Bank failed genesis validation.");
-        },
-        else => return e,
-    };
+    try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
     // validate the status cache
     logger.infof("validating status cache...", .{});
