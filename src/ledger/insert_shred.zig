@@ -51,6 +51,7 @@ pub const ShredInserter = struct {
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
+    count: usize = 0,
 
     const Self = @This();
 
@@ -139,6 +140,13 @@ pub const ShredInserter = struct {
         is_trusted: bool,
         retransmit_sender: ?PointerClosure([]const []const u8, void),
     ) !InsertShredsResult {
+        if (shreds.len == 0) return .{
+            .completed_data_set_infos = ArrayList(CompletedDataSetInfo).init(self.allocator),
+            .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(self.allocator),
+        };
+        self.count += 1;
+        const should_log = self.count % 10 == 0;
+
         self.metrics.num_shreds.add(shreds.len);
         const allocator = self.allocator;
         var reed_solomon_cache = try ReedSolomonCache.init(allocator);
@@ -369,6 +377,12 @@ pub const ShredInserter = struct {
             if (working_erasure_meta.* == .clean) {
                 continue;
             }
+            if (should_log) {
+                self.logger.infof("erasure_meta: {any}: {any}", .{
+                    erasure_set,
+                    working_erasure_meta.asRef().*,
+                });
+            }
             try write_batch.put(
                 schema.erasure_meta,
                 erasure_set,
@@ -383,6 +397,13 @@ pub const ShredInserter = struct {
             const working_merkle_meta = merkle_entry.value_ptr;
             if (working_merkle_meta.* == .clean) {
                 continue;
+            }
+
+            if (should_log) {
+                self.logger.infof("merkle_root_meta: {any}: {any}", .{
+                    erasure_set_id,
+                    working_merkle_meta.asRef().*,
+                });
             }
             try write_batch.put(
                 schema.merkle_root_meta,
@@ -717,12 +738,9 @@ pub const ShredInserter = struct {
         slot_meta_entry.did_insert_occur = true;
 
         // TODO: redundant get or put pattern
-        const erasure_meta_entry = try erasure_metas.getOrPut(erasure_set_id);
-        if (!erasure_meta_entry.found_existing) {
+        if (!erasure_metas.contains(erasure_set_id)) {
             if (try self.db.get(schema.erasure_meta, erasure_set_id)) |meta_| {
-                erasure_meta_entry.value_ptr.* = .{ .clean = meta_ };
-            } else {
-                std.debug.assert(erasure_metas.remove(erasure_set_id));
+                try erasure_metas.put(erasure_set_id, .{ .clean = meta_ });
             }
         }
 
@@ -1089,10 +1107,10 @@ pub const ShredInserter = struct {
             reed_solomon_cache,
         )) |shreds| {
             return shreds;
-        } else |e| {
+        } else |_| {
             // TODO: submit_self.metrics
             // TODO: consider returning error (agave does not return an error or log)
-            self.logger.errf("shred recovery error: {}", .{e});
+            // self.logger.errf("shred recovery error: {}", .{e});
             return std.ArrayList(Shred).init(self.allocator);
         }
     }

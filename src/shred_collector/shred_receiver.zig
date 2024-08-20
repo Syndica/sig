@@ -93,8 +93,8 @@ pub const ShredReceiver = struct {
                     const shred_version = self.shred_version.load(.monotonic);
                     for (buf.items) |batch| {
                         for (batch.items) |*packet| {
-                            try self.handlePacket(packet, &responses, shred_version);
                             if (is_repair) packet.flags.set(.repair);
+                            try self.handlePacket(packet, &responses, shred_version);
                         }
                         try self.unverified_shred_sender.send(batch);
                     }
