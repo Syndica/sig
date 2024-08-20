@@ -21,7 +21,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Shred = sig.ledger.shred.Shred;
-const CodingShred = sig.ledger.shred.CodeShred;
+const CodeShred = sig.ledger.shred.CodeShred;
 const DataShred = sig.ledger.shred.DataShred;
 const ReedSolomonCache = bs.shredder.ReedSolomonCache;
 const ShredId = sig.ledger.shred.ShredId;
@@ -209,7 +209,7 @@ pub const ShredInserter = struct {
                 },
                 .code => |code_shred| {
                     // TODO error handling?
-                    _ = try self.checkInsertCodingShred(
+                    _ = try self.checkInsertCodeShred(
                         code_shred,
                         &erasure_metas,
                         &merkle_root_metas,
@@ -418,9 +418,9 @@ pub const ShredInserter = struct {
 
     /// agave: check_insert_coding_shred
     /// TODO: break this up
-    fn checkInsertCodingShred(
+    fn checkInsertCodeShred(
         self: *Self,
-        shred: CodingShred,
+        shred: CodeShred,
         erasure_metas: *SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)), // BTreeMap in rust
         merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
         index_working_set: *AutoHashMap(u64, IndexMetaWorkingSetEntry),
@@ -455,7 +455,7 @@ pub const ShredInserter = struct {
                 return false;
             }
 
-            if (!shouldInsertCodingShred(&shred, self.max_root.load(.unordered))) {
+            if (!shouldInsertCodeShred(&shred, self.max_root.load(.unordered))) {
                 self.metrics.num_code_shreds_invalid.inc();
                 return false;
             }
@@ -483,7 +483,7 @@ pub const ShredInserter = struct {
                 erasure_meta_entry.value_ptr.* = .{ .clean = meta_ };
             } else {
                 erasure_meta_entry.value_ptr.* = .{
-                    .dirty = ErasureMeta.fromCodingShred(shred) orelse return error.Unwrap,
+                    .dirty = ErasureMeta.fromCodeShred(shred) orelse return error.Unwrap,
                 };
             }
         }
@@ -492,10 +492,10 @@ pub const ShredInserter = struct {
         // NOTE perf: maybe this can be skipped for trusted shreds.
         // agave runs this regardless of trust, but we can check if it has
         // a meaningful performance impact to skip this for trusted shreds.
-        if (!erasure_meta.checkCodingShred(shred)) {
+        if (!erasure_meta.checkCodeShred(shred)) {
             self.metrics.num_code_shreds_invalid_erasure_config.inc();
             if (!try self.hasDuplicateShredsInSlot(slot)) {
-                if (try self.findConflictingCodingShred(
+                if (try self.findConflictingCodeShred(
                     shred,
                     slot,
                     erasure_meta,
@@ -545,7 +545,7 @@ pub const ShredInserter = struct {
         //     .record_shred(shred.slot(), shred.fec_set_index(), shred_source, None);
         _ = shred_source;
 
-        const result = if (insertCodingShred(index_meta, shred, write_batch)) |_| blk: {
+        const result = if (insertCodeShred(index_meta, shred, write_batch)) |_| blk: {
             index_meta_working_set_entry.did_insert_occur = true;
             self.metrics.num_inserted.inc();
             const entry = try merkle_root_metas.getOrPut(erasure_set_id);
@@ -565,15 +565,15 @@ pub const ShredInserter = struct {
     }
 
     /// agave: should_insert_coding_shred
-    fn shouldInsertCodingShred(shred: *const CodingShred, max_root: Slot) bool {
+    fn shouldInsertCodeShred(shred: *const CodeShred, max_root: Slot) bool {
         assertOk(shred.sanitize());
         return shred.fields.common.slot > max_root;
     }
 
     /// agave: find_conflicting_coding_shred
-    fn findConflictingCodingShred(
+    fn findConflictingCodeShred(
         self: *Self,
-        _: CodingShred,
+        _: CodeShred,
         slot: Slot,
         erasure_meta: *const ErasureMeta,
         just_received_shreds: *const AutoHashMap(ShredId, Shred),
@@ -784,9 +784,9 @@ pub const ShredInserter = struct {
     }
 
     /// agave: insert_coding_shred
-    fn insertCodingShred(
+    fn insertCodeShred(
         index_meta: *meta.Index,
-        shred: CodingShred,
+        shred: CodeShred,
         write_batch: *WriteBatch,
     ) !void {
         const slot = shred.fields.common.slot;
@@ -1319,13 +1319,13 @@ pub const ShredInserter = struct {
     /// agave: check_forward_chained_merkle_root_consistency
     fn checkForwardChainedMerkleRootConsistency(
         self: *Self,
-        shred: CodingShred,
+        shred: CodeShred,
         erasure_meta: ErasureMeta,
         just_inserted_shreds: *const AutoHashMap(ShredId, Shred),
         merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
         duplicate_shreds: *std.ArrayList(PossibleDuplicateShred),
     ) !bool {
-        std.debug.assert(erasure_meta.checkCodingShred(shred));
+        std.debug.assert(erasure_meta.checkCodeShred(shred));
         const slot = shred.fields.common.slot;
         const erasure_set_id = shred.fields.common.erasureSetId();
 
@@ -1916,7 +1916,7 @@ pub const TestState = struct {
         return self.inserter.insertShreds(shreds, is_repairs, null, false, null);
     }
 
-    fn checkInsertCodingShred(
+    fn checkInsertCodeShred(
         self: *TestState,
         shred: Shred,
         write_batch: *WriteBatch,
@@ -1936,7 +1936,7 @@ pub const TestState = struct {
         var i: usize = 0;
 
         return .{
-            try self.inserter.checkInsertCodingShred(
+            try self.inserter.checkInsertCodeShred(
                 shred.code,
                 &erasure_metas,
                 merkle_root_metas,
@@ -2097,7 +2097,7 @@ test "merkle root metas coding" {
 
         const succeeded, //
         const duplicate_shreds = try state
-            .checkInsertCodingShred(this_shred, &write_batch, &merkle_root_metas);
+            .checkInsertCodeShred(this_shred, &write_batch, &merkle_root_metas);
         defer duplicate_shreds.deinit();
         try std.testing.expect(succeeded);
 
@@ -2133,7 +2133,7 @@ test "merkle root metas coding" {
 
         const succeeded, //
         const duplicate_shreds = try state
-            .checkInsertCodingShred(this_shred, &write_batch, &merkle_root_metas);
+            .checkInsertCodeShred(this_shred, &write_batch, &merkle_root_metas);
         defer duplicate_shreds.deinit();
         try std.testing.expect(!succeeded);
 
@@ -2170,7 +2170,7 @@ test "merkle root metas coding" {
 
         const succeeded, //
         const duplicate_shreds = try state
-            .checkInsertCodingShred(this_shred, &write_batch, &merkle_root_metas);
+            .checkInsertCodeShred(this_shred, &write_batch, &merkle_root_metas);
         defer duplicate_shreds.deinit();
         try std.testing.expect(succeeded);
 
@@ -2212,7 +2212,7 @@ test "recovery" {
     const shreds = try loadShredsFromFile(
         allocator,
         &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
-        "test_data/shreds/recovery_test_shreds_34_data_34_coding.bin",
+        "test_data/shreds/recovery_test_shreds_34_data_34_code.bin",
     );
     defer for (shreds) |s| s.deinit();
     const data_shreds = shreds[0..34];
