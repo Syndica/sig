@@ -28,6 +28,7 @@ const GossipConfig = struct {
     host: ?[]const u8 = null,
     port: u16 = 8001,
     entrypoints: [][]const u8 = &.{},
+    network: ?[]const u8 = null,
     spy_node: bool = false,
     dump: bool = false,
     trusted_validators: [][]const u8 = &.{},

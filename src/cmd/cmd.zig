@@ -117,6 +117,15 @@ pub fn run() !void {
         .value_name = "Entrypoints",
     };
 
+    var network_option = cli.Option{
+        .long_name = "network",
+        .help = "network to use with predefined entrypoints",
+        .short_alias = 'n',
+        .value_ref = cli.mkRef(&config.current.gossip.network),
+        .required = false,
+        .value_name = "Network for Entrypoints",
+    };
+
     var trusted_validators_option = cli.Option{
         .long_name = "trusted_validator",
         .help = "public key of a validator whose snapshot hash is trusted to be downloaded",
@@ -414,6 +423,7 @@ pub fn run() !void {
                             &gossip_host_option,
                             &gossip_port_option,
                             &gossip_entrypoints_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -996,6 +1006,95 @@ fn getMyDataFromIpEcho(
     };
 }
 
+pub const Network = enum {
+    mainnet,
+    devnet,
+    testnet,
+
+    const Self = @This();
+
+    pub fn getPredefinedEntrypoints(self: Self, socket_addrs: *std.ArrayList(SocketAddr), logger: Logger) !void {
+        const E = std.BoundedArray(u8, 100);
+        var predefined_entrypoints: [10]E = undefined;
+        @memset(&predefined_entrypoints, .{});
+        var len: usize = 0;
+
+        switch (self) {
+            .mainnet => {
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint.mainnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.mainnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.mainnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.mainnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.mainnet.solana.com:8001");
+                len += 1;
+            },
+            .testnet => {
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint.testnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.testnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.testnet.solana.com:8001");
+                len += 1;
+            },
+            .devnet => {
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint.devnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint2.devnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint3.devnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint4.devnet.solana.com:8001");
+                len += 1;
+                predefined_entrypoints[len] = try E.fromSlice("entrypoint5.devnet.solana.com:8001");
+                len += 1;
+            },
+        }
+
+        for (predefined_entrypoints[0..len]) |entrypoint| {
+            logger.infof("adding predefined entrypoint: {s}", .{entrypoint.slice()});
+            const socket_addr = try resolveSocketAddr(entrypoint.slice(), .noop);
+            try socket_addrs.append(socket_addr);
+        }
+    }
+};
+
+fn resolveSocketAddr(entrypoint: []const u8, logger: Logger) !SocketAddr {
+    const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
+        logger.field("entrypoint", entrypoint).err("entrypoint port missing");
+        return error.EntrypointPortMissing;
+    };
+    const domain_str = entrypoint[0..domain_port_sep];
+    if (domain_str.len == 0) {
+        logger.errf("'{s}': entrypoint domain not valid", .{entrypoint});
+        return error.EntrypointDomainNotValid;
+    }
+    // parse port from string
+    const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
+        logger.errf("'{s}': entrypoint port not valid", .{entrypoint});
+        return error.EntrypointPortNotValid;
+    };
+
+    // get dns address lists
+    const addr_list = try std.net.getAddressList(gpa_allocator, domain_str, port);
+    defer addr_list.deinit();
+
+    if (addr_list.addrs.len == 0) {
+        logger.errf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
+        return error.EntrypointDnsResolutionFailure;
+    }
+
+    // use first A record address
+    const ipv4_addr = addr_list.addrs[0];
+
+    const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
+    std.debug.assert(socket_addr.port() == port);
+    return socket_addr;
+}
+
 fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoints = std.ArrayList(SocketAddr).init(gpa_allocator);
     errdefer entrypoints.deinit();
@@ -1004,46 +1103,25 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     var entrypoint_set = EntrypointSet.init(gpa_allocator);
     defer entrypoint_set.deinit();
 
-    try entrypoint_set.ensureTotalCapacity(config.current.gossip.entrypoints.len);
-    try entrypoints.ensureTotalCapacityPrecise(config.current.gossip.entrypoints.len);
+    // try entrypoint_set.ensureTotalCapacity(config.current.gossip.entrypoints.len);
+    // try entrypoints.ensureTotalCapacityPrecise(config.current.gossip.entrypoints.len);
+
+    if (config.current.gossip.network) |network_str| {
+        const network_t: Network = std.meta.stringToEnum(Network, network_str) orelse {
+            logger.errf("'{s}': network not valid", .{network_str});
+            return error.NetworkNotValid;
+        };
+        try network_t.getPredefinedEntrypoints(&entrypoints, logger);
+    }
 
     for (config.current.gossip.entrypoints) |entrypoint| {
         const socket_addr = SocketAddr.parse(entrypoint) catch brk: {
-            const domain_port_sep = std.mem.indexOfScalar(u8, entrypoint, ':') orelse {
-                logger.field("entrypoint", entrypoint).err("entrypoint port missing");
-                return error.EntrypointPortMissing;
-            };
-            const domain_str = entrypoint[0..domain_port_sep];
-            if (domain_str.len == 0) {
-                logger.errf("'{s}': entrypoint domain not valid", .{entrypoint});
-                return error.EntrypointDomainNotValid;
-            }
-            // parse port from string
-            const port = std.fmt.parseInt(u16, entrypoint[domain_port_sep + 1 ..], 10) catch {
-                logger.errf("'{s}': entrypoint port not valid", .{entrypoint});
-                return error.EntrypointPortNotValid;
-            };
-
-            // get dns address lists
-            const addr_list = try std.net.getAddressList(gpa_allocator, domain_str, port);
-            defer addr_list.deinit();
-
-            if (addr_list.addrs.len == 0) {
-                logger.errf("'{s}': entrypoint resolve dns failed (no records found)", .{entrypoint});
-                return error.EntrypointDnsResolutionFailure;
-            }
-
-            // use first A record address
-            const ipv4_addr = addr_list.addrs[0];
-
-            const socket_addr = SocketAddr.fromIpV4Address(ipv4_addr);
-            std.debug.assert(socket_addr.port() == port);
-            break :brk socket_addr;
+            break :brk try resolveSocketAddr(entrypoint, logger);
         };
 
-        const gop = entrypoint_set.getOrPutAssumeCapacity(socket_addr);
+        const gop = try entrypoint_set.getOrPut(socket_addr);
         if (!gop.found_existing) {
-            entrypoints.appendAssumeCapacity(socket_addr);
+            try entrypoints.append(socket_addr);
         }
     }
 
