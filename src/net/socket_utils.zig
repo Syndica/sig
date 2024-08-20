@@ -127,8 +127,11 @@ pub const SocketThread = struct {
     pub fn deinit(self: Self) void {
         self.exit.store(true, .unordered);
         self.handle.join();
+        // close the channel first, so that we can drain without waiting for new items
+        self.channel.close();
         if (self.channel.drain()) |lists| {
             for (lists) |list| list.deinit();
+            self.channel.allocator.free(lists);
         }
         self.channel.deinit();
     }
