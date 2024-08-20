@@ -38,6 +38,31 @@ pub const AccountReferenceHead = struct {
 
         return .{ rooted_ref_count, ref_slot_max };
     }
+
+    pub const PtrToFieldThatIsPtrToRef = union(enum) {
+        null,
+        head,
+        inner: *?*AccountRef,
+    };
+    /// Returns a pointer to the field which is a pointer to the
+    /// account reference pointer with a field `.slot` == `slot`.
+    /// Returns `.null` if no account reference has said slot value.
+    /// Returns `.head` if `head_ref.ref_ptr.slot == slot`.
+    /// Returns `.inner = ptr` if `ptr.*.?.*.slot == slot`.
+    pub inline fn getPtrToFieldThatIsPtrToRefWithSlot(
+        head_ref: *const AccountReferenceHead,
+        slot: Slot,
+    ) PtrToFieldThatIsPtrToRef {
+        if (head_ref.ref_ptr.slot == slot) return .head;
+        var curr_ref_ptr_ptr: *?*AccountRef = &head_ref.ref_ptr.next_ptr;
+        while (true) {
+            const curr_ref = curr_ref_ptr_ptr.* orelse return .null;
+            if (curr_ref.slot == slot) {
+                return .{ .inner = curr_ref_ptr_ptr };
+            }
+            curr_ref_ptr_ptr = &curr_ref.next_ptr;
+        }
+    }
 };
 
 /// reference to an account (either in a file or cache)
@@ -185,14 +210,18 @@ pub const AccountIndex = struct {
         errdefer bin_lg.unlock();
 
         const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
-        const ref_ptr_ptr = getReferencePtrPtrWriteFromHeadWithSlot(head_ref, slot) orelse return error.SlotNotFound;
-        return .{ &ref_ptr_ptr.*.?, bin_lg };
+        const ref_ptr_ptr = switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
+            .null => return error.SlotNotFound,
+            .head => &head_ref.ref_ptr,
+            .inner => |inner| &inner.*.?,
+        };
+        return .{ ref_ptr_ptr, bin_lg };
     }
 
     /// returns a reference to the slot in the index which is a local copy
     /// useful for reading the slot without holding the lock.
     /// NOTE: its not safe to read the underlying data without holding the lock
-    pub fn getReferenceSlot(self: *Self, pubkey: *const Pubkey, slot: Slot) ?AccountRef {
+    pub fn getReferenceSlotCopy(self: *Self, pubkey: *const Pubkey, slot: Slot) ?AccountRef {
         const head_ref, var head_ref_lg = self.getReferenceHeadRead(pubkey) orelse return null;
         defer head_ref_lg.unlock();
 
@@ -302,24 +331,15 @@ pub const AccountIndex = struct {
         defer bin_lg.unlock();
 
         const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
-        const ref_ptr_ptr = getReferencePtrPtrWriteFromHeadWithSlot(head_ref, slot) orelse return error.SlotNotFound;
-
-        const removed_ref = ref_ptr_ptr.*.?;
-        std.debug.assert(removed_ref.slot == slot);
-        std.debug.assert(removed_ref.pubkey.equals(pubkey));
-
-        ref_ptr_ptr.* = removed_ref.next_ptr orelse blk: {
-            // if it's the last reference, and not the head, simply remove
-            // if by setting it to null.
-            if (head_ref.ref_ptr.slot != slot) break :blk null;
-
-            // otherwise, remove the reference head altogether, since it has no
-            // next_ptr, meaning there are no other references in this linked list.
-            std.debug.assert(&ref_ptr_ptr.*.? == &head_ref.ref_ptr);
-            return bin.remove(pubkey.*) catch |err| switch (err) {
-                error.KeyNotFound => error.PubkeyNotFound,
-            };
-        };
+        switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
+            .null => return error.SlotNotFound,
+            .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
+                return bin.remove(pubkey.*) catch |err| switch (err) {
+                    error.KeyNotFound => error.PubkeyNotFound,
+                };
+            },
+            .inner => |inner| inner.* = if (inner.*) |ref| ref.next_ptr else null,
+        }
     }
 
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
@@ -340,29 +360,6 @@ pub const AccountIndex = struct {
 
     pub inline fn numberOfBins(self: *const Self) usize {
         return self.bins.len;
-    }
-
-    /// Returns a pointer to the `next_ptr` field of an
-    /// account reference, where `next_ptr.?.slot == slot`,
-    /// or null if there is none.
-    /// NOTE: the pointed-to optional pointer may actually be an alias
-    /// of a non-optional pointer, when it's pointing at the `ref_ptr` field
-    /// of `head_ref`. If this is the case, the caller should take care to not
-    /// set it to `null` unless they are invalidating `head_ref`, or otherwise
-    /// never intending to dereference its `ref_ptr` field afterwards.
-    inline fn getReferencePtrPtrWriteFromHeadWithSlot(
-        head_ref: *AccountReferenceHead,
-        slot: Slot,
-    ) ?*?*AccountRef {
-        var curr_ref_ptr_ptr: *?*AccountRef = @ptrCast(&head_ref.ref_ptr); // SAFE: optional pointers have the same repr as normal ones
-        while (true) {
-            const curr_ref = curr_ref_ptr_ptr.*.?; // SAFE: guaranteed to be non-null in the first branch, and to be non-null after the loop continues.
-            if (curr_ref.slot == slot) {
-                return curr_ref_ptr_ptr;
-            }
-            if (curr_ref.next_ptr == null) return null;
-            curr_ref_ptr_ptr = &curr_ref.next_ptr;
-        }
     }
 };
 
@@ -463,7 +460,7 @@ test "account index update/remove reference" {
     } };
     try index.updateReference(&ref_b.pubkey, 1, &ref_b2);
     {
-        const ref = index.getReferenceSlot(&ref_a.pubkey, 1).?;
+        const ref = index.getReferenceSlotCopy(&ref_a.pubkey, 1).?;
         try std.testing.expect(ref.location == .File);
     }
 
@@ -475,7 +472,7 @@ test "account index update/remove reference" {
     } };
     try index.updateReference(&ref_a.pubkey, 0, &ref_a2);
     {
-        const ref = index.getReferenceSlot(&ref_a.pubkey, 0).?;
+        const ref = index.getReferenceSlotCopy(&ref_a.pubkey, 0).?;
         try std.testing.expect(ref.location == .File);
     }
 
