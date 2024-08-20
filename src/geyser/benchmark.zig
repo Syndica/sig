@@ -2,9 +2,6 @@ const std = @import("std");
 const sig = @import("../lib.zig");
 const geyser = sig.geyser;
 
-const bincode = sig.bincode;
-const AccountsDB = sig.accounts_db.AccountsDB;
-const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;

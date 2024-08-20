@@ -738,8 +738,6 @@ fn shredCollector() !void {
 }
 
 const GeyserWriter = sig.geyser.GeyserWriter;
-const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
-const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWriter {
     var geyser_writer: ?*GeyserWriter = null;

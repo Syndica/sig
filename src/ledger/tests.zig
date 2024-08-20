@@ -4,7 +4,6 @@ const blockstore = @import("lib.zig");
 
 const Logger = sig.trace.Logger;
 
-const BlockstoreDB = blockstore.BlockstoreDB;
 const schema = blockstore.schema.schema;
 const TestState = sig.ledger.insert_shred.TestState;
 

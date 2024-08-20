@@ -40,7 +40,6 @@ const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 const BankHashStats = sig.accounts_db.snapshots.BankHashStats;
 const PubkeyBinCalculator = sig.accounts_db.index.PubkeyBinCalculator;
 const GeyserWriter = sig.geyser.GeyserWriter;
-const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 
 const parallelUnpackZstdTarBall = sig.accounts_db.snapshots.parallelUnpackZstdTarBall;
 const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;

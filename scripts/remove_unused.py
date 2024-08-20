@@ -62,7 +62,12 @@ while lines_removed_this_time > 0:
         print(path, num_lines_to_remove)
         total_num_lines_removed += num_lines_to_remove
         lines_removed_this_time += num_lines_to_remove
+        if (num_lines_to_remove > 0):
+            os.system(f"zig fmt {path}")
+
     print("removed this iteration:", lines_removed_this_time)
     print()
 
 print("total lines removed:", total_num_lines_removed)
+if (total_num_lines_removed > 0):
+    exit(1)

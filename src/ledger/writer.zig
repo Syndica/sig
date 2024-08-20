@@ -5,7 +5,6 @@ pub const blockstore = @import("lib.zig");
 // std
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const AutoHashMap = std.AutoHashMap;
 
 // sig common
 const GetMetricError = sig.prometheus.GetMetricError;
@@ -20,10 +19,8 @@ const Registry = sig.prometheus.Registry;
 const Timer = sig.time.Timer;
 
 // blockstore
-const AddressSignatureMeta = blockstore.meta.AddressSignatureMeta;
 const AncestorIterator = blockstore.reader.AncestorIterator;
 const BlockstoreDB = blockstore.blockstore.BlockstoreDB;
-const BlockstoreReader = blockstore.reader.BlockstoreReader;
 const FrozenHashVersioned = blockstore.meta.FrozenHashVersioned;
 const FrozenHashStatus = blockstore.meta.FrozenHashStatus;
 const SlotMeta = blockstore.meta.SlotMeta;

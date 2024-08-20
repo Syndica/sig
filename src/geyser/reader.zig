@@ -1,7 +1,6 @@
 const std = @import("std");
 const sig = @import("sig");
 
-const GeyserReader = sig.geyser.GeyserReader;
 const MEASURE_RATE = sig.time.Duration.fromSecs(5);
 
 pub fn main() !void {
