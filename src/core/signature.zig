@@ -1,4 +1,5 @@
 const std = @import("std");
+const base58 = @import("base58-zig");
 const Pubkey = @import("pubkey.zig").Pubkey;
 const Ed25519 = std.crypto.sign.Ed25519;
 const Verifier = std.crypto.sign.Ed25519.Verifier;
@@ -39,5 +40,13 @@ pub const Signature = struct {
 
     pub fn eql(self: *const Self, other: *const Self) bool {
         return std.mem.eql(u8, self.data[0..], other.data[0..]);
+    }
+
+    pub fn base58String(self: Signature) std.BoundedArray(u8, 88) {
+        var result: std.BoundedArray(u8, 88) = .{};
+        const b58_encoder = comptime base58.Encoder.init(.{});
+        const encoded_len = b58_encoder.encode(&self.data, &result.buffer) catch unreachable; // this is unreachable because '44' is exactly the maximum encoded length for a 32 byte string.
+        result.len = @intCast(encoded_len);
+        return result;
     }
 };

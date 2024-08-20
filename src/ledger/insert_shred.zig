@@ -51,7 +51,6 @@ pub const ShredInserter = struct {
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
-    count: usize = 0,
 
     const Self = @This();
 
@@ -144,8 +143,6 @@ pub const ShredInserter = struct {
             .completed_data_set_infos = ArrayList(CompletedDataSetInfo).init(self.allocator),
             .duplicate_shreds = ArrayList(PossibleDuplicateShred).init(self.allocator),
         };
-        self.count += 1;
-        const should_log = self.count % 10 == 0;
 
         self.metrics.num_shreds.add(shreds.len);
         const allocator = self.allocator;
@@ -377,12 +374,6 @@ pub const ShredInserter = struct {
             if (working_erasure_meta.* == .clean) {
                 continue;
             }
-            if (should_log) {
-                self.logger.infof("erasure_meta: {any}: {any}", .{
-                    erasure_set,
-                    working_erasure_meta.asRef().*,
-                });
-            }
             try write_batch.put(
                 schema.erasure_meta,
                 erasure_set,
@@ -399,12 +390,6 @@ pub const ShredInserter = struct {
                 continue;
             }
 
-            if (should_log) {
-                self.logger.infof("merkle_root_meta: {any}: {any}", .{
-                    erasure_set_id,
-                    working_merkle_meta.asRef().*,
-                });
-            }
             try write_batch.put(
                 schema.merkle_root_meta,
                 erasure_set_id,
