@@ -1761,6 +1761,11 @@ pub const AllSnapshotFields = struct {
 
         // collapse accounts-db fields
         const storages_map = &self.incremental.?.accounts_db_fields.file_map;
+
+        // TODO: use a better allocator
+        const allocator = storages_map.allocator;
+        var slots_to_remove = std.ArrayList(Slot).init(allocator);
+
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
         while (storages_entry_iter.next()) |*incremental_entry| {
@@ -1768,7 +1773,7 @@ pub const AllSnapshotFields = struct {
 
             // only keep slots > full snapshot slot
             if (!(slot > full_slot)) {
-                _ = storages_map.swapRemove(slot);
+                try slots_to_remove.append(slot);
                 continue;
             }
 
@@ -1779,6 +1784,11 @@ pub const AllSnapshotFields = struct {
                 slot_entry.value_ptr.* = incremental_entry.value_ptr.*;
             }
         }
+
+        for (slots_to_remove.items) |slot| {
+            _ = storages_map.swapRemove(slot);
+        }
+
         snapshot.accounts_db_fields = self.full.accounts_db_fields;
 
         return snapshot;

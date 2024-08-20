@@ -461,6 +461,24 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
+                        .name = "print-manifest",
+                        .description = .{
+                            .one_line = "Prints a manifest file",
+                            .detailed =
+                            \\ Loads and prints a manifest file
+                            ,
+                        },
+                        .options = &.{
+                            &snapshot_dir_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = printManifest,
+                            },
+                        },
+                    },
+
+                    &cli.Command{
                         .name = "leader-schedule",
                         .description = .{
                             .one_line = "Prints the leader schedule from the snapshot",
@@ -774,6 +792,31 @@ fn buildGeyserWriter(allocator: std.mem.Allocator, logger: Logger) !?*GeyserWrit
     return geyser_writer;
 }
 
+fn printManifest() !void {
+    const allocator = gpa_allocator;
+    const app_base = try AppBase.init(allocator);
+
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    defer snapshot_dir.close();
+
+    const snapshot_file_info = try SnapshotFiles.find(allocator, snapshot_dir);
+
+    var snapshots = try AllSnapshotFields.fromFiles(
+        allocator,
+        app_base.logger,
+        snapshot_dir,
+        snapshot_file_info,
+    );
+    defer snapshots.deinit(allocator);
+
+    _ = try snapshots.collapse();
+
+    // // TODO: support better inspection of snapshots (maybe dump to a file as json?)
+    // std.debug.print("full snapshots: {any}\n", .{snapshots.full.accounts_db_fields.file_map.keys()});
+    // std.debug.print("inc snapshots: {any}\n", .{snapshots.incremental.?.accounts_db_fields.file_map.keys()});
+}
+
 fn validateSnapshot() !void {
     const allocator = gpa_allocator;
     const app_base = try AppBase.init(allocator);
@@ -799,6 +842,27 @@ fn validateSnapshot() !void {
         geyser_writer,
     );
     defer snapshot_result.deinit();
+
+    // read input
+    const accounts_db = &snapshot_result.accounts_db;
+    var buf: [1024]u8 = undefined;
+
+    while (true) {
+        std.debug.print("enter pubkey:\n", .{});
+        const input_pubkey_str = try std.io.getStdIn().reader().readUntilDelimiterOrEof(&buf, '\n') orelse continue;
+        const input_pubkey = Pubkey.fromBytes(input_pubkey_str) catch {
+            std.debug.print("invalid pubkey\n", .{});
+            continue;
+        };
+
+        const account = accounts_db.getAccount(&input_pubkey) catch |err| {
+            std.debug.print("getAccount failed: {s}\n", .{@errorName(err)});
+            continue;
+        };
+        defer account.deinit(accounts_db.allocator);
+
+        std.debug.print("account: {any}\n", .{account});
+    }
 }
 
 /// entrypoint to print the leader schedule and then exit
@@ -1327,8 +1391,12 @@ fn downloadSnapshot() !void {
         &.{},
     );
     defer gossip_service.deinit();
+
     const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
-    handle.detach();
+    defer {
+        exit.store(true, .unordered);
+        handle.join();
+    }
 
     const trusted_validators = try getTrustedValidators(gpa_allocator);
     defer if (trusted_validators) |*tvs| tvs.deinit();

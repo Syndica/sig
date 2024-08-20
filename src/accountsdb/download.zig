@@ -239,10 +239,17 @@ pub fn downloadSnapshotsFromGossip(
                 snapshot_filename,
                 min_mb_per_sec,
             ) catch |err| {
-                logger.infof("failed to download full_snapshot: {s}", .{@errorName(err)});
-                if (err == error.TooSlow) {
-                    logger.infof("peer is too slow, skipping", .{});
-                    try slow_peer_pubkeys.append(peer.contact_info.pubkey);
+                switch (err) {
+                    // if we hit this error, then the error should have been printed in the
+                    // downloadFile function
+                    error.Unexpected => {},
+                    error.TooSlow => {
+                        logger.infof("peer is too slow, skipping", .{});
+                        try slow_peer_pubkeys.append(peer.contact_info.pubkey);
+                    },
+                    else => {
+                        logger.infof("failed to download full_snapshot: {s}", .{@errorName(err)});
+                    },
                 }
                 continue;
             };
@@ -366,6 +373,19 @@ const DownloadProgress = struct {
             const time_left_ns = mb_left * ns_per_mb;
             const mb_per_second = mb_read / elapsed_sec;
 
+            const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed;
+            if (should_check_speed) {
+                // dont check again
+                self.has_checked_speed = true;
+                if (mb_per_second < self.min_mb_per_second.?) {
+                    // not fast enough => abort
+                    self.logger.infof("[download progress]: speed is too slow ({d} MB/s) -- disconnecting", .{mb_per_second});
+                    return 0;
+                } else {
+                    self.logger.infof("[download progress]: speed is ok ({d} MB/s) -- maintaining", .{mb_per_second});
+                }
+            }
+
             self.logger.infof("[download progress]: {d}% done ({d} MB/s - {d}/{d}) (time left: {d})", .{
                 self.file_memory_index * 100 / self.download_size,
                 mb_per_second,
@@ -373,19 +393,6 @@ const DownloadProgress = struct {
                 self.download_size,
                 std.fmt.fmtDuration(time_left_ns),
             });
-
-            const should_check_speed = self.min_mb_per_second != null and !self.has_checked_speed;
-            if (should_check_speed) {
-                // dont check again
-                self.has_checked_speed = true;
-                if (mb_per_second < self.min_mb_per_second.?) {
-                    // not fast enough => abort
-                    self.logger.infof("download speed is too slow ({d} MB/s) -- disconnecting", .{mb_per_second});
-                    return 0;
-                } else {
-                    self.logger.infof("download speed is ok ({d} MB/s) -- maintaining connection", .{mb_per_second});
-                }
-            }
         }
 
         return len;
