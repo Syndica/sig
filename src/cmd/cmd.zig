@@ -461,6 +461,22 @@ pub fn run() !void {
                     },
 
                     &cli.Command{
+                        .name = "snapshot-create",
+                        .description = .{
+                            .one_line = "Loads from a snapshot and outputs to new snapshot alt_ledger/",
+                        },
+                        .options = &.{
+                            &snapshot_dir_option,
+                            &genesis_file_path,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = createSnapshot,
+                            },
+                        },
+                    },
+
+                    &cli.Command{
                         .name = "print-manifest",
                         .description = .{
                             .one_line = "Prints a manifest file",
@@ -812,8 +828,51 @@ fn printManifest() !void {
     _ = try snapshots.collapse();
 
     // // TODO: support better inspection of snapshots (maybe dump to a file as json?)
-    // std.debug.print("full snapshots: {any}\n", .{snapshots.full.accounts_db_fields.file_map.keys()});
+    std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
     // std.debug.print("inc snapshots: {any}\n", .{snapshots.incremental.?.accounts_db_fields.file_map.keys()});
+}
+
+const zstd = @import("zstd");
+
+fn createSnapshot() !void {
+    const allocator = gpa_allocator;
+    const app_base = try AppBase.init(allocator);
+
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
+    defer snapshot_dir.close();
+
+    const snapshot_result = try loadSnapshot(
+        allocator,
+        app_base.logger,
+        null,
+        false,
+        null,
+    );
+    defer snapshot_result.deinit();
+
+    var accounts_db = snapshot_result.accounts_db;
+    const slot = snapshot_result.snapshot_fields.full.bank_fields.slot;
+
+    var n_accounts_indexed: u64 = 0;
+    for (accounts_db.account_index.bins) |*bin_rw| {
+        const bin, var bin_lg = bin_rw.readWithLock();
+        defer bin_lg.unlock();
+        n_accounts_indexed += bin.count();
+    }
+    app_base.logger.infof("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
+
+    const output_dir_name = "alt_ledger";
+    var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
+    defer output_dir.close();
+
+    app_base.logger.infof("accountsdb[manager]: generating full snapshot for slot {d}", .{slot});
+    try accounts_db.buildFullSnapshot(
+        slot,
+        output_dir,
+        &snapshot_result.snapshot_fields.full.bank_fields,
+        snapshot_result.status_cache,
+    );
 }
 
 fn validateSnapshot() !void {
@@ -1213,15 +1272,17 @@ fn spawnLogger() !Logger {
 const LoadedSnapshot = struct {
     allocator: Allocator,
     accounts_db: AccountsDB,
-    snapshot_fields: sig.accounts_db.SnapshotFields,
+    snapshot_fields: sig.accounts_db.snapshots.AllSnapshotFields,
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
     genesis_config: GenesisConfig,
+    status_cache: StatusCache,
 
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit(false); // keep index files on disk
+        self.status_cache.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -1238,20 +1299,19 @@ fn loadSnapshot(
 ) !*LoadedSnapshot {
     const result = try allocator.create(LoadedSnapshot);
     errdefer allocator.destroy(result);
-
     result.allocator = allocator;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db.snapshot_dir, .{ .iterate = true });
     defer snapshot_dir.close();
 
-    var snapshots, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
+    var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
         .snapshot_dir = snapshot_dir,
         .force_unpack_snapshot = config.current.accounts_db.force_unpack_snapshot,
         .force_new_snapshot_download = config.current.accounts_db.force_new_snapshot_download,
         .num_threads_snapshot_unpack = config.current.accounts_db.num_threads_snapshot_unpack,
         .min_snapshot_download_speed_mbs = config.current.accounts_db.min_snapshot_download_speed_mbs,
     });
-    errdefer snapshots.deinit(allocator);
+    result.snapshot_fields = all_snapshot_fields;
 
     logger.infof("full snapshot: {s}", .{
         sig.utils.fmt.tryRealPath(snapshot_dir, snapshot_files.full_snapshot.snapshotNameStr().constSlice()),
@@ -1287,14 +1347,14 @@ fn loadSnapshot(
     );
     errdefer result.accounts_db.deinit(false);
 
-    result.snapshot_fields = try result.accounts_db.loadWithDefaults(
-        &snapshots,
+    var snapshot_fields = try result.accounts_db.loadWithDefaults(
+        &all_snapshot_fields,
         n_threads_snapshot_load,
         validate_snapshot,
     );
-    errdefer result.snapshot_fields.deinit(allocator);
+    errdefer snapshot_fields.deinit(allocator);
 
-    const bank_fields = &result.snapshot_fields.bank_fields;
+    const bank_fields = &snapshot_fields.bank_fields;
 
     // this should exist before we start to unpack
     logger.infof("reading genesis...", .{});
@@ -1313,18 +1373,17 @@ fn loadSnapshot(
 
     // validate the status cache
     logger.infof("validating status cache...", .{});
-    var status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
+    result.status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
         if (err == error.StatusCacheNotFound) {
             logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
         }
         return err;
     };
-    defer status_cache.deinit(allocator);
 
     var slot_history = try result.accounts_db.getSlotHistory();
     defer slot_history.deinit(result.accounts_db.allocator);
 
-    try status_cache.validate(allocator, bank_fields.slot, &slot_history);
+    try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
 

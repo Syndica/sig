@@ -1423,6 +1423,10 @@ pub const BankSlotDelta = struct {
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
+    pub fn default() @This() {
+        return .{ .bank_slot_deltas = &.{} };
+    }
+
     pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
         var status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
