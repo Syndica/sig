@@ -14,8 +14,7 @@ pub const SwissMapUnmanaged = swiss_map.SwissMapUnmanaged;
 pub const BenchmarkSwissMap = swiss_map.BenchmarkSwissMap;
 pub const BenchHashMap = swiss_map.BenchHashMap;
 
-// for sync reasons we need a stable head with a lock
-pub const AccountReferenceHead = RwMux(struct {
+pub const AccountReferenceHead = struct {
     ref_ptr: *AccountRef,
 
     const Self = @This();
@@ -39,7 +38,7 @@ pub const AccountReferenceHead = RwMux(struct {
 
         return .{ rooted_ref_count, ref_slot_max };
     }
-});
+};
 
 /// reference to an account (either in a file or cache)
 pub const AccountRef = struct {
@@ -146,215 +145,181 @@ pub const AccountIndex = struct {
         const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
         defer reference_memory_lg.unlock();
 
-        if (!reference_memory.remove(slot)) {
-            return error.MemoryNotFound;
-        }
+        const removed_kv = reference_memory.fetchRemove(slot) orelse return error.MemoryNotFound;
+        removed_kv.value.deinit();
     }
 
-    pub fn getReference(self: *Self, pubkey: *const Pubkey) ?AccountReferenceHead {
+    /// Get a read-safe account reference head, and its associated lock guard.
+    /// If access to many different account reference heads which are potentially in the same bin is
+    /// required, prefer instead to use `getBinFromPubkey(pubkey).read*(){.get(pubkey)}` directly.
+    pub fn getReferenceHeadRead(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(RefMap).RLockGuard } {
         const bin, var bin_lg = self.getBinFromPubkey(pubkey).readWithLock();
-        defer bin_lg.unlock();
-        return bin.get(pubkey.*);
+        const ref_head = bin.get(pubkey.*) orelse {
+            bin_lg.unlock();
+            return null;
+        };
+        return .{ ref_head, bin_lg };
+    }
+
+    /// Get a write-safe account reference head, and its associated lock guard.
+    /// If access to many different account reference heads which are potentially in the same bin is
+    /// required, prefer instead to use `getBinFromPubkey(pubkey).write*(){.get(pubkey)}` directly.
+    pub fn getReferenceHeadWrite(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(RefMap).WLockGuard } {
+        const bin, const bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
+        const ref_head = bin.get(pubkey.*) orelse return null;
+        return .{ ref_head, bin_lg };
+    }
+
+    pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
+
+    /// Get a pointer to the account reference pointer with slot `slot` and pubkey `pubkey`,
+    /// alongside the write lock guard for the parent bin, and thus by extension the account
+    /// reference; this also locks access to all other account references in the parent bin.
+    /// This can be used to update an account reference (ie by replacing the `*AccountRef`).
+    pub fn getReferencePtrPtrWrite(
+        self: *const Self,
+        pubkey: *const Pubkey,
+        slot: Slot,
+    ) GetAccountRefError!struct { **AccountRef, RwMux(RefMap).WLockGuard } {
+        const bin, var bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
+        errdefer bin_lg.unlock();
+
+        const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
+        const ref_ptr_ptr = getReferencePtrPtrWriteFromHeadWithSlot(head_ref, slot) orelse return error.SlotNotFound;
+        return .{ &ref_ptr_ptr.*.?, bin_lg };
     }
 
     /// returns a reference to the slot in the index which is a local copy
     /// useful for reading the slot without holding the lock.
     /// NOTE: its not safe to read the underlying data without holding the lock
     pub fn getReferenceSlot(self: *Self, pubkey: *const Pubkey, slot: Slot) ?AccountRef {
-        var head_ref_rw = self.getReference(pubkey) orelse return null;
-        const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+        const head_ref, var head_ref_lg = self.getReferenceHeadRead(pubkey) orelse return null;
         defer head_ref_lg.unlock();
 
         var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-        const slot_ref = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+        var slot_ref_copy: AccountRef = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
             if (ref.slot == slot) break ref.*;
-        } else null;
-
-        return slot_ref;
+        } else return null;
+        // since this will purely be a copy, it's safer to not allow the caller
+        // to observe the `next_ptr` value, because they won't have the lock.
+        slot_ref_copy.next_ptr = null;
+        return slot_ref_copy;
     }
 
     pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {
-        var head_reference_rw = self.getReference(pubkey) orelse return false;
-        const head_ref, var head_reference_lg = head_reference_rw.readWithLock();
+        const head_ref, var head_reference_lg = self.getReferenceHeadRead(pubkey) orelse return false;
         defer head_reference_lg.unlock();
 
         // find the slot in the reference list
         var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-        const does_exists = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+        const does_exist = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
             if (ref.slot == slot) break true;
         } else false;
 
-        return does_exists;
+        return does_exist;
     }
 
     /// adds the reference to the index if there is not a duplicate (ie, the same slot).
     /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlot(self: *Self, account_ref: *AccountRef) bool {
-        const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
+        const bin, var bin_lg = self.getBinFromPubkey(&account_ref.pubkey).writeWithLock();
+        defer bin_lg.unlock(); // the lock on the bin also locks the reference map
 
-        const bin, var bin_lg = bin_rw.writeWithLock();
-        const result = bin.getOrPutAssumeCapacity(account_ref.pubkey);
-        bin_lg.unlock();
-
-        if (result.found_existing) {
-            // traverse until you find the end
-            var head_ref_rw: AccountReferenceHead = result.value_ptr.*;
-            const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
-            defer head_ref_lg.unlock();
-
-            var curr = head_ref.ref_ptr;
-            while (true) {
-                if (curr.slot == account_ref.slot) {
-                    // found a duplicate => dont do the insertion
-                    return false;
-                } else if (curr.next_ptr == null) {
-                    // end of the list => insert it here
-                    curr.next_ptr = account_ref;
-                    return true;
-                } else {
-                    // keep traversing
-                    curr = curr.next_ptr.?;
-                }
-            }
-        } else {
-            result.value_ptr.* = AccountReferenceHead.init(.{ .ref_ptr = account_ref });
+        const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ .ref_ptr = account_ref };
             return true;
+        }
+
+        // traverse until you find the end
+        const head_ref = gop.value_ptr.*;
+
+        var curr = head_ref.ref_ptr;
+        while (true) {
+            if (curr.slot == account_ref.slot) {
+                // found a duplicate => dont do the insertion
+                return false;
+            }
+
+            if (curr.next_ptr == null) {
+                curr.next_ptr = account_ref;
+                return true;
+            }
+
+            const next_ptr = curr.next_ptr orelse {
+                // end of the list => insert it here
+                curr.next_ptr = account_ref;
+                return true;
+            };
+
+            // keep traversing
+            curr = next_ptr;
         }
     }
 
     /// adds a reference to the index
     /// NOTE: this should only be used when you know the reference does not exist
     /// because we never want duplicate state references in the index
-    pub fn indexRef(self: *Self, account_ref: *AccountRef) void {
-        const bin_rw = self.getBinFromPubkey(&account_ref.pubkey);
+    pub fn indexRefAssumeCapacity(
+        self: *const Self,
+        account_ref: *AccountRef,
+    ) void {
+        const bin, var bin_lg = self.getBinFromPubkey(&account_ref.pubkey).writeWithLock();
+        defer bin_lg.unlock(); // the lock on the bin also locks the reference map
 
-        const bin, var bin_lg = bin_rw.writeWithLock();
-        const result = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
-
-        if (result.found_existing) {
-            // we can release the lock now
-            bin_lg.unlock();
-
-            // traverse until you find the end
-            var head_ref_rw: AccountReferenceHead = result.value_ptr.*;
-            const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
-            defer head_ref_lg.unlock();
-
-            var curr = head_ref.ref_ptr;
-            while (true) {
-                if (curr.next_ptr == null) { // 2)
-                    curr.next_ptr = account_ref;
-                    break;
-                } else {
-                    curr = curr.next_ptr.?;
-                }
-            }
-        } else {
-            result.value_ptr.* = AccountReferenceHead.init(.{ .ref_ptr = account_ref });
-            bin_lg.unlock();
+        const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{ .ref_ptr = account_ref };
+            return;
         }
+
+        // traverse until you find the end
+        const head_ref = gop.value_ptr.*;
+
+        var curr_ref = head_ref.ref_ptr;
+        while (curr_ref.next_ptr) |next_ref| {
+            curr_ref = next_ref;
+        }
+        std.debug.assert(curr_ref.next_ptr == null);
+        curr_ref.next_ptr = account_ref;
     }
 
-    pub fn updateReference(self: *Self, pubkey: *const Pubkey, slot: Slot, new_ref: *AccountRef) !void {
-        var head_ref_rw = self.getReference(pubkey) orelse unreachable;
-        const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
-        var curr_ref = head_ref.ref_ptr;
-
-        // 1) it relates to the head (we get a ptr and update directly)
-        if (curr_ref.slot == slot) {
-            const bin_rw = self.getBinFromPubkey(pubkey);
-            const bin, var bin_lg = bin_rw.writeWithLock();
-            defer bin_lg.unlock();
-
-            // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
-            // so we release the head_lock so we can get a pointer -- because we need a pointer,
-            // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
-            head_ref_lg.unlock();
-
-            // NOTE: `getPtr` is important here vs `get` used above
-            var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;
-            var head_ref_ptr, var head_ref_ptr_lg = head_reference_ptr_rw.writeWithLock();
-            defer head_ref_ptr_lg.unlock();
-
-            const head_next_ptr = head_ref_ptr.ref_ptr.next_ptr;
-            // insert into linked list
-            head_ref_ptr.ref_ptr = new_ref;
-            new_ref.next_ptr = head_next_ptr;
-        } else {
-            defer head_ref_lg.unlock();
-
-            // 2) it relates to a normal linked-list
-            var prev_ref = curr_ref;
-            curr_ref = curr_ref.next_ptr orelse return error.SlotNotFound;
-            blk: while (true) {
-                if (curr_ref.slot == slot) {
-                    // update prev -> curr -> next
-                    //    ==> prev -> new -> next
-                    prev_ref.next_ptr = new_ref;
-                    new_ref.next_ptr = curr_ref.next_ptr;
-                    break :blk;
-                } else {
-                    // keep traversing
-                    prev_ref = curr_ref;
-                    curr_ref = curr_ref.next_ptr orelse return error.SlotNotFound;
-                }
-            }
-        }
+    pub fn updateReference(
+        self: *const Self,
+        pubkey: *const Pubkey,
+        slot: Slot,
+        new_ref: *AccountRef,
+    ) GetAccountRefError!void {
+        const ref_ptr_ptr, var bin_lg = try self.getReferencePtrPtrWrite(pubkey, slot);
+        defer bin_lg.unlock();
+        std.debug.assert(ref_ptr_ptr.*.slot == slot);
+        std.debug.assert(ref_ptr_ptr.*.pubkey.equals(pubkey));
+        ref_ptr_ptr.* = new_ref;
     }
 
     pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
-        // need to hold bin lock to update the head ptr value (need to hold a reference to it)
+        const bin, var bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
+        defer bin_lg.unlock();
 
-        const head_ref, var head_reference_lg = blk: {
-            const bin_rw = self.getBinFromPubkey(pubkey);
-            // NOTE: we only get a read since most of the time it will update the linked-list and not the head
-            const bin, var bin_lg = bin_rw.readWithLock();
-            defer bin_lg.unlock();
+        const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
+        const ref_ptr_ptr = getReferencePtrPtrWriteFromHeadWithSlot(head_ref, slot) orelse return error.SlotNotFound;
 
-            var head_reference_rw = bin.get(pubkey.*) orelse return error.PubkeyNotFound;
-            break :blk head_reference_rw.writeWithLock();
+        const removed_ref = ref_ptr_ptr.*.?;
+        std.debug.assert(removed_ref.slot == slot);
+        std.debug.assert(removed_ref.pubkey.equals(pubkey));
+
+        ref_ptr_ptr.* = removed_ref.next_ptr orelse blk: {
+            // if it's the last reference, and not the head, simply remove
+            // if by setting it to null.
+            if (head_ref.ref_ptr.slot != slot) break :blk null;
+
+            // otherwise, remove the reference head altogether, since it has no
+            // next_ptr, meaning there are no other references in this linked list.
+            std.debug.assert(&ref_ptr_ptr.*.? == &head_ref.ref_ptr);
+            return bin.remove(pubkey.*) catch |err| switch (err) {
+                error.KeyNotFound => error.PubkeyNotFound,
+            };
         };
-        defer head_reference_lg.unlock();
-
-        var curr_reference = head_ref.ref_ptr;
-
-        // structure will always be: head -> [a] -> [b] -> [c]
-        // 1) handle base case with head: head -> [a] -> [b] => head -> [b]
-        // 2) handle normal linked-list case: [a] -> [b] -> [c]
-
-        // 1) it relates to the head
-        if (curr_reference.slot == slot) {
-            const bin_rw = self.getBinFromPubkey(pubkey);
-            const bin, var bin_lg = bin_rw.writeWithLock();
-            defer bin_lg.unlock();
-
-            if (curr_reference.next_ptr) |next_ptr| {
-                // NOTE: rn we have a stack copy of the head reference -- we need a pointer to modify it
-                // so we release the head_lock so we can get a pointer -- because we need a pointer,
-                // we also need a write lock on the bin itself to make sure the pointer isnt invalidated
-                // NOTE: `getPtr` is important here vs `get` used above
-                var head_reference_ptr_rw = bin.getPtr(pubkey.*) orelse unreachable;
-                // SAFE: we have a write lock on the bin
-                // and the head reference already, we just need to access the ptr
-                head_reference_ptr_rw.private.v.ref_ptr = next_ptr;
-            } else {
-                // head -> [a] => remove from hashmap
-                bin.remove(pubkey.*) catch unreachable;
-            }
-        } else {
-            // 2) it relates to a normal linked-list
-            var previous_reference = curr_reference;
-            curr_reference = curr_reference.next_ptr orelse return error.SlotNotFound;
-            while (true) {
-                if (curr_reference.slot == slot) {
-                    previous_reference.next_ptr = curr_reference.next_ptr;
-                    return;
-                } else {
-                    previous_reference = curr_reference;
-                    curr_reference = curr_reference.next_ptr orelse return error.SlotNotFound;
-                }
-            }
-        }
     }
 
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
@@ -375,6 +340,29 @@ pub const AccountIndex = struct {
 
     pub inline fn numberOfBins(self: *const Self) usize {
         return self.bins.len;
+    }
+
+    /// Returns a pointer to the `next_ptr` field of an
+    /// account reference, where `next_ptr.?.slot == slot`,
+    /// or null if there is none.
+    /// NOTE: the pointed-to optional pointer may actually be an alias
+    /// of a non-optional pointer, when it's pointing at the `ref_ptr` field
+    /// of `head_ref`. If this is the case, the caller should take care to not
+    /// set it to `null` unless they are invalidating `head_ref`, or otherwise
+    /// never intending to dereference its `ref_ptr` field afterwards.
+    inline fn getReferencePtrPtrWriteFromHeadWithSlot(
+        head_ref: *AccountReferenceHead,
+        slot: Slot,
+    ) ?*?*AccountRef {
+        var curr_ref_ptr_ptr: *?*AccountRef = @ptrCast(&head_ref.ref_ptr); // SAFE: optional pointers have the same repr as normal ones
+        while (true) {
+            const curr_ref = curr_ref_ptr_ptr.*.?; // SAFE: guaranteed to be non-null in the first branch, and to be non-null after the loop continues.
+            if (curr_ref.slot == slot) {
+                return curr_ref_ptr_ptr;
+            }
+            if (curr_ref.next_ptr == null) return null;
+            curr_ref_ptr_ptr = &curr_ref.next_ptr;
+        }
     }
 };
 
@@ -452,17 +440,16 @@ test "account index update/remove reference" {
 
     // pubkey -> a
     var ref_a = AccountRef.default();
-    index.indexRef(&ref_a);
+    index.indexRefAssumeCapacity(&ref_a);
 
     var ref_b = AccountRef.default();
     ref_b.slot = 1;
-    index.indexRef(&ref_b);
+    index.indexRefAssumeCapacity(&ref_b);
 
     // make sure indexRef works
     {
-        var ref_head_rw = index.getReference(&ref_a.pubkey).?;
-        const ref_head, var ref_head_lg = ref_head_rw.writeWithLock();
-        ref_head_lg.unlock();
+        const ref_head, var ref_head_lg = index.getReferenceHeadRead(&ref_a.pubkey).?;
+        defer ref_head_lg.unlock();
         _, const ref_max = ref_head.highestRootedSlot(10);
         try std.testing.expectEqual(1, ref_max);
     }

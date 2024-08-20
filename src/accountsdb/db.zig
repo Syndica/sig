@@ -618,7 +618,7 @@ pub const AccountsDB = struct {
         while (slot_iter.next()) |slot| {
             const refs = reference_memory.get(slot.*).?;
             for (refs.items) |*ref| {
-                _ = self.account_index.indexRefIfNotDuplicateSlot(ref);
+                _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
                 ref_count += 1;
             }
 
@@ -719,7 +719,7 @@ pub const AccountsDB = struct {
     pub fn combineThreadIndexesMultiThread(
         logger: Logger,
         index: *AccountIndex,
-        thread_dbs: []AccountsDB,
+        thread_dbs: []const AccountsDB,
         // task specific
         bin_start_index: usize,
         bin_end_index: usize,
@@ -731,40 +731,33 @@ pub const AccountsDB = struct {
         const print_progress = thread_id == 0;
 
         for (bin_start_index..bin_end_index, 1..) |bin_index, iteration_count| {
-            const index_bin_rw = index.getBin(bin_index);
-
             // sum size across threads
             var bin_n_accounts: usize = 0;
             for (thread_dbs) |*thread_db| {
-                var bin_rw = thread_db.account_index.getBin(bin_index);
-                const bin, var bin_lg = bin_rw.readWithLock();
+                const bin, var bin_lg = thread_db.account_index.getBin(bin_index).readWithLock();
                 defer bin_lg.unlock();
 
                 bin_n_accounts += bin.count();
             }
             // prealloc
             if (bin_n_accounts > 0) {
-                const index_bin, var index_bin_lg = index_bin_rw.writeWithLock();
+                const index_bin, var index_bin_lg = index.getBin(bin_index).writeWithLock();
                 defer index_bin_lg.unlock();
 
                 try index_bin.ensureTotalCapacity(bin_n_accounts);
             }
 
             for (thread_dbs) |*thread_db| {
-                const bin_rw = thread_db.account_index.getBin(bin_index);
-                const bin, var bin_lg = bin_rw.readWithLock();
+                const bin, var bin_lg = thread_db.account_index.getBin(bin_index).readWithLock();
                 defer bin_lg.unlock();
 
                 // insert all of the thread entries into the main index
                 var iter = bin.iterator();
                 while (iter.next()) |thread_entry| {
-                    var thread_head_ref_rw = thread_entry.value_ptr.*;
-                    const thread_head_ref, var thread_head_ref_lg = thread_head_ref_rw.readWithLock();
-                    defer thread_head_ref_lg.unlock();
-
+                    const thread_head_ref = thread_entry.value_ptr.*;
                     // NOTE: we dont have to check for duplicates because the duplicate
                     // slots have already been handled in the prev step
-                    index.indexRef(thread_head_ref.ref_ptr);
+                    index.indexRefAssumeCapacity(thread_head_ref.ref_ptr);
                 }
             }
 
@@ -984,9 +977,8 @@ pub const AccountsDB = struct {
         }
         try hashes.ensureTotalCapacity(hashes_allocator, total_n_pubkeys);
 
-        // well reuse this over time so this is ok (even if 1k is an under estimate)
-        var keys = try self.allocator.alloc(Pubkey, 1_000);
-        defer self.allocator.free(keys);
+        var keys_buf = try std.ArrayList(Pubkey).initCapacity(self.allocator, 1000);
+        defer keys_buf.deinit();
 
         var local_total_lamports: u64 = 0;
         var timer = try sig.time.Timer.start();
@@ -998,27 +990,18 @@ pub const AccountsDB = struct {
             defer bin_lg.unlock();
 
             const n_pubkeys_in_bin = bin.count();
-            if (n_pubkeys_in_bin == 0) {
-                continue;
-            }
-            if (n_pubkeys_in_bin > keys.len) {
-                if (!self.allocator.resize(keys, n_pubkeys_in_bin)) {
-                    self.allocator.free(keys);
-                    const new_keys = try self.allocator.alloc(Pubkey, n_pubkeys_in_bin);
-                    keys.ptr = new_keys.ptr;
-                    keys.len = new_keys.len;
-                } else {
-                    keys.len = n_pubkeys_in_bin;
-                }
-            }
+            if (n_pubkeys_in_bin == 0) continue;
 
-            var i: usize = 0;
-            var key_iter = bin.iterator();
-            while (key_iter.next()) |entry| {
-                keys[i] = entry.key_ptr.*;
-                i += 1;
-            }
-            const bin_pubkeys = keys[0..n_pubkeys_in_bin];
+            try keys_buf.ensureTotalCapacity(n_pubkeys_in_bin);
+            keys_buf.clearRetainingCapacity();
+
+            const bin_pubkeys: []Pubkey = blk: {
+                var key_iter = bin.iterator();
+                while (key_iter.next()) |entry| {
+                    keys_buf.appendAssumeCapacity(entry.key_ptr.*);
+                }
+                break :blk keys_buf.items;
+            };
 
             std.mem.sort(Pubkey, bin_pubkeys, {}, struct {
                 fn lessThan(_: void, lhs: Pubkey, rhs: Pubkey) bool {
@@ -1028,9 +1011,7 @@ pub const AccountsDB = struct {
 
             // get the hashes
             for (bin_pubkeys) |key| {
-                const ref_head_rw = bin.getPtr(key).?;
-                const ref_head, var ref_head_lg = ref_head_rw.readWithLock();
-                defer ref_head_lg.unlock();
+                const ref_head = bin.getPtr(key).?;
 
                 // get the most recent state of the account
                 const ref_ptr = ref_head.ref_ptr;
@@ -1437,24 +1418,21 @@ pub const AccountsDB = struct {
 
         // update the reference AFTER the data exists
         for (pubkeys, offsets) |pubkey, offset| {
-            var head_reference_rw = self.account_index.getReference(&pubkey) orelse return error.PubkeyNotFound;
-            const head_ref, var head_reference_lg = head_reference_rw.writeWithLock();
+            const head_ref, var head_reference_lg = self.account_index.getReferenceHeadWrite(&pubkey) orelse return error.PubkeyNotFound;
             defer head_reference_lg.unlock();
 
             // find the slot in the reference list
-            var did_update = false;
             var curr_ref: ?*AccountRef = head_ref.ref_ptr;
-            while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
+            const did_update = while (curr_ref) |ref| : (curr_ref = ref.next_ptr) {
                 if (ref.slot == slot) {
                     ref.location = .{ .File = .{ .file_id = file_id, .offset = offset } };
-                    did_update = true;
                     // NOTE: we break here because we dont allow multiple account states per slot
                     // NOTE: if there are multiple states, then it will likely break during clean
                     // trying to access a .File location which is actually still .Cache (bc it
                     // was never updated)
-                    break;
+                    break true;
                 }
-            }
+            } else false;
             std.debug.assert(did_update);
         }
 
@@ -1505,7 +1483,7 @@ pub const AccountsDB = struct {
 
         // TODO: move this out into a CleanState struct to reduce allocations
         // track then delete all to avoid deleting while iterating
-        var references_to_delete = std.ArrayList(*AccountRef).init(self.allocator);
+        var references_to_delete = std.ArrayList(struct { pubkey: Pubkey, slot: Slot }).init(self.allocator);
         defer references_to_delete.deinit();
 
         // track so we dont double delete
@@ -1534,9 +1512,7 @@ pub const AccountsDB = struct {
                 // check if already cleaned
                 if (try cleaned_pubkeys.fetchPut(pubkey, {}) != null) continue;
 
-                // SAFE: this should always succeed or something is wrong
-                var head_reference_rw = self.account_index.getReference(&pubkey).?;
-                const head_ref, var head_ref_lg = head_reference_rw.readWithLock();
+                const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(&pubkey).?; // SAFE: this should always succeed or something is wrong
                 defer head_ref_lg.unlock();
 
                 // get the highest slot <= highest_rooted_slot
@@ -1567,7 +1543,10 @@ pub const AccountsDB = struct {
                     const should_delete_ref = is_largest_root_zero_lamports or is_old_state;
                     if (should_delete_ref) {
                         // queue for deletion
-                        try references_to_delete.append(ref);
+                        try references_to_delete.append(.{
+                            .pubkey = ref.pubkey,
+                            .slot = ref.slot,
+                        });
 
                         // NOTE: we should never clean non-rooted references (ie, should always be in a file)
                         const ref_file_id = ref.location.File.file_id;
@@ -1831,24 +1810,22 @@ pub const AccountsDB = struct {
                 if (is_alive) {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
-                    // SAFE: we know the pubkey exists in the index because its alive
-                    const old_ref = self.account_index.getReferenceSlot(pubkey, slot).?;
+
+                    const ref_ptr_ptr, var ref_lg = self.account_index.getReferencePtrPtrWrite(pubkey, slot) catch |err| switch (err) {
+                        // SAFE: we know the pubkey exists in the index because its alive
+                        error.SlotNotFound, error.PubkeyNotFound => unreachable,
+                    };
+                    defer ref_lg.unlock();
 
                     // copy + update the values
-                    var new_ref = old_ref;
-                    new_ref.location.File.offset = offsets.items[offset_index];
-                    new_ref.location.File.file_id = new_file_id;
-                    offset_index += 1;
-
                     const new_ref_ptr = new_reference_block.addOneAssumeCapacity();
-                    new_ref_ptr.* = new_ref;
-
-                    // remove + re-add new reference
-                    try self.account_index.updateReference(pubkey, slot, new_ref_ptr);
-
-                    if (builtin.mode == .Debug) {
-                        std.debug.assert(self.account_index.exists(pubkey, slot));
-                    }
+                    new_ref_ptr.* = ref_ptr_ptr.*.*;
+                    new_ref_ptr.location.File = .{
+                        .offset = offsets.items[offset_index],
+                        .file_id = new_file_id,
+                    };
+                    offset_index += 1;
+                    ref_ptr_ptr.* = new_ref_ptr;
                 }
             }
 
@@ -1893,48 +1870,32 @@ pub const AccountsDB = struct {
     /// only exist in the cache, and not on disk). this is mainly used for dropping
     /// forks.
     pub fn purgeSlot(self: *Self, slot: Slot) void {
-        const pubkeys, const accounts = blk: {
-            const account_cache, var account_cache_lg = self.account_cache.readWithLock();
+        const pubkeys: []const Pubkey, //
+        const accounts: []const Account //
+        = blk: {
+            const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
 
-            const pubkeys, const accounts = account_cache.get(slot) orelse {
+            const removed = account_cache.fetchRemove(slot) orelse {
                 // the way it works right now, account files only exist for rooted slots
                 // rooted slots should never need to be purged so we should never get here
                 @panic("purging an account file not supported");
             };
-            break :blk .{ pubkeys, accounts };
+            break :blk removed.value;
         };
 
         // remove the references
         for (pubkeys) |*pubkey| {
-            self.account_index.removeReference(pubkey, slot) catch |err| {
-                switch (err) {
-                    error.PubkeyNotFound => {
-                        std.debug.panic("pubkey not found in index while purging: {any}", .{pubkey});
-                    },
-                    error.SlotNotFound => {
-                        std.debug.panic(
-                            "pubkey @ slot not found in index while purging: {any} @ {d}",
-                            .{ pubkey, slot },
-                        );
-                    },
-                }
+            self.account_index.removeReference(pubkey, slot) catch |err| switch (err) {
+                error.PubkeyNotFound => std.debug.panic("pubkey not found in index while purging: {any}", .{pubkey}),
+                error.SlotNotFound => std.debug.panic("pubkey @ slot not found in index while purging: {any} @ {d}", .{ pubkey, slot }),
             };
         }
 
         // free the reference memory
-        self.account_index.freeReferenceBlock(slot) catch |err| {
-            switch (err) {
-                error.MemoryNotFound => {
-                    std.debug.panic("memory block @ slot not found: {d}", .{slot});
-                },
-            }
+        self.account_index.freeReferenceBlock(slot) catch |err| switch (err) {
+            error.MemoryNotFound => std.debug.panic("memory block @ slot not found: {d}", .{slot}),
         };
-
-        // remove the slot from the cache
-        const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
-        defer account_cache_lg.unlock();
-        _ = account_cache.remove(slot);
 
         // free the account memory
         for (accounts) |account| {
@@ -2089,9 +2050,7 @@ pub const AccountsDB = struct {
 
     /// gets an account given an associated pubkey. mut ref is required for locks.
     pub fn getAccount(self: *Self, pubkey: *const Pubkey) !Account {
-        var head_ref_rw = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
-
-        const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+        const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer head_ref_lg.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
@@ -2106,8 +2065,7 @@ pub const AccountsDB = struct {
         self: *Self,
         pubkey: *const Pubkey,
     ) GetAccountError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
-        var head_ref_rw = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
-        const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
+        const head_ref, var head_ref_lg = self.account_index.getReferenceHeadRead(pubkey) orelse return error.PubkeyNotInIndex;
         defer head_ref_lg.unlock();
 
         // NOTE: this will always be a safe unwrap since both bounds are null
@@ -2206,7 +2164,7 @@ pub const AccountsDB = struct {
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
         for (references.items) |*ref| {
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref);
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
             if (!was_inserted) {
                 accounts_dead_count += 1;
                 self.logger.warnf(
@@ -2309,7 +2267,7 @@ pub const AccountsDB = struct {
                 .location = .{ .Cache = .{ .index = i } },
             };
 
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref_ptr);
+            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref_ptr);
             if (!was_inserted) {
                 self.logger.warnf(
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",
@@ -3523,9 +3481,8 @@ test "purge accounts in cache works" {
     try accounts_db.putAccountSlice(&accounts, &pubkeys, slot);
 
     for (0..n_accounts) |i| {
-        try std.testing.expect(
-            accounts_db.account_index.getReference(&pubkeys[i]) != null,
-        );
+        _, var lg = accounts_db.account_index.getReferenceHeadRead(&pubkeys[i]) orelse return error.TestUnexpectedNull;
+        lg.unlock();
     }
 
     accounts_db.purgeSlot(slot);
@@ -3546,7 +3503,7 @@ test "purge accounts in cache works" {
 
     // ref hashmap is cleared
     for (0..n_accounts) |i| {
-        try std.testing.expect(accounts_db.account_index.getReference(&pubkey_copy[i]) == null);
+        try std.testing.expect(accounts_db.account_index.getReferenceHeadRead(&pubkey_copy[i]) == null);
     }
 }
 
