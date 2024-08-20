@@ -41,6 +41,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    timeout-minutes: 60
     steps:
       - name: checkout
         uses: actions/checkout@v2
@@ -60,6 +61,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    timeout-minutes: 60
     steps:
       - name: checkout
         uses: actions/checkout@v2
@@ -98,6 +100,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    timeout-minutes: 60
     steps:
       - name: checkout
         uses: actions/checkout@v2
@@ -116,6 +119,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
     runs-on: ${{matrix.os}}
+    timeout-minutes: 60
     steps:
       - name: checkout
         uses: actions/checkout@v2
