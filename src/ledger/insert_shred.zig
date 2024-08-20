@@ -52,7 +52,6 @@ pub const ShredInserter = struct {
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
-    count: usize = 0,
 
     const Self = @This();
 
@@ -375,12 +374,6 @@ pub const ShredInserter = struct {
         for (em1_keys, em1_values) |erasure_set, *working_erasure_meta| {
             if (working_erasure_meta.* == .clean) {
                 continue;
-            }
-            if (should_log) {
-                self.logger.infof("erasure_meta: {any}: {any}", .{
-                    erasure_set,
-                    working_erasure_meta.asRef().*,
-                });
             }
             try write_batch.put(
                 schema.erasure_meta,
