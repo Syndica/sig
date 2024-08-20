@@ -871,7 +871,7 @@ fn createSnapshot() !void {
         slot,
         output_dir,
         &snapshot_result.snapshot_fields.full.bank_fields,
-        snapshot_result.status_cache,
+        StatusCache.default(),
     );
 }
 
@@ -905,7 +905,7 @@ fn validateSnapshot() !void {
     var buf: [1024]u8 = undefined;
 
     while (true) {
-        std.debug.print("enter pubkey:\n", .{});
+        std.debug.print("enter pubkey:", .{});
         const input_pubkey_str = try std.io.getStdIn().reader().readUntilDelimiterOrEof(&buf, '\n') orelse continue;
         const input_pubkey = Pubkey.fromString(input_pubkey_str) catch {
             std.debug.print("invalid pubkey: {s}\n", .{input_pubkey_str});
@@ -1276,13 +1276,11 @@ const LoadedSnapshot = struct {
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
     genesis_config: GenesisConfig,
-    status_cache: StatusCache,
 
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit(false); // keep index files on disk
-        self.status_cache.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -1301,7 +1299,8 @@ fn loadSnapshot(
     errdefer allocator.destroy(result);
     result.allocator = allocator;
 
-    var snapshot_dir = try std.fs.cwd().makeOpenPath(config.current.accounts_db.snapshot_dir, .{ .iterate = true });
+    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{ .iterate = true });
     defer snapshot_dir.close();
 
     var all_snapshot_fields, const snapshot_files = try getOrDownloadSnapshots(allocator, logger, gossip_service, .{
@@ -1323,7 +1322,6 @@ fn loadSnapshot(
     }
 
     // cli parsing
-    const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
     const n_threads_snapshot_load: u32 = blk: {
         const cli_n_threads_snapshot_load: u32 = config.current.accounts_db.num_threads_snapshot_load;
         if (cli_n_threads_snapshot_load == 0) {
@@ -1353,6 +1351,7 @@ fn loadSnapshot(
         validate_snapshot,
     );
     errdefer snapshot_fields.deinit(allocator);
+    result.snapshot_fields.was_collapsed = true;
 
     const bank_fields = &snapshot_fields.bank_fields;
 
@@ -1371,19 +1370,17 @@ fn loadSnapshot(
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
-    // validate the status cache
-    logger.infof("validating status cache...", .{});
-    result.status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
-        if (err == error.StatusCacheNotFound) {
-            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
-        }
-        return err;
-    };
+    // // validate the status cache
+    // result.status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
+    //     if (err == error.StatusCacheNotFound) {
+    //         logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+    //     }
+    //     return err;
+    // };
 
-    var slot_history = try result.accounts_db.getSlotHistory();
-    defer slot_history.deinit(result.accounts_db.allocator);
-
-    try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
+    // var slot_history = try result.accounts_db.getSlotHistory();
+    // defer slot_history.deinit(result.accounts_db.allocator);
+    // try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
 
