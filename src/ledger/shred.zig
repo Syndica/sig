@@ -201,7 +201,7 @@ pub const CodeShred = struct {
     pub fn sanitize(self: *const Self) !void {
         try self.fields.sanitize();
         if (self.fields.custom.num_code_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
-            return error.InvalidNumCodingShreds;
+            return error.InvalidNumCodeShreds;
         }
         _ = try self.erasureShardIndex();
     }

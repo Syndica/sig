@@ -3,8 +3,8 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CodingShred = sig.ledger.shred.CodeShred;
-const CodingShredHeader = sig.ledger.shred.CodeHeader;
+const CodeShred = sig.ledger.shred.CodeShred;
+const CodeShredHeader = sig.ledger.shred.CodeHeader;
 const CommonHeader = sig.ledger.shred.CommonHeader;
 const DataShred = sig.ledger.shred.DataShred;
 const Hash = sig.core.Hash;
@@ -92,7 +92,7 @@ pub fn recover(
     // so we can just grab the retransmitter signature from one of the
     // available shreds and attach it to the recovered shreds.
     const common_header: CommonHeader, //
-    const code_header: CodingShredHeader, //
+    const code_header: CodeShredHeader, //
     const chained_merkle_root: ?Hash, //
     const retransmitter_signature: ?Signature =
         for (shreds) |shred|
@@ -203,7 +203,7 @@ pub fn recover(
                 var this_code_header = code_header;
                 this_common_header.index += @intCast(offset);
                 this_code_header.position = @intCast(offset);
-                const code_shred = try CodingShred.fromRecoveredShard(
+                const code_shred = try CodeShred.fromRecoveredShard(
                     allocator,
                     common_header,
                     code_header,
@@ -271,7 +271,7 @@ pub fn recover(
 /// and have consistent headers.
 fn verifyErasureBatch(
     expect: CommonHeader,
-    code: CodingShredHeader,
+    code: CodeShredHeader,
     shreds: []const Shred,
 ) bool {
     for (shreds) |shred| {

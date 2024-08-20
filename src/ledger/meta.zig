@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
-const CodingShred = sig.ledger.shred.CodeShred;
+const CodeShred = sig.ledger.shred.CodeShred;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 
@@ -185,7 +185,7 @@ pub const ErasureMeta = struct {
 
     const Self = @This();
 
-    pub fn fromCodingShred(shred: CodingShred) ?Self {
+    pub fn fromCodeShred(shred: CodeShred) ?Self {
         return .{
             .fec_set_index = @intCast(shred.fields.common.fec_set_index),
             .config = ErasureConfig{
@@ -199,8 +199,8 @@ pub const ErasureMeta = struct {
 
     /// Returns true if the erasure fields on the shred
     /// are consistent with the erasure-meta.
-    pub fn checkCodingShred(self: Self, shred: CodingShred) bool {
-        var other = fromCodingShred(shred) orelse return false;
+    pub fn checkCodeShred(self: Self, shred: CodeShred) bool {
+        var other = fromCodeShred(shred) orelse return false;
         other.first_received_code_index = self.first_received_code_index;
         return sig.utils.types.eql(self, other);
     }

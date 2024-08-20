@@ -171,7 +171,7 @@ pub const BlockstoreReader = struct {
     }
 
     /// Analogous to [get_coding_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2287-L2288)
-    pub fn getCodingShredsForSlot(
+    pub fn getCodeShredsForSlot(
         self: *Self,
         slot: Slot,
         start_index: u64,
@@ -1470,7 +1470,7 @@ pub const AncestorIterator = struct {
 const bincode = sig.bincode;
 const Blockstore = sig.ledger.BlockstoreDB;
 const ShredInserter = sig.ledger.ShredInserter;
-const CodingShred = sig.ledger.shred.CodeShred;
+const CodeShred = sig.ledger.shred.CodeShred;
 const TestState = sig.ledger.insert_shred.TestState;
 
 const test_shreds = @import("test_shreds.zig");
@@ -2091,7 +2091,7 @@ test "getCodeShred" {
         &max_root,
     );
 
-    var shred = Shred{ .code = try CodingShred.default(allocator) };
+    var shred = Shred{ .code = try CodeShred.default(allocator) };
     defer shred.deinit();
     shred.code.fields.common.slot = 10;
     shred.code.fields.common.index = 10;
@@ -2139,7 +2139,7 @@ test "getCodeShred" {
     const is_full = try reader.isFull(shred_slot);
     try std.testing.expectEqual(false, is_full);
 
-    var shreds = try reader.getCodingShredsForSlot(shred_slot, shred_index);
+    var shreds = try reader.getCodeShredsForSlot(shred_slot, shred_index);
     defer {
         for (shreds.items) |*s| s.deinit();
         shreds.deinit();
