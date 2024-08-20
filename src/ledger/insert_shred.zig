@@ -52,6 +52,7 @@ pub const ShredInserter = struct {
     lock: Mutex,
     max_root: Atomic(u64), // TODO shared
     metrics: BlockstoreInsertionMetrics,
+    count: usize = 0,
 
     const Self = @This();
 
@@ -374,6 +375,12 @@ pub const ShredInserter = struct {
         for (em1_keys, em1_values) |erasure_set, *working_erasure_meta| {
             if (working_erasure_meta.* == .clean) {
                 continue;
+            }
+            if (should_log) {
+                self.logger.infof("erasure_meta: {any}: {any}", .{
+                    erasure_set,
+                    working_erasure_meta.asRef().*,
+                });
             }
             try write_batch.put(
                 schema.erasure_meta,
@@ -1093,10 +1100,10 @@ pub const ShredInserter = struct {
             reed_solomon_cache,
         )) |shreds| {
             return shreds;
-        } else |e| {
+        } else |_| {
             // TODO: submit_self.metrics
             // TODO: consider returning error (agave does not return an error or log)
-            self.logger.errf("shred recovery error: {}", .{e});
+            // self.logger.errf("shred recovery error: {}", .{e});
             return std.ArrayList(Shred).init(self.allocator);
         }
     }
