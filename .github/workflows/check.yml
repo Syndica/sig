@@ -12,25 +12,27 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v2
+        
       - name: setup-zig
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
 
       - name: lint
         run: |
-          zig fmt --check src/
-          zig fmt --check build.zig
+          zig fmt --check src/ build.zig
 
   unused_imports:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
         uses: actions/checkout@v3
+
       - name: Set up Python 3.10
         uses: actions/setup-python@v3
         with: 
-          python-version: "3.10"         
+          python-version: "3.10"      
+
       - name: remove unused imports
         run: python remove_unused.py src/
 
@@ -44,12 +46,12 @@ jobs:
         uses: actions/checkout@v2
         with:
           submodules: recursive
+
       - name: setup-zig
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
-      - name: prevent rocksdb from depending on libraries that won't be provided by the linker
-        run: sudo apt remove liblz4-dev libzstd-dev
+
       - name: test
         run: zig build test
 
@@ -65,7 +67,7 @@ jobs:
           submodules: recursive
 
       - name: setup-zig
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
 
@@ -82,9 +84,6 @@ jobs:
           cmake ..
           make
           sudo make install
-
-      - name: prevent rocksdb from depending on libraries that won't be provided by the linker
-        run: sudo apt remove liblz4-dev libzstd-dev
 
       - name: Run kcov
         run: |
@@ -104,8 +103,8 @@ jobs:
         uses: actions/checkout@v2
         with:
           submodules: recursive
-      - name: setup-zig
-        uses: goto-bus-stop/setup-zig@v1
+      - name: setup zig
+        uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
 
@@ -123,12 +122,9 @@ jobs:
         with:
           submodules: recursive
       - name: setup-zig
-        uses: goto-bus-stop/setup-zig@v1
+        uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
-
-      - name: prevent rocksdb from depending on libraries that won't be provided by the linker
-        run: sudo apt remove liblz4-dev libzstd-dev
 
       - name: build release 
         run: zig build -Doptimize=ReleaseSafe 
