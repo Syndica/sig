@@ -7,8 +7,6 @@ const Logger = sig.trace.Logger;
 const Account = sig.core.Account;
 const Slot = sig.core.time.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
-const GeyserWriter = sig.geyser.GeyserWriter;
-const Hash = sig.core.Hash;
 const BankFields = sig.accounts_db.snapshots.BankFields;
 const BankHashInfo = sig.accounts_db.snapshots.BankHashInfo;
 
