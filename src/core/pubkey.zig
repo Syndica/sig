@@ -1,28 +1,19 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
-const base58 = @import("base58-zig");
 const Ed25519 = std.crypto.sign.Ed25519;
 const U8ArrayConfig = sig.bincode.int.U8ArrayConfig;
-const encoder = base58.Encoder.init(.{});
-const decoder = base58.Decoder.init(.{});
 
 pub const Pubkey = extern struct {
-    data: [32]u8,
+    data: [size]u8,
 
-    pub const @"!bincode-config:data" = U8ArrayConfig(32);
+    pub const size = 32;
+    pub const @"!bincode-config:data" = U8ArrayConfig(size);
 
     const Self = @This();
+    const base58 = sig.crypto.base58.Base58Sized(size);
 
-    /// ***fromString*** takea a base58 encoded string and decodes the value. It also caches
-    /// the `str` for future calls to string() method.
-    /// If `bytes`, it wil automatically encode so that it's able to call string() method.
-    ///
     pub fn fromString(str: []const u8) !Self {
-        var out: [32]u8 = undefined;
-        const written = decoder.decode(str, &out) catch return Error.InvalidEncodedValue;
-        if (written != 32) return Error.InvalidBytesLength;
-
-        return Self{ .data = out };
+        return .{ .data = try base58.decode(str) };
     }
 
     /// ***fromBytes*** will automatically base58 decode the value. It will also cache the decoded string
@@ -34,48 +25,30 @@ pub const Pubkey = extern struct {
     /// scenarios where you plan to only use the bytes and want to save on expensive base58 encoding.
     ///
     pub fn fromBytes(bytes: []const u8) !Self {
-        if (bytes.len != 32) {
+        if (bytes.len != size) {
             return Error.InvalidBytesLength;
         }
-        return Self{ .data = bytes[0..32].* };
+        return .{ .data = bytes[0..size].* };
     }
 
-    pub fn base58_encode(bytes: []const u8) error{EncodingError}![44]u8 {
-        var dest: [44]u8 = undefined;
-        @memset(&dest, 0);
-        const written = encoder.encode(bytes, &dest) catch return error.EncodingError;
-        if (written > 44) {
-            std.debug.panic("written is > 44, written: {}, dest: {any}, bytes: {any}", .{ written, dest, bytes });
-        }
-        return dest;
-    }
-
-    pub fn string(self: *const Self) [44]u8 {
-        return Self.base58_encode(&self.data) catch @panic("could not encode pubkey");
-    }
-
-    pub fn stringWithBuf(self: *const Self, dest: []u8) []u8 {
-        const written = encoder.encode(&self.data, dest) catch @panic("could not encode pubkey");
-        if (written > 44) {
-            std.debug.panic("written > 44\n", .{});
-        }
-        return dest[0..written];
+    pub fn string(self: Self) base58.String {
+        return base58.encode(self.data);
     }
 
     /// ***random*** generates a random pubkey. Optionally set `skip_encoding` to skip expensive base58 encoding.
     pub fn random(rng: std.Random) Self {
-        var bytes: [32]u8 = undefined;
+        var bytes: [size]u8 = undefined;
         rng.bytes(&bytes);
-        return Self{ .data = bytes };
+        return .{ .data = bytes };
     }
 
     pub fn default() Self {
-        return Self{ .data = [_]u8{0} ** 32 };
+        return .{ .data = [_]u8{0} ** size };
     }
 
     pub fn equals(self: *const Self, other: *const Pubkey) bool {
-        const xx: @Vector(32, u8) = self.data;
-        const yy: @Vector(32, u8) = other.data;
+        const xx: @Vector(size, u8) = self.data;
+        const yy: @Vector(size, u8) = other.data;
         const r = @reduce(.And, xx == yy);
         return r;
     }
@@ -84,15 +57,17 @@ pub const Pubkey = extern struct {
         return Self.fromBytes(&public_key.bytes) catch unreachable;
     }
 
-    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
-        var dest: [44]u8 = undefined;
-        @memset(&dest, 0);
-        const written = encoder.encode(&self.data, &dest) catch unreachable;
-        return writer.print("{s}", .{dest[0..written]}) catch unreachable;
+    pub fn format(
+        self: @This(),
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        return base58.format(self.data, writer);
     }
 
     pub fn isDefault(self: *const Self) bool {
-        return std.mem.eql(u8, &self.data, &[_]u8{0} ** 32);
+        return std.mem.eql(u8, &self.data, &[_]u8{0} ** size);
     }
 };
 

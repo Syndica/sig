@@ -1,12 +1,17 @@
 const std = @import("std");
+const sig = @import("../lib.zig");
+
 const Sha256 = std.crypto.hash.sha2.Sha256;
-const base58 = @import("base58-zig");
 const Allocator = std.mem.Allocator;
 
-pub const HASH_SIZE: usize = 32;
+pub const HASH_SIZE: usize = Hash.size;
 
 pub const Hash = extern struct {
-    data: [HASH_SIZE]u8,
+    data: [size]u8,
+
+    pub const size = 32;
+
+    const base58 = sig.crypto.base58.Base58Sized(size);
 
     pub fn fromSizedSlice(data: *const [HASH_SIZE]u8) Hash {
         var hash: Hash = undefined;
@@ -44,38 +49,24 @@ pub const Hash = extern struct {
     }
 
     pub fn parseBase58String(str: []const u8) error{InvalidHash}!Hash {
-        var result_data: [HASH_SIZE]u8 = undefined;
-        const b58_decoder = comptime base58.Decoder.init(.{});
-        const encoded_len = b58_decoder.decode(str, &result_data) catch return error.InvalidHash;
-        if (encoded_len != HASH_SIZE) return error.InvalidHash;
-        return .{ .data = result_data };
+        return .{ .data = base58.decode(str) catch return error.InvalidHash };
     }
 
     pub fn base58String(self: Hash) std.BoundedArray(u8, 44) {
-        var result: std.BoundedArray(u8, 44) = .{};
-        const b58_encoder = comptime base58.Encoder.init(.{});
-        const encoded_len = b58_encoder.encode(&self.data, &result.buffer) catch unreachable; // this is unreachable because '44' is exactly the maximum encoded length for a 32 byte string.
-        result.len = @intCast(encoded_len);
-        return result;
+        return base58.encode(self.data);
     }
 
-    pub fn format(self: Hash, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        const b58_str_bounded = self.base58String();
-        return writer.writeAll(b58_str_bounded.constSlice());
+    pub fn format(
+        self: Hash,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        return base58.format(self.data, writer);
     }
 
     pub fn base58EncodeAlloc(self: Hash, allocator: Allocator) Allocator.Error![]const u8 {
-        const buf = try allocator.alloc(u8, 44);
-        const size = self.base58EncodeToSlice(buf[0..44]);
-        std.debug.assert(size <= 44);
-        return try allocator.realloc(buf, size);
-    }
-
-    fn base58EncodeToSlice(self: Hash, buf: *[44]u8) usize {
-        const b58_encoder = base58.Encoder.init(.{});
-        // unreachable because 44 is the maximum encoded length for 32 bytes.
-        const size = b58_encoder.encode(&self.data, buf[0..]) catch unreachable;
-        return size;
+        return base58.encodeAlloc(self.data, allocator);
     }
 
     /// Intended to be used in tests.

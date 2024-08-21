@@ -1,24 +1,26 @@
 const std = @import("std");
 const sig = @import("../lib.zig");
+const ledger = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const CodeShred = sig.ledger.shred.CodeShred;
-const CodeShredHeader = sig.ledger.shred.CodeHeader;
-const CommonHeader = sig.ledger.shred.CommonHeader;
-const DataShred = sig.ledger.shred.DataShred;
 const Hash = sig.core.Hash;
 const Lru = sig.common.lru.LruCacheCustom;
-const MerkleProofEntryList = sig.ledger.shred.MerkleProofEntryList;
-const ReedSolomon = sig.ledger.reed_solomon.ReedSolomon;
-const Shred = sig.ledger.shred.Shred;
+
+const CodeShred = ledger.shred.CodeShred;
+const CodeShredHeader = ledger.shred.CodeHeader;
+const CommonHeader = ledger.shred.CommonHeader;
+const DataShred = ledger.shred.DataShred;
+const MerkleProofEntryList = ledger.shred.MerkleProofEntryList;
+const ReedSolomon = ledger.reed_solomon.ReedSolomon;
+const Shred = ledger.shred.Shred;
 const Signature = sig.core.Signature;
 
 const checkedSub = sig.utils.math.checkedSub;
-const makeMerkleTree = sig.ledger.shred.makeMerkleTree;
-const makeMerkleProof = sig.ledger.shred.makeMerkleProof;
+const makeMerkleTree = ledger.shred.makeMerkleTree;
+const makeMerkleProof = ledger.shred.makeMerkleProof;
 
-const DATA_SHREDS_PER_FEC_BLOCK = sig.ledger.shred.DATA_SHREDS_PER_FEC_BLOCK;
+const DATA_SHREDS_PER_FEC_BLOCK = ledger.shred.DATA_SHREDS_PER_FEC_BLOCK;
 
 pub const ReedSolomonCache = struct {
     cache: Cache,
@@ -363,7 +365,13 @@ fn verifyErasureBatch(
     return true;
 }
 
-// test "recover mainnet shreds" {
+///////////
+// Tests
+
+const mainnet_shreds = @import("test_shreds.zig").mainnet_recovery_shreds;
+const CodeHeader = ledger.shred.CodeHeader;
+
+// test "recover mainnet shreds - end to end" {
 //     const allocator = std.testing.allocator;
 //     const shred_bytes = @import("test_shreds.zig").mainnet_recovery_shreds;
 //     var shreds = std.ArrayList(Shred).init(allocator);
@@ -376,3 +384,45 @@ fn verifyErasureBatch(
 //     defer cache.deinit();
 //     _ = try recover(allocator, shreds.items, &cache);
 // }
+
+test "recover mainnet shreds - metadata is correct" {
+    const shreds = try toShreds(std.testing.allocator, &mainnet_shreds);
+    defer {
+        for (shreds) |shred| shred.deinit();
+        std.testing.allocator.free(shreds);
+    }
+    const actual = try getRecoveryMetadata(shreds);
+    const expected = RecoveryMetadata{
+        .common_header = CommonHeader{
+            .signature = try Signature.fromString(
+                "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
+            ),
+            .variant = .{
+                .shred_type = .code,
+                .proof_size = 5,
+                .chained = false,
+                .resigned = false,
+            },
+            .slot = 284737905,
+            .index = 483,
+            .version = 50093,
+            .fec_set_index = 483,
+        },
+        .code_header = CodeHeader{
+            .num_data_shreds = 7,
+            .num_code_shreds = 21,
+            .position = 0,
+        },
+        .retransmitter_signature = null,
+        .chained_merkle_root = null,
+    };
+    try std.testing.expectEqual(expected, actual);
+}
+
+fn toShreds(allocator: Allocator, payloads: []const []const u8) ![]const Shred {
+    var shreds = try std.ArrayList(Shred).initCapacity(allocator, payloads.len);
+    for (payloads) |payload| {
+        shreds.appendAssumeCapacity(try Shred.fromPayload(allocator, payload));
+    }
+    return shreds.items;
+}
