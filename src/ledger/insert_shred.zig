@@ -5,7 +5,6 @@ const bs = sig.ledger;
 const meta = bs.meta;
 const schema = bs.schema.schema;
 const shred_mod = sig.ledger.shred;
-const shredder = sig.ledger.shredder;
 
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
@@ -23,7 +22,7 @@ const Slot = sig.core.Slot;
 const Shred = sig.ledger.shred.Shred;
 const CodeShred = sig.ledger.shred.CodeShred;
 const DataShred = sig.ledger.shred.DataShred;
-const ReedSolomonCache = bs.shredder.ReedSolomonCache;
+const ReedSolomonCache = bs.recovery.ReedSolomonCache;
 const ShredId = sig.ledger.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
@@ -41,6 +40,8 @@ const SlotMeta = meta.SlotMeta;
 
 const key_serializer = sig.ledger.database.key_serializer;
 const value_serializer = sig.ledger.database.value_serializer;
+
+const recover = bs.recovery.recover;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -1086,7 +1087,7 @@ pub const ShredInserter = struct {
             &available_shreds,
         );
 
-        if (shredder.recover(
+        if (recover(
             self.allocator,
             available_shreds.items,
             reed_solomon_cache,
