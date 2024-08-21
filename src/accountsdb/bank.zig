@@ -10,9 +10,9 @@ const SnapshotFields = @import("snapshots.zig").SnapshotFields;
 /// Analogous to [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
 pub const Bank = struct {
     accounts_db: *AccountsDB,
-    bank_fields: *BankFields,
+    bank_fields: *const BankFields,
 
-    pub fn init(accounts_db: *AccountsDB, bank_fields: *BankFields) Bank {
+    pub fn init(accounts_db: *AccountsDB, bank_fields: *const BankFields) Bank {
         return .{
             .accounts_db = accounts_db,
             .bank_fields = bank_fields,
