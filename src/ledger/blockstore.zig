@@ -1,4 +1,4 @@
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 pub const BlockstoreDB = sig.ledger.rocksdb.RocksDB(&sig.ledger.schema.list);
 

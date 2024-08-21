@@ -1,7 +1,7 @@
 const std = @import("std");
 const TarOutputHeader = std.tar.output.Header;
 
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const ThreadPoolTask = sig.utils.thread.ThreadPoolTask;
 const ThreadPool = sig.sync.thread_pool.ThreadPool;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const base58 = @import("base58-zig");
 const Ed25519 = std.crypto.sign.Ed25519;
 const U8ArrayConfig = sig.bincode.int.U8ArrayConfig;

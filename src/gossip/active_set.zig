@@ -1,6 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const EndPoint = network.EndPoint;

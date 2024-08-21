@@ -1,11 +1,11 @@
 const std = @import("std");
-const lib = @import("./lib.zig");
+const sig = @import("sig.zig");
 
-const accountsdb_fuzz = lib.accounts_db.fuzz;
-const gossip_fuzz_service = lib.gossip.fuzz_service;
-const gossip_fuzz_table = lib.gossip.fuzz_table;
-const accountsdb_snapshot_fuzz = lib.accounts_db.fuzz_snapshot;
-const logger = lib.trace.log;
+const accountsdb_fuzz = sig.accounts_db.fuzz;
+const gossip_fuzz_service = sig.gossip.fuzz_service;
+const gossip_fuzz_table = sig.gossip.fuzz_table;
+const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
+const logger = sig.trace.log;
 
 // where seeds are saved (in case of too many logs)
 const SEED_FILE_PATH = "test_data/fuzz_seeds.txt";

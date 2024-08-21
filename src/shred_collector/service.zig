@@ -1,6 +1,6 @@
 const std = @import("std");
 const network = @import("zig-network");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const shred_collector = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;

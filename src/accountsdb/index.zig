@@ -1,7 +1,7 @@
 //! all index related structs (account ref, simd hashmap, …)
 
 const std = @import("std");
-const lib = @import("../lib.zig");
+const lib = @import("../sig.zig");
 
 const ArrayList = std.ArrayList;
 const Slot = lib.core.time.Slot;

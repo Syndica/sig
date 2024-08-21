@@ -1,7 +1,7 @@
 //! includes the main database struct `AccountsDB`
 
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const builtin = @import("builtin");
 const zstd = @import("zstd");
 const bincode = sig.bincode;

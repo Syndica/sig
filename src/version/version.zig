@@ -1,4 +1,4 @@
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 
 const var_int_config_u16 = sig.bincode.varint.var_int_config_u16;
 

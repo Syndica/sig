@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const network = @import("zig-network");
 
 const AtomicBool = std.atomic.Value(bool);

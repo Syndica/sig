@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const sig = @import("sig.zig");
 const logger = @import("./trace/log.zig");
 
 test {
@@ -8,7 +8,7 @@ test {
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
 
     std.testing.log_level = std.log.Level.err;
-    refAllDeclsRecursive(lib, 2);
+    refAllDeclsRecursive(sig, 2);
 }
 
 /// Like std.testing.refAllDeclsRecursive, except:
