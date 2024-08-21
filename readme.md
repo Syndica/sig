@@ -310,8 +310,8 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 
 [Zig](https://ziglang.org/)
 
-- [Official Documentation](https://ziglang.org/documentation/0.12.0/)
-- [Ziglearn Book](https://ziglearn.org/)
+- [Official Documentation](https://ziglang.org/documentation/0.13.0/)
+- [zig.guide](https://zig.guide.org/)
 - [Ziglings Exercises](https://github.com/ratfactor/ziglings)
 
 [Solana](https://solana.com/)

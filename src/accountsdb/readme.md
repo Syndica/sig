@@ -34,17 +34,17 @@ the main files include:
 
 Additional context on specific cli flags is given throughout these docs.
 
-## download a snapshot throught cli 
+## download a snapshot through cli 
 
 ```bash
-zig-out/bin/sig download_snapshot \
+zig-out/bin/sig snapshot-download \
     # where to save snapshot
     -s test_data/tmp \
     # gossip peers to join network from
     --entrypoint 34.83.231.102:8001 \
     --entrypoint 145.40.67.83:8001 \
     # pubkeys of validators whos snapshot hashes you trust
-    --trusted_validator x19btgySsrjuo25CJCj7oE7DREwezDhnx7pZkj2v69Nk
+    --trusted_validator x19btgySsrjuo25CJCj7oE7DREwezDhnx7pZkj2v69N
     # minimum MB/s speed when downloading snapshot
     --min-snapshot-download-speed 50 \
 ```
@@ -100,7 +100,7 @@ the codebase.
 
 we'll cover how to load accounts db from a snapshot later in the docs.
 
-# architechture
+# architecture
 
 the two major components in the db include:
 - a account_file map which maps a file_id to the mmap'd contents of that file
