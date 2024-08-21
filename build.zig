@@ -8,6 +8,7 @@ pub fn build(b: *Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const filters = b.option([]const []const u8, "filter", "List of filters, used for example to filter unit tests by name"); // specified as a series like `-Dfilter="filter1" -Dfilter="filter2"`
+    const enable_tsan = b.option(bool, "enable-tsan", "Enable TSan for the test suite");
 
     // CLI build steps
     const run_step = b.step("run", "Run the sig executable");
@@ -79,6 +80,7 @@ pub fn build(b: *Build) void {
         .target = target,
         .optimize = optimize,
         .filters = filters orelse &.{},
+        .sanitize_thread = enable_tsan,
     });
     b.installArtifact(unit_tests_exe);
     unit_tests_exe.root_module.addImport("base58-zig", base58_module);

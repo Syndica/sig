@@ -756,7 +756,7 @@ pub const ThreadPool = struct {
                 // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
                 // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
                 if (state == SHUTDOWN) {
-                    @fence(.acquire);
+                    self.state.fence(.acquire);
                     return;
                 }
 
