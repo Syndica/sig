@@ -225,10 +225,12 @@ test "signed/serialized RepairRequest is valid" {
             nonce,
         );
 
+        // TODO: `serializeRepairRequest` is currently non-deterministic because keypair.signer uses csprng.
+        // figure out a way to make it deterministic!
+
         var deserialized = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
         try deserialized.verify(serialized, recipient, timestamp);
-
-        serialized[10] = 0; // >99% chance that this invalidates the signature
+        rng.bytes(serialized[10..15]); // >99.99% chance that this invalidates the signature
         var bad = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
         if (bad.verify(serialized, recipient, timestamp)) |_| @panic("should err") else |_| {}
     }

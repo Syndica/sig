@@ -85,7 +85,8 @@ pub fn Channel(comptime T: type) type {
             return buffer.mut().pop();
         }
 
-        /// `drain` func will remove all pending items from queue.
+        /// `drain` func will remove all pending items from queue. If the channel isn't closed
+        /// and the buffer is empty, `drain` will wait for new items to be produced.
         ///
         /// NOTE: Caller is responsible for calling `allocator.free` on the returned slice.
         pub fn drain(self: *Self) ?[]T {

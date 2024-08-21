@@ -378,7 +378,7 @@ pub const ThreadPool = struct {
             self.run_queue.push(list);
         }
 
-        forceSpawn(self);
+        self.forceSpawn();
     }
 
     pub fn forceSpawn(self: *ThreadPool) void {
@@ -556,6 +556,7 @@ pub const ThreadPool = struct {
                 // Wake up any threads sleeping on the idle_event.
                 // TODO: I/O polling notification here.
                 if (sync.idle > 0) self.idle_event.shutdown();
+                if (sync.spawned == 0) self.join_event.notify();
                 return;
             }));
         }
@@ -611,11 +612,8 @@ pub const ThreadPool = struct {
 
     fn join(self: *ThreadPool) void {
         // Wait for the thread pool to be shutdown() then for all threads to enter a joinable state
-        var sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
-        if (!(sync.state == .shutdown and sync.spawned == 0)) {
-            self.join_event.wait();
-            sync = @as(Sync, @bitCast(self.sync.load(.monotonic)));
-        }
+        self.join_event.wait();
+        const sync = @as(Sync, @bitCast(self.sync.load(.acquire)));
 
         assert(sync.state == .shutdown);
         assert(sync.spawned == 0);
@@ -651,13 +649,12 @@ pub const ThreadPool = struct {
             var self = &self_;
             current = self;
 
+            thread_pool.register(self);
+            defer thread_pool.unregister(self);
+
             if (thread_pool.on_thread_spawn) |spawn| {
                 current.?.ctx = spawn(thread_pool.threadpool_context);
             }
-
-            thread_pool.register(self);
-
-            defer thread_pool.unregister(self);
 
             var is_waking = false;
             while (true) {
