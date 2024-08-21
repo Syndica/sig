@@ -1180,15 +1180,16 @@ pub const AccountsDB = struct {
             }
 
             const must_flush_slots = flush_slots.items.len > 0;
+            defer if (must_flush_slots) {
+                flush_slots.clearRetainingCapacity();
+                unclean_account_files.clearRetainingCapacity();
+                shrink_account_files.clearRetainingCapacity();
+                delete_account_files.clearRetainingCapacity();
+            };
 
             if (must_flush_slots) {
                 // self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
-                defer {
-                    flush_slots.clearRetainingCapacity();
-                    unclean_account_files.clearRetainingCapacity();
-                    shrink_account_files.clearRetainingCapacity();
-                    delete_account_files.clearRetainingCapacity();
-                }
+                self.logger.debugf("flushing slots: min: {}...{}", std.mem.minMax(Slot, flush_slots.items));
 
                 // flush the slots
                 try unclean_account_files.ensureTotalCapacityPrecise(flush_slots.items.len);
@@ -1446,7 +1447,7 @@ pub const AccountsDB = struct {
             const account_file, var account_file_lg = account_file_rw.readWithLock();
             defer account_file_lg.unlock();
 
-            self.logger.infof("cleaning slot: {}...", .{account_file.slot});
+            // self.logger.debugf("cleaning slot: {}...", .{account_file.slot});
 
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
@@ -1654,7 +1655,7 @@ pub const AccountsDB = struct {
             errdefer shrink_account_file_lg.unlock();
 
             const slot = shrink_account_file.slot;
-            self.logger.infof("shrinking slot: {}...", .{slot});
+            self.logger.debugf("shrinking slot: {}...", .{slot});
 
             // compute size of alive accounts (read)
             var is_alive_flags = try std.ArrayList(bool).initCapacity(
