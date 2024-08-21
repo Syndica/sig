@@ -115,6 +115,7 @@ pub const AccountsDB = struct {
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
 
+    // TODO: populate this during snapshot load
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
     stats: AccountsDBStats,
@@ -2275,10 +2276,10 @@ pub const AccountsDB = struct {
 
             const was_inserted = self.account_index.indexRefIfNotDuplicateSlot(ref_ptr);
             if (!was_inserted) {
-                // self.logger.warnf(
-                //     "duplicate reference not inserted: slot: {d} pubkey: {s}",
-                //     .{ ref_ptr.slot, ref_ptr.pubkey },
-                // );
+                self.logger.warnf(
+                    "duplicate reference not inserted: slot: {d} pubkey: {s}",
+                    .{ ref_ptr.slot, ref_ptr.pubkey },
+                );
                 accounts_dead_count += 1;
             }
 
@@ -2419,11 +2420,9 @@ pub const AccountsDB = struct {
 
             if (bank_hash_stats_map.get(account_file.slot)) |other_stats| {
                 bank_hash_stats.accumulate(other_stats);
+            } else {
+                self.logger.warnf("No bank hash stats for slot {}.", .{account_file.slot});
             }
-            // // TODO: incorp in snapshot loading and add this back
-            // } else {
-            //     self.logger.warnf("No bank hash stats for slot {}.", .{account_file.slot});
-            // }
 
             serializable_file_map.putAssumeCapacityNoClobber(account_file.slot, .{
                 .id = account_file.id,

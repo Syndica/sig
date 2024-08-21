@@ -5,6 +5,7 @@ const network = @import("zig-network");
 const helpers = @import("helpers.zig");
 const sig = @import("../sig.zig");
 const config = @import("config.zig");
+const zstd = @import("zstd");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -315,6 +316,7 @@ pub fn run() !void {
                             &gossip_entrypoints_option,
                             &gossip_spy_node_option,
                             &gossip_dump_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -361,6 +363,7 @@ pub fn run() !void {
                             &geyser_writer_fba_bytes_option,
                             // general
                             &leader_schedule_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -397,6 +400,7 @@ pub fn run() !void {
                             &max_shreds_option,
                             // general
                             &leader_schedule_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -527,6 +531,7 @@ pub fn run() !void {
                             &genesis_file_path,
                             // general
                             &leader_schedule_option,
+                            &network_option,
                         },
                         .target = .{
                             .action = .{
@@ -832,8 +837,6 @@ fn printManifest() !void {
     // std.debug.print("inc snapshots: {any}\n", .{snapshots.incremental.?.accounts_db_fields.file_map.keys()});
 }
 
-const zstd = @import("zstd");
-
 fn createSnapshot() !void {
     const allocator = gpa_allocator;
     const app_base = try AppBase.init(allocator);
@@ -862,7 +865,7 @@ fn createSnapshot() !void {
     }
     app_base.logger.infof("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 
-    const output_dir_name = "alt_ledger";
+    const output_dir_name = "alt_ledger"; // TODO: pull out to cli arg
     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
     defer output_dir.close();
 
@@ -1371,6 +1374,7 @@ fn loadSnapshot(
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
     // // validate the status cache
+    // // TODO: add back when ser/deser is fixed
     // result.status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
     //     if (err == error.StatusCacheNotFound) {
     //         logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
