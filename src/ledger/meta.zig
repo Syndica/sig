@@ -202,7 +202,7 @@ pub const ErasureMeta = struct {
     pub fn checkCodeShred(self: Self, shred: CodeShred) bool {
         var other = fromCodeShred(shred) orelse return false;
         other.first_received_code_index = self.first_received_code_index;
-        return sig.utils.types.eql(self, other);
+        return sig.utils.types.eql(self, other, .{});
     }
 
     /// Analogous to [status](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L442)

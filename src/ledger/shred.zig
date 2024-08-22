@@ -182,6 +182,7 @@ pub const CodeShred = struct {
         }
         const payload = try allocator.alloc(u8, consts.payload_size);
         @memcpy(payload[consts.headers_size..][0..shard.len], shard);
+        @memset(payload[consts.headers_size + shard.len ..], 0);
         var buf = std.io.fixedBufferStream(payload);
         const writer = buf.writer();
         try bincode.write(writer, common_header, .{});
@@ -1248,7 +1249,7 @@ test "merkle tree round trip" {
                 try std.testing.expectEqual(root.data, recalculated_root.data);
             } else {
                 const recalculated_root = try calculateMerkleRoot(k, node, owned_proof);
-                try std.testing.expect(!sig.utils.types.eql(root, recalculated_root));
+                try std.testing.expect(!sig.utils.types.eql(root, recalculated_root, .{}));
             }
         }
     }

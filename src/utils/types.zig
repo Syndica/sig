@@ -265,57 +265,119 @@ pub inline fn comptimeZeroSizePtrCast(comptime T: type, comptime ptr: *const any
     }
 }
 
-// config: allocator, pointers
+pub const EqlConfig = struct {
+    /// whether to compare the pointer itself or
+    /// "follow" the pointer and compare the data it points to
+    follow_pointers: enum { no, yes, only_slices } = .yes,
+    /// whether to use an `eql` method if defined for the type,
+    /// instead of standard recursive approach implemented in eql.
+    use_eql_method: enum { no, yes, only_for_nested_types } = .yes,
+};
 
 /// Compare equality of two items with the same type.
-pub fn eql(one: anytype, two: anytype) bool {
-    if (@TypeOf(one) != @TypeOf(two)) @compileError("must be the same type");
-    return switch (@typeInfo(@TypeOf(one))) {
-        inline .Void, .Null => true,
-        .Struct => st: {
-            inline for (@typeInfo((@TypeOf(one))).Struct.fields) |field| {
-                const one_value = @field(one, field.name);
-                const two_value = @field(two, field.name);
-                if (!eql(one_value, two_value)) {
-                    break :st false;
+///
+/// By default:
+/// - follows pointers
+/// - treats Allocators as equal
+/// - uses an `eql` method if defined for the type
+/// - compares only the `items` field in ArrayLists
+pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
+    var config = config_;
+    const T: type = @TypeOf(a);
+
+    // custom handlers for specific types -- TODO: ideally these would be part of EqlConfig
+    if (@TypeOf(a) == std.mem.Allocator) {
+        return true;
+    }
+    if (arrayListInfo(@TypeOf(a))) |_| {
+        return eql(a.items, b.items, config);
+    }
+
+    // use the type's eql method if it exists
+    if (config.use_eql_method == .yes) {
+        switch (@typeInfo(T)) {
+            inline .Struct, .Enum, .Union, .Opaque => {
+                if (@hasDecl(T, "eql") and
+                    @typeInfo(@TypeOf(T.eql)) == .Fn and
+                    @typeInfo(ParamsTuple(T.eql)).Struct.fields.len == 2 and
+                    ReturnType(@TypeOf(T.eql)) == bool)
+                {
+                    const param1 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).Struct.fields[0].type);
+                    const param2 = @typeInfo(@typeInfo(ParamsTuple(T.eql)).Struct.fields[1].type);
+
+                    if (param1 == .Pointer and param2 == .Pointer) {
+                        var a_copy = a;
+                        var b_copy = b;
+                        return T.eql(&a_copy, &b_copy);
+                    } else if (param1 != .Pointer and param2 == .Pointer) {
+                        var b_copy = b;
+                        return T.eql(a, &b_copy);
+                    } else if (param1 == .Pointer and param2 != .Pointer) {
+                        var a_copy = a;
+                        return T.eql(&a_copy, b);
+                    } else {
+                        return T.eql(a, b);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+    if (config.use_eql_method == .only_for_nested_types) {
+        config.use_eql_method = .yes;
+    }
+
+    // basic equality comparison
+    switch (@typeInfo(T)) {
+        .Struct => {
+            inline for (@typeInfo((T)).Struct.fields) |field| {
+                if (!eql(@field(a, field.name), @field(b, field.name), config)) {
+                    return false;
                 }
             }
-            break :st true;
+            return true;
         },
-        .Array => |array| sliceEql(array.child, &one, &two),
-        .Pointer => |pointer| switch (pointer.size) {
-            .Slice => sliceEql(pointer.child, one, two),
-            else => @compileError("not supported"),
+        .ErrorUnion => {
+            if (a) |a_p| {
+                if (b) |b_p| return eql(a_p, b_p, config) else |_| return false;
+            } else |a_e| {
+                if (b) |_| return false else |b_e| return a_e == b_e;
+            }
         },
-        .Optional => one == null and two == null or
-            one != null and two != null and eql(one, two),
+        .Union => |info| {
+            if (info.tag_type) |UnionTag| {
+                if (@intFromEnum(a) != @intFromEnum(b)) return false;
+                inline for (info.fields) |field_info| {
+                    if (@field(UnionTag, field_info.name) == @as(std.meta.Tag(T), a)) {
+                        return eql(@field(a, field_info.name), @field(b, field_info.name), config);
+                    }
+                }
+                return false;
+            }
+            @compileError("cannot compare untagged union type " ++ @typeName(T));
+        },
+        .Array => |array| return sliceEql(array.child, &a, &b, config),
+        .Pointer => |pointer| return switch (pointer.size) {
+            .Slice => if (config.follow_pointers != .no) {
+                return sliceEql(pointer.child, a, b, config);
+            } else {
+                return a.len == b.len and a.ptr == b.ptr;
+            },
+            else => if (config.follow_pointers == .yes) {
+                return eql(a.*, b.*, config);
+            } else {
+                return a == b;
+            },
+        },
+        .Optional => return a == null and b == null or
+            a != null and b != null and eql(a.?, b.?, config),
 
-        inline .Type,
-        .Bool,
-        .Int,
-        .Float,
-        .ComptimeInt,
-        .ComptimeFloat,
-        .Vector,
-        .Enum,
-        .ErrorSet,
-        .Fn,
-        => one == two,
-
-        inline .NoReturn,
-        .Undefined,
-        .ErrorUnion,
-        .Union,
-        .Opaque,
-        .Frame,
-        .AnyFrame,
-        .EnumLiteral,
-        => @compileError("not supported"),
-    };
+        else => return a == b,
+    }
 }
 
 /// copy of `std.mem.eql` except it uses `eql` (above) instead of `==`
-fn sliceEql(comptime T: type, a: []const T, b: []const T) bool {
+fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) bool {
     if (@sizeOf(T) == 0) return true;
     const backend_can_use_eql_bytes = switch (@import("builtin").zig_backend) {
         // The SPIR-V backend does not support the optimized path yet.
@@ -324,14 +386,36 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T) bool {
         .stage2_riscv64 => false,
         else => true,
     };
-    if (!@inComptime() and std.meta.hasUniqueRepresentation(T) and backend_can_use_eql_bytes)
+    if (!@inComptime() and
+        std.meta.hasUniqueRepresentation(T) and
+        backend_can_use_eql_bytes and
+        config.follow_pointers == .no)
+    {
         return std.mem.eql(T, a, b);
+    }
 
     if (a.len != b.len) return false;
     if (a.len == 0 or a.ptr == b.ptr) return true;
 
     for (a, b) |a_elem, b_elem| {
-        if (eql(a_elem, b_elem)) return false;
+        if (!eql(a_elem, b_elem, config)) return false;
     }
     return true;
+}
+
+test "eql follows slices" {
+    const Foo = struct {
+        slice: []const u8,
+    };
+    const a_slice = try std.testing.allocator.alloc(u8, 1);
+    defer std.testing.allocator.free(a_slice);
+    const b_slice = try std.testing.allocator.alloc(u8, 1);
+    defer std.testing.allocator.free(b_slice);
+    a_slice[0] = 1;
+    b_slice[0] = 1;
+    const a = Foo{ .slice = a_slice };
+    const b = Foo{ .slice = b_slice };
+    try std.testing.expect(eql(a, b, .{}));
+    try std.testing.expect(!eql(a, b, .{ .follow_pointers = .no }));
+    try std.testing.expect(!std.meta.eql(a, b));
 }

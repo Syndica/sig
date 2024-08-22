@@ -283,8 +283,8 @@ fn reconstructShred(
         this_code_header.position = @intCast(offset);
         const code_shred = try CodeShred.fromRecoveredShard(
             allocator,
-            meta.common_header,
-            meta.code_header,
+            this_common_header,
+            this_code_header,
             meta.chained_merkle_root,
             meta.retransmitter_signature,
             shard,
@@ -368,35 +368,103 @@ fn verifyErasureBatch(
 ///////////
 // Tests
 
-const mainnet_shreds = @import("test_shreds.zig").mainnet_recovery_shreds;
 const CodeHeader = ledger.shred.CodeHeader;
 
-// test "recover mainnet shreds - end to end" {
-//     const allocator = std.testing.allocator;
-//     const shred_bytes = @import("test_shreds.zig").mainnet_recovery_shreds;
-//     var shreds = std.ArrayList(Shred).init(allocator);
-//     defer shreds.deinit();
-//     defer for (shreds.items) |s| s.deinit();
-//     for (shred_bytes) |sb| {
-//         try shreds.append(try Shred.fromPayload(allocator, sb));
-//     }
-//     var cache = try ReedSolomonCache.init(allocator);
-//     defer cache.deinit();
-//     _ = try recover(allocator, shreds.items, &cache);
-// }
+const test_shreds = @import("test_shreds.zig");
+const mainnet_shreds = test_shreds.mainnet_recovery_shreds;
+const mainnet_shards = test_shreds.mainnet_recovery_shards;
+const mainnet_recovered_shards = test_shreds.mainnet_expected_recovered_shards;
+const mainnet_partially_recovered_shreds = test_shreds.mainnet_expected_partially_recovered_shreds;
+const mainnet_expected_recovered_shreds = test_shreds.mainnet_expected_recovered_shreds;
+
+test "recover mainnet shreds - end to end" {
+    const allocator = std.testing.allocator;
+    const shreds = try toShreds(&mainnet_shreds);
+    defer deinitShreds(shreds);
+    var cache = try ReedSolomonCache.init(allocator);
+    defer cache.deinit();
+
+    const recovered_shreds = try recover(allocator, shreds, &cache);
+    defer {
+        for (recovered_shreds.items) |shred| shred.deinit();
+        recovered_shreds.deinit();
+    }
+
+    try std.testing.expectEqual(mainnet_expected_recovered_shreds.len, recovered_shreds.items.len);
+    for (mainnet_expected_recovered_shreds, recovered_shreds.items) |expected, actual| {
+        try std.testing.expectEqualSlices(u8, expected, actual.payload());
+        const expected_shred = try Shred.fromPayload(allocator, expected);
+        defer expected_shred.deinit();
+        try std.testing.expect(sig.utils.types.eql(expected_shred, actual, .{}));
+    }
+}
 
 test "recover mainnet shreds - metadata is correct" {
-    const shreds = try toShreds(std.testing.allocator, &mainnet_shreds);
-    defer {
-        for (shreds) |shred| shred.deinit();
-        std.testing.allocator.free(shreds);
-    }
+    const shreds = try toShreds(&mainnet_shreds);
+    defer deinitShreds(shreds);
     const actual = try getRecoveryMetadata(shreds);
-    const expected = RecoveryMetadata{
+    try std.testing.expectEqual(expected_metadata, actual);
+}
+
+test "recover mainnet shreds - correct input shards" {
+    const shreds = try toShreds(&mainnet_shreds);
+    defer deinitShreds(shreds);
+    const organized =
+        try organizeShredsForRecovery(std.testing.allocator, shreds, expected_metadata);
+    defer organized.deinit();
+    defer organized.deinitShreds();
+    try std.testing.expectEqual(mainnet_shards.len, organized.shards.len);
+    try std.testing.expect(sig.utils.types.eql(
+        @as([]const ?[]const u8, &mainnet_shards),
+        @as([]const ?[]const u8, organized.shards),
+        .{},
+    ));
+}
+
+test "recover mainnet shreds - construct shreds from shards" {
+    const allocator = std.testing.allocator;
+    const shreds = try toShreds(&mainnet_shreds);
+    defer allocator.free(shreds);
+    const organized =
+        try organizeShredsForRecovery(std.testing.allocator, shreds, expected_metadata);
+    defer organized.deinit();
+    const meta = try getRecoveryMetadata(shreds);
+
+    const all_shreds = try allocator.alloc(Shred, mainnet_recovered_shards.len);
+    defer deinitShreds(all_shreds);
+    for (organized.input_shreds, mainnet_recovered_shards, 0..) |maybe_shred, shard, index| {
+        all_shreds[index] = if (maybe_shred) |shred|
+            shred
+        else
+            try reconstructShred(allocator, meta, shard, index);
+    }
+    var i: usize = 0;
+    for (all_shreds, mainnet_partially_recovered_shreds) |recovered_shred, shred_bytes| {
+        try std.testing.expectEqualSlices(u8, shred_bytes, recovered_shred.payload());
+        const expected_shred = try Shred.fromPayload(allocator, shred_bytes);
+        defer expected_shred.deinit();
+        switch (expected_shred) {
+            inline .code => |c| {
+                try std.testing.expectEqual(c.fields.common, recovered_shred.code.fields.common);
+                try std.testing.expectEqual(c.fields.custom, recovered_shred.code.fields.custom);
+            },
+            inline .data => |c| {
+                try std.testing.expectEqual(c.fields.common, recovered_shred.data.fields.common);
+                try std.testing.expectEqual(c.fields.custom, recovered_shred.data.fields.custom);
+            },
+        }
+        try std.testing.expect(sig.utils.types.eql(expected_shred, recovered_shred, .{}));
+        i += 1;
+    }
+}
+
+const expected_metadata = blk: {
+    @setEvalBranchQuota(10_000);
+    break :blk RecoveryMetadata{
         .common_header = CommonHeader{
-            .signature = try Signature.fromString(
+            .signature = Signature.fromString(
                 "ksnjzXzraR5hWthnKAWVgJkDBUoRX8CHpLttYs2sAmhPFvh6Ga6HMTLMKRi45p1PfLevfm272ANmwTBEvGwW19m",
-            ),
+            ) catch unreachable,
             .variant = .{
                 .shred_type = .code,
                 .proof_size = 5,
@@ -416,13 +484,17 @@ test "recover mainnet shreds - metadata is correct" {
         .retransmitter_signature = null,
         .chained_merkle_root = null,
     };
-    try std.testing.expectEqual(expected, actual);
-}
+};
 
-fn toShreds(allocator: Allocator, payloads: []const []const u8) ![]const Shred {
-    var shreds = try std.ArrayList(Shred).initCapacity(allocator, payloads.len);
+fn toShreds(payloads: []const []const u8) ![]const Shred {
+    var shreds = try std.ArrayList(Shred).initCapacity(std.testing.allocator, payloads.len);
     for (payloads) |payload| {
-        shreds.appendAssumeCapacity(try Shred.fromPayload(allocator, payload));
+        shreds.appendAssumeCapacity(try Shred.fromPayload(std.testing.allocator, payload));
     }
     return shreds.items;
+}
+
+fn deinitShreds(shreds: []const Shred) void {
+    for (shreds) |shred| shred.deinit();
+    std.testing.allocator.free(shreds);
 }
