@@ -1093,10 +1093,10 @@ pub const ShredInserter = struct {
             reed_solomon_cache,
         )) |shreds| {
             return shreds;
-        } else |_| {
+        } else |e| {
             // TODO: submit_self.metrics
             // TODO: consider returning error (agave does not return an error or log)
-            // self.logger.errf("shred recovery error: {}", .{e});
+            self.logger.errf("shred recovery error: {}", .{e});
             return std.ArrayList(Shred).init(self.allocator);
         }
     }
