@@ -33,6 +33,7 @@ const Logger = sig.trace.log.Logger;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
+const Histogram = sig.prometheus.histogram.Histogram;
 const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
@@ -60,6 +61,17 @@ pub const AccountsDBStats = struct {
     number_files_shrunk: *Counter,
     number_files_deleted: *Counter,
 
+    flush_account_file_size: *Histogram,
+    flush_accounts_written: *Counter,
+
+    clean_references_deleted: *Counter,
+    clean_files_queued_deletion: *Counter,
+    clean_files_queued_shrink: *Counter,
+
+    // shrink_file_shrunk_by: *Histogram,
+    shrink_alive_accounts: *Histogram,
+    shrink_dead_accounts: *Histogram,
+
     const Self = @This();
 
     pub fn init() GetMetricError!Self {
@@ -67,8 +79,26 @@ pub const AccountsDBStats = struct {
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(Self).Struct;
         inline for (stats_struct_info.fields) |field| {
-            const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
-            @field(self, field.name) = field_counter;
+            switch (field.type) {
+                *Counter => {
+                    const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
+                    @field(self, field.name) = field_counter;
+                },
+                *Histogram => {
+                    // TODO: these are likely crappy buckets, should be configurable also
+                    const buckets = &.{
+                        1,
+                        100,
+                        1_000,
+                        10_000,
+                    };
+                    const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, buckets);
+                    @field(self, field.name) = field_histogram;
+                },
+                else => {
+                    @compileError("Unsupported field type");
+                },
+            }
         }
         return self;
     }
@@ -1392,6 +1422,8 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     /// Returns the unclean file id.
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
+        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+
         defer self.stats.number_files_flushed.inc();
 
         const pubkeys, const accounts: []const Account = blk: {
@@ -1408,8 +1440,11 @@ pub const AccountsDB = struct {
         // create account file which is big enough
         var size: usize = 0;
         for (accounts) |*account| {
-            size += account.getSizeInFile();
+            const account_size_in_file = account.getSizeInFile();
+            size += account_size_in_file;
+            self.stats.flush_account_file_size.observe(@floatFromInt(account_size_in_file));
         }
+
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
@@ -1435,6 +1470,8 @@ pub const AccountsDB = struct {
             try file_map.putNoClobber(self.allocator, file_id, account_file);
         }
 
+        self.stats.flush_accounts_written.add(account_file.number_of_accounts);
+
         // update the reference AFTER the data exists
         for (pubkeys, offsets) |pubkey, offset| {
             var head_reference_rw = self.account_index.getReference(&pubkey) orelse return error.PubkeyNotFound;
@@ -1458,6 +1495,8 @@ pub const AccountsDB = struct {
             std.debug.assert(did_update);
         }
 
+        self.logger.debugf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
+
         // remove old references
         {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
@@ -1474,6 +1513,8 @@ pub const AccountsDB = struct {
             self.allocator.free(accounts);
             self.allocator.free(pubkeys);
         }
+
+        self.logger.debugf("flushSlot time elapsed: {}ns", .{timer.read()});
 
         // return to queue for cleaning
         return file_id;
@@ -1495,6 +1536,8 @@ pub const AccountsDB = struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
+        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+
         defer {
             const number_of_files = unclean_account_files.len;
             self.stats.number_files_cleaned.add(number_of_files);
@@ -1525,7 +1568,7 @@ pub const AccountsDB = struct {
                 break :blk file_map.get(file_id).?;
             };
 
-            // self.logger.debugf("cleaning slot: {}...", .{account_file.slot});
+            self.logger.debugf("cleaning slot: {}...", .{account_file.slot});
 
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
@@ -1620,7 +1663,13 @@ pub const AccountsDB = struct {
                 }
             }
             references_to_delete.clearRetainingCapacity();
+            self.stats.clean_references_deleted.set(references_to_delete.items.len);
         }
+
+        self.stats.clean_files_queued_deletion.set(delete_account_files.count());
+        self.stats.clean_files_queued_shrink.set(delete_account_files.count());
+
+        self.logger.debugf("cleanAccountFiles time elapsed: {}ns", .{timer.read()});
 
         return .{
             .num_zero_lamports = num_zero_lamports,
@@ -1718,6 +1767,8 @@ pub const AccountsDB = struct {
         shrink_account_files: []const FileId,
         delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
+        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+
         defer {
             const number_of_files = shrink_account_files.len;
             self.stats.number_files_shrunk.add(number_of_files);
@@ -1779,6 +1830,14 @@ pub const AccountsDB = struct {
             // if there are no dead accounts, it should have not been queued for shrink
             std.debug.assert(accounts_dead_count > 0);
             total_accounts_deleted += accounts_dead_count;
+
+            self.stats.shrink_alive_accounts.observe(@floatFromInt(accounts_alive_count));
+            self.stats.shrink_dead_accounts.observe(@floatFromInt(accounts_dead_count));
+
+            self.logger.debugf("n alive accounts: {}", .{accounts_alive_count});
+            self.logger.debugf("n dead accounts: {}", .{accounts_dead_count});
+
+            // self.stats.shrink_file_shrunk_by.observe(@floatFromInt(shrink_account_file));
 
             // alloc account file for accounts
             const new_file, const new_file_id, const new_memory = try self.createAccountFile(
@@ -1883,6 +1942,8 @@ pub const AccountsDB = struct {
             }
         }
 
+        self.logger.debugf("shrinkAccountFiles time elapsed: {}ns", .{timer.read()});
+
         return .{
             .num_accounts_deleted = total_accounts_deleted,
         };
@@ -1893,6 +1954,8 @@ pub const AccountsDB = struct {
     /// only exist in the cache, and not on disk). this is mainly used for dropping
     /// forks.
     pub fn purgeSlot(self: *Self, slot: Slot) void {
+        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+
         const pubkeys, const accounts = blk: {
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
             defer account_cache_lg.unlock();
@@ -1942,6 +2005,8 @@ pub const AccountsDB = struct {
         }
         self.allocator.free(accounts);
         self.allocator.free(pubkeys);
+
+        self.logger.debugf("purgeSlot time elapsed: {}ns", .{timer.read()});
     }
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
