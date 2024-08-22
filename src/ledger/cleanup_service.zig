@@ -195,8 +195,6 @@ fn findSlotsToClean(
 }
 
 const Blockstore = sig.ledger.BlockstoreDB;
-const ShredInserter = sig.ledger.ShredInserter;
-const CodeShred = sig.ledger.shred.CodeShred;
 const TestState = sig.ledger.insert_shred.TestState;
 
 test "findSlotsToClean" {
