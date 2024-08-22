@@ -35,12 +35,18 @@ pub const Logger = union(enum) {
         }
     }
 
-    pub fn scope(self: Self, comptime scope_tag: type) void {
+    pub fn changeScope(self: Self, comptime scope_tag: type) Self {
         switch (self) {
             .standard => |logger| {
-                logger.scope_tag = @typeName(scope_tag);
+                return .{ .standard = StandardErrLogger.initScoped(
+                    logger.allocator,
+                    logger.max_level,
+                    scope_tag,
+                ) };
             },
-            .noop, .test_logger => {},
+            .noop, .test_logger => {
+                return self;
+            },
         }
     }
 
@@ -178,6 +184,19 @@ pub const StandardErrLogger = struct {
             .handle = null,
             .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
             .scope_tag = null,
+        };
+        return self;
+    }
+
+    pub fn initScoped(allocator: std.mem.Allocator, max_level: Level, comptime scope_tag: anytype) *Self {
+        const self = allocator.create(Self) catch @panic("could not allocator.create Logger");
+        self.* = .{
+            .allocator = allocator,
+            .max_level = max_level,
+            .exit_sig = AtomicBool.init(false),
+            .handle = null,
+            .channel = Channel(*StandardEntry).init(allocator, INITIAL_ENTRIES_CHANNEL_SIZE),
+            .scope_tag = @typeName(scope_tag),
         };
         return self;
     }
@@ -355,42 +374,54 @@ pub const StdErrSink = struct {
 
 test "trace.logger: works" {
     // var logger: Logger = .noop; // uncomment below to run visual test
-    var logger = Logger.init(testing.allocator, .debug);
-    logger.scope(@This());
-    logger.spawn();
-    defer logger.deinit();
+    var original_logger = Logger.init(testing.allocator, .debug);
+    var scoped_logger = original_logger.changeScope(@This());
 
-    logger.field("elapsed", 4245).debugf("request with id {s} succeeded", .{"abcd1234"});
+    original_logger.spawn();
+    defer original_logger.deinit();
 
-    logger.field("kind", .some_enum_kind).infof("operation was done", .{});
-    logger.field("authorized", false).warnf("api call received at {d} not authorized", .{10004});
-    logger.field("error", "IOError").errf("api call received at {d} broke the system!", .{10005});
+    scoped_logger.spawn();
+    defer scoped_logger.deinit();
+
+    // Original logger is not scopped.
+    original_logger.info("Not scoped");
+    scoped_logger.field("elapsed", 4245).debugf("request with id {s} succeeded", .{"abcd1234"});
+
+    scoped_logger.field("kind", .some_enum_kind).infof("operation was done", .{});
+    scoped_logger.field("authorized", false).warnf("api call received at {d} not authorized", .{10004});
+    scoped_logger.field("error", "IOError").errf("api call received at {d} broke the system!", .{10005});
 
     std.time.sleep(std.time.ns_per_ms * 100);
 
-    logger.field("elapsed", 4245).debug("request with id succeeded");
-    logger.field("kind", .some_enum_kind).info("operation was done");
-    logger.field("authorized", false).warn("api call received at not authorized");
-    logger.field("error", "IOError").err("api call received broke the system!");
+    scoped_logger.field("elapsed", 4245).debug("request with id succeeded");
+    scoped_logger.field("kind", .some_enum_kind).info("operation was done");
+    scoped_logger.field("authorized", false).warn("api call received at not authorized");
+    scoped_logger.field("error", "IOError").err("api call received broke the system!");
 
     const s: []const u8 = "t12312";
-    logger
+    scoped_logger
         .field("tmp1", 123)
         .field("tmp2", 456)
         .field("tmp2", s)
         .info("new push message");
 
-    logger
+    scoped_logger
         .info("new push message");
 
-    logger.infof("operation was done", .{});
-    logger.warnf("api call received at {d} not authorized", .{10004});
-    logger.errf("api call received at {d} broke the system!", .{10005});
+    scoped_logger.infof("operation was done", .{});
+    scoped_logger.warnf("api call received at {d} not authorized", .{10004});
+    scoped_logger.errf("api call received at {d} broke the system!", .{10005});
 
-    logger.debug("request with id succeeded");
-    logger.info("operation was done");
-    logger.warn("api call received at not authorized");
-    logger.err("api call received broke the system!");
+    scoped_logger.debug("request with id succeeded");
+    scoped_logger.info("operation was done");
+    scoped_logger.warn("api call received at not authorized");
+    scoped_logger.err("api call received broke the system!");
+
+    // Switch scope of the scoped logger.
+    var scoped = scoped_logger.changeScope(StandardEntry);
+    scoped.spawn();
+    defer scoped.deinit();
+    scoped.info("Scope Changed");
 
     std.time.sleep(std.time.ns_per_ms * 100);
 }
