@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../sig.zig");
 const core = @import("lib.zig");
 
 const Ed25519 = std.crypto.sign.Ed25519;
