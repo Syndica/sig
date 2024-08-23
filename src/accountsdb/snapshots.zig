@@ -1428,9 +1428,13 @@ pub const StatusCache = struct {
     }
 
     pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
-        var status_cache_file = try std.fs.cwd().openFile(path, .{});
+        const status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
-        return try decodeFromBincode(allocator, status_cache_file.reader());
+        return readFromFile(allocator, status_cache_file);
+    }
+
+    pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
+        return decodeFromBincode(allocator, file.reader());
     }
 
     pub fn decodeFromBincode(

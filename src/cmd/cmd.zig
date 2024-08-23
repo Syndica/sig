@@ -604,7 +604,7 @@ fn validator() !void {
 
     // leader schedule
     var leader_schedule = try getLeaderScheduleFromCli(allocator) orelse
-        try leaderScheduleFromBank(allocator, &snapshot.bank);
+        try leaderScheduleFromBank(allocator, snapshot.bank.bank_fields);
     const leader_provider = leader_schedule.provider();
 
     // blockstore
@@ -874,7 +874,7 @@ fn createSnapshot() !void {
         slot,
         output_dir,
         &snapshot_result.snapshot_fields.full.bank_fields,
-        StatusCache.default(),
+        snapshot_result.status_cache,
     );
 }
 
@@ -949,7 +949,7 @@ fn printLeaderSchedule() !void {
                 return err;
             }
         };
-        break :b try leaderScheduleFromBank(allocator, &loaded_snapshot.bank);
+        break :b try leaderScheduleFromBank(allocator, loaded_snapshot.bank.bank_fields);
     };
 
     var stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
@@ -1275,6 +1275,7 @@ fn spawnLogger() !Logger {
 const LoadedSnapshot = struct {
     allocator: Allocator,
     accounts_db: AccountsDB,
+    status_cache: sig.accounts_db.snapshots.StatusCache,
     snapshot_fields: sig.accounts_db.snapshots.AllSnapshotFields,
     /// contains pointers to `accounts_db` and `snapshot_fields`
     bank: Bank,
@@ -1282,6 +1283,7 @@ const LoadedSnapshot = struct {
 
     pub fn deinit(self: *@This()) void {
         self.genesis_config.deinit(self.allocator);
+        self.status_cache.deinit(self.allocator);
         self.snapshot_fields.deinit(self.allocator);
         self.accounts_db.deinit(false); // keep index files on disk
         self.allocator.destroy(self);
@@ -1373,18 +1375,18 @@ fn loadSnapshot(
     result.bank = Bank.init(&result.accounts_db, bank_fields);
     try Bank.validateBankFields(result.bank.bank_fields, &result.genesis_config);
 
-    // // validate the status cache
-    // // TODO: add back when ser/deser is fixed
-    // result.status_cache = readStatusCache(allocator, snapshot_dir_str) catch |err| {
-    //     if (err == error.StatusCacheNotFound) {
-    //         logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
-    //     }
-    //     return err;
-    // };
+    // validate the status cache
+    result.status_cache = readStatusCache(allocator, snapshot_dir) catch |err| {
+        if (err == error.StatusCacheNotFound) {
+            logger.errf("status-cache.bin not found - expecting {s}/snapshots/status-cache to exist", .{snapshot_dir_str});
+        }
+        return err;
+    };
+    errdefer result.status_cache.deinit(allocator);
 
-    // var slot_history = try result.accounts_db.getSlotHistory();
-    // defer slot_history.deinit(result.accounts_db.allocator);
-    // try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
+    var slot_history = try result.accounts_db.getSlotHistory();
+    defer slot_history.deinit(result.accounts_db.allocator);
+    try result.status_cache.validate(allocator, bank_fields.slot, &slot_history);
 
     logger.infof("accounts-db setup done...", .{});
 
@@ -1401,19 +1403,13 @@ fn readGenesisConfig(allocator: Allocator, genesis_path: []const u8) !GenesisCon
     return genesis_config;
 }
 
-fn readStatusCache(allocator: Allocator, snapshot_dir: []const u8) !StatusCache {
-    const status_cache_path = try std.fmt.allocPrint(
-        gpa_allocator,
-        "{s}/{s}",
-        .{ snapshot_dir, "snapshots/status_cache" },
-    );
-    defer allocator.free(status_cache_path);
-
-    std.fs.cwd().access(status_cache_path, .{}) catch {
-        return error.StatusCacheNotFound;
+fn readStatusCache(allocator: Allocator, snapshot_dir: std.fs.Dir) !StatusCache {
+    const status_cache_file = snapshot_dir.openFile("snapshots/status_cache", .{}) catch |err| return switch (err) {
+        error.FileNotFound => error.StatusCacheNotFound,
+        else => |e| e,
     };
-
-    return try StatusCache.initFromPath(allocator, status_cache_path);
+    defer status_cache_file.close();
+    return try StatusCache.readFromFile(allocator, status_cache_file);
 }
 
 /// entrypoint to download snapshot
