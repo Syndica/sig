@@ -1,12 +1,14 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 const chacha = @import("chacha.zig");
+const weighted_shuffle = @import("weighted_shuffle.zig");
 
 const Allocator = std.mem.Allocator;
 const Random = std.Random;
 
 pub const ChaCha = chacha.ChaCha;
 pub const ChaChaRng = chacha.ChaChaRng;
+pub const WeightedShuffle = weighted_shuffle.WeightedShuffle;
 
 /// Uniformly samples a collection of weighted items. This struct only deals with
 /// the weights, and it tells you which index it selects.
