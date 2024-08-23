@@ -132,37 +132,37 @@ pub const AccountsDB = struct {
 
     /// File Map with additional variables to ensure its used saftely across multiple threads
     pub const ThreadSafeFileMap = struct {
-        //! USAGE/CONTEXT: 
-        //! 
+        //! USAGE/CONTEXT:
+        //!
         //! Theres three main thread-safe scenarios we care about:
-        //! 
+        //!
         //! * Adding new account files (flushing):
         //! Adding an account file should never invalidate the
-        //! account files observed by another thread. The file-map should be 
+        //! account files observed by another thread. The file-map should be
         //! write-locked to account for map resizing if theres not enough space.
-        //! 
+        //!
         //! * Reading account files (snapshot generation, account queries):
-        //! All reading threads must first acquire a read (shared) lock on the fd_keep_open_rw, 
-        //! before acquiring a lock on the file map, and reading an account file - to ensure 
-        //! account files will not be closed while being read. 
-        //! 
+        //! All reading threads must first acquire a read (shared) lock on the fd_keep_open_rw,
+        //! before acquiring a lock on the file map, and reading an account file - to ensure
+        //! account files will not be closed while being read.
+        //!
         //! After doing so, the file_map_rw may be unlocked, without
         //! releasing the fd_keep_open_rw, allowing other threads to modify the file_map,
         //! whilst preventing any files being closed until all reading threads have finished their work.
-        //! 
+        //!
         //! * Removing account files (shrinking, purging):
-        //! A thread which wants to delete/close an account files must first 
+        //! A thread which wants to delete/close an account files must first
         //! acquire a write (exclusive) lock on `fd_keep_open_rw`, before acquiring
         //! a write-lock on the file map to access the account_file and close/delete it.
-        //! 
-        //! NOTE: no method modifieds/mutates account files after they have been 
+        //!
+        //! NOTE: no method modifieds/mutates account files after they have been
         //! flushed. They are 'shrunk' with deletion + creating a 'smaller' file, or purged
         //! with deletion. This allows us to *not* use a lock per-account-file.
 
         file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
 
         /// This RwLock is used to ensure files in the file_map are not closed while its held as a read-lock.
-        /// To close any files, a write-lock must be acquired. When reading from account files contained in the 
+        /// To close any files, a write-lock must be acquired. When reading from account files contained in the
         /// file_map, a read-lock must be acquired and held for the full duration.
         fd_keep_open_rw: std.Thread.RwLock = .{},
     };
