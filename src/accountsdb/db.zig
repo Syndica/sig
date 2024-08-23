@@ -67,8 +67,10 @@ pub const AccountsDBStats = struct {
     clean_references_deleted: *Counter,
     clean_files_queued_deletion: *Counter,
     clean_files_queued_shrink: *Counter,
+    clean_slot_old_state: *Counter,
+    clean_slot_zero_lamports: *Counter,
 
-    // shrink_file_shrunk_by: *Histogram,
+    shrink_file_shrunk_by: *Histogram,
     shrink_alive_accounts: *Histogram,
     shrink_dead_accounts: *Histogram,
 
@@ -1664,13 +1666,18 @@ pub const AccountsDB = struct {
             }
             references_to_delete.clearRetainingCapacity();
             self.stats.clean_references_deleted.set(references_to_delete.items.len);
+            self.logger.debugf(
+                "cleaned slot {} -  old_state: {}, zero_lamports: {}",
+                .{ account_file.slot, num_old_states, num_zero_lamports },
+            );
         }
 
         self.stats.clean_files_queued_deletion.set(delete_account_files.count());
         self.stats.clean_files_queued_shrink.set(delete_account_files.count());
+        self.stats.clean_slot_old_state.set(num_old_states);
+        self.stats.clean_slot_zero_lamports.set(num_zero_lamports);
 
         self.logger.debugf("cleanAccountFiles time elapsed: {}ns", .{timer.read()});
-
         return .{
             .num_zero_lamports = num_zero_lamports,
             .num_old_states = num_old_states,
@@ -1807,6 +1814,7 @@ pub const AccountsDB = struct {
             try alive_pubkeys.ensureTotalCapacity(shrink_account_file.number_of_accounts);
 
             var accounts_alive_size: u64 = 0;
+            var accounts_dead_size: u64 = 0;
             var account_iter = shrink_account_file.iterator();
             while (account_iter.next()) |*account_in_file| {
                 const pubkey = account_in_file.pubkey();
@@ -1821,6 +1829,7 @@ pub const AccountsDB = struct {
                     is_alive_flags.appendAssumeCapacity(true);
                     alive_pubkeys.putAssumeCapacity(pubkey.*, {});
                 } else {
+                    accounts_dead_size += account_in_file.getSizeInFile();
                     accounts_dead_count += 1;
                     is_alive_flags.appendAssumeCapacity(false);
                 }
@@ -1833,11 +1842,11 @@ pub const AccountsDB = struct {
 
             self.stats.shrink_alive_accounts.observe(@floatFromInt(accounts_alive_count));
             self.stats.shrink_dead_accounts.observe(@floatFromInt(accounts_dead_count));
+            self.stats.shrink_file_shrunk_by.observe(@floatFromInt(accounts_dead_size));
 
             self.logger.debugf("n alive accounts: {}", .{accounts_alive_count});
             self.logger.debugf("n dead accounts: {}", .{accounts_dead_count});
-
-            // self.stats.shrink_file_shrunk_by.observe(@floatFromInt(shrink_account_file));
+            self.logger.debugf("shrunk by: {}", .{accounts_dead_size});
 
             // alloc account file for accounts
             const new_file, const new_file_id, const new_memory = try self.createAccountFile(
