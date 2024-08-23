@@ -186,7 +186,7 @@ fn organizeShredsForRecovery(
     }
 
     @memset(input_shreds, null);
-    for (shards) |*s| s.* = null;
+    @memset(shards, null);
     for (shreds) |shred| {
         const index = shred.erasureShardIndex() catch {
             return error.InvalidIndex;
