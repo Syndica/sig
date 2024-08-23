@@ -311,8 +311,9 @@ Zig's own definition: `Zig is a general-purpose programming language and toolcha
 [Zig](https://ziglang.org/)
 
 - [Official Documentation](https://ziglang.org/documentation/0.13.0/)
-- [zig.guide](https://zig.guide.org/)
+- [zig.guide](https://zig.guide/)
 - [Ziglings Exercises](https://github.com/ratfactor/ziglings)
+- [Learning Zig](https://www.openmymind.net/learning_zig/)
 
 [Solana](https://solana.com/)
 
@@ -324,3 +325,4 @@ Sig
 
 - [Introduction](https://blog.syndica.io/introducing-sig-by-syndica-an-rps-focused-solana-validator-client-written-in-zig/)
 - [Gossip Deep Dive](https://blog.syndica.io/sig-engineering-1-gossip-protocol/)
+- [Solana's AccountsDB](https://blog.syndica.io/sig-engineering-part-3-solanas-accountsdb/)
