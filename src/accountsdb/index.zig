@@ -8,7 +8,7 @@ const Pubkey = lib.core.pubkey.Pubkey;
 const FileId = lib.accounts_db.accounts_file.FileId;
 const RwMux = lib.sync.RwMux;
 
-const swiss_map = @import("index/swiss_map.zig");
+const swiss_map = @import("swiss_map.zig");
 pub const SwissMapManaged = swiss_map.SwissMapManaged;
 pub const SwissMapUnmanaged = swiss_map.SwissMapUnmanaged;
 
