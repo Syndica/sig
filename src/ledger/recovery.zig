@@ -185,7 +185,7 @@ fn organizeShredsForRecovery(
         allocator.free(shards);
     }
 
-    for (input_shreds) |*s| s.* = null;
+    @memset(input_shreds, null);
     for (shards) |*s| s.* = null;
     for (shreds) |shred| {
         const index = shred.erasureShardIndex() catch {
