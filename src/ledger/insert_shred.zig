@@ -1,9 +1,9 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const bs = sig.ledger;
-const meta = bs.meta;
-const schema = bs.schema.schema;
+const ledger = sig.ledger;
+const meta = ledger.meta;
+const schema = ledger.schema.schema;
 const shred_mod = sig.ledger.shred;
 
 const Allocator = std.mem.Allocator;
@@ -22,14 +22,14 @@ const Slot = sig.core.Slot;
 const Shred = sig.ledger.shred.Shred;
 const CodeShred = sig.ledger.shred.CodeShred;
 const DataShred = sig.ledger.shred.DataShred;
-const ReedSolomonCache = bs.recovery.ReedSolomonCache;
+const ReedSolomonCache = ledger.recovery.ReedSolomonCache;
 const ShredId = sig.ledger.shred.ShredId;
 const SlotLeaderProvider = sig.core.leader_schedule.SlotLeaderProvider;
 const SortedSet = sig.utils.collections.SortedSet;
 const SortedMap = sig.utils.collections.SortedMap;
 const Timer = sig.time.Timer;
 
-const BlockstoreDB = bs.blockstore.BlockstoreDB;
+const BlockstoreDB = ledger.blockstore.BlockstoreDB;
 const WriteBatch = BlockstoreDB.WriteBatch;
 
 const ErasureMeta = meta.ErasureMeta;
@@ -41,7 +41,7 @@ const SlotMeta = meta.SlotMeta;
 const key_serializer = sig.ledger.database.key_serializer;
 const value_serializer = sig.ledger.database.value_serializer;
 
-const recover = bs.recovery.recover;
+const recover = ledger.recovery.recover;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -2087,10 +2087,9 @@ test "merkle root metas coding" {
 
     const shreds = try loadShredsFromFile(
         allocator,
-        &[1]usize{1228} ** 3,
         sig.TEST_DATA_DIR ++ "shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
     );
-    defer for (shreds) |shred| shred.deinit();
+    defer deinitShreds(allocator, shreds);
 
     { // first shred (should succeed)
         var write_batch = try state.db.initWriteBatch();
@@ -2215,10 +2214,9 @@ test "recovery" {
 
     const shreds = try loadShredsFromFile(
         allocator,
-        &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
         sig.TEST_DATA_DIR ++ "shreds/recovery_test_shreds_34_data_34_code.bin",
     );
-    defer for (shreds) |s| s.deinit();
+    defer deinitShreds(allocator, shreds);
     const data_shreds = shreds[0..34];
     const code_shreds = shreds[34..68];
 
@@ -2260,4 +2258,5 @@ const OneSlotLeaderProvider = struct {
     }
 };
 
-const loadShredsFromFile = sig.ledger.shred.loadShredsFromFile;
+const loadShredsFromFile = sig.ledger.tests.loadShredsFromFile;
+const deinitShreds = ledger.tests.deinitShreds;

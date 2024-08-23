@@ -1206,12 +1206,11 @@ test "mainnet shreds look like agave" {
 }
 
 test "merkleProof" {
-    const shreds = try loadShredsFromFile(
+    const shreds = try sig.ledger.tests.loadShredsFromFile(
         std.testing.allocator,
-        &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
         sig.TEST_DATA_DIR ++ "shreds/merkle_proof_test_shreds_34_data_34_code.bin",
     );
-    defer for (shreds) |s| s.deinit();
+    defer sig.ledger.tests.deinitShreds(std.testing.allocator, shreds);
     var i: usize = 0;
     for (shreds) |shred| {
         const proof = try shred.merkleProof();
@@ -1514,32 +1513,6 @@ test makeMerkleProof {
     defer proof.deinit(std.testing.allocator);
     for (expected, 0..) |entry, i| {
         try std.testing.expectEqualSlices(u8, &entry, &proof.get(i).?);
-    }
-}
-
-pub fn loadShredsFromFile(
-    allocator: Allocator,
-    comptime payload_lens: []const usize,
-    path: []const u8,
-) ![payload_lens.len]Shred {
-    var inserted: usize = 0;
-    var shreds: [payload_lens.len]Shred = undefined;
-    errdefer for (0..inserted) |i| shreds[i].deinit();
-    const file = try std.fs.cwd().openFile(path, .{});
-    for (payload_lens, 0..) |chunk_len, i| {
-        const payload = try allocator.alloc(u8, chunk_len);
-        defer allocator.free(payload);
-        _ = try file.readAll(payload);
-        shreds[i] = try Shred.fromPayload(allocator, payload);
-        inserted += 1;
-    }
-    return shreds;
-}
-
-fn writeSlicesToFile(path: []const u8, data: anytype) !void {
-    const file = try std.fs.cwd().createFile(path, .{});
-    for (data) |slice| {
-        try file.writeAll(slice[0..]);
     }
 }
 

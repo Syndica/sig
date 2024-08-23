@@ -365,9 +365,11 @@ fn verifyErasureBatch(
 ///////////
 // Tests
 
-const CodeHeader = ledger.shred.CodeHeader;
-
 const test_shreds = @import("test_shreds.zig");
+
+const CodeHeader = ledger.shred.CodeHeader;
+const deinitShreds = ledger.tests.deinitShreds;
+
 const mainnet_shreds = test_shreds.mainnet_recovery_shreds;
 const mainnet_shards = test_shreds.mainnet_recovery_shards;
 const mainnet_recovered_shards = test_shreds.mainnet_expected_recovered_shards;
@@ -377,7 +379,7 @@ const mainnet_expected_recovered_shreds = test_shreds.mainnet_expected_recovered
 test "recover mainnet shreds - end to end" {
     const allocator = std.testing.allocator;
     const shreds = try toShreds(&mainnet_shreds);
-    defer deinitShreds(shreds);
+    defer deinitShreds(std.testing.allocator, shreds);
     var cache = try ReedSolomonCache.init(allocator);
     defer cache.deinit();
 
@@ -398,14 +400,14 @@ test "recover mainnet shreds - end to end" {
 
 test "recover mainnet shreds - metadata is correct" {
     const shreds = try toShreds(&mainnet_shreds);
-    defer deinitShreds(shreds);
+    defer deinitShreds(std.testing.allocator, shreds);
     const actual = try getRecoveryMetadata(shreds);
     try std.testing.expectEqual(expected_metadata, actual);
 }
 
 test "recover mainnet shreds - correct input shards" {
     const shreds = try toShreds(&mainnet_shreds);
-    defer deinitShreds(shreds);
+    defer deinitShreds(std.testing.allocator, shreds);
     const organized =
         try organizeShredsForRecovery(std.testing.allocator, shreds, expected_metadata);
     defer organized.deinit();
@@ -428,7 +430,7 @@ test "recover mainnet shreds - construct shreds from shards" {
     const meta = try getRecoveryMetadata(shreds);
 
     const all_shreds = try allocator.alloc(Shred, mainnet_recovered_shards.len);
-    defer deinitShreds(all_shreds);
+    defer deinitShreds(std.testing.allocator, all_shreds);
     for (organized.input_shreds, mainnet_recovered_shards, 0..) |maybe_shred, shard, index| {
         all_shreds[index] = if (maybe_shred) |shred|
             shred
@@ -488,10 +490,5 @@ fn toShreds(payloads: []const []const u8) ![]const Shred {
     for (payloads) |payload| {
         shreds.appendAssumeCapacity(try Shred.fromPayload(std.testing.allocator, payload));
     }
-    return shreds.items;
-}
-
-fn deinitShreds(shreds: []const Shred) void {
-    for (shreds) |shred| shred.deinit();
-    std.testing.allocator.free(shreds);
+    return shreds.toOwnedSlice();
 }
