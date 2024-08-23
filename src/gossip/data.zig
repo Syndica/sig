@@ -245,13 +245,13 @@ pub const SignedGossipData = struct {
 };
 
 /// Analogous to [CrdsValueLabel](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L500)
-pub const GossipKey = union(enum) {
+pub const GossipKey = union(GossipDataTag) {
     LegacyContactInfo: Pubkey,
     Vote: struct { u8, Pubkey },
     LowestSlot: Pubkey,
     LegacySnapshotHashes: Pubkey,
-    EpochSlots: struct { u8, Pubkey },
     AccountsHashes: Pubkey,
+    EpochSlots: struct { u8, Pubkey },
     LegacyVersion: Pubkey,
     Version: Pubkey,
     NodeInstance: Pubkey,
@@ -262,8 +262,25 @@ pub const GossipKey = union(enum) {
     RestartHeaviestFork: Pubkey,
 };
 
+const GossipDataTag = enum(u32) {
+    LegacyContactInfo,
+    Vote,
+    LowestSlot,
+    LegacySnapshotHashes,
+    AccountsHashes,
+    EpochSlots,
+    LegacyVersion,
+    Version,
+    NodeInstance,
+    DuplicateShred,
+    SnapshotHashes,
+    ContactInfo,
+    RestartLastVotedForkSlots,
+    RestartHeaviestFork,
+};
+
 /// Analogous to [CrdsData](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85)
-pub const GossipData = union(enum(u32)) {
+pub const GossipData = union(GossipDataTag) {
     LegacyContactInfo: LegacyContactInfo,
     Vote: struct { u8, Vote },
     LowestSlot: struct { u8, LowestSlot },
