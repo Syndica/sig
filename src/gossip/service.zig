@@ -1251,6 +1251,7 @@ pub const GossipService = struct {
 
             for (pull_requests.items) |*req| {
                 _ = gossip_table.insert(req.value, now) catch {};
+                self.stats.table_n_updates_pull_request.inc();
                 gossip_table.updateRecordTimestamp(req.value.id(), now);
             }
         }
@@ -1441,6 +1442,7 @@ pub const GossipService = struct {
                         pull_message.gossip_values[index],
                         now,
                     ) catch {};
+                    self.stats.table_n_updates_pull_response.inc();
                 }
 
                 // update the contactInfo timestamps of the successful inserts
@@ -1769,6 +1771,7 @@ pub const GossipService = struct {
 
         while (push_msg_queue.popOrNull()) |gossip_value| {
             _ = gossip_table.insert(gossip_value, now) catch {};
+            self.stats.table_n_updates_push_message.inc();
         }
     }
 
@@ -1962,6 +1965,12 @@ pub const GossipStats = struct {
     table_old_values_removed: *Counter,
     table_trim_call_count: *Counter,
     table_remove_old_values_call_count: *Counter,
+
+    table_n_updates_push_message: *Counter,
+    table_n_updates_pull_request: *Counter,
+    table_n_updates_pull_response: *Counter,
+    table_n_updates_local: *Counter,
+    pull_n_crds_values_produced: *Counter,
 
     // logging details
     _logging_fields: struct {
