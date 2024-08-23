@@ -47,7 +47,8 @@ const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 
 // NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
-pub const ACCOUNTS_PER_FILE_EST: usize = 1500;
+pub const ACCOUNTS_PER_FILE_EST: usize = 1_500; // devnet/testnet
+// pub const ACCOUNTS_PER_FILE_EST: usize = 3_000; // mainnet
 
 pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
 pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
@@ -114,6 +115,7 @@ pub const AccountsDB = struct {
     /// Not closed by the `AccountsDB`, but must live at least as long as it.
     snapshot_dir: std.fs.Dir,
 
+    // TODO: populate this during snapshot load
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
     stats: AccountsDBStats,
@@ -445,15 +447,12 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
         var references = try ArrayList(AccountRef).initCapacity(
+            // TODO: wrap in FBA for correct OOM OR use UnmanagedArrayList instead
             self.account_index.reference_allocator,
             n_accounts_estimate,
         );
 
         const references_ptr = references.items.ptr;
-        defer {
-            // rn we dont support resizing - something went wrong if we resized
-            std.debug.assert(references.items.ptr == references_ptr);
-        }
 
         const counting_alloc = try FreeCounterAllocator.init(self.allocator, references);
         defer counting_alloc.deinitIfSafe();
@@ -582,6 +581,11 @@ pub const AccountsDB = struct {
                 );
                 progress_timer.reset();
             }
+        }
+
+        // rn we dont support resizing - something went wrong if we resized
+        if (references.items.ptr != references_ptr) {
+            std.debug.panic("ACCOUNTS_PER_FILE_EST too small, increase and try again...", .{});
         }
 
         // allocate enough memory for the bins
@@ -1236,7 +1240,7 @@ pub const AccountsDB = struct {
 
                 const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
 
-                try snapshot_gen_pkg.write(zstd_write_ctx.writer());
+                try snapshot_gen_pkg.write(zstd_write_ctx.writer(), StatusCache.default());
                 try zstd_write_ctx.finish();
 
                 try self.commitFullSnapshotInfo(snapshot_gen_info, .delete_old);
@@ -1296,16 +1300,69 @@ pub const AccountsDB = struct {
                     &shrink_account_files,
                     &delete_account_files,
                 );
-                self.logger.debugf("clean_result: {any}", .{clean_result});
+                _ = clean_result;
+                // self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                const shrink_results = try self.shrinkAccountFiles(shrink_account_files.keys());
-                self.logger.debugf("shrink_results: {any}", .{shrink_results});
+                const shrink_result = try self.shrinkAccountFiles(shrink_account_files.keys());
+                _ = shrink_result;
+                // self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
                 self.deleteAccountFiles(delete_account_files.keys());
             }
         }
+    }
+
+    pub fn buildFullSnapshot(
+        self: *Self,
+        slot: Slot,
+        archive_dir: std.fs.Dir,
+        bank_fields: *sig.accounts_db.snapshots.BankFields,
+        status_cache: StatusCache,
+    ) !void {
+        var rand = std.Random.DefaultPrng.init(1234);
+
+        // setup zstd
+        const zstd_compressor = try zstd.Compressor.init(.{});
+        defer zstd_compressor.deinit();
+        var zstd_sfba_state = std.heap.stackFallback(4096 * 4, self.allocator);
+        const zstd_sfba = zstd_sfba_state.get();
+        const zstd_buffer = try zstd_sfba.alloc(u8, zstd.Compressor.recommOutSize());
+        defer zstd_sfba.free(zstd_buffer);
+
+        // generate the snapshot package
+        var snapshot_gen_pkg, const snapshot_gen_info = try self.makeFullSnapshotGenerationPackage(
+            slot,
+            bank_fields,
+            rand.random().int(u64),
+            0,
+        );
+        defer snapshot_gen_pkg.deinit();
+
+        // create the snapshot filename
+        const archive_file_name_bounded = sig.accounts_db.snapshots.FullSnapshotFileInfo.snapshotNameStr(.{
+            .slot = snapshot_gen_info.slot,
+            .hash = snapshot_gen_info.hash,
+            .compression = .zstd,
+        });
+        const archive_file_name = archive_file_name_bounded.constSlice();
+        const archive_file = try archive_dir.createFile(archive_file_name, .{ .read = true });
+        defer archive_file.close();
+
+        const full_path = try archive_dir.realpathAlloc(self.allocator, archive_file_name);
+        defer self.allocator.free(full_path);
+        self.logger.infof("writing full snapshot to {s}", .{full_path});
+
+        // write the snapshot to disk, compressed
+        var timer = try sig.time.Timer.start();
+        const zstd_write_ctx = zstd.writerCtx(archive_file.writer(), &zstd_compressor, zstd_buffer);
+        try snapshot_gen_pkg.write(zstd_write_ctx.writer(), status_cache);
+        try zstd_write_ctx.finish();
+        self.logger.infof("writing full snapshot took {any}", .{timer.read()});
+
+        // track new snapshot
+        try self.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);
     }
 
     /// flushes a slot account data from the cache onto disk, and updates the index
@@ -2287,7 +2344,7 @@ pub const AccountsDB = struct {
         file_map_rw: RwMux(FileMap).RLockGuard,
 
         /// Writes the snapshot in tar archive format to `archive_writer`.
-        pub fn write(package: *const FullSnapshotGenerationPackage, archive_writer: anytype) !void {
+        pub fn write(package: *const FullSnapshotGenerationPackage, archive_writer: anytype, status_cache: StatusCache) !void {
             const snapshot_fields: SnapshotFields = .{
                 .bank_fields = package.bank_fields,
                 .accounts_db_fields = .{
@@ -2308,7 +2365,7 @@ pub const AccountsDB = struct {
             try writeSnapshotTarWithFields(
                 archive_writer,
                 sig.version.CURRENT_CLIENT_VERSION,
-                .{ .bank_slot_deltas = &.{} },
+                status_cache,
                 snapshot_fields,
                 package.file_map_rw.get(),
             );
@@ -2970,7 +3027,7 @@ fn testWriteSnapshotFull(
         errdefer archive_file.close();
 
         var buffered_state = std.io.bufferedWriter(archive_file.writer());
-        try snapshot_gen_pkg.write(buffered_state.writer());
+        try snapshot_gen_pkg.write(buffered_state.writer(), StatusCache.default());
         try buffered_state.flush();
 
         try accounts_db.commitFullSnapshotInfo(snapshot_gen_info, .ignore_old);

@@ -1,5 +1,4 @@
 const std = @import("std");
-const ArrayList = std.ArrayList;
 
 /// reads all the files in a directory.
 /// returns a list of filenames and the underlying memory for the filenames.
@@ -7,7 +6,7 @@ const ArrayList = std.ArrayList;
 pub fn readDirectory(
     allocator: std.mem.Allocator,
     directory_iter: std.fs.Dir.Iterator,
-) !struct { filenames: ArrayList([]u8), filename_memory: []u8 } {
+) !struct { filenames: std.ArrayList([]u8), filename_memory: []u8 } {
     var dir_iter = directory_iter;
     var total_name_size: usize = 0;
     var total_files: usize = 0;
@@ -21,7 +20,7 @@ pub fn readDirectory(
 
     dir_iter.reset(); // reset
 
-    var filenames = try ArrayList([]u8).initCapacity(allocator, total_files);
+    var filenames = try std.ArrayList([]u8).initCapacity(allocator, total_files);
     errdefer filenames.deinit();
 
     var index: usize = 0;

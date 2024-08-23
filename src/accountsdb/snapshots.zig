@@ -1423,10 +1423,18 @@ pub const BankSlotDelta = struct {
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
+    pub fn default() @This() {
+        return .{ .bank_slot_deltas = &.{} };
+    }
+
     pub fn initFromPath(allocator: std.mem.Allocator, path: []const u8) !StatusCache {
-        var status_cache_file = try std.fs.cwd().openFile(path, .{});
+        const status_cache_file = try std.fs.cwd().openFile(path, .{});
         defer status_cache_file.close();
-        return try decodeFromBincode(allocator, status_cache_file.reader());
+        return readFromFile(allocator, status_cache_file);
+    }
+
+    pub fn readFromFile(allocator: std.mem.Allocator, file: std.fs.File) !StatusCache {
+        return decodeFromBincode(allocator, file.reader());
     }
 
     pub fn decodeFromBincode(
@@ -1761,6 +1769,11 @@ pub const AllSnapshotFields = struct {
 
         // collapse accounts-db fields
         const storages_map = &self.incremental.?.accounts_db_fields.file_map;
+
+        // TODO: use a better allocator
+        const allocator = storages_map.allocator;
+        var slots_to_remove = std.ArrayList(Slot).init(allocator);
+
         // make sure theres no overlap in slots between full and incremental and combine
         var storages_entry_iter = storages_map.iterator();
         while (storages_entry_iter.next()) |*incremental_entry| {
@@ -1768,7 +1781,7 @@ pub const AllSnapshotFields = struct {
 
             // only keep slots > full snapshot slot
             if (!(slot > full_slot)) {
-                _ = storages_map.swapRemove(slot);
+                try slots_to_remove.append(slot);
                 continue;
             }
 
@@ -1779,6 +1792,11 @@ pub const AllSnapshotFields = struct {
                 slot_entry.value_ptr.* = incremental_entry.value_ptr.*;
             }
         }
+
+        for (slots_to_remove.items) |slot| {
+            _ = storages_map.swapRemove(slot);
+        }
+
         snapshot.accounts_db_fields = self.full.accounts_db_fields;
 
         return snapshot;

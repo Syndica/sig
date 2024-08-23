@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Bank = sig.accounts_db.Bank;
 const ChaChaRng = sig.rand.ChaChaRng;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
@@ -37,16 +36,19 @@ pub const SingleEpochLeaderSchedule = struct {
     }
 };
 
-pub fn leaderScheduleFromBank(allocator: Allocator, bank: *const Bank) !SingleEpochLeaderSchedule {
-    const epoch = bank.bank_fields.epoch;
-    const epoch_stakes = bank.bank_fields.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
-    const slots_in_epoch = bank.bank_fields.epoch_schedule.getSlotsInEpoch(epoch);
+pub fn leaderScheduleFromBank(
+    allocator: Allocator,
+    bank_fields: *const sig.accounts_db.snapshots.BankFields,
+) !SingleEpochLeaderSchedule {
+    const epoch = bank_fields.epoch;
+    const epoch_stakes = bank_fields.epoch_stakes.getPtr(epoch) orelse return error.NoEpochStakes;
+    const slots_in_epoch = bank_fields.epoch_schedule.getSlotsInEpoch(epoch);
     const staked_nodes = try epoch_stakes.stakes.vote_accounts.stakedNodes(allocator);
 
     const slot_leaders = try leaderSchedule(allocator, staked_nodes, slots_in_epoch, epoch);
 
-    _, const slot_index = bank.bank_fields.epoch_schedule.getEpochAndSlotIndex(bank.bank_fields.slot);
-    const epoch_start_slot = bank.bank_fields.slot - slot_index;
+    _, const slot_index = bank_fields.epoch_schedule.getEpochAndSlotIndex(bank_fields.slot);
+    const epoch_start_slot = bank_fields.slot - slot_index;
     return SingleEpochLeaderSchedule{
         .allocator = allocator,
         .slot_leaders = slot_leaders,
