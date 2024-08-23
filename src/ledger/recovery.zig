@@ -223,30 +223,30 @@ fn reconstructShreds(
     shreds: RecoveryShreds,
 ) ![]const Shred {
     // Reconstruct code and data shreds from erasure encoded shards.
-    const all_shreds = try allocator.alloc(Shred, shreds.input_shreds.len);
-    var num_recovered_so_far: usize = 0;
+    // const all_shreds = try allocator.alloc(Shred, shreds.input_shreds.len);
+    var all_shreds = try std.ArrayListUnmanaged(Shred)
+        .initCapacity(allocator, shreds.input_shreds.len);
     errdefer {
         // The shreds that are created below need to be freed if there is an error.
         // If no error, ownership is transfered to calling scope.
         // Existing shreds do not need to be freed because they were already owned by calling scope.
-        for (all_shreds, shreds.mask, 0..num_recovered_so_far) |shred, was_present, _| {
-            if (!was_present) shred.deinit();
+        for (all_shreds.items, 0..) |shred, i| {
+            if (!shreds.mask[i]) shred.deinit();
         }
     }
     std.debug.assert(shreds.input_shreds.len == shreds.shards.len);
     for (shreds.input_shreds, shreds.shards, 0..) |maybe_shred, maybe_shard, index| {
         if (maybe_shred) |shred| {
-            all_shreds[index] = shred;
+            all_shreds.appendAssumeCapacity(shred);
         } else {
             const shard = maybe_shard orelse return error.TooFewShards;
-            all_shreds[index] = try reconstructShred(allocator, meta, shard, index);
+            all_shreds.appendAssumeCapacity(try reconstructShred(allocator, meta, shard, index));
         }
-        num_recovered_so_far += 1;
     }
 
-    try setMerkleProofs(allocator, meta, shreds, all_shreds);
+    try setMerkleProofs(allocator, meta, shreds, all_shreds.items);
 
-    return all_shreds;
+    return all_shreds.toOwnedSlice(allocator);
 }
 
 fn reconstructShred(
