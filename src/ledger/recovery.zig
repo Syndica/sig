@@ -333,7 +333,7 @@ fn setMerkleProofs(
             }
         } else {
             try shred.setMerkleProof(proof);
-            std.debug.assert(if (shred.sanitize()) |_| true else |_| false);
+            std.debug.assert(std.meta.isError(shred.sanitize()));
             // TODO: Assert that shred payload is fully populated.
         }
     }
