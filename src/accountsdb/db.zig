@@ -148,8 +148,7 @@ pub const AccountsDB = struct {
         //! 
         //! After doing so, the file_map_rw may be unlocked, without
         //! releasing the fd_keep_open_rw, allowing other threads to modify the file_map,
-        //! whilst preventing any files being closed until all reading threads have finished their work
-        //! and the fd_keep_open_rw is unlocked.
+        //! whilst preventing any files being closed until all reading threads have finished their work.
         //! 
         //! * Removing account files (shrinking, purging):
         //! A thread which wants to delete/close an account files must first 
