@@ -1,9 +1,11 @@
 const std = @import("std");
 const Atomic = std.atomic.Value;
+const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
 const testing = std.testing;
 const assert = std.debug.assert;
 const Mux = @import("mux.zig").Mux;
+const Backoff = @import("Backoff.zig");
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
 pub fn Channel(comptime T: type) type {
@@ -115,12 +117,12 @@ pub fn Channel(comptime T: type) type {
         }
 
         pub fn try_drain(self: *Self) error{ ChannelClosed, OutOfMemory }!?[]T {
-            var buffer = self.buffer.lock();
-            defer buffer.unlock();
-
             if (self.closed.load(.seq_cst)) {
                 return error.ChannelClosed;
             }
+
+            var buffer = self.buffer.lock();
+            defer buffer.unlock();
 
             const values: *const std.ArrayList(T) = buffer.get();
             const num_items_to_drain = values.items.len;
@@ -167,105 +169,519 @@ pub fn Channel(comptime T: type) type {
     };
 }
 
+pub fn NewChannel(T: type) type {
+    return struct {
+        head: Position,
+        tail: Position,
+        closed: Atomic(bool) = Atomic(bool).init(false),
+        allocator: Allocator,
+
+        const Self = @This();
+        const BLOCK_CAP = 31;
+        const SHIFT = 1;
+        const LAP = 32;
+
+        const WRITE: usize = 0b01;
+        const READ: usize = 0b10;
+        const DESTROY: usize = 0b100;
+
+        const HAS_NEXT: usize = 0b01;
+
+        const Position = struct {
+            index: Atomic(usize),
+            block: Atomic(?*Buffer),
+
+            fn init() Position {
+                return .{
+                    .index = Atomic(usize).init(0),
+                    .block = Atomic(?*Buffer).init(null),
+                };
+            }
+
+            fn deinit(pos: *Position, allocator: Allocator) void {
+                if (pos.block.load(.monotonic)) |block| {
+                    block.deinit(allocator);
+                    allocator.destroy(block);
+                }
+            }
+        };
+
+        const Buffer = struct {
+            next: Atomic(?*Buffer),
+            slots: [BLOCK_CAP]Slot,
+
+            fn create(allocator: Allocator) !*Buffer {
+                const new = try allocator.create(Buffer);
+                @memset(&new.slots, Slot.uninit);
+                new.next = Atomic(?*Buffer).init(null);
+                return new;
+            }
+
+            fn destroy(block: *Buffer, start: usize, allocator: Allocator) void {
+                for (start..BLOCK_CAP - 1) |i| {
+                    const slot = &block.slots[i];
+
+                    if (slot.state.load(.acquire) & READ == 0 and
+                        slot.state.fetchOr(DESTROY, .acq_rel) & READ == 0)
+                    {
+                        return;
+                    }
+                }
+
+                allocator.destroy(block);
+            }
+
+            fn deinit(block: *Buffer, allocator: Allocator) void {
+                if (block.next.load(.monotonic)) |n| {
+                    n.deinit(allocator);
+                    allocator.destroy(n);
+                }
+            }
+        };
+
+        const Slot = struct {
+            value: T,
+            state: Atomic(usize),
+
+            const uninit: Slot = .{
+                .value = undefined,
+                .state = Atomic(usize).init(0),
+            };
+        };
+
+        pub fn init(allocator: Allocator, initial_capacity: usize) Self {
+            _ = initial_capacity; // TODO: do something with this
+            return .{
+                .head = Position.init(),
+                .tail = Position.init(),
+                .allocator = allocator,
+            };
+        }
+
+        pub fn create(allocator: Allocator, initial_capacity: usize) !*Self {
+            const channel = try allocator.create(Self);
+            channel.* = Self.init(allocator, initial_capacity);
+            return channel;
+        }
+
+        pub fn send(channel: *Self, value: T) !void {
+            var backoff = Backoff.init();
+            var tail = channel.tail.index.load(.acquire);
+            var block = channel.tail.block.load(.acquire);
+            var next_block: ?*Buffer = null;
+
+            while (true) {
+                const offset = (tail >> SHIFT) % LAP;
+                if (offset == BLOCK_CAP) {
+                    backoff.snooze();
+                    tail = channel.tail.index.load(.acquire);
+                    block = channel.tail.block.load(.acquire);
+                    continue;
+                }
+
+                if (offset + 1 == BLOCK_CAP and next_block == null) {
+                    next_block = try Buffer.create(channel.allocator);
+                }
+
+                if (block == null) {
+                    const new = try Buffer.create(channel.allocator);
+
+                    if (channel.tail.block.cmpxchgStrong(block, new, .release, .monotonic) == null) {
+                        channel.head.block.store(new, .release);
+                        block = new;
+                    } else {
+                        next_block = new;
+                        tail = channel.tail.index.load(.acquire);
+                        block = channel.tail.block.load(.acquire);
+                        continue;
+                    }
+                }
+
+                const new_tail = tail + (1 << SHIFT);
+
+                if (channel.tail.index.cmpxchgWeak(tail, new_tail, .seq_cst, .acquire)) |t| {
+                    tail = t;
+                    block = channel.tail.block.load(.acquire);
+                    backoff.spin();
+                } else {
+                    if (offset + 1 == BLOCK_CAP) {
+                        const next_index = new_tail +% (1 << SHIFT);
+                        channel.tail.block.store(next_block, .release);
+                        channel.tail.index.store(next_index, .release);
+                        block.?.next.store(next_block, .release);
+                    } else if (next_block) |b| {
+                        channel.allocator.destroy(b);
+                    }
+
+                    const slot = &block.?.slots[offset];
+                    slot.value = value;
+                    _ = slot.state.fetchOr(WRITE, .release);
+                    return;
+                }
+            }
+        }
+
+        pub fn receive(channel: *Self) ?T {
+            var backoff = Backoff.init();
+            var head = channel.head.index.load(.acquire);
+            var block = channel.head.block.load(.acquire);
+
+            while (true) {
+                const offset = (head >> SHIFT) % LAP;
+
+                if (offset == BLOCK_CAP) {
+                    backoff.snooze();
+                    head = channel.head.index.load(.acquire);
+                    block = channel.head.block.load(.acquire);
+                    continue;
+                }
+
+                var new_head = head + (1 << SHIFT);
+
+                if (new_head & HAS_NEXT == 0) {
+                    channel.tail.index.fence(.seq_cst);
+                    const tail = channel.tail.index.load(.monotonic);
+
+                    if (head >> SHIFT == tail >> SHIFT) {
+                        return null;
+                    }
+
+                    if ((head >> SHIFT) / LAP != (tail >> SHIFT) / LAP) {
+                        new_head |= HAS_NEXT;
+                    }
+                }
+
+                if (block == null) {
+                    backoff.snooze();
+                    head = channel.head.index.load(.acquire);
+                    block = channel.head.block.load(.acquire);
+                    continue;
+                }
+
+                if (channel.head.index.cmpxchgWeak(head, new_head, .seq_cst, .acquire)) |h| {
+                    head = h;
+                    block = channel.head.block.load(.acquire);
+                    backoff.spin();
+                } else {
+                    if (offset + 1 == BLOCK_CAP) {
+                        const next = while (true) {
+                            const next = block.?.next.load(.acquire);
+                            if (next != null) break next.?;
+                        };
+                        var next_index = (new_head & ~HAS_NEXT) +% (1 << SHIFT);
+
+                        if (next.next.load(.monotonic) != null) {
+                            next_index |= HAS_NEXT;
+                        }
+
+                        channel.head.block.store(next, .release);
+                        channel.head.index.store(next_index, .release);
+                    }
+
+                    const slot = &block.?.slots[offset];
+                    while (slot.state.load(.acquire) & WRITE == 0) {}
+                    const value = slot.value;
+
+                    if (offset + 1 == BLOCK_CAP) {
+                        block.?.destroy(0, channel.allocator);
+                    } else if (slot.state.fetchOr(READ, .acq_rel) & DESTROY != 0) {
+                        block.?.destroy(offset + 1, channel.allocator);
+                    }
+
+                    return value;
+                }
+            }
+        }
+
+        pub fn len(channel: *Self) usize {
+            while (true) {
+                var tail = channel.tail.index.load(.seq_cst);
+                var head = channel.head.index.load(.seq_cst);
+
+                if (channel.tail.index.load(.seq_cst) == tail) {
+                    tail &= ~((@as(usize, 1) << SHIFT) - 1);
+                    head &= ~((@as(usize, 1) << SHIFT) - 1);
+
+                    if ((tail >> SHIFT) & (LAP - 1) == (LAP - 1)) {
+                        tail +%= (1 << SHIFT);
+                    }
+                    if ((head >> SHIFT) & (LAP - 1) == (LAP - 1)) {
+                        head +%= (1 << SHIFT);
+                    }
+
+                    const lap = (head >> SHIFT) / LAP;
+                    tail -%= (lap * LAP) << SHIFT;
+                    head -%= (lap * LAP) << SHIFT;
+
+                    tail >>= SHIFT;
+                    head >>= SHIFT;
+
+                    return tail - head - tail / LAP;
+                }
+            }
+        }
+
+        pub fn isEmpty(channel: *Self) bool {
+            const head = channel.head.index.load(.seq_cst);
+            const tail = channel.tail.index.load(.seq_cst);
+            return (head >> SHIFT) == (tail >> SHIFT);
+        }
+
+        pub fn deinit(channel: *Self) void {
+            var head = channel.head.index.raw;
+            var tail = channel.tail.index.raw;
+            var block = channel.head.block.raw;
+
+            head &= ~((@as(usize, 1) << SHIFT) - 1);
+            tail &= ~((@as(usize, 1) << SHIFT) - 1);
+
+            while (head != tail) {
+                const offset = (head >> SHIFT) % LAP;
+
+                if (offset >= BLOCK_CAP) {
+                    const next = block.?.next.raw;
+                    channel.allocator.destroy(block.?);
+                    block = next;
+                }
+
+                head +%= (1 << SHIFT);
+            }
+
+            if (block) |b| {
+                channel.allocator.destroy(b);
+            }
+        }
+
+        pub fn close(channel: *Self) void {
+            _ = channel;
+        }
+    };
+}
+
 const Block = struct {
     num: u32 = 333,
     valid: bool = true,
     data: [1024]u8 = undefined,
 };
 
-const BlockChannel = Channel(Block);
-const BlockPointerChannel = Channel(*Block);
-
 const logger = std.log.scoped(.sync_channel_tests);
 
-fn testReceiver(chan: *BlockChannel, recv_count: *Atomic(usize), id: u8) void {
-    _ = id;
-    while (chan.receive()) |v| {
-        _ = v;
-        _ = recv_count.fetchAdd(1, .seq_cst);
+fn testUsizeReceiver(chan: anytype, recv_count: usize) void {
+    var count: usize = 0;
+    while (count < recv_count) : (count += 1) {
+        while (chan.receive() == null) {}
     }
 }
 
-fn testSender(chan: *BlockChannel, total_send: usize) void {
+fn testUsizeSender(chan: anytype, send_count: usize) void {
     var i: usize = 0;
-    while (i < total_send) : (i += 1) {
-        chan.send(Block{ .num = @intCast(i) }) catch unreachable;
+    while (i < send_count) : (i += 1) {
+        chan.send(i) catch |err| {
+            std.debug.print("could not send on chan: {any}", .{err});
+            @panic("could not send on channel!");
+        };
     }
-    chan.close();
 }
 
 const Packet = @import("../net/packet.zig").Packet;
-fn testPacketSender(chan: *Channel(Packet), total_send: usize) void {
+
+fn testPacketSender(chan: anytype, total_send: usize) void {
     var i: usize = 0;
     while (i < total_send) : (i += 1) {
         const packet = Packet.default();
-        chan.send(packet) catch unreachable;
+        chan.send(packet) catch |err| {
+            std.debug.print("could not send on chan: {any}", .{err});
+            @panic("could not send on channel!");
+        };
     }
 }
 
-fn testPacketReceiver(chan: *Channel(Packet), total_recv: usize) void {
+fn testPacketReceiver(chan: anytype, total_recv: usize) void {
     var count: usize = 0;
     while (count < total_recv) : (count += 1) {
-        const v = chan.receive();
-        _ = v;
+        while (chan.receive() != null) {}
     }
-}
-
-test "sync.channel: channel works properly" {
-    var ch = BlockChannel.init(testing.allocator, 100);
-    defer ch.deinit();
-
-    var recv_count: Atomic(usize) = Atomic(usize).init(0);
-    const send_count: usize = 1_000_000;
-
-    var join1 = try std.Thread.spawn(.{}, testSender, .{ ch, send_count });
-    var join2 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
-    var join3 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
-    var join4 = try std.Thread.spawn(.{}, testReceiver, .{ ch, &recv_count, 1 });
-
-    join1.join();
-    join2.join();
-    join3.join();
-    join4.join();
-
-    try testing.expectEqual(send_count, recv_count.load(.seq_cst));
 }
 
 pub const BenchmarkChannel = struct {
-    pub const min_iterations = 5;
-    pub const max_iterations = 5;
+    pub const min_iterations = 10;
+    pub const max_iterations = 20;
 
-    const send_count: usize = 500_000;
+    pub const BenchmarkArgs = struct {
+        name: []const u8 = "",
+        n_items: usize,
+        n_senders: usize,
+        n_receivers: usize,
+    };
 
-    pub fn benchmarkChannel() !u64 {
+    pub const args = [_]BenchmarkArgs{
+        .{
+            .name = "  10k_items,   1_senders,   1_receivers ",
+            .n_items = 10_000,
+            .n_senders = 1,
+            .n_receivers = 1,
+        },
+        .{
+            .name = " 100k_items,   4_senders,   4_receivers ",
+            .n_items = 100_000,
+            .n_senders = 4,
+            .n_receivers = 4,
+        },
+        .{
+            .name = " 500k_items,   8_senders,   8_receivers ",
+            .n_items = 500_000,
+            .n_senders = 8,
+            .n_receivers = 8,
+        },
+        .{
+            .name = "   1m_items,  16_senders,  16_receivers ",
+            .n_items = 1_000_000,
+            .n_senders = 16,
+            .n_receivers = 16,
+        },
+    };
+
+    pub fn benchmarkSimpleUsizeChannel(argss: BenchmarkArgs) !usize {
+        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
+
         const allocator = std.heap.page_allocator;
-        var channel = BlockChannel.init(allocator, send_count / 2);
+        var channel = Channel(usize).init(allocator, 0);
         defer channel.deinit();
 
-        var recv_count: Atomic(usize) = Atomic(usize).init(0);
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
 
-        var timer = try std.time.Timer.start();
-        var join2 = try std.Thread.spawn(.{}, testSender, .{ channel, send_count });
-        var join1 = try std.Thread.spawn(.{}, testReceiver, .{ channel, &recv_count, 1 });
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ channel, sends_per_sender });
+        }
 
-        join2.join();
-        join1.join();
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ channel, receives_per_receiver });
+        }
 
-        return timer.read();
+        for (0..thread_handles.len) |i| {
+            if (thread_handles[i]) |handle| {
+                handle.join();
+            } else {
+                break;
+            }
+        }
+
+        channel.close();
+        const elapsed = timer.read();
+        return elapsed;
     }
 
-    pub fn benchmarkPacketChannel() !u64 {
+    pub fn benchmarkSimpleUsizeBetterChannel(argss: BenchmarkArgs) !usize {
+        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
+
         const allocator = std.heap.page_allocator;
-        var channel = Channel(Packet).init(allocator, send_count / 2);
+        var channel = NewChannel(usize).init(allocator, n_items / 2);
         defer channel.deinit();
 
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
+
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeSender, .{ &channel, sends_per_sender });
+        }
+
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testUsizeReceiver, .{ &channel, receives_per_receiver });
+        }
+
+        for (0..thread_handles.len) |i| {
+            if (thread_handles[i]) |handle| {
+                handle.join();
+            } else {
+                break;
+            }
+        }
+
+        channel.close();
+        const elapsed = timer.read();
+        return elapsed;
+    }
+
+    pub fn benchmarkSimplePacketChannel(argss: BenchmarkArgs) !usize {
+        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
         var timer = try std.time.Timer.start();
-        var join1 = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, send_count });
-        var join2 = try std.Thread.spawn(.{}, testPacketSender, .{ channel, send_count });
 
-        join1.join();
-        join2.join();
+        const allocator = std.heap.page_allocator;
+        var channel = Channel(Packet).init(allocator, n_items / 2);
+        defer channel.deinit();
 
-        return timer.read();
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
+
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{ channel, sends_per_sender });
+        }
+
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{ channel, receives_per_receiver });
+        }
+
+        for (0..thread_handles.len) |i| {
+            if (thread_handles[i]) |handle| {
+                handle.join();
+            } else {
+                break;
+            }
+        }
+
+        channel.close();
+        const elapsed = timer.read();
+        return elapsed;
+    }
+
+    pub fn benchmarkSimplePacketBetterChannel(argss: BenchmarkArgs) !usize {
+        var thread_handles: [64]?std.Thread = [_]?std.Thread{null} ** 64;
+        const n_items = argss.n_items;
+        const senders_count = argss.n_senders;
+        const receivers_count = argss.n_receivers;
+        var timer = try std.time.Timer.start();
+
+        const allocator = std.heap.page_allocator;
+        var channel = NewChannel(Packet).init(allocator, n_items / 2);
+        defer channel.deinit();
+
+        const sends_per_sender: usize = n_items / senders_count;
+        const receives_per_receiver: usize = n_items / receivers_count;
+
+        var thread_index: usize = 0;
+        while (thread_index < senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketSender, .{ &channel, sends_per_sender });
+        }
+
+        while (thread_index < receivers_count + senders_count) : (thread_index += 1) {
+            thread_handles[thread_index] = try std.Thread.spawn(.{}, testPacketReceiver, .{ &channel, receives_per_receiver });
+        }
+
+        for (0..thread_handles.len) |i| {
+            if (thread_handles[i]) |handle| {
+                handle.join();
+            } else {
+                break;
+            }
+        }
+
+        channel.close();
+        const elapsed = timer.read();
+        return elapsed;
     }
 };
