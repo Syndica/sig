@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Bank = sig.accounts_db.Bank;
 const ChaChaRng = sig.rand.ChaChaRng;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
