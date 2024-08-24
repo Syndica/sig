@@ -173,8 +173,7 @@ fn organizeShredsForRecovery(
     shreds: []const Shred,
     meta: RecoveryMetadata,
 ) !RecoveryShreds {
-    const num_shards: usize =
-        @intCast(meta.code_header.num_data_shreds + meta.code_header.num_code_shreds);
+    const num_shards: usize = meta.code_header.num_data_shreds + meta.code_header.num_code_shreds;
 
     // Obtain erasure encoded shards from shreds.
     const input_shreds = try allocator.alloc(?Shred, num_shards);
@@ -223,7 +222,6 @@ fn reconstructShreds(
     shreds: RecoveryShreds,
 ) ![]const Shred {
     // Reconstruct code and data shreds from erasure encoded shards.
-    // const all_shreds = try allocator.alloc(Shred, shreds.input_shreds.len);
     var all_shreds = try std.ArrayListUnmanaged(Shred)
         .initCapacity(allocator, shreds.input_shreds.len);
     errdefer {
@@ -308,8 +306,7 @@ fn setMerkleProofs(
     try makeMerkleTree(&tree);
 
     // set the merkle proof on the recovered shreds.
-    const num_shards: usize =
-        @intCast(meta.code_header.num_data_shreds + meta.code_header.num_code_shreds);
+    const num_shards: usize = meta.code_header.num_data_shreds + meta.code_header.num_code_shreds;
     for (all_shreds, shreds.mask, 0..) |*shred, was_present, index| {
         const proof: MerkleProofEntryList = try makeMerkleProof(
             allocator,
