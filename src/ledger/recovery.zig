@@ -99,7 +99,7 @@ const RecoveryShreds = struct {
     }
 };
 
-/// agave: merkle::recover
+/// Analogous to [merkle::recover](https://github.com/anza-xyz/agave/blob/42e72bf1b31f5335d3f7ee56ce1f607ceb899c3f/ledger/src/shred/merkle.rs#L778)
 pub fn recover(
     allocator: Allocator,
     shreds: []const Shred,
