@@ -389,8 +389,14 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) boo
     if (!@inComptime() and
         std.meta.hasUniqueRepresentation(T) and
         backend_can_use_eql_bytes and
-        config.follow_pointers == .no)
+        (config.follow_pointers == .no or !(containsPointer(T) orelse true)))
     {
+        // This is a performance optimization. We directly compare the bytes in the slice, instead
+        // of iterating over each item and comparing them for equality. Ideally we could use
+        // `eqlBytes(sliceAsBytes(a), sliceAsBytes(b))` directly from the std library, but those
+        // functions are private. Calling std.mem.eql accomplishes the same thing, as long as
+        // should_use_eqlBytes is true. If should_use_eqlBytes is false, std.mem.eql would have
+        // undesired behavior.
         return std.mem.eql(T, a, b);
     }
 
@@ -401,6 +407,31 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) boo
         if (!eql(a_elem, b_elem, config)) return false;
     }
     return true;
+}
+
+/// Returns whether a type has any pointers within it, at any level of nesting.
+/// Returns null if the answer cannot be determined.
+pub fn containsPointer(comptime T: type) ?bool {
+    std.builtin.Type;
+    return switch (@typeInfo(T)) {
+        .Pointer => true,
+
+        .Array, .Optional => |info| containsPointer(info.child),
+
+        .ErrorUnion => |info| containsPointer(info.payload),
+
+        .Struct, .Union => |info| for (info.fields) |field| {
+            const field_has_pointer = containsPointer(field.type);
+            if (field_has_pointer != false) break field_has_pointer;
+        } else false,
+
+        .Opaque, .Frame => null,
+
+        .AnyFrame => |info| if (info.child) |c| containsPointer(c) else null,
+
+        .Type, .Void, .Bool, .NoReturn, .Int, .Float, .ComptimeFloat, .ComptimeInt => false,
+        .Undefined, .Null, .ErrorSet, .Enum, .Fn, .Frame, .AnyFrame, .Vector, .EnumLiteral => false,
+    };
 }
 
 test "eql follows slices" {
