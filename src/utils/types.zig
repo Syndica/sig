@@ -412,7 +412,6 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) boo
 /// Returns whether a type has any pointers within it, at any level of nesting.
 /// Returns null if the answer cannot be determined.
 pub fn containsPointer(comptime T: type) ?bool {
-    std.builtin.Type;
     return switch (@typeInfo(T)) {
         .Pointer => true,
 
@@ -430,7 +429,7 @@ pub fn containsPointer(comptime T: type) ?bool {
         .AnyFrame => |info| if (info.child) |c| containsPointer(c) else null,
 
         .Type, .Void, .Bool, .NoReturn, .Int, .Float, .ComptimeFloat, .ComptimeInt => false,
-        .Undefined, .Null, .ErrorSet, .Enum, .Fn, .Frame, .AnyFrame, .Vector, .EnumLiteral => false,
+        .Undefined, .Null, .ErrorSet, .Enum, .Fn, .Vector, .EnumLiteral => false,
     };
 }
 
