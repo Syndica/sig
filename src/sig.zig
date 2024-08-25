@@ -12,6 +12,7 @@ pub const rpc = @import("rpc/lib.zig");
 pub const shred_collector = @import("shred_collector/lib.zig");
 pub const sync = @import("sync/lib.zig");
 pub const trace = @import("trace/lib.zig");
+pub const trace_ng = @import("trace_ng/lib.zig");
 pub const utils = @import("utils/lib.zig");
 pub const version = @import("version/version.zig");
 pub const time = @import("time/lib.zig");
