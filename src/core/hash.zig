@@ -4,8 +4,6 @@ const sig = @import("../sig.zig");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const Allocator = std.mem.Allocator;
 
-pub const HASH_SIZE: usize = Hash.size;
-
 pub const Hash = extern struct {
     data: [size]u8,
 
@@ -13,18 +11,18 @@ pub const Hash = extern struct {
 
     const base58 = sig.crypto.base58.Base58Sized(size);
 
-    pub fn fromSizedSlice(data: *const [HASH_SIZE]u8) Hash {
+    pub fn fromSizedSlice(data: *const [size]u8) Hash {
         var hash: Hash = undefined;
         @memcpy(&hash.data, data);
         return hash;
     }
 
     pub fn default() Hash {
-        return .{ .data = .{0} ** HASH_SIZE };
+        return .{ .data = .{0} ** size };
     }
 
     pub fn generateSha256Hash(bytes: []const u8) Hash {
-        var data: [HASH_SIZE]u8 = undefined;
+        var data: [size]u8 = undefined;
         Sha256.hash(bytes, &data, .{});
         return .{ .data = data };
     }
@@ -71,7 +69,7 @@ pub const Hash = extern struct {
 
     /// Intended to be used in tests.
     pub fn random(rand: std.Random) Hash {
-        var data: [HASH_SIZE]u8 = undefined;
+        var data: [size]u8 = undefined;
         rand.bytes(&data);
         return .{ .data = data };
     }

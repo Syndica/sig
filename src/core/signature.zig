@@ -8,12 +8,10 @@ const e = std.crypto.errors;
 
 const Pubkey = core.Pubkey;
 
-pub const SIGNATURE_LENGTH: usize = Signature.size;
-
 pub const Signature = struct {
     data: [size]u8 = [_]u8{0} ** size,
 
-    pub const size = 64;
+    pub const size: usize = 64;
 
     const base58 = sig.crypto.base58.Base58Sized(size);
     const Self = @This();
