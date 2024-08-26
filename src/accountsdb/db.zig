@@ -104,10 +104,10 @@ pub const AccountsDBStats = struct {
                     @field(self, field.name) = field_counter;
                 },
                 *Histogram => {
-                    const histogram_kind = std.meta.stringToEnum(
+                    const histogram_kind = comptime std.meta.stringToEnum(
                         HistogramKind,
                         field.name,
-                    ) orelse @panic("no matching HistogramKind for AccountsDBStats *Histogram field");
+                    ) orelse @compileError("no matching HistogramKind for AccountsDBStats *Histogram field");
 
                     const buckets = histogram_kind.buckets();
                     const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, buckets);
