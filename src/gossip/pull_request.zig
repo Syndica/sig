@@ -11,6 +11,7 @@ const GossipTable = @import("table.zig").GossipTable;
 const _gossip_data = @import("data.zig");
 const SignedGossipData = _gossip_data.SignedGossipData;
 const RwMux = @import("../sync/mux.zig").RwMux;
+const builtin = @import("builtin");
 
 pub const MAX_BLOOM_SIZE: usize = 928;
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
@@ -208,6 +209,7 @@ pub const GossipPullFilter = struct {
 
     /// only used in tests
     pub fn init(allocator: std.mem.Allocator) Self {
+        std.debug.assert(builtin.is_test);
         return Self{
             .filter = Bloom.init(allocator, 0, null),
             .mask = 18_446_744_073_709_551_615,

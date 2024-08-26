@@ -2,6 +2,7 @@ const std = @import("std");
 const Sha256 = std.crypto.hash.sha2.Sha256;
 const base58 = @import("base58-zig");
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 
 pub const HASH_SIZE: usize = 32;
 
@@ -80,6 +81,7 @@ pub const Hash = extern struct {
 
     /// Intended to be used in tests.
     pub fn random(rand: std.Random) Hash {
+        std.debug.assert(builtin.is_test);
         var data: [HASH_SIZE]u8 = undefined;
         rand.bytes(&data);
         return .{ .data = data };

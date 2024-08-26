@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const builtin = @import("builtin");
 
 const testing = std.testing;
 const bincode = sig.bincode;
@@ -48,6 +49,7 @@ pub const Bloom = struct {
 
     // used in tests
     pub fn addKey(self: *Self, key: u64) !void {
+        std.debug.assert(builtin.is_test);
         try self.keys.append(key);
     }
 

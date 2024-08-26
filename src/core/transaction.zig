@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+const builtin = @import("builtin");
 
 const Signature = sig.core.Signature;
 const Pubkey = sig.core.Pubkey;
@@ -83,6 +84,7 @@ pub const Transaction = struct {
 
     // used in tests
     pub fn default() Transaction {
+        std.debug.assert(builtin.is_test);
         return Transaction{
             .signatures = &[_]Signature{},
             .message = Message.default(),

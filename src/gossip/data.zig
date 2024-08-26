@@ -1,6 +1,7 @@
 const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
+const builtin = @import("builtin");
 
 const testing = std.testing;
 const bincode = sig.bincode;
@@ -113,11 +114,13 @@ pub const SignedGossipData = struct {
 
     /// only used in tests
     pub fn random(rng: std.rand.Random, keypair: *const KeyPair) !Self {
+        std.debug.assert(builtin.is_test);
         return try initSigned(GossipData.random(rng), keypair);
     }
 
     /// only used in tests
     pub fn randomWithIndex(rng: std.rand.Random, keypair: *const KeyPair, index: usize) !Self {
+        std.debug.assert(builtin.is_test);
         var data = GossipData.randomFromIndex(rng, index);
         const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
         data.setId(pubkey);
@@ -395,6 +398,7 @@ pub const GossipData = union(GossipDataTag) {
 
     // only used in tests
     pub fn setId(self: *GossipData, id: Pubkey) void {
+        std.debug.assert(builtin.is_test);
         switch (self.*) {
             .LegacyContactInfo => |*v| {
                 v.id = id;
