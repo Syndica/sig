@@ -121,7 +121,11 @@ pub const BasicShredTracker = struct {
                 slot_reports.drop(1);
             }
             if (!found_an_incomplete_slot) {
-                self.logger.debugf("finished slot: {}", .{slot}); // FIXME not always logged
+                if (slot % 20 == 0) {
+                    self.logger.infof("shred tracker: received all shreds up to slot {}", .{slot});
+                } else {
+                    self.logger.debugf("shred tracker: received all shreds up to slot {}", .{slot});
+                }
                 self.current_bottom_slot = @max(self.current_bottom_slot, slot + 1);
                 monitored_slot.* = .{};
             }

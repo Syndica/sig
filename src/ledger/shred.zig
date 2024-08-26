@@ -15,20 +15,18 @@ const Slot = sig.core.Slot;
 const checkedAdd = sig.utils.math.checkedAdd;
 const checkedSub = sig.utils.math.checkedSub;
 
-const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
-
-pub const MAX_SHREDS_PER_SLOT: usize = coding_shred.max_per_slot + data_shred.max_per_slot;
+pub const MAX_SHREDS_PER_SLOT: usize = code_shred_constants.max_per_slot + data_shred_constants.max_per_slot;
 
 pub const DATA_SHREDS_PER_FEC_BLOCK: usize = 32;
-const SIZE_OF_MERKLE_ROOT: usize = sig.core.HASH_SIZE;
+const SIZE_OF_MERKLE_ROOT: usize = sig.core.Hash.size;
 
-pub const coding_shred = ShredConstants{
+pub const code_shred_constants = ShredConstants{
     .max_per_slot = 32_768,
     .payload_size = 1228, // TODO this can be calculated like solana
     .headers_size = 89,
 };
 
-pub const data_shred = ShredConstants{
+pub const data_shred_constants = ShredConstants{
     .max_per_slot = 32_768,
     .payload_size = 1203, // TODO this can be calculated like solana
     .headers_size = 88,
@@ -36,7 +34,7 @@ pub const data_shred = ShredConstants{
 
 /// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred.rs#L245)
 pub const Shred = union(ShredType) {
-    code: CodingShred,
+    code: CodeShred,
     data: DataShred,
 
     const Self = @This();
@@ -50,7 +48,7 @@ pub const Shred = union(ShredType) {
     pub fn fromPayload(allocator: Allocator, payload_: []const u8) !Self {
         const variant = layout.getShredVariant(payload_) orelse return error.InvalidShredVariant;
         return switch (variant.shred_type) {
-            .code => .{ .code = .{ .fields = try CodingShred.Fields.fromPayload(allocator, payload_) } },
+            .code => .{ .code = .{ .fields = try CodeShred.Fields.fromPayload(allocator, payload_) } },
             .data => .{ .data = .{ .fields = try DataShred.Fields.fromPayload(allocator, payload_) } },
         };
     }
@@ -68,7 +66,7 @@ pub const Shred = union(ShredType) {
     }
 
     pub fn sanitize(self: *const Self) !void {
-        if (self.commonHeader().shred_variant.shred_type != @as(ShredType, self.*)) {
+        if (self.commonHeader().variant.shred_type != @as(ShredType, self.*)) {
             return error.InconsistentShredVariant;
         }
         switch (self.*) {
@@ -81,7 +79,7 @@ pub const Shred = union(ShredType) {
             inline .code, .data => |s| getMerkleRoot(
                 s.fields.payload,
                 @TypeOf(s.fields).constants,
-                s.fields.common.shred_variant,
+                s.fields.common.variant,
             ),
         };
     }
@@ -150,13 +148,13 @@ pub const Shred = union(ShredType) {
 };
 
 /// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
-pub const CodingShred = struct {
+pub const CodeShred = struct {
     // TODO(x19): pull out the generics
     fields: Fields,
-    const Fields = GenericShred(CodingShredHeader, coding_shred);
+    const Fields = GenericShred(CodeHeader, code_shred_constants);
 
     const Self = @This();
-    const consts = coding_shred;
+    const consts = code_shred_constants;
 
     pub fn default(allocator: std.mem.Allocator) !Self {
         return .{ .fields = try Fields.default(allocator) };
@@ -166,15 +164,15 @@ pub const CodingShred = struct {
     pub fn fromRecoveredShard(
         allocator: Allocator,
         common_header: CommonHeader,
-        coding_header: CodingShredHeader,
+        code_header: CodeHeader,
         chained_merkle_root: ?Hash,
         retransmitter_signature: ?Signature,
         shard: []const u8,
     ) !Self {
-        if (common_header.shred_variant.shred_type != .code) {
+        if (common_header.variant.shred_type != .code) {
             return error.InvalidShredVariant;
         }
-        if (shard.len != try capacity(consts, common_header.shred_variant)) {
+        if (shard.len != try capacity(consts, common_header.variant)) {
             return error.InvalidShardSize;
         }
         if (shard.len + consts.headers_size > consts.payload_size) {
@@ -182,14 +180,15 @@ pub const CodingShred = struct {
         }
         const payload = try allocator.alloc(u8, consts.payload_size);
         @memcpy(payload[consts.headers_size..][0..shard.len], shard);
+        @memset(payload[consts.headers_size + shard.len ..], 0);
         var buf = std.io.fixedBufferStream(payload);
         const writer = buf.writer();
         try bincode.write(writer, common_header, .{});
-        try bincode.write(writer, coding_header, .{});
+        try bincode.write(writer, code_header, .{});
         var shred = Fields{
             .allocator = allocator,
             .common = common_header,
-            .custom = coding_header,
+            .custom = code_header,
             .payload = payload,
         };
         if (chained_merkle_root) |hash| try shred.setChainedMerkleRoot(hash);
@@ -200,8 +199,8 @@ pub const CodingShred = struct {
 
     pub fn sanitize(self: *const Self) !void {
         try self.fields.sanitize();
-        if (self.fields.custom.num_coding_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
-            return error.InvalidNumCodingShreds;
+        if (self.fields.custom.num_code_shreds > 8 * DATA_SHREDS_PER_FEC_BLOCK) {
+            return error.InvalidNumCodeShreds;
         }
         _ = try self.erasureShardIndex();
     }
@@ -212,24 +211,24 @@ pub const CodingShred = struct {
         if (try checkedAdd(
             self.fields.common.fec_set_index,
             try checkedSub(@as(u32, @intCast(self.fields.custom.num_data_shreds)), 1),
-        ) >= data_shred.max_per_slot) {
+        ) >= data_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
         if (try checkedAdd(
-            try self.firstCodingIndex(),
-            try checkedSub(@as(u32, @intCast(self.fields.custom.num_coding_shreds)), 1),
-        ) >= coding_shred.max_per_slot) {
+            try self.firstCodeIndex(),
+            try checkedSub(@as(u32, @intCast(self.fields.custom.num_code_shreds)), 1),
+        ) >= code_shred_constants.max_per_slot) {
             return error.InvalidErasureShardIndex;
         }
         const num_data_shreds: usize = @intCast(self.fields.custom.num_data_shreds);
-        const num_coding_shreds: usize = @intCast(self.fields.custom.num_coding_shreds);
+        const num_code_shreds: usize = @intCast(self.fields.custom.num_code_shreds);
         const position: usize = @intCast(self.fields.custom.position);
-        const fec_set_size = try checkedAdd(num_data_shreds, num_coding_shreds);
+        const fec_set_size = try checkedAdd(num_data_shreds, num_code_shreds);
         const index = try checkedAdd(position, num_data_shreds);
         return if (index < fec_set_size) index else error.InvalidErasureShardIndex;
     }
 
-    pub fn firstCodingIndex(self: *const Self) !u32 {
+    pub fn firstCodeIndex(self: *const Self) !u32 {
         return sig.utils.math.checkedSub(
             self.fields.common.index,
             @as(u32, @intCast(self.fields.custom.position)),
@@ -240,10 +239,10 @@ pub const CodingShred = struct {
 /// Analogous to [ShredData](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L61)
 pub const DataShred = struct {
     fields: Fields,
-    const Fields = GenericShred(DataShredHeader, data_shred);
+    const Fields = GenericShred(DataHeader, data_shred_constants);
 
     const Self = @This();
-    pub const constants = data_shred;
+    pub const constants = data_shred_constants;
 
     pub fn default(allocator: std.mem.Allocator) !Self {
         return .{ .fields = try Fields.default(allocator) };
@@ -258,16 +257,16 @@ pub const DataShred = struct {
         shard: []const u8,
     ) !Self {
         const shard_size = shard.len;
-        if (shard_size + SIGNATURE_LENGTH > constants.payload_size) {
+        if (shard_size + Signature.size > constants.payload_size) {
             return error.InvalidShardSize;
         }
         const payload = try allocator.alloc(u8, constants.payload_size);
         errdefer allocator.free(payload);
-        @memcpy(payload[0..SIGNATURE_LENGTH], &signature.data);
-        @memcpy(payload[SIGNATURE_LENGTH..][0..shard_size], shard);
-        @memset(payload[SIGNATURE_LENGTH + shard_size ..], 0);
+        @memcpy(payload[0..Signature.size], &signature.data);
+        @memcpy(payload[Signature.size..][0..shard_size], shard);
+        @memset(payload[Signature.size + shard_size ..], 0);
         var shred = try Fields.fromPayloadOwned(allocator, payload);
-        if (shard_size != try capacity(coding_shred, shred.common.shred_variant)) {
+        if (shard_size != try capacity(code_shred_constants, shred.common.variant)) {
             return error.InvalidShardSize;
         }
         if (chained_merkle_root) |hash| try shred.setChainedMerkleRoot(hash);
@@ -284,7 +283,7 @@ pub const DataShred = struct {
     }
 
     pub fn data(self: *const Self) ![]const u8 {
-        const data_buffer_size = try capacity(constants, self.fields.common.shred_variant);
+        const data_buffer_size = try capacity(constants, self.fields.common.variant);
         const size = self.fields.custom.size;
         if (size > self.fields.payload.len or
             size < constants.headers_size or
@@ -415,18 +414,18 @@ pub fn GenericShred(
             return .{
                 .slot = self.common.slot,
                 .index = self.common.index,
-                .shred_type = self.common.shred_variant.shred_type,
+                .shred_type = self.common.variant.shred_type,
             };
         }
 
         /// The return contains a pointer to data owned by the shred.
         fn merkleProof(self: *const Self) !MerkleProofEntryList {
-            return getMerkleProof(self.payload, constants, self.common.shred_variant);
+            return getMerkleProof(self.payload, constants, self.common.variant);
         }
 
         pub fn merkleNode(self: Self) !Hash {
-            const offset = try proofOffset(constants, self.common.shred_variant);
-            return getMerkleNode(self.payload, SIGNATURE_LENGTH, offset);
+            const offset = try proofOffset(constants, self.common.variant);
+            return getMerkleNode(self.payload, Signature.size, offset);
         }
 
         fn erasureShardAsSlice(self: *const Self) ![]const u8 {
@@ -434,12 +433,12 @@ pub fn GenericShred(
                 return error.InvalidPayloadSize;
             }
             const end = constants.headers_size +
-                try capacity(constants, self.common.shred_variant);
+                try capacity(constants, self.common.variant);
             if (self.payload.len < end) {
                 return error.InsufficientPayloadSize;
             }
-            const start = switch (self.common.shred_variant.shred_type) {
-                .data => SIGNATURE_LENGTH,
+            const start = switch (self.common.variant.shred_type) {
+                .data => Signature.size,
                 .code => constants.headers_size,
             };
             return self.payload[start..end];
@@ -453,7 +452,7 @@ pub fn GenericShred(
 
         /// this is the data that is signed by the signature
         pub fn merkleRoot(self: Self) !Hash {
-            return getMerkleRoot(self.payload, constants, self.common.shred_variant);
+            return getMerkleRoot(self.payload, constants, self.common.variant);
         }
 
         pub fn chainedMerkleRoot(self: Self) !Hash {
@@ -462,7 +461,7 @@ pub fn GenericShred(
 
         /// agave: set_chained_merkle_root
         fn setChainedMerkleRoot(self: *Self, chained_merkle_root: Hash) !void {
-            const offset = try getChainedMerkleRootOffset(self.common.shred_variant);
+            const offset = try getChainedMerkleRootOffset(self.common.variant);
             const end = offset + SIZE_OF_MERKLE_ROOT;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
@@ -473,11 +472,11 @@ pub fn GenericShred(
         /// agave: set_merkle_proof
         pub fn setMerkleProof(self: *Self, proof: MerkleProofEntryList) !void {
             try proof.sanitize();
-            const proof_size = self.common.shred_variant.proof_size;
+            const proof_size = self.common.variant.proof_size;
             if (proof.len != proof_size) {
                 return error.InvalidMerkleProof;
             }
-            const offset = try proofOffset(constants, self.common.shred_variant);
+            const offset = try proofOffset(constants, self.common.variant);
             if (self.payload.len < offset + proof.len * merkle_proof_entry_size) {
                 return error.InvalidProofSize;
             }
@@ -493,20 +492,20 @@ pub fn GenericShred(
 
         /// agave: retransmitter_signature
         pub fn retransmitterSignature(self: Self) !Signature {
-            const offset = try retransmitterSignatureOffset(self.common.shred_variant);
-            const end = offset + SIGNATURE_LENGTH;
+            const offset = try retransmitterSignatureOffset(self.common.variant);
+            const end = offset + Signature.size;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
             }
-            var sig_bytes: [SIGNATURE_LENGTH]u8 = undefined;
+            var sig_bytes: [Signature.size]u8 = undefined;
             @memcpy(&sig_bytes, self.payload[offset..end]);
             return .{ .data = sig_bytes };
         }
 
         /// agave: setRetransmitterSignature
         pub fn setRetransmitterSignature(self: *Self, signature: Signature) !void {
-            const offset = try retransmitterSignatureOffset(self.common.shred_variant);
-            const end = offset + SIGNATURE_LENGTH;
+            const offset = try retransmitterSignatureOffset(self.common.variant);
+            const end = offset + Signature.size;
             if (self.payload.len < end) {
                 return error.InvalidPayloadSize;
             }
@@ -549,7 +548,7 @@ fn getMerkleRoot(
     };
     const proof = try getMerkleProof(shred, constants, variant);
     const offset = try proofOffset(constants, variant);
-    const node = try getMerkleNode(shred, SIGNATURE_LENGTH, offset);
+    const node = try getMerkleNode(shred, Signature.size, offset);
     return calculateMerkleRoot(index, node, proof);
 }
 
@@ -704,12 +703,12 @@ fn capacity(constants: ShredConstants, variant: ShredVariant) !usize {
         constants.headers_size +
             (if (variant.chained) SIZE_OF_MERKLE_ROOT else 0) +
             variant.proof_size * merkle_proof_entry_size +
-            (if (variant.resigned) SIGNATURE_LENGTH else 0),
+            (if (variant.resigned) Signature.size else 0),
     ) catch error.InvalidProofSize;
 }
 
 /// Shred index in the erasure batch.
-/// This only works for coding shreds.
+/// This only works for code shreds.
 fn codeIndex(shred: []const u8) ?usize {
     const num_data_shreds: usize = @intCast(getInt(u16, shred, 83) orelse return null);
     const position: usize = @intCast(getInt(u16, shred, 87) orelse return null);
@@ -784,20 +783,20 @@ pub const MerkleProofEntryList = struct {
 
 pub const CommonHeader = struct {
     signature: Signature,
-    shred_variant: ShredVariant,
+    variant: ShredVariant,
     slot: Slot,
     index: u32,
     version: u16,
     fec_set_index: u32,
 
-    pub const @"!bincode-config:shred_variant" = ShredVariantConfig;
+    pub const @"!bincode-config:variant" = ShredVariantConfig;
 
     const Self = @This();
 
     pub fn default() Self {
         return .{
             .signature = Signature{ .data = undefined },
-            .shred_variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
+            .variant = ShredVariant{ .shred_type = .data, .proof_size = 0, .chained = false, .resigned = false },
             .slot = 0,
             .index = 0,
             .version = 0,
@@ -805,7 +804,7 @@ pub const CommonHeader = struct {
         };
     }
 
-    // Identifier for the erasure coding set that the shred belongs to.
+    // Identifier for the erasure code set that the shred belongs to.
     pub fn erasureSetId(self: @This()) ErasureSetId {
         return ErasureSetId{
             .slot = self.slot,
@@ -814,7 +813,7 @@ pub const CommonHeader = struct {
     }
 };
 
-pub const DataShredHeader = struct {
+pub const DataHeader = struct {
     parent_offset: u16,
     flags: ShredFlags,
     size: u16, // common shred header + data shred header + data
@@ -830,17 +829,17 @@ pub const DataShredHeader = struct {
     }
 };
 
-pub const CodingShredHeader = struct {
+pub const CodeHeader = struct {
     num_data_shreds: u16,
-    num_coding_shreds: u16,
-    position: u16, // [0..num_coding_shreds)
+    num_code_shreds: u16,
+    position: u16, // [0..num_code_shreds)
 
     const Self = @This();
 
     pub fn default() Self {
         return .{
             .num_data_shreds = 0,
-            .num_coding_shreds = 0,
+            .num_code_shreds = 0,
             .position = 0,
         };
     }
@@ -852,8 +851,8 @@ pub const ShredType = enum(u8) {
 
     fn constants(self: @This()) ShredConstants {
         return switch (self) {
-            .code => coding_shred,
-            .data => data_shred,
+            .code => code_shred_constants,
+            .data => data_shred_constants,
         };
     }
 };
@@ -944,8 +943,8 @@ pub const ShredVariant = struct {
 
     pub fn constants(self: Self) ShredConstants {
         return switch (self.shred_type) {
-            .data => data_shred,
-            .code => coding_shred,
+            .data => data_shred_constants,
+            .code => code_shred_constants,
         };
     }
 };
@@ -995,8 +994,8 @@ pub const ShredConstants = struct {
 pub const layout = struct {
     pub const SIZE_OF_COMMON_SHRED_HEADER: usize = 83;
     pub const SIZE_OF_DATA_SHRED_HEADERS: usize = 88;
-    pub const SIZE_OF_CODING_SHRED_HEADERS: usize = 89;
-    pub const SIZE_OF_SIGNATURE: usize = sig.core.SIGNATURE_LENGTH;
+    pub const SIZE_OF_CODE_SHRED_HEADERS: usize = 89;
+    pub const SIZE_OF_SIGNATURE: usize = sig.core.Signature.size;
     pub const SIZE_OF_SHRED_VARIANT: usize = 1;
     pub const SIZE_OF_SHRED_SLOT: usize = 8;
 
@@ -1035,7 +1034,7 @@ pub const layout = struct {
     }
 
     pub fn getSignature(shred: []const u8) ?Signature {
-        if (shred.len < SIGNATURE_LENGTH) {
+        if (shred.len < Signature.size) {
             return null;
         }
         return Signature.init(shred[0..SIZE_OF_SIGNATURE].*);
@@ -1044,8 +1043,8 @@ pub const layout = struct {
     pub fn getSignedData(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const constants = switch (variant.shred_type) {
-            .code => coding_shred,
-            .data => data_shred,
+            .code => code_shred_constants,
+            .data => data_shred_constants,
         };
         return getMerkleRoot(shred, constants, variant) catch null;
     }
@@ -1071,7 +1070,7 @@ pub const layout = struct {
     ) !void {
         const variant = getShredVariant(shred) orelse return error.UnknownVariant;
         const offset = try retransmitterSignatureOffset(variant);
-        const end = offset + SIGNATURE_LENGTH;
+        const end = offset + Signature.size;
         if (shred.len < end) {
             return error.InvalidPayloadSize;
         }
@@ -1139,7 +1138,7 @@ test "getIndex" {
 
 test "getMerkleRoot" {
     const variant = layout.getShredVariant(&test_data_shred).?;
-    const merkle_root = try getMerkleRoot(&test_data_shred, data_shred, variant);
+    const merkle_root = try getMerkleRoot(&test_data_shred, data_shred_constants, variant);
     const expected_signed_data = [_]u8{
         224, 241, 85,  253, 247, 62,  137, 179, 152, 192, 186, 203, 121, 194, 178, 130,
         33,  181, 143, 156, 220, 150, 69,  197, 81,  97,  237, 11,  74,  156, 129, 134,
@@ -1210,7 +1209,7 @@ test "merkleProof" {
     const shreds = try loadShredsFromFile(
         std.testing.allocator,
         &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
-        "test_data/shreds/merkle_proof_test_shreds_34_data_34_coding.bin",
+        "test_data/shreds/merkle_proof_test_shreds_34_data_34_code.bin",
     );
     defer for (shreds) |s| s.deinit();
     var i: usize = 0;
@@ -1248,9 +1247,273 @@ test "merkle tree round trip" {
                 try std.testing.expectEqual(root.data, recalculated_root.data);
             } else {
                 const recalculated_root = try calculateMerkleRoot(k, node, owned_proof);
-                try std.testing.expect(!sig.utils.types.eql(root, recalculated_root));
+                try std.testing.expect(!sig.utils.types.eql(root, recalculated_root, .{}));
             }
         }
+    }
+}
+
+test makeMerkleTree {
+    const nodes = [_]Hash{
+        try Hash.parseBase58String("Avu3YJ9MpG6huLiaEBUs7itdTQFSn6vkNanGcthq9w54"),
+        try Hash.parseBase58String("GVF24L5qCiF62NRaLCWeJ1qfVZRYzne13unogpc551jx"),
+        try Hash.parseBase58String("83wW8QQ8skrj3Lj7FtKsRnK8gE8sJRoxbEdRgPAUtmoc"),
+        try Hash.parseBase58String("Euw4JJYaFdJoHBowj5HsydBqRRr4jQGjZ6cSxidic8RW"),
+        try Hash.parseBase58String("C84zcesazkS12kFSA3T4sf8BY5y9JkaJdvmMSSfMeduf"),
+        try Hash.parseBase58String("Ffzixbkk66T817BBAYuX8FUGDHcfvmwJh7H6vG5BV1sU"),
+        try Hash.parseBase58String("63CNwN3TyS26v4A7XiEouQjLDgZemRW3Jv5STEyXL7x5"),
+        try Hash.parseBase58String("HNvav4QV3gjF4WQqcZhFEqXdXX7TvqLp948eCFcR6mHZ"),
+        try Hash.parseBase58String("DbctQvG9j3YAJga8mngz2wxpR78nSHb1AF7AiAuGjV8q"),
+        try Hash.parseBase58String("DVmofySDmFxrLgMRVwDVHRk4nugZhpyoZ7uHrTQfyma7"),
+        try Hash.parseBase58String("7TK5tEQxV78HNX8rh74eFYt51Pj8YWxgbQrVAHjaZrnb"),
+        try Hash.parseBase58String("Gg43BctSfRxhQeMJ9DfHzinuBopj3RN9nc6FRAzMfgnx"),
+        try Hash.parseBase58String("2YWFoRGqQLe6fStqtpLoj9ZRNp4ymFmsC5KfMnWsKeyj"),
+        try Hash.parseBase58String("Ef7WKvLsAR7a3HdGrhFJDFjVYMfy7ELLyfgVkYLxN9f3"),
+        try Hash.parseBase58String("2DBNDzRpKt5ehUUeYM5o73CtdcLGhdZTHUaCKhM5A5Wp"),
+        try Hash.parseBase58String("7VP1Gucxen6Y4RUCiRYiBgjKCaRAHWjCGWComPoxzxYG"),
+        try Hash.parseBase58String("CD7EjB1Dkk1DQ78LzfUSLXpkjmwZwCCY5DLhD5fyeiYm"),
+        try Hash.parseBase58String("5AomypabrrtAyh1n6hcvPhDp5mwKwV2Lf4t42k5mBuga"),
+        try Hash.parseBase58String("6UqRDQ1B1LGFtADJf4i4bfvgNTEfiR7w7hppYQLtMoHQ"),
+        try Hash.parseBase58String("CiGorzhT6qMMGEy95ghA7kWnoQRq6BdxpT2vEMCz58dk"),
+        try Hash.parseBase58String("FcjVvzJwozaUNpHPLUDsCRdqboyxA85EWG4iAz3zM37c"),
+        try Hash.parseBase58String("HbE2dgxM7YxMsqRXWGXWz4BFL4Xh2fP2iug31arspzQG"),
+        try Hash.parseBase58String("CtNg3dw3o7YieqU2HVrGNTcKgyLseTfs3Hj7t5hLtXuT"),
+        try Hash.parseBase58String("FXx2kK2WBSZjVVuKmdqCasC9UQzqPyvUNrxo2kPsJffd"),
+        try Hash.parseBase58String("4pVU9F2sMYbj994HHXc74BT1m8UkDpnrtTyeSzukhpCV"),
+        try Hash.parseBase58String("3iiaEpFZkaEgRH2vt36siSu6u2bVs7Wb6KbJJbE3XeUj"),
+        try Hash.parseBase58String("8pBEYyqpM5yM11R9FYQ9Xs1Fafve3nbZTHHr3MNfmoQu"),
+        try Hash.parseBase58String("D5pMWDvEZAmJJJiLw8GS1kj6XFRAMqjabRLpDHvNGKdo"),
+    };
+    const expected_tree = [_]Hash{
+        try Hash.parseBase58String("Avu3YJ9MpG6huLiaEBUs7itdTQFSn6vkNanGcthq9w54"),
+        try Hash.parseBase58String("GVF24L5qCiF62NRaLCWeJ1qfVZRYzne13unogpc551jx"),
+        try Hash.parseBase58String("83wW8QQ8skrj3Lj7FtKsRnK8gE8sJRoxbEdRgPAUtmoc"),
+        try Hash.parseBase58String("Euw4JJYaFdJoHBowj5HsydBqRRr4jQGjZ6cSxidic8RW"),
+        try Hash.parseBase58String("C84zcesazkS12kFSA3T4sf8BY5y9JkaJdvmMSSfMeduf"),
+        try Hash.parseBase58String("Ffzixbkk66T817BBAYuX8FUGDHcfvmwJh7H6vG5BV1sU"),
+        try Hash.parseBase58String("63CNwN3TyS26v4A7XiEouQjLDgZemRW3Jv5STEyXL7x5"),
+        try Hash.parseBase58String("HNvav4QV3gjF4WQqcZhFEqXdXX7TvqLp948eCFcR6mHZ"),
+        try Hash.parseBase58String("DbctQvG9j3YAJga8mngz2wxpR78nSHb1AF7AiAuGjV8q"),
+        try Hash.parseBase58String("DVmofySDmFxrLgMRVwDVHRk4nugZhpyoZ7uHrTQfyma7"),
+        try Hash.parseBase58String("7TK5tEQxV78HNX8rh74eFYt51Pj8YWxgbQrVAHjaZrnb"),
+        try Hash.parseBase58String("Gg43BctSfRxhQeMJ9DfHzinuBopj3RN9nc6FRAzMfgnx"),
+        try Hash.parseBase58String("2YWFoRGqQLe6fStqtpLoj9ZRNp4ymFmsC5KfMnWsKeyj"),
+        try Hash.parseBase58String("Ef7WKvLsAR7a3HdGrhFJDFjVYMfy7ELLyfgVkYLxN9f3"),
+        try Hash.parseBase58String("2DBNDzRpKt5ehUUeYM5o73CtdcLGhdZTHUaCKhM5A5Wp"),
+        try Hash.parseBase58String("7VP1Gucxen6Y4RUCiRYiBgjKCaRAHWjCGWComPoxzxYG"),
+        try Hash.parseBase58String("CD7EjB1Dkk1DQ78LzfUSLXpkjmwZwCCY5DLhD5fyeiYm"),
+        try Hash.parseBase58String("5AomypabrrtAyh1n6hcvPhDp5mwKwV2Lf4t42k5mBuga"),
+        try Hash.parseBase58String("6UqRDQ1B1LGFtADJf4i4bfvgNTEfiR7w7hppYQLtMoHQ"),
+        try Hash.parseBase58String("CiGorzhT6qMMGEy95ghA7kWnoQRq6BdxpT2vEMCz58dk"),
+        try Hash.parseBase58String("FcjVvzJwozaUNpHPLUDsCRdqboyxA85EWG4iAz3zM37c"),
+        try Hash.parseBase58String("HbE2dgxM7YxMsqRXWGXWz4BFL4Xh2fP2iug31arspzQG"),
+        try Hash.parseBase58String("CtNg3dw3o7YieqU2HVrGNTcKgyLseTfs3Hj7t5hLtXuT"),
+        try Hash.parseBase58String("FXx2kK2WBSZjVVuKmdqCasC9UQzqPyvUNrxo2kPsJffd"),
+        try Hash.parseBase58String("4pVU9F2sMYbj994HHXc74BT1m8UkDpnrtTyeSzukhpCV"),
+        try Hash.parseBase58String("3iiaEpFZkaEgRH2vt36siSu6u2bVs7Wb6KbJJbE3XeUj"),
+        try Hash.parseBase58String("8pBEYyqpM5yM11R9FYQ9Xs1Fafve3nbZTHHr3MNfmoQu"),
+        try Hash.parseBase58String("D5pMWDvEZAmJJJiLw8GS1kj6XFRAMqjabRLpDHvNGKdo"),
+        try Hash.parseBase58String("8FhhiixoVmfx57W684YGXK2KF8WsC8bJCLye7WSDRuXX"),
+        try Hash.parseBase58String("89Dn6RSPmjbhx2z3yTmxbpp53WhYdHZULrJxW2kutnB7"),
+        try Hash.parseBase58String("FFWCyXHm8ZW4uBKtnr8adMzJtfc74jhiCGjbxkjEMFmj"),
+        try Hash.parseBase58String("9BDbWZrbLzvUjSANudZZD2GkV7cE3Coqo8Fnyh1Jz4ww"),
+        try Hash.parseBase58String("A12oZ3tmuEQf9PjJAFL3agzs4fxKUS5Xwq9oLkswsK1b"),
+        try Hash.parseBase58String("2bPX8bpGqUbUM16MbxLs8LUb1wAruHoVmsaw2io9NiNJ"),
+        try Hash.parseBase58String("D7uzP68j1WjinDcroo7rR77UZoaafdfjAzMd4pSyT6GJ"),
+        try Hash.parseBase58String("7SJ7ry6TDcbtCybXDmwQmQwuUQVq6cCAmmiVxR7YhFik"),
+        try Hash.parseBase58String("3NLoB2mVwq87vSKTv7rGFHNgVvqy8ZjaoqrQM4oq7jXo"),
+        try Hash.parseBase58String("23QuXVPFnAbhFxkKf2sk3KNETyVkFk9EZM3A53HZWotc"),
+        try Hash.parseBase58String("BbveVMySjupr6Mr2dkFeEJoxEq1BLzPB5MqWtmKXYpmU"),
+        try Hash.parseBase58String("FL5wDqQNKgoibFJQod5GXRLZoqsKYocKF3WqN3Hjd1ko"),
+        try Hash.parseBase58String("9gzituZoRNCM9F14Nr2uzzEfBVtukpfcNU9SrNHDEJb"),
+        try Hash.parseBase58String("B95BBuX6P5hF6Xq1w6eEpT5py5YwFjyEKmJKDL8yrLkq"),
+        try Hash.parseBase58String("4P5aCVJsuTUADqevAfEvzLBQ7aGTy2Hu8kygwoENNtbp"),
+        try Hash.parseBase58String("6M92Yvq7gsA18wx6S5RNmRgVXE6vxheskHBeVeNng5BF"),
+        try Hash.parseBase58String("55vksYsEAB5LvyCCBKEu8u2QwznSxFp5YgT4vchxJxJR"),
+        try Hash.parseBase58String("HVqsRLBhmM8aBbZNMYktHZputgsUBtDDYaBVSBgtUFub"),
+        try Hash.parseBase58String("9zWf6ZniGVr8c6PivETabujn5TyHPMyHjRjDBD1iDALN"),
+        try Hash.parseBase58String("8fNrCWvf1T64xi4UEqxnqwRmABhTK9TZevaDbQhfp46G"),
+        try Hash.parseBase58String("CYuvqKDoo6ohbi1XBYupwVotHRXY6dZmXWU7Snggt6S8"),
+        try Hash.parseBase58String("H3FEfEnAZUutGqeQFWgNAuvwMs4MJELq7HnvsQg33aUz"),
+        try Hash.parseBase58String("ExfUZS2bwAh2VTQuMpW48AHu2kGQNg8tEJhLVT2fYKgb"),
+        try Hash.parseBase58String("8Ekq6Wg3sMSLnqqf81vZVJ19zdEeThb8mDruYp3Zmz8p"),
+        try Hash.parseBase58String("9XiUqSkgM2hs7ofTwdnAgSzYXqFigi6FGbGu28WvPCaF"),
+        try Hash.parseBase58String("CKjXJV7SLzrxyaJUc4xaUxcM8M3Eexfxv3MHcou13N5X"),
+        try Hash.parseBase58String("EsV8thKpJBh72M4pEm3ZYUrTS8xge7CEzY4L4waQVcrJ"),
+        try Hash.parseBase58String("4Ldwcp5b81BrE9e4SECwc4kmDq3AEuvaaATvU1eF7Phb"),
+    };
+    var nodes_list = std.ArrayList(Hash).init(std.testing.allocator);
+    defer nodes_list.deinit();
+    for (nodes) |n| try nodes_list.append(n);
+    try makeMerkleTree(&nodes_list);
+    for (nodes_list.items, 0..) |actual, i| {
+        const expected = expected_tree[i];
+        try std.testing.expectEqualSlices(u8, &expected.data, &actual.data);
+    }
+}
+
+test makeMerkleProof {
+    const tree = [_]Hash{
+        try Hash.parseBase58String("Bx9LW8aTjrh13cEeBru7tmyTrWkiXWnwVP7wNMy364j5"),
+        try Hash.parseBase58String("FpV1bWLfkM65XEV2MuEB5jDFXPTmkZrL8ycdMstfJQrk"),
+        try Hash.parseBase58String("stvy1uVFRKv8QrVTCAEZFRCkGssSic1ya9ibSmkDYsE"),
+        try Hash.parseBase58String("AaewceZsfwdzXZZTWv2vZrt37STiaqMyVXCoT4BP3HKH"),
+        try Hash.parseBase58String("7rWjphywgPvnDkkTcoA2166bYVq7U6Ux3fRYnAnE3yzU"),
+        try Hash.parseBase58String("Cx5qGtjravyGkGZdZAPYevAPJUAKBYvecmchK5iZv16e"),
+        try Hash.parseBase58String("C6b1zy8fdZsiQCCtSeEomMhXYMQRHHTEUnB24vZr2iZn"),
+        try Hash.parseBase58String("EugqFJFXPfKaDxmgJnjfVppyaxvPPeitnX2USqmh6QjK"),
+        try Hash.parseBase58String("9qvLbBQsS3NfwWuZYoMpnefqfE3fx2SKEpm9YufLcoZm"),
+        try Hash.parseBase58String("AaNEKZ639cHJaHTaodEcv6GVDu2fZd236YVVWfqsgh8V"),
+        try Hash.parseBase58String("HE8HKAM3ALTCJEzGEG83TTEij3i3V42T3seuJPmeTMN8"),
+        try Hash.parseBase58String("6oY87eJaX8PLUNp8Qkyce34ap6CHm4itj45Tg2ZUPfQG"),
+        try Hash.parseBase58String("GBmdTsaw4ZuYp2ALLvPQapbNyN8uBAM4yxqi7UEM9WqS"),
+        try Hash.parseBase58String("5zffPFkVc8Yz6wRdzDVHk5tGiMt72Xa1S3FSQD79kzyB"),
+        try Hash.parseBase58String("6mYt2Bv9eJsyjNjNgLn7cgvoNwEi2yUXq3chSaN2tBAk"),
+        try Hash.parseBase58String("E1kfyXtKMgGE9TVAnU4FDVdE3bWVV3iBAbeKMJQqTy2M"),
+        try Hash.parseBase58String("C89cUQPoqZRhiBCG8N7cqvSuPBEkpNJfroA9eMDhzkyF"),
+        try Hash.parseBase58String("AjWMnZR37u2txd6jsS4Y3PHjo8GeCA9WWwrGya8DU2so"),
+        try Hash.parseBase58String("AbnsxL1QF7B1Ljki5DeBzshaDoUB3zm4sAvBvHoMHDvE"),
+        try Hash.parseBase58String("4DHzjExhzgHZBDc2KmAagCTfRj2SUjTquNuvTgZ6bpfq"),
+        try Hash.parseBase58String("FFKiDtCVewMavX8ZxZCGPxN9zRtYR4BfJ1rSLrHGPESF"),
+        try Hash.parseBase58String("4mMbVaCL5V3DVHHJ5zV9HxmVMAwrG3SX6FUvLCwSUiMq"),
+        try Hash.parseBase58String("2DzuAMMcMdV8XarJhwbpgfTo3DAWvyevyowB7ugd9B5N"),
+        try Hash.parseBase58String("EMdcMzfRcJQqMuGbXtUHwNyAkx4qCXwep6PYyaUsMf86"),
+        try Hash.parseBase58String("FBYkn21APR9pThEHFUtFHfwi7T4TR1yNeAMRpsZ3QYCT"),
+        try Hash.parseBase58String("AgGCfSV3aaGyLLhWohZjenZnEptot58JNkVLHtzUrv1J"),
+        try Hash.parseBase58String("HFJrA51z4Lk1zyDScZ5TDQguP481E6Z9wgq3hhKgrH8o"),
+        try Hash.parseBase58String("GRqdZSt53JnUksMp8qqVPK1B25ZXtVhDGhuu2znYgSsW"),
+        try Hash.parseBase58String("7iFLoVuVUKnzf8N5d1R3beZoo5zFUYVqEieHdRky7qyw"),
+        try Hash.parseBase58String("5REoZpdLej6Gdp75bGvi2exydk1X6vDYMMp8jaeE3BFL"),
+        try Hash.parseBase58String("8fs4yx2jFUr6u2N4qZoxznk18SyUbkRRQeLsWKk3CCec"),
+        try Hash.parseBase58String("9PNXzpa5GfPBYLgUyfcbSYHbXa1VvHEsnDZS1XMxaR4s"),
+        try Hash.parseBase58String("3GfjjMPKzDEQhK2eo32t22qMefVJDPTuWhaUAzKVm7ZU"),
+        try Hash.parseBase58String("26L3tEsmYqLSqThQKcpPtk7wPyHc4anVFTt2w8NDSRjn"),
+        try Hash.parseBase58String("33vRjcTAVz8hUQreStDBEcbiwp51LFbMAzoPfkeReEPq"),
+        try Hash.parseBase58String("5e4dq7ZD1UBToE9j85bvFbzhmc7jf4tNpxsDeii5ruK4"),
+        try Hash.parseBase58String("3qyf4nWp524hSdbPi1GEpw7iB4A9Zv5pQe1Zqdx8ZJGn"),
+        try Hash.parseBase58String("29Q1jRaE6oQkwn2N4Mkpg5CsRfXB7bngj1tFCxPakciR"),
+        try Hash.parseBase58String("HvoTPjs5VwWaS5coBL2Tso6DHiMczhJwHGxp24PVnr47"),
+        try Hash.parseBase58String("7PW6vwfBschMSvVXmSN6q72XTVhFDAB8Ek5RGcLfgYhi"),
+        try Hash.parseBase58String("9nyEHFufr4WjFS6rnK64zvQNDj66urFk7ZBvmjGJ1vH8"),
+        try Hash.parseBase58String("ChDuVAdfL16tvUQtEDokcCHM5qtS6BowW1AT7h3yjgsM"),
+        try Hash.parseBase58String("544pGFuvRhB5A5CUnwDg6dchPdye99VJtFuSGk54DwwZ"),
+        try Hash.parseBase58String("6ptdtQyxV3TqvZsCUw6AwrkstfSq3bgKxLPPM4xjD8NZ"),
+        try Hash.parseBase58String("4XRJcKZKj2UfaWkeUs2gWDshzeeBCs6Rq82pJJFXsmQr"),
+        try Hash.parseBase58String("FuFmzBJhNkqcYgNAhVPGsJbCGXcnyi1yT3FYb5C4r8Z7"),
+        try Hash.parseBase58String("9BA7PjW4ViTLcEWT1iQS1rNX9thkiFg87si5a8EDA5y7"),
+        try Hash.parseBase58String("2Zaj64ZdqawgKBGbpFEXJw1Kk1kFUzNjeNGL65ah5M6b"),
+        try Hash.parseBase58String("3W8jM1YhspQJPMq7v6mfo2QbNyYVFGoE8rGcSgpAF5rv"),
+        try Hash.parseBase58String("GGpGNC9pwiBL4C67F6qoJMzUdZ3RBtKpqE5Eb6Bvr9BA"),
+        try Hash.parseBase58String("8FyaXRHM6amauitV56xReQVST5761mexLTRrQVERssRH"),
+        try Hash.parseBase58String("AK9MvRkinupJMbQXmZQ8tKQchHqo4psoYsDq5iS4oz4M"),
+        try Hash.parseBase58String("2zGtEcqViQ4yKkd3bJBkZxipNXMsxoSCDHdiBntmHNep"),
+        try Hash.parseBase58String("6GLmAgGohejq6afPzFy3ckCaRgzannDa6WB5mccMVSS9"),
+        try Hash.parseBase58String("3X73e745Duuemvp7BVjPStE99JqdisyrRFWGqbNwCWEs"),
+        try Hash.parseBase58String("5DcQxHDWhT6S29EmcR23emFKfF8Ns2N7L4nfedx9GrJN"),
+        try Hash.parseBase58String("2PMrr1jXhouP5CVKKM8TeJBeLuaHJjMvvfQQ2XXTU4fk"),
+        try Hash.parseBase58String("8zYkwyXmf8SFXcf8ckiTEefLy8ycPvXVbNQ6bT69pfS6"),
+        try Hash.parseBase58String("BEHGhyvyM4WkDyZbUxnoghNBDxDN2NXq4imnASiwk9H9"),
+        try Hash.parseBase58String("6RwNHCQL3aT7zgTQgRugxC9SBVAq6JkZ7oV3QPtgS8CF"),
+        try Hash.parseBase58String("4rbGzhJoyrDUEBNFnWXCbNiSAgbmnSm6ct5WLnBWbwQn"),
+        try Hash.parseBase58String("HRL9nCpU4dYz2uQEP6YvXLqtHpnTbZizw1hc977yFUqs"),
+        try Hash.parseBase58String("864cccyjMbHs1nHA62roRhjXkRyNTMi4pM8qXfiEHwJC"),
+        try Hash.parseBase58String("Be5A1QfXGh7KjUFcgJuAPpBG3ZoKjedkqBSU42gDCrdS"),
+        try Hash.parseBase58String("58qmjy9wNp58mjUkfXNX5B9ktTDcaxGC6t4vrzsndELp"),
+        try Hash.parseBase58String("5bx6gYTcVxLBvtf9WmjTUd9gZZKUSLiDiQhiJM6iV6cx"),
+        try Hash.parseBase58String("GZ3p8cpjTEXfqLqY3PjzNsqY9nfZDbR1bM8Wrgf7VHTy"),
+        try Hash.parseBase58String("ELRJqXN61mTu9F9oj9DyS3ywnbQNoh3j2K6gfsBgMjg1"),
+        try Hash.parseBase58String("F5grQyLqPmFjsjP5WQWq138Z4wvomw5nW5qREkbFycot"),
+        try Hash.parseBase58String("GX24x4ZPEFUwpWZom7gSorwDqH5v39NNdaCcbvJUzg4v"),
+        try Hash.parseBase58String("3mFtDKF8RzuzH4x9SVErd1LkYTwTv992RGTU9LoMye3i"),
+        try Hash.parseBase58String("HeYVCMjVPwWQ3zMpF5vqZvfmm97toP6AoZyPTsLTW3sW"),
+        try Hash.parseBase58String("9eQXk1Puxrp9ADWVE7SHxni2ab7Y2uCPFL2yrKPWv64B"),
+        try Hash.parseBase58String("CDRBanMrvbAzTts881jUTMUSNxLSKQT2cJYdn6CYFRXq"),
+        try Hash.parseBase58String("4CqcNaEGGBbxWE7qGuJ7rQHfpUowkUTXtjYrPyyGZQ63"),
+        try Hash.parseBase58String("BJEY5rk8fvRvJwxt2E2qzYWvxhcPrb5ESyXXuehHgc7p"),
+        try Hash.parseBase58String("AUi1FEP4Sb6NhGgns1ttKvP5ZXAoYYtA8UfmvF6Sg9wv"),
+        try Hash.parseBase58String("DwLYXjMcn2tE8wuM6ShQ8Yx8zMPsUVAA7NYQDoAbthiN"),
+        try Hash.parseBase58String("BVR6gB4GPM1fVZFNehNkG13LSbwjecGSCEbYUu5JY5kR"),
+        try Hash.parseBase58String("Af7GsqqFBkdMQLsvd87sh9MwzgAnnfRV2pDghkX2VhPa"),
+        try Hash.parseBase58String("4Qwxnp8VjpXK1ztpZtYydEXMpJpkQCAt3p7VLkt29gsq"),
+        try Hash.parseBase58String("J62wxQtganLZiMMiPy2X2VsdwBMTwA4z99HYEYqGF62J"),
+        try Hash.parseBase58String("ExKSbUQm2rM3QSPuN3WVrP5Gvdpo1VF2U2nDR4KRv4qu"),
+        try Hash.parseBase58String("HiS77MrGWUsG2WwWmCgXQm3bL6LUoqjx1G7WEcTP67DC"),
+        try Hash.parseBase58String("57kbNWRpQoCMbKGHMWviA7rSU7W2weZwK7mLP24ebPU"),
+        try Hash.parseBase58String("3PDMX7pzsD8YYqAEPzm3Rw5hmPrfex2EEtFsnbxJgfJS"),
+        try Hash.parseBase58String("3JjY5Y9cS8KpVXMFbdza8vTpf4cCjVqYZKxgk6TbbwNA"),
+        try Hash.parseBase58String("J6am9e5xEQHFSK1SvSoYHiFmB3oiGYM5CcAFPC7qrHfh"),
+        try Hash.parseBase58String("3jqQxSAvpaPH8WSezBbGR3me5Rftwnb53MTs1BAvZGWf"),
+        try Hash.parseBase58String("GAknjw45DGKy4NmB2Hp6Gjye1QcBCayZXtWm5hoiMZhK"),
+        try Hash.parseBase58String("98tLRxnihiTtyye4CxmMC4VzP9DT3usPFEwJAY1uhtCw"),
+        try Hash.parseBase58String("BRy9MeT5qssZWsMgvytPXTXSSJcip8g6UdifXn4N8dZ4"),
+        try Hash.parseBase58String("26dDnoc2DEp4Xmr8qAPq56BjGCPzyPgGCe366fNNmrsR"),
+        try Hash.parseBase58String("8JLhLrCrwSX3zCcGAgL9VrVPqTtBAVsaVLKf8dQcyMC2"),
+        try Hash.parseBase58String("HjnzKdG8oUxLhnRj8bzMFVpfyZudv72zRrkC8EQyYw2"),
+        try Hash.parseBase58String("AfHf7M87CbErc48Sb4aNf5Cvxk47hL414xQLrKtqJhDC"),
+        try Hash.parseBase58String("4CXveM6jn53oWdz9euYpWrEb5TEPWauVkHmisz6Jn6RR"),
+        try Hash.parseBase58String("EzK8nNawwjfkirhgaW2pQpPuQWbKHm8ciGixn9jnf5d9"),
+        try Hash.parseBase58String("Atyq6rxw6ke4qu84x3QhKWq1Vd5n6kvuGeWAqbkCqdzG"),
+        try Hash.parseBase58String("DVtZ4C1ff1gszEjbhNamz9iBpaasSJDpKuZg7TMGrAFa"),
+        try Hash.parseBase58String("C6WEeV7vzcCxxjWdyEfvoqZmHEbybcf812mW64Z1UsAb"),
+        try Hash.parseBase58String("BsxdmftSSjGdhVvEuHDXsFU7gCYmMtWj8CZz6923Dxqb"),
+        try Hash.parseBase58String("4R9Zo99us2XeBBDtnASG7ybkzjX79BiZw5iZ1qXoSxy7"),
+        try Hash.parseBase58String("3S76Aa3EQqgVUENFfxq6ExNvD6uRVDxsJ8Se7H4oLrsY"),
+        try Hash.parseBase58String("8fjA37W4yPTPu72j5mxE66DMJxniCckGuCWusEzuGcpk"),
+        try Hash.parseBase58String("6EQVYYkVkCEo9UkM79EQp1BY19S3z7BhRgnPQW7PYqZe"),
+        try Hash.parseBase58String("2jpcTvWKHu1TTo2VNroTeN2RiJ5NoWTNZnu1gmADPsDi"),
+        try Hash.parseBase58String("HfpXFNuskqvADJpadEAU5d89RdaL8ocNe12pZ8GZy9Nc"),
+        try Hash.parseBase58String("HFDNt5ZztGAbCN1mB6yj48XZgZ1ccf9sHo79EQejam2"),
+        try Hash.parseBase58String("3zGqA95TBckLbw7q213DnnMQbsVfmo1dPYUnQbmoTSaj"),
+        try Hash.parseBase58String("DmiKQ2yfzwFW857LnCbkFkg6UnDRe2bsT4vFe6CRtY4Z"),
+        try Hash.parseBase58String("FPCxSZSAYskyDQdKnFaMs4KeDyVjGeA1HtaN4ARRkUmr"),
+        try Hash.parseBase58String("HeVBzjBHGKXEXvKZSwthsrmKRZ1a3MSEjdAQ7vxh6dCt"),
+        try Hash.parseBase58String("4vDREHaEV9BEsebAdcT2hTJ3PASxVGctEyKALrH4VoV6"),
+        try Hash.parseBase58String("FB1Z2nSG3EGqyQRfjZwBnaQXyPDjFQ8nUwGgGgJgZyvS"),
+        try Hash.parseBase58String("C3Nres82334oRKseqSKN7RgeWKQzBoEiqz1kfTBNXgrf"),
+        try Hash.parseBase58String("CNLgTpk5FCW7ncYMU3nB27so7QE5BizpjVG8KAa6h1iH"),
+        try Hash.parseBase58String("5E4aGGpbkutYzXxvfXf7pSZGXnNguSdLbJEDHMX3i6AS"),
+        try Hash.parseBase58String("EXvua2pY15VHSJGUwQB6v1dGBUPc1vEixPavkFzxWHC6"),
+        try Hash.parseBase58String("AuYHmAUg3ZJGPCtLvpzRUoWAZzYdbnKX8bj5vkCStDKC"),
+        try Hash.parseBase58String("J8w6CXQaGbiMriE5EQ6gNSDfR8REf9Y5tqmGWPSg8GbF"),
+        try Hash.parseBase58String("FZsyfzm6HgtR2sU3B2C3TmfsuNY2CmXjQNf2wD5nimiZ"),
+        try Hash.parseBase58String("5hkdwEuHwG6RdWvVkHYELeJ8XsM2K7TtFbFay3XMGwAP"),
+        try Hash.parseBase58String("eRKZbFKJkinG1fZ7hbv9eogkB56BJsbiorMkCSSPp3V"),
+        try Hash.parseBase58String("7FMsczNNzwohTpEfzRthaZrtxAQkNjrZngYxYE7vwYbS"),
+        try Hash.parseBase58String("G1A2o3JhxSKe1BJXURDJN3DvAeihUmn754SqmNPHopjL"),
+        try Hash.parseBase58String("HDzsPL28ZWcSJzRYcbr3mWbFVDxy5TVzreszMZe2mF2N"),
+        try Hash.parseBase58String("E19LBz8BbGxD8JdFstv3BPLxmSDkLDELrHeJfmbvz7LL"),
+        try Hash.parseBase58String("2J6dzFFBeBFfbhsdXhQdbHWgim8dynUY622jB8PAftQy"),
+        try Hash.parseBase58String("BezvqJJoBFa6qqdTawuBjeSDPeqvCh8uuwEGgGSphUZ1"),
+        try Hash.parseBase58String("E8TSKDo4DudNDVj31WRpriczGUianB59mExsk4FXKXLa"),
+        try Hash.parseBase58String("8z4FYYP3bPHpMicrZ2Bwop3Lh6jw3ShHuWFZqPr3RnDy"),
+        try Hash.parseBase58String("CSu74jNs9HDwtKh4ppVAHoQm7seEUcjxpVxX92yFy7wC"),
+        try Hash.parseBase58String("4niaphXxYzQ9zjVFScAyJ2v9S7hkgGgemCzrNkTW5UUY"),
+        try Hash.parseBase58String("Bt3EdSLbrzmg9YinymV4UXPzwpaba2Ng4ALAvAdaK3tL"),
+        try Hash.parseBase58String("43kNPuYbgKydPj33stP7r9371az9D2DmsRVpLgcZkGDe"),
+        try Hash.parseBase58String("5YEZY8unUm6ztiyXf4Xa1aYDAwuUjRPFnujxL44zKjCw"),
+        try Hash.parseBase58String("8Mydc1tbU7c3HP67ntoiJQa4SGwbqaHJR7FGcsyqVVCg"),
+        try Hash.parseBase58String("FMJP8kyHLVb3qt7w2n2XZG6i3fJbgi7MXNgdsGzWbdVV"),
+        try Hash.parseBase58String("3nWYmM6aSX6wwcxpxVp9p8Nf2pMCMj6i4Hij3GKq6ZJY"),
+        try Hash.parseBase58String("9Heu1ukN3DM7KzgaGk8EUDqJoB81E1h4r72RD5wG2Ud"),
+        try Hash.parseBase58String("5PQQLYveY6fHdFzQWukSzbT1J6QCDS64DKgg2v4BgE1a"),
+        try Hash.parseBase58String("E3MWANRDpfXLKjvJGtog4GUh5D5MrwdzKvq6S5da2jSe"),
+        try Hash.parseBase58String("4ZtSJ3pNL8j8escBBFD4JdZqnTJjpniaJqDbKhUCaU8M"),
+        try Hash.parseBase58String("3SjiiTZMXsGS33QEt4mimdBNScBsyNrZuChWy6TnQd5z"),
+        try Hash.parseBase58String("14ssfeqapneaBmL3eGVQBnB4gbTMaaAFZaUQZs26rDr3"),
+    };
+    const expected = [_][20]u8{
+        .{ 142, 88, 63, 241, 80, 194, 115, 62, 209, 60, 63, 141, 196, 45, 211, 9, 145, 60, 5, 16 },
+        .{ 128, 114, 151, 64, 189, 69, 180, 252, 187, 219, 88, 82, 36, 178, 137, 138, 223, 151, 59, 222 },
+        .{ 44, 99, 97, 29, 31, 141, 236, 200, 68, 34, 226, 123, 11, 45, 214, 144, 17, 140, 240, 42 },
+        .{ 193, 49, 89, 138, 77, 2, 103, 144, 93, 181, 101, 150, 120, 77, 14, 125, 41, 162, 14, 211 },
+        .{ 67, 111, 22, 19, 137, 37, 71, 8, 66, 231, 112, 45, 56, 78, 126, 52, 213, 167, 217, 96 },
+        .{ 65, 43, 252, 148, 140, 235, 207, 125, 56, 245, 130, 242, 95, 2, 185, 216, 208, 149, 175, 160 },
+        .{ 36, 79, 50, 101, 43, 152, 43, 26, 133, 95, 29, 33, 83, 43, 125, 205, 187, 30, 10, 47 },
+    };
+    const proof = (try makeMerkleProof(std.testing.allocator, 2, 72, &tree)).?;
+    defer proof.deinit(std.testing.allocator);
+    for (expected, 0..) |entry, i| {
+        try std.testing.expectEqualSlices(u8, &entry, &proof.get(i).?);
     }
 }
 

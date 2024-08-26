@@ -49,11 +49,9 @@ pub const GossipDumpService = struct {
                     &gossip_versioned_data.value_hash.data,
                     &encoder_buf,
                 );
-                const pubkey_str = val.id().string();
-                const len: usize = if (pubkey_str[43] == 0) 43 else 44;
                 try writer.print("{s},{s},{s},{},", .{
                     @tagName(val.data),
-                    pubkey_str[0..len],
+                    val.id(),
                     encoder_buf[0..size],
                     val.wallclock(),
                 });

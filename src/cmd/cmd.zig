@@ -574,7 +574,7 @@ fn validator() !void {
     var app_base = try AppBase.init(allocator);
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
     const snapshot_dir_str = config.current.accounts_db.snapshot_dir;
 
     var snapshot_dir = try std.fs.cwd().makeOpenPath(snapshot_dir_str, .{});
@@ -692,7 +692,7 @@ fn shredCollector() !void {
     var app_base = try AppBase.init(allocator);
 
     const repair_port: u16 = config.current.shred_collector.repair_port;
-    const turbine_recv_port: u16 = config.current.shred_collector.repair_port;
+    const turbine_recv_port: u16 = config.current.shred_collector.turbine_recv_port;
 
     var gossip_service, var gossip_manager = try startGossip(allocator, &app_base, &.{
         .{ .tag = .repair, .port = repair_port },

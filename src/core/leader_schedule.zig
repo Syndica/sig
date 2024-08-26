@@ -114,7 +114,7 @@ pub fn leaderSchedule(
 
 pub fn writeLeaderSchedule(sched: SingleEpochLeaderSchedule, writer: anytype) !void {
     for (sched.slot_leaders, 0..) |leader, i| {
-        try writer.print("  {}       {s}\n", .{ i + sched.start_slot, &leader.string() });
+        try writer.print("  {}       {s}\n", .{ i + sched.start_slot, leader });
     }
 }
 
