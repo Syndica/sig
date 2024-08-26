@@ -1861,6 +1861,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
+const TestDB = ledger.tests.TestDB("insert_shred");
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1868,7 +1869,7 @@ fn assertOk(result: anytype) void {
 
 const test_dir = comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/insert_shred", .{});
 
-pub const TestState = struct {
+const TestState = struct {
     db: BlockstoreDB,
     inserter: ShredInserter,
     registry: sig.prometheus.Registry(.{}),
@@ -1876,19 +1877,18 @@ pub const TestState = struct {
     // if this leaks, you forgot to call `TestState.deinit`
     _leak_check: []const u8,
 
-    // var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
-    // pub const allocator = gpa.allocator();
-
-    pub const allocator = std.testing.allocator;
+    /// This is used instead of std.testing.allocator because it includes more stack trace frames
+    /// std.testing.allocator is already the same exact allocator, just with a call to detectLeaks
+    /// run at the end of the test. TestState does the same, so we can use the gpa directly.
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
+    pub const allocator = gpa.allocator();
 
     pub fn init(comptime test_name: []const u8) !TestState {
         return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
     }
 
     fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !TestState {
-        const path = comptimePrint("{s}/{s}", .{ test_dir, test_name });
-        try sig.ledger.tests.freshDir(path);
-        const db = try BlockstoreDB.open(allocator, logger, path);
+        const db = try TestDB.initCustom(allocator, logger, test_name);
         var registry = sig.prometheus.Registry(.{}).init(allocator);
         const inserter = try ShredInserter.init(allocator, logger, &registry, db);
         return .{
@@ -1957,10 +1957,10 @@ pub const TestState = struct {
     }
 
     pub fn deinit(self: *@This()) void {
-        self.db.deinit(true);
+        self.db.deinit();
         self.registry.deinit();
         std.testing.allocator.free(self._leak_check);
-        // _ = gpa.detectLeaks();
+        _ = gpa.detectLeaks();
     }
 };
 

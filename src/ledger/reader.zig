@@ -1,6 +1,6 @@
 pub const std = @import("std");
 pub const sig = @import("../sig.zig");
-pub const blockstore = @import("lib.zig");
+pub const ledger = @import("lib.zig");
 
 // std
 const Allocator = std.mem.Allocator;
@@ -29,20 +29,20 @@ const DataShred = sig.ledger.shred.DataShred;
 
 const shred_layout = sig.ledger.shred.layout;
 
-// blockstore
-const BytesRef = blockstore.database.BytesRef;
-const BlockstoreDB = blockstore.blockstore.BlockstoreDB;
-const ColumnFamily = blockstore.database.ColumnFamily;
-const DuplicateSlotProof = blockstore.meta.DuplicateSlotProof;
-const PerfSample = blockstore.meta.PerfSample;
-const SlotMeta = blockstore.meta.SlotMeta;
-const TransactionStatusMeta = blockstore.meta.TransactionStatusMeta;
-const TransactionError = blockstore.transaction_status.TransactionError;
-const UnixTimestamp = blockstore.meta.UnixTimestamp;
+// ledger
+const BytesRef = ledger.database.BytesRef;
+const BlockstoreDB = ledger.blockstore.BlockstoreDB;
+const ColumnFamily = ledger.database.ColumnFamily;
+const DuplicateSlotProof = ledger.meta.DuplicateSlotProof;
+const PerfSample = ledger.meta.PerfSample;
+const SlotMeta = ledger.meta.SlotMeta;
+const TransactionStatusMeta = ledger.meta.TransactionStatusMeta;
+const TransactionError = ledger.transaction_status.TransactionError;
+const UnixTimestamp = ledger.meta.UnixTimestamp;
 
-const schema = blockstore.schema.schema;
-const key_serializer = blockstore.database.key_serializer;
-const shredder = blockstore.shredder;
+const schema = ledger.schema.schema;
+const key_serializer = ledger.database.key_serializer;
+const shredder = ledger.shredder;
 
 const DEFAULT_TICKS_PER_SECOND = sig.core.time.DEFAULT_TICKS_PER_SECOND;
 
@@ -1326,7 +1326,7 @@ const VersionedConfirmedBlock = struct {
     blockhash: []const u8,
     parent_slot: Slot,
     transactions: []const VersionedTransactionWithStatusMeta,
-    rewards: []const blockstore.meta.Reward,
+    rewards: []const ledger.meta.Reward,
     num_partitions: ?u64,
     block_time: ?UnixTimestamp,
     block_height: ?u64,
@@ -1468,9 +1468,9 @@ pub const AncestorIterator = struct {
 };
 
 const bincode = sig.bincode;
-const Blockstore = sig.ledger.BlockstoreDB;
-const CodeShred = sig.ledger.shred.CodeShred;
-const TestState = sig.ledger.insert_shred.TestState;
+const Blockstore = ledger.BlockstoreDB;
+const CodeShred = ledger.shred.CodeShred;
+const TestDB = ledger.tests.TestDB("BlockstoreReader");
 
 const test_shreds = @import("test_shreds.zig");
 
@@ -1484,9 +1484,8 @@ test "getLatestOptimisticSlots" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getLatestOptimisticSlots");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getLatestOptimisticSlots");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1557,7 +1556,7 @@ test "getFirstDuplicateProof" {
     const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
     var db = try BlockstoreDB.open(allocator, logger, path);
-    defer db.deinit(true);
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1593,9 +1592,8 @@ test "isDead" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("isDead");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("isDead");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1628,9 +1626,8 @@ test "getBlockHeight" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getBlockHeight");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getBlockHeight");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1657,9 +1654,8 @@ test "getRootedBlockTime" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getRootedBlockTime");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getRootedBlockTime");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1695,9 +1691,8 @@ test "slotMetaIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("slotMetaIterator");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("slotMetaIterator");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1757,9 +1752,8 @@ test "rootedSlotIterator" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("rootedSlotIterator");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("rootedSlotIterator");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1793,9 +1787,8 @@ test "slotRangeConnected" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("slotRangeConnected");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("slotRangeConnected");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1851,9 +1844,8 @@ test "highestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("highestSlot");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("highestSlot");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1909,9 +1901,8 @@ test "lowestSlot" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("lowestSlot");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("lowestSlot");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -1955,9 +1946,8 @@ test "isShredDuplicate" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("isShredDuplicate");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("isShredDuplicate");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -2007,9 +1997,8 @@ test "findMissingDataIndexes" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("findMissingDataIndexes");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("findMissingDataIndexes");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -2075,9 +2064,8 @@ test "getCodeShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getCodeShred");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getCodeShred");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);
@@ -2155,9 +2143,8 @@ test "getDataShred" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    var state = try TestState.init("getDataShred");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB.init("getDataShred");
+    defer db.deinit();
 
     var lowest_cleanup_slot = RwMux(Slot).init(0);
     var max_root = std.atomic.Value(Slot).init(0);

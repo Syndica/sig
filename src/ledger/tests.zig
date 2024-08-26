@@ -1,3 +1,5 @@
+//! Tests and test helpers that exceed the scope of any individual file in the ledger package.
+
 const std = @import("std");
 const sig = @import("../sig.zig");
 const ledger = @import("lib.zig");
@@ -6,8 +8,10 @@ const Allocator = std.mem.Allocator;
 
 const Logger = sig.trace.Logger;
 
-const TestState = ledger.insert_shred.TestState;
+const BlockstoreDB = ledger.BlockstoreDB;
 const Shred = ledger.shred.Shred;
+
+const comptimePrint = std.fmt.comptimePrint;
 
 const schema = ledger.schema.schema;
 
@@ -17,9 +21,8 @@ test "put/get data consistency for merkle root" {
     var rng = std.Random.DefaultPrng.init(100);
     const random = rng.random();
 
-    var state = try TestState.init("bsdbMerkleRootDatabaseConsistency");
-    defer state.deinit();
-    var db = state.db;
+    var db = try TestDB("").init("bsdbMerkleRootDatabaseConsistency");
+    defer db.deinit();
 
     const id = sig.ledger.shred.ErasureSetId{
         .slot = 1234127498,
@@ -40,6 +43,23 @@ test "put/get data consistency for merkle root" {
     try std.testing.expectEqualSlices(u8, &root.data, &output.merkle_root.?.data);
 }
 
+const test_dir = "test_data/ledger";
+
+pub fn TestDB(scope: []const u8) type {
+    const test_logger = (sig.trace.TestLogger{}).logger();
+    return struct {
+        pub fn init(comptime test_name: []const u8) !BlockstoreDB {
+            return try initCustom(std.testing.allocator, test_logger, test_name);
+        }
+
+        pub fn initCustom(allocator: Allocator, logger: Logger, comptime test_name: []const u8) !BlockstoreDB {
+            const path = comptimePrint("{s}/{s}/{s}", .{ test_dir, scope, test_name });
+            try sig.ledger.tests.freshDir(path);
+            return try BlockstoreDB.open(allocator, logger, path);
+        }
+    };
+}
+
 /// ensures the path exists as an empty directory.
 /// deletes anything else that might exist here.
 pub fn freshDir(path: []const u8) !void {
@@ -49,6 +69,20 @@ pub fn freshDir(path: []const u8) !void {
     try std.fs.cwd().makePath(path);
 }
 
+/// Read shreds from binary file structured like this:
+/// [shred0_len: u64(little endian)][shred0_payload][shred1_len...
+///
+/// loadShredsFromFile can read shreds produced by saveShredsToFile or this rust function:
+/// ```rust
+/// fn save_shreds_to_file(shreds: &[Shred], path: &str) {
+///     let mut file = std::fs::File::create(path).unwrap();
+///     for shred in shreds {
+///         let payload = shred.payload();
+///         file.write(&payload.len().to_le_bytes()).unwrap();
+///         file.write(payload).unwrap();
+///     }
+/// }
+/// ```
 pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred {
     const file = try std.fs.cwd().openFile(path, .{});
     const reader = file.reader();
@@ -58,6 +92,11 @@ pub fn loadShredsFromFile(allocator: Allocator, path: []const u8) ![]const Shred
         try shreds.append(try Shred.fromPayload(allocator, chunk));
     }
     return shreds.toOwnedSlice();
+}
+
+pub fn saveShredsToFile(path: []const u8, shreds: []const Shred) !void {
+    const file = try std.fs.cwd().createFile(path, .{});
+    for (shreds) |s| writeChunk(file.writer(), s.payload());
 }
 
 fn readChunk(allocator: Allocator, reader: anytype) !?[]const u8 {
