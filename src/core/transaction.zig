@@ -151,7 +151,7 @@ pub const Message = struct {
 
     pub fn new(allocator: std.mem.Allocator, instructions: []Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
         var compiled_keys = try CompiledKeys.compile(allocator, instructions, payer);
-        const header, const account_keys = try compiled_keys.into_message_header_and_account_keys(allocator);
+        const header, const account_keys = try compiled_keys.intoMessageHeaderAndAccountKeys(allocator);
         const compiled_instructions = try compileInstructions(allocator, instructions, account_keys);
         return .{
             .header = header,

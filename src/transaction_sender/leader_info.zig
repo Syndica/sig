@@ -31,9 +31,9 @@ const RpcLeaderSchedule = sig.rpc.Client.LeaderSchedule;
 const RpcLatestBlockhash = sig.rpc.Client.LatestBlockhash;
 const LeaderSchedule = sig.core.leader_schedule.LeaderSchedule;
 const Logger = sig.trace.log.Logger;
-const RpcCluster = sig.rpc.Client.Cluster;
 const Config = sig.transaction_sender.Config;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
 /// LeaderInfo contains information about the cluster that is used to send transactions.
 /// It uses the RpcClient to get the epoch info and leader schedule.
@@ -48,7 +48,7 @@ pub const LeaderInfo = struct {
 
     pub fn init(
         allocator: Allocator,
-        cluster: RpcCluster,
+        cluster: ClusterType,
         gossip_table_rw: *RwMux(GossipTable),
     ) !LeaderInfo {
         var rpc_client = RpcClient.init(allocator, cluster);
@@ -57,16 +57,6 @@ pub const LeaderInfo = struct {
 
         const epoch_info = try rpc_client.getEpochInfo(&rpc_arena, null, .{ .commitment = .processed });
         const leader_schedule = try getLeaderSchedule(allocator, &epoch_info, &rpc_client);
-
-        const file = try std.fs.cwd().createFile("leader-schedule.log", .{});
-        defer file.close();
-
-        for (leader_schedule.slot_leaders, 0..) |leader, i| {
-            const slot = epoch_info.absoluteSlot - epoch_info.slotIndex + i;
-            const string = try std.fmt.allocPrint(allocator, "{} {s}", .{ slot, try leader.toString() });
-            try file.writeAll(string);
-            try file.writeAll("\n");
-        }
 
         return .{
             .epoch_info = epoch_info,
@@ -91,7 +81,7 @@ pub const LeaderInfo = struct {
         if (current_slot > self.epoch_info.slotsInEpoch + self.leader_schedule.start_slot) {
             self.epoch_info = try rpc_client.getEpochInfo(&rpc_arena, null, .{ .commitment = .processed });
             self.leader_schedule = try getLeaderSchedule(allocator, &self.epoch_info, &rpc_client);
-            self.updateLeaderAddressesCache();
+            try self.updateLeaderAddressesCache();
         }
 
         var leader_addresses = std.ArrayList(SocketAddr).init(allocator);

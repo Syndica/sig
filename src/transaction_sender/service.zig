@@ -117,7 +117,7 @@ fn receiveTransactionsThread(
 
     // As transactions are received, they are added to a transaction batch until
     // the batch size is reached or the batch send rate is reached. The transactions are then
-    // sent to the leader TPU addresses and subsequently added to the transaction pool.
+    // sent to the leader TPU addresses and subsequently added to the transaction pool for processing.
     var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(allocator);
     defer transaction_batch.deinit();
 
@@ -143,6 +143,7 @@ fn receiveTransactionsThread(
                 config,
                 cluster_info_rw,
                 transaction_batch.values(),
+                logger,
             );
             last_batch_sent = try Instant.now();
 
@@ -152,7 +153,7 @@ fn receiveTransactionsThread(
             logger.infof("Adding {d} new transactions to pool.", .{transaction_batch.count()});
             for (transaction_batch.values()) |_tx| {
                 if (transaction_pool.count() >= config.pool_max_size) {
-                    logger.warnf("Transaction pool is full, dropping transaction: signature={s}", .{_tx.signature});
+                    logger.warnf("Transaction pool is full, dropping transaction: signature={s}", .{try _tx.signature.toString()});
                     continue;
                 }
                 var tx = _tx; // Is there a nicer way to do this?
@@ -175,36 +176,6 @@ fn processTransactionsThread(
 ) !void {
     errdefer exit.store(true, .unordered);
 
-    while (!exit.load(.unordered)) {
-        std.time.sleep(config.pool_process_rate.asNanos());
-
-        var transaction_pool: *TransactionPool, var transaction_pool_lock = transaction_pool_rw.writeWithLock();
-        defer transaction_pool_lock.unlock();
-
-        if (transaction_pool.count() == 0) continue;
-
-        try processTransactions(
-            allocator,
-            sender,
-            config,
-            cluster_info_rw,
-            transaction_pool,
-            logger,
-        );
-    }
-}
-
-fn processTransactions(
-    allocator: std.mem.Allocator,
-    sender: *Channel(std.ArrayList(Packet)),
-    config: Config,
-    cluster_info_rw: *RwMux(LeaderInfo),
-    transaction_pool: *TransactionPool,
-    logger: Logger,
-) !void {
-    var successful_signatures = std.ArrayList(Signature).init(allocator);
-    defer successful_signatures.deinit();
-
     var retry_signatures = std.ArrayList(Signature).init(allocator);
     defer retry_signatures.deinit();
 
@@ -214,21 +185,72 @@ fn processTransactions(
     var rpc_arena = std.heap.ArenaAllocator.init(allocator);
     defer rpc_arena.deinit();
 
-    var rpc_client = RpcClient.init(allocator, .Testnet);
+    var rpc_client = RpcClient.init(allocator, config.cluster);
     defer rpc_client.deinit();
 
+    while (!exit.load(.unordered)) {
+        std.time.sleep(config.pool_process_rate.asNanos());
+
+        { // NOTE: is this prefered over an explicit unlock on the continue branch? or does that violate free/unlock immediately with a defer?
+            var transaction_pool: *const TransactionPool, var transaction_pool_lock = transaction_pool_rw.readWithLock();
+            defer transaction_pool_lock.unlock();
+
+            if (transaction_pool.count() == 0) continue;
+        }
+
+        try processTransactions(
+            config,
+            transaction_pool_rw,
+            &retry_signatures,
+            &drop_signatures,
+            &rpc_arena,
+            &rpc_client,
+            logger,
+        );
+
+        try retryTransactions(
+            allocator,
+            sender,
+            config,
+            cluster_info_rw,
+            &retry_signatures,
+            transaction_pool_rw,
+            logger,
+        );
+
+        dropTransactions(&drop_signatures, transaction_pool_rw);
+
+        retry_signatures.clearRetainingCapacity();
+        drop_signatures.clearRetainingCapacity();
+        if (!rpc_arena.reset(.retain_capacity)) @panic("Failed to reset rpc_arena"); // TODO: Look into this more
+    }
+}
+
+fn processTransactions(
+    config: Config,
+    transaction_pool_rw: *RwMux(TransactionPool),
+    retry_signatures: *std.ArrayList(Signature),
+    drop_signatures: *std.ArrayList(Signature),
+    rpc_arena: *std.heap.ArenaAllocator,
+    rpc_client: *RpcClient,
+    logger: Logger,
+) !void {
     const block_height = try rpc_client.getBlockHeight(
-        &rpc_arena,
+        rpc_arena,
         .{ .commitment = .processed },
     );
 
+    const transaction_pool: *const TransactionPool, var transaction_pool_lock = transaction_pool_rw.readWithLock();
+    defer transaction_pool_lock.unlock();
+
     const signature_statuses = try rpc_client.getSignatureStatuses(
-        &rpc_arena,
+        rpc_arena,
         transaction_pool.keys(),
         .{ .searchTransactionHistory = false },
     );
 
     // Populate retry_signatures and drop_signatures
+    var successful_signatures_count: usize = 0;
     var pending_transactions_iter = transaction_pool.iterator();
     for (signature_statuses.value) |maybe_signature_status| {
         const entry = pending_transactions_iter.next().?;
@@ -239,7 +261,7 @@ fn processTransactions(
             // Drop transaction if it is rooted
             if (signature_status.confirmations == null) {
                 try drop_signatures.append(signature);
-                try successful_signatures.append(signature);
+                successful_signatures_count += 1;
                 continue;
             }
 
@@ -284,20 +306,35 @@ fn processTransactions(
     logger.infof(
         "Processed {d} transactions: {d} successful, {d} retry, {d} drop",
         .{
-            successful_signatures.len + retry_signatures.len + drop_signatures.len,
-            successful_signatures.len,
-            retry_signatures.len,
-            drop_signatures.len,
+            successful_signatures_count + retry_signatures.items.len + drop_signatures.items.len,
+            successful_signatures_count,
+            retry_signatures.items.len,
+            drop_signatures.items.len,
         },
     );
+}
 
+fn retryTransactions(
+    allocator: std.mem.Allocator,
+    sender: *Channel(std.ArrayList(Packet)),
+    config: Config,
+    cluster_info_rw: *RwMux(LeaderInfo),
+    retry_signatures: *std.ArrayList(Signature),
+    transaction_pool_rw: *RwMux(TransactionPool),
+    logger: Logger,
+) !void {
     // Retry transactions
     if (retry_signatures.items.len > 0) {
         var retry_transactions = try allocator.alloc(TransactionInfo, retry_signatures.items.len);
         defer allocator.free(retry_transactions);
 
-        for (retry_signatures.items, 0..) |signature, i| {
-            retry_transactions[i] = transaction_pool.get(signature).?;
+        {
+            const transaction_pool: *const TransactionPool, var transaction_pool_lock = transaction_pool_rw.readWithLock();
+            defer transaction_pool_lock.unlock();
+
+            for (retry_signatures.items, 0..) |signature, i| {
+                retry_transactions[i] = transaction_pool.get(signature).?;
+            }
         }
 
         var start_index: usize = 0;
@@ -315,8 +352,14 @@ fn processTransactions(
             start_index = end_index;
         }
     }
+}
 
-    // Remove transactions
+fn dropTransactions(
+    drop_signatures: *std.ArrayList(Signature),
+    transaction_pool_rw: *RwMux(TransactionPool),
+) void {
+    const transaction_pool: *TransactionPool, var transaction_pool_lock = transaction_pool_rw.writeWithLock();
+    defer transaction_pool_lock.unlock();
     for (drop_signatures.items) |signature| {
         _ = transaction_pool.swapRemove(signature);
     }
