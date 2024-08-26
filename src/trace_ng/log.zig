@@ -11,6 +11,38 @@ pub const LogConfig = struct {
     buff_size: usize = 64,
 };
 
+// Start: Trying out polymorphism via vtable.
+const LoggerInterface = struct {
+    // pointer to the logger object
+    ptr: *anyopaque,
+    infoFn: *const fn (ptr: *anyopaque) Entry,
+    // infoFn: fn (*anyopaque) Entry,
+    pub fn info(self: LoggerInterface) Entry {
+        return self.infoFn(self.ptr);
+    }
+};
+
+const StandardLogger = struct {
+    max_level: Level,
+    pub fn init(max_level: Level) StandardLogger {
+        return .{
+            .max_level = max_level,
+        };
+    }
+    pub fn logger(self: *StandardLogger) LoggerInterface {
+        return LoggerInterface{
+            .ptr = self,
+            .infoFn = info,
+        };
+    }
+
+    pub fn info(ptr: *anyopaque) Entry {
+        std.debug.print("{s}", .{"Hello World"});
+        const self: *StandardLogger = @ptrCast(@alignCast(ptr));
+        return Entry{ .standard = StdEntry.init(@This(), self.max_level) };
+    }
+};
+
 const Logger = ScopedLogger(null);
 pub fn ScopedLogger(comptime scope: ?type) type {
     return struct {
@@ -77,4 +109,10 @@ test "trace_ng: scope switch" {
     logger.info().log("starting the app");
     const stuff = Stuff.init(logger);
     stuff.doStuff();
+}
+
+test "polymophism_ng" {
+    var stdLogger = StandardLogger.init(Level.info);
+    const logger = stdLogger.logger();
+    logger.info().log("Hello Wo");
 }
