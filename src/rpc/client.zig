@@ -23,7 +23,7 @@ pub const Client = struct {
         self.client.deinit();
     }
 
-    const AccountInfo = struct {
+    pub const AccountInfo = struct {
         context: Context,
         value: Value,
 
@@ -42,7 +42,7 @@ pub const Client = struct {
         };
     };
 
-    const GetAccountInfoConfig = struct {
+    pub const GetAccountInfoConfig = struct {
         commitment: ?Commitment = null,
         encoding: ?[]const u8 = null,
         dataSlice: ?DataSlice = null,
@@ -64,7 +64,7 @@ pub const Client = struct {
         });
     }
 
-    const Balance = struct {
+    pub const Balance = struct {
         context: Context,
         value: u64,
 
@@ -78,7 +78,7 @@ pub const Client = struct {
         }
     };
 
-    const GetBalanceConfig = struct {
+    pub const GetBalanceConfig = struct {
         commitment: ?Commitment = null,
         minContextSlot: ?u64 = null,
     };
@@ -93,7 +93,7 @@ pub const Client = struct {
         });
     }
 
-    const Block = struct {
+    pub const Block = struct {
         blockhash: []const u8,
         previousBlockhash: []const u8,
         parentSlot: u64,
@@ -120,7 +120,7 @@ pub const Client = struct {
         };
     };
 
-    const GetBlockConfig = struct {
+    pub const GetBlockConfig = struct {
         commitment: ?Commitment = null,
         encoding: ?[]const u8 = null,
         transactionDetails: ?[]const u8 = null,
@@ -138,7 +138,7 @@ pub const Client = struct {
         });
     }
 
-    const BlockCommitment = struct {
+    pub const BlockCommitment = struct {
         commitment: ?[]const u64,
         totalStake: u64,
     };
@@ -153,7 +153,7 @@ pub const Client = struct {
         });
     }
 
-    const GetBlockHeightConfig = struct {
+    pub const GetBlockHeightConfig = struct {
         commitment: ?Commitment = null,
         minContextSlot: ?u64 = null,
     };
@@ -182,7 +182,7 @@ pub const Client = struct {
         transactionCount: u64,
     };
 
-    const GetEpochInfoConfig = struct {
+    pub const GetEpochInfoConfig = struct {
         commitment: ?Commitment = null,
         minContextSlot: ?u64 = null,
     };
@@ -223,7 +223,7 @@ pub const Client = struct {
         };
     };
 
-    const GetLatestBlockhashConfig = struct {
+    pub const GetLatestBlockhashConfig = struct {
         commitment: ?Commitment = null,
         minContextSlot: ?Slot = null,
     };
@@ -275,7 +275,7 @@ pub const Client = struct {
     // TODO: getRecentPerformanceSamples()
     // TODO: getRecentPrioritizationFees()
 
-    const SignatureStatuses = struct {
+    pub const SignatureStatuses = struct {
         context: Context,
         value: []const ?Status,
 
@@ -292,7 +292,7 @@ pub const Client = struct {
         };
     };
 
-    const GetSignatureStatusesConfig = struct {
+    pub const GetSignatureStatusesConfig = struct {
         searchTransactionHistory: ?bool = null,
     };
 
@@ -322,7 +322,7 @@ pub const Client = struct {
 
     // TODO: getSignaturesForAddress()
 
-    const GetSlotConfig = struct {
+    pub const GetSlotConfig = struct {
         commitment: ?Commitment = null,
         minContextSlot: ?Slot = null,
     };
