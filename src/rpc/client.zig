@@ -8,6 +8,10 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 
+/// Rpc Client
+/// TODO:
+/// - change get methods to take std.mem.Allocator and return type T wrapped with arena
+/// - implement remaining methods
 pub const Client = struct {
     cluster: ClusterType,
     client: std.http.Client,
