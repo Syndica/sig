@@ -93,6 +93,8 @@ pub const AccountsDB = struct {
 
     geyser_writer: ?*GeyserWriter,
 
+    /// When a given counter reaches 0, it is to be removed.
+    /// When a counter is first added, it must be initialized to 0.
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
     /// Used for filenames when flushing accounts to disk.
@@ -1353,7 +1355,10 @@ pub const AccountsDB = struct {
                 // self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                const shrink_result = try self.shrinkAccountFiles(shrink_account_files.keys());
+                const shrink_result = try self.shrinkAccountFiles(
+                    shrink_account_files.keys(),
+                    &delete_account_files,
+                );
                 _ = shrink_result;
                 // self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
@@ -1593,7 +1598,7 @@ pub const AccountsDB = struct {
 
                     const should_delete_ref = is_largest_root_zero_lamports or is_old_state;
                     if (should_delete_ref) {
-                        // queeue for deletion
+                        // queue for deletion
                         try references_to_delete.append(ref);
 
                         // NOTE: we should never clean non-rooted references (ie, should always be in a file)
@@ -1604,8 +1609,10 @@ pub const AccountsDB = struct {
                             const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                             defer dead_accounts_counter_lg.unlock();
 
-                            const number_dead_accounts_ptr = dead_accounts_counter.getPtr(ref_slot).?;
-                            number_dead_accounts_ptr.* = number_dead_accounts_ptr.* + 1;
+                            // NOTE: if there is no counter for this slot, it may have been removed after reaching 0 dead accounts
+                            // previously. it is added back as needed.
+                            const number_dead_accounts_ptr = (try dead_accounts_counter.getOrPutValue(ref_slot, 0)).value_ptr;
+                            number_dead_accounts_ptr.* += 1;
                             const accounts_dead_count = number_dead_accounts_ptr.*;
 
                             if (ref_file_id == file_id) {
@@ -1628,11 +1635,8 @@ pub const AccountsDB = struct {
                             // queue for delete
                             try delete_account_files.put(ref_file_id, {});
 
-                            // if its queued for shrink, remove it
-                            if (shrink_account_files.contains(ref_file_id)) {
-                                const did_remove = shrink_account_files.swapRemove(ref_file_id);
-                                std.debug.assert(did_remove);
-                            }
+                            // if its queued for shrink, avoid unnecessary work by directly queueing it for deletion
+                            _ = shrink_account_files.swapRemove(ref_file_id);
                         } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
                             // queue for shrink
                             try shrink_account_files.put(ref_file_id, {});
@@ -1682,26 +1686,18 @@ pub const AccountsDB = struct {
                 const slot = account_file.slot;
                 self.logger.infof("deleting slot: {}...", .{slot});
 
-                // sanity check
-                {
-                    const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.readWithLock();
-                    defer dead_accounts_counter_lg.unlock();
-                    const number_of_dead_accounts = dead_accounts_counter.get(account_file.slot).?;
-                    std.debug.assert(account_file.number_of_accounts == number_of_dead_accounts);
-                }
-
                 // remove from file map
                 const did_remove = file_map.swapRemove(file_id);
                 std.debug.assert(did_remove);
 
-                // delete file
+                // deinit the account file struct
                 account_file.deinit();
 
                 break :blk slot;
             };
 
             // NOTE: this should always succeed or something is wrong
-            // remove from map - delete file from disk
+            // delete file from disk
             self.deleteAccountFile(slot, file_id) catch |err| {
                 self.logger.errf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
@@ -1709,11 +1705,15 @@ pub const AccountsDB = struct {
                 );
             };
 
-            {
+            remove_dead_counter: {
                 const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                 defer dead_accounts_counter_lg.unlock();
-                const did_remove = dead_accounts_counter.swapRemove(slot);
-                std.debug.assert(did_remove);
+
+                const current_count = dead_accounts_counter.get(slot) orelse break :remove_dead_counter;
+                if (current_count == 0) {
+                    const did_remove = dead_accounts_counter.swapRemove(slot);
+                    std.debug.assert(did_remove);
+                }
             }
         }
     }
@@ -1737,6 +1737,7 @@ pub const AccountsDB = struct {
     pub fn shrinkAccountFiles(
         self: *Self,
         shrink_account_files: []const FileId,
+        delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
         defer {
             const number_of_files = shrink_account_files.len;
@@ -1746,10 +1747,12 @@ pub const AccountsDB = struct {
         var alive_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
         defer alive_pubkeys.deinit();
 
+        try delete_account_files.ensureUnusedCapacity(shrink_account_files.len);
+
         var total_accounts_deleted: u64 = 0;
         for (shrink_account_files) |shrink_file_id| {
-            self.file_map_safe.fd_keep_open_rw.lock();
-            defer self.file_map_safe.fd_keep_open_rw.unlock();
+            self.file_map_safe.fd_keep_open_rw.lockShared();
+            defer self.file_map_safe.fd_keep_open_rw.unlockShared();
 
             const shrink_account_file = blk: {
                 const file_map, var file_map_lg = self.file_map_safe.file_map.readWithLock();
@@ -1885,32 +1888,18 @@ pub const AccountsDB = struct {
                 reference_memory_entry.value_ptr.* = new_reference_block;
             }
 
-            // delete old account file
+            delete_account_files.putAssumeCapacityNoClobber(shrink_file_id, {});
+
             {
-                // NOTE: we write lock the file_map and the account_file before
-                // we de-init the account-file that way we guarantee no-one else has
-                // a reference to the account file
-                const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
-                defer file_map_lg.unlock();
-
-                const did_remove = file_map.swapRemove(shrink_file_id);
-                std.debug.assert(did_remove);
-
-                shrink_account_file.deinit();
-            }
-
-            self.deleteAccountFile(slot, shrink_file_id) catch |err| {
-                self.logger.errf(
-                    "failed to delete account file slot.file_id: {d}.{d}: {s}",
-                    .{ slot, shrink_file_id.toInt(), @errorName(err) },
-                );
-            };
-
-            // reset to zero dead accounts
-            {
+                // remove the dead accounts counter entry, since there
+                // are no longer any dead accounts at this slot for now.
+                // there has to be a counter for it at this point, since
+                // cleanAccounts would only have added this file_id to
+                // the queue if it deleted any accounts refs.
                 const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                 defer dead_accounts_counter_lg.unlock();
-                dead_accounts_counter.getPtr(slot).?.* = 0;
+                const removed = dead_accounts_counter.fetchSwapRemove(slot) orelse unreachable;
+                std.debug.assert(removed.value == accounts_dead_count);
             }
         }
 
@@ -2250,7 +2239,7 @@ pub const AccountsDB = struct {
             }
         }
 
-        {
+        if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
             try dead_accounts.putNoClobber(account_file.slot, accounts_dead_count);
@@ -2343,7 +2332,7 @@ pub const AccountsDB = struct {
             std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
         }
 
-        {
+        if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
             try dead_accounts.putNoClobber(slot, accounts_dead_count);
@@ -3897,7 +3886,10 @@ test "shrink account file works" {
     }
 
     // test: files were shrunk
-    const r = try accounts_db.shrinkAccountFiles(shrink_account_files.keys());
+    const r = try accounts_db.shrinkAccountFiles(
+        shrink_account_files.keys(),
+        &delete_account_files,
+    );
     try std.testing.expectEqual(9, r.num_accounts_deleted);
 
     // test: new account file is shrunk
@@ -3908,10 +3900,21 @@ test "shrink account file works" {
         const file_map2, var file_map_lg2 = accounts_db.file_map_safe.file_map.readWithLock();
         defer file_map_lg2.unlock();
 
-        const new_slot_file_id: FileId = for (file_map2.keys()) |file_id| {
-            const account_file = file_map2.get(file_id).?;
-            if (account_file.slot == slot) break file_id;
-        } else return error.NoSlotFile;
+        const new_slot_file_id: FileId = blk: {
+            var maybe_max_file_id: ?FileId = null;
+            for (file_map2.keys(), file_map2.values()) |file_id, account_file| {
+                const max_file_id = maybe_max_file_id orelse {
+                    if (account_file.slot == slot) {
+                        maybe_max_file_id = file_id;
+                    }
+                    continue;
+                };
+                if (max_file_id.toInt() > file_id.toInt()) continue;
+                if (account_file.slot != slot) continue;
+                maybe_max_file_id = file_id;
+            }
+            break :blk maybe_max_file_id orelse return error.NoSlotFile;
+        };
 
         const new_account_file = file_map2.get(new_slot_file_id).?;
         const post_shrink_size = new_account_file.file_size;
