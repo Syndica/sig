@@ -56,6 +56,23 @@ pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more 
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
 pub const AccountsDBStats = struct {
+    const HistogramKind = enum {
+        flush_account_file_size,
+        shrink_file_shrunk_by,
+        shrink_alive_accounts,
+        shrink_dead_accounts,
+        fn buckets(self: HistogramKind) []const f64 {
+            const default = &.{ 1, 100, 1_000, 10_000 };
+
+            return switch (self) {
+                .flush_account_file_size => default,
+                .shrink_file_shrunk_by => default,
+                .shrink_alive_accounts => default,
+                .shrink_dead_accounts => default,
+            };
+        }
+    };
+
     number_files_flushed: *Counter,
     number_files_cleaned: *Counter,
     number_files_shrunk: *Counter,
@@ -87,13 +104,12 @@ pub const AccountsDBStats = struct {
                     @field(self, field.name) = field_counter;
                 },
                 *Histogram => {
-                    // TODO: these are likely crappy buckets, should be configurable also
-                    const buckets = &.{
-                        1,
-                        100,
-                        1_000,
-                        10_000,
-                    };
+                    const histogram_kind = std.meta.stringToEnum(
+                        HistogramKind,
+                        field.name,
+                    ) orelse @panic("no matching HistogramKind for AccountsDBStats *Histogram field");
+
+                    const buckets = histogram_kind.buckets();
                     const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, buckets);
                     @field(self, field.name) = field_histogram;
                 },
