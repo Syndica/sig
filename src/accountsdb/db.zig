@@ -62,13 +62,14 @@ pub const AccountsDBStats = struct {
         shrink_alive_accounts,
         shrink_dead_accounts,
         fn buckets(self: HistogramKind) []const f64 {
-            const default = &.{ 1, 100, 1_000, 10_000 };
+            const account_size_buckets = &.{ 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000 };
+            const account_count_buckets = &.{ 1, 5, 10, 50, 100, 500, 1_000, 10_000 };
 
             return switch (self) {
-                .flush_account_file_size => default,
-                .shrink_file_shrunk_by => default,
-                .shrink_alive_accounts => default,
-                .shrink_dead_accounts => default,
+                .flush_account_file_size => account_size_buckets,
+                .shrink_file_shrunk_by => account_size_buckets,
+                .shrink_alive_accounts => account_count_buckets,
+                .shrink_dead_accounts => account_count_buckets,
             };
         }
     };
