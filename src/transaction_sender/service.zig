@@ -115,7 +115,10 @@ fn receiveTransactionsThread(
 
     var last_batch_sent = try Instant.now();
 
-    var transaction_batch = TransactionPool.init(allocator);
+    // As transactions are received, they are added to a transaction batch until
+    // the batch size is reached or the batch send rate is reached. The transactions are then
+    // sent to the leader TPU addresses and subsequently added to the transaction pool.
+    var transaction_batch = std.AutoArrayHashMap(Signature, TransactionInfo).init(allocator);
     defer transaction_batch.deinit();
 
     while (!exit.load(.unordered)) {
