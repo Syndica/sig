@@ -93,7 +93,7 @@ pub const Transaction = struct {
         };
     }
 
-    pub fn new_unsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
+    pub fn newUnsigned(allocator: std.mem.Allocator, message: Message) error{OutOfMemory}!Transaction {
         return Transaction{
             .signatures = try allocator.alloc(Signature, message.header.num_required_signatures),
             .message = message,
@@ -152,7 +152,7 @@ pub const Message = struct {
     pub fn new(allocator: std.mem.Allocator, instructions: []Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
         var compiled_keys = try CompiledKeys.compile(allocator, instructions, payer);
         const header, const account_keys = try compiled_keys.into_message_header_and_account_keys(allocator);
-        const compiled_instructions = try compile_instructions(allocator, instructions, account_keys);
+        const compiled_instructions = try compileInstructions(allocator, instructions, account_keys);
         return .{
             .header = header,
             .account_keys = account_keys,
@@ -229,6 +229,7 @@ pub const MessageHeader = struct {
     num_readonly_unsigned_accounts: u8,
 };
 
+/// TODO: Add instruction and instruction compilation testing
 pub const Instruction = struct {
     program_id: Pubkey,
     accounts: []AccountMeta,
@@ -273,7 +274,7 @@ pub const AccountMeta = struct {
     is_signer: bool,
     is_writable: bool,
 
-    pub fn new_mutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
+    pub fn newMutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
         return .{
             .pubkey = pubkey,
             .is_signer = is_signer,
@@ -281,7 +282,7 @@ pub const AccountMeta = struct {
         };
     }
 
-    pub fn new_immutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
+    pub fn newImmutable(pubkey: Pubkey, is_signer: bool) AccountMeta {
         return .{
             .pubkey = pubkey,
             .is_signer = is_signer,
@@ -328,7 +329,7 @@ pub const CompiledKeys = struct {
     /// Account keys memory is allocated and owned by the caller.
     /// TODO: Depending on whether the order of account keys is important, the code could be
     /// optimized by simply counting the key types and appending them to account_keys direclty.
-    pub fn into_message_header_and_account_keys(self: *CompiledKeys, allocator: std.mem.Allocator) !struct { MessageHeader, []Pubkey } {
+    pub fn intoMessageHeaderAndAccountKeys(self: *CompiledKeys, allocator: std.mem.Allocator) !struct { MessageHeader, []Pubkey } {
         var writable_signer_keys = std.ArrayList(Pubkey).init(allocator);
         defer writable_signer_keys.deinit();
 
@@ -429,24 +430,26 @@ pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPa
     };
 }
 
+/// TODO: Implement other types of instructions
 pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64) !Instruction {
     var account_metas = try allocator.alloc(AccountMeta, 2);
-    account_metas[0] = AccountMeta.new_mutable(from_pubkey, true);
-    account_metas[1] = AccountMeta.new_mutable(to_pubkey, false);
+    account_metas[0] = AccountMeta.newMutable(from_pubkey, true);
+    account_metas[1] = AccountMeta.newMutable(to_pubkey, false);
     return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
 }
 
-fn index_of(comptime T: type, slice: []const T, value: T) ?usize {
+/// TODO: Move to a more appropriate location.
+fn indexOf(comptime T: type, slice: []const T, value: T) ?usize {
     for (slice, 0..) |element, index| {
         if (std.meta.eql(value, element)) return index;
     } else return null;
 }
 
-pub fn compile_instruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []Pubkey) !CompiledInstruction {
-    const program_id_index = index_of(Pubkey, account_keys, instruction.program_id).?;
+pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []Pubkey) !CompiledInstruction {
+    const program_id_index = indexOf(Pubkey, account_keys, instruction.program_id).?;
     var accounts = try allocator.alloc(u8, instruction.accounts.len);
     for (instruction.accounts, 0..) |account, i| {
-        accounts[i] = @truncate(index_of(Pubkey, account_keys, account.pubkey).?);
+        accounts[i] = @truncate(indexOf(Pubkey, account_keys, account.pubkey).?);
     }
     return .{
         .program_id_index = @truncate(program_id_index),
@@ -454,15 +457,16 @@ pub fn compile_instruction(allocator: std.mem.Allocator, instruction: Instructio
         .accounts = accounts,
     };
 }
-pub fn compile_instructions(allocator: std.mem.Allocator, instructions: []Instruction, account_keys: []Pubkey) ![]CompiledInstruction {
+
+pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []Instruction, account_keys: []Pubkey) ![]CompiledInstruction {
     var compiled_instructions = try allocator.alloc(CompiledInstruction, instructions.len);
     for (instructions, 0..) |instruction, i| {
-        compiled_instructions[i] = try compile_instruction(allocator, instruction, account_keys);
+        compiled_instructions[i] = try compileInstruction(allocator, instruction, account_keys);
     }
     return compiled_instructions;
 }
 
-test "core.transfer" {
+test "transfer" {
     const allocator = std.heap.page_allocator;
     const from_pubkey = Pubkey.default();
     const to_pubkey = Pubkey.default();
@@ -470,16 +474,11 @@ test "core.transfer" {
     _ = try transfer(allocator, from_pubkey, to_pubkey, lamports);
 }
 
-test "core.transaction: tmp" {
-    const msg = Message.default();
-    try std.testing.expect(msg.account_keys.len == 0);
-}
-
-test "core.transaction: blank Message fails to sanitize" {
+test "transaction: blank Message fails to sanitize" {
     try std.testing.expect(error.MissingWritableFeePayer == Message.default().sanitize());
 }
 
-test "core.transaction: minimal valid Message sanitizes" {
+test "transaction: minimal valid Message sanitizes" {
     var pubkeys = [_]Pubkey{Pubkey.default()};
     const message = Message{
         .header = MessageHeader{
@@ -494,7 +493,7 @@ test "core.transaction: minimal valid Message sanitizes" {
     try message.sanitize();
 }
 
-test "core.transaction: Message sanitize fails if missing signers" {
+test "transaction: Message sanitize fails if missing signers" {
     var pubkeys = [_]Pubkey{Pubkey.default()};
     const message = Message{
         .header = MessageHeader{
@@ -509,7 +508,7 @@ test "core.transaction: Message sanitize fails if missing signers" {
     try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
 }
 
-test "core.transaction: Message sanitize fails if missing unsigned" {
+test "transaction: Message sanitize fails if missing unsigned" {
     var pubkeys = [_]Pubkey{Pubkey.default()};
     const message = Message{
         .header = MessageHeader{
@@ -524,7 +523,7 @@ test "core.transaction: Message sanitize fails if missing unsigned" {
     try std.testing.expect(error.NotEnoughAccounts == message.sanitize());
 }
 
-test "core.transaction: Message sanitize fails if no writable signed" {
+test "transaction: Message sanitize fails if no writable signed" {
     var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
     const message = Message{
         .header = MessageHeader{
@@ -539,7 +538,7 @@ test "core.transaction: Message sanitize fails if no writable signed" {
     try std.testing.expect(error.MissingWritableFeePayer == message.sanitize());
 }
 
-test "core.transaction: Message sanitize fails if missing program id" {
+test "transaction: Message sanitize fails if missing program id" {
     var pubkeys = [_]Pubkey{Pubkey.default()};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 1,
@@ -559,7 +558,7 @@ test "core.transaction: Message sanitize fails if missing program id" {
     try std.testing.expect(error.ProgramIdAccountMissing == message.sanitize());
 }
 
-test "core.transaction: Message sanitize fails if program id has index 0" {
+test "transaction: Message sanitize fails if program id has index 0" {
     var pubkeys = [_]Pubkey{Pubkey.default()};
     var instructions = [_]CompiledInstruction{.{
         .program_id_index = 0,
@@ -579,7 +578,7 @@ test "core.transaction: Message sanitize fails if program id has index 0" {
     try std.testing.expect(error.ProgramIdCannotBePayer == message.sanitize());
 }
 
-test "core.transaction: Message sanitize fails if account index is out of bounds" {
+test "transaction: Message sanitize fails if account index is out of bounds" {
     var pubkeys = [_]Pubkey{ Pubkey.default(), Pubkey.default() };
     var accounts = [_]u8{2};
     var instructions = [_]CompiledInstruction{.{
