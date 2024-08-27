@@ -50,7 +50,16 @@ pub const StdEntry = struct {
     pub fn log(self: StdEntry, msg: []const u8) void {
         // TODO: The output the entry writes to should be configurable.
         const stderr = std.io.getStdErr().writer();
-        logfmt.formatter(stderr, self.level, self.scope, self.field_buf.constSlice(), msg) catch unreachable();
+        logfmt.formatter(
+            stderr,
+            self.level,
+            self.scope,
+            self.field_buf.constSlice(),
+            msg,
+            null,
+            null,
+            null,
+        ) catch unreachable();
     }
 };
 

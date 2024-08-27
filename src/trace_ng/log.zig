@@ -1,6 +1,9 @@
 const std = @import("std");
 const Level = @import("level.zig").Level;
 const entry = @import("entry.zig");
+const logfmt = @import("logfmt.zig");
+const testing = std.testing;
+const Allocator = std.mem.Allocator;
 
 const Entry = entry.Entry;
 const StdEntry = entry.StdEntry;
@@ -11,37 +14,104 @@ pub const LogConfig = struct {
     buff_size: usize = 64,
 };
 
-// Start: Trying out polymorphism via vtable.
-const LoggerInterface = struct {
-    // pointer to the logger object
-    ptr: *anyopaque,
-    infoFn: *const fn (ptr: *anyopaque) Entry,
-    // infoFn: fn (*anyopaque) Entry,
-    pub fn info(self: LoggerInterface) Entry {
-        return self.infoFn(self.ptr);
-    }
+// // Start: Trying out polymorphism via vtable.
+// const LoggerInterface = struct {
+//     // pointer to the logger object
+//     ptr: *anyopaque,
+//     infoFn: *const fn (ptr: *anyopaque) Entry,
+//     // infoFn: fn (*anyopaque) Entry,
+//     pub fn info(self: LoggerInterface) Entry {
+//         return self.infoFn(self.ptr);
+//     }
+// };
+
+// const StandardLogger = struct {
+//     max_level: Level,
+//     pub fn init(max_level: Level) StandardLogger {
+//         return .{
+//             .max_level = max_level,
+//         };
+//     }
+//     pub fn logger(self: *StandardLogger) LoggerInterface {
+//         return LoggerInterface{
+//             .ptr = self,
+//             .infoFn = info,
+//         };
+//     }
+
+//     pub fn info(ptr: *anyopaque) Entry {
+//         std.debug.print("{s}", .{"Hello World"});
+//         const self: *StandardLogger = @ptrCast(@alignCast(ptr));
+//         return Entry{ .standard = StdEntry.init(@This(), self.max_level) };
+//     }
+// };
+
+pub const Config = struct {
+    level: Level = Level.debug,
 };
 
-const StandardLogger = struct {
-    max_level: Level,
-    pub fn init(max_level: Level) StandardLogger {
-        return .{
-            .max_level = max_level,
-        };
-    }
-    pub fn logger(self: *StandardLogger) LoggerInterface {
-        return LoggerInterface{
-            .ptr = self,
-            .infoFn = info,
-        };
-    }
+const UnScoppedLogger = StandardLogger(null);
+pub fn StandardLogger(comptime scope: ?type) type {
+    return struct {
+        const Self = @This();
+        level: Level,
+        allocator: Allocator, // Currently not used.
+        pub fn init(allocator: Allocator, config: Config) Self {
+            return .{ .allocator = allocator, .level = config.level };
+        }
 
-    pub fn info(ptr: *anyopaque) Entry {
-        std.debug.print("{s}", .{"Hello World"});
-        const self: *StandardLogger = @ptrCast(@alignCast(ptr));
-        return Entry{ .standard = StdEntry.init(@This(), self.max_level) };
-    }
-};
+        pub fn log(self: Self, message: []const u8) void {
+            const stderr = std.io.getStdErr().writer();
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+            // TODO take struct as input instead.
+            logfmt.formatter(stderr, self.level, maybe_scope, null, message, null, null, null) catch unreachable();
+        }
+
+        pub fn logWithFields(self: Self, message: []const u8, keyvalue: anytype) void {
+            const stderr = std.io.getStdErr().writer();
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+            logfmt.formatter(stderr, self.level, maybe_scope, null, message, null, null, keyvalue) catch unreachable();
+        }
+
+        pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
+            const stderr = std.io.getStdErr().writer();
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+            // TODO take struct as input instead.
+            logfmt.formatter(stderr, self.level, maybe_scope, null, null, fmt, args, null) catch unreachable();
+        }
+
+        pub fn logfWithFields(self: Self, comptime fmt: []const u8, args: anytype, keyvalue: anytype) void {
+            const stderr = std.io.getStdErr().writer();
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+            // TODO take struct as input instead.
+            logfmt.formatter(stderr, self.level, maybe_scope, null, null, fmt, args, keyvalue) catch unreachable();
+        }
+    };
+}
 
 const Logger = ScopedLogger(null);
 pub fn ScopedLogger(comptime scope: ?type) type {
@@ -69,13 +139,6 @@ pub fn ScopedLogger(comptime scope: ?type) type {
             return Entry{ .noop = NoopEntry{} };
         }
     };
-}
-
-test "trace_ng" {
-    //var logger = Logger.init(.{});
-    var logger = ScopedLogger(@This()).init(.{});
-    logger.info().add("f_agent", "firefox").add("f_version", "v2").log("Hello Logger");
-    logger.info().log("Hello Logger");
 }
 
 const Stuff = struct {
@@ -111,8 +174,40 @@ test "trace_ng: scope switch" {
     stuff.doStuff();
 }
 
-test "polymophism_ng" {
-    var stdLogger = StandardLogger.init(Level.info);
-    const logger = stdLogger.logger();
-    logger.info().log("Hello Wo");
+test "trace_ng: chaining" {
+    //var logger = Logger.init(.{});
+    var logger = ScopedLogger(@This()).init(.{});
+    logger.info()
+        .add("f_agent", "firefox")
+        .add("f_version", "v2")
+        .log("Hello Logger");
+
+    logger.info()
+        .log("Hello Logger");
+}
+
+test "trace_ng: multiple methods" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    const logger = StandardLogger(null).init(allocator, .{ .level = Level.info });
+    logger.log("Starting the app");
+    logger.logWithFields(
+        "Starting the app",
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
+    logger.logf(
+        "{s}",
+        .{"Starting the app"},
+    );
+    logger.logfWithFields(
+        "{s}",
+        .{"Starting the app"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
 }
