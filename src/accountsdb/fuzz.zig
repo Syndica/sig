@@ -245,7 +245,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 break :full .{ archive_name, snapshot_info };
             };
 
-            var archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
+            const archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
             defer archive_file.close();
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
@@ -258,7 +258,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
 
             logger.infof("fuzz[validate]: unpacked full snapshot at slot: {}", .{snapshot_info.slot});
-            var snapshot_files = sig.accounts_db.SnapshotFiles{
+            var snapshot_files: sig.accounts_db.SnapshotFiles = .{
                 .full_snapshot = .{
                     .hash = snapshot_info.hash,
                     .slot = snapshot_info.slot,
@@ -296,7 +296,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             if (inc_result) |result| {
                 const inc_archive_name, const inc_snapshot_info = result;
 
-                var inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name.slice(), .{});
+                const inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name.slice(), .{});
                 defer inc_archive_file.close();
 
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
