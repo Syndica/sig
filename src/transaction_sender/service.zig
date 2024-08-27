@@ -153,7 +153,7 @@ fn receiveTransactionsThread(
             logger.infof("Adding {d} new transactions to pool.", .{transaction_batch.count()});
             for (transaction_batch.values()) |_tx| {
                 if (transaction_pool.count() >= config.pool_max_size) {
-                    logger.warnf("Transaction pool is full, dropping transaction: signature={s}", .{try _tx.signature.toString()});
+                    logger.warnf("Transaction pool is full, dropping transaction: signature={s}", .{_tx.signature});
                     continue;
                 }
                 var tx = _tx; // Is there a nicer way to do this?

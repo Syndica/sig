@@ -22,12 +22,12 @@ pub fn run(
 ) !void {
     errdefer exit.store(true, .unordered);
 
-    const from_pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
+    const from_pubkey = try Pubkey.fromBase58String("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     const from_keypair = KeyPair{
         .public_key = .{ .bytes = from_pubkey.data },
         .secret_key = .{ .bytes = [_]u8{ 76, 196, 192, 17, 40, 245, 120, 49, 64, 133, 213, 227, 12, 42, 183, 70, 235, 64, 235, 96, 246, 205, 78, 13, 173, 111, 254, 96, 210, 208, 121, 240, 159, 193, 185, 89, 227, 77, 234, 91, 232, 234, 253, 119, 162, 105, 200, 227, 123, 90, 111, 105, 72, 53, 60, 147, 76, 154, 44, 72, 29, 165, 2, 246 } },
     };
-    const to_pubkey = try Pubkey.fromString("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
+    const to_pubkey = try Pubkey.fromBase58String("GDFVa3uYXDcNhcNk8A4v28VeF4wcMn8mauZNwVWbpcN");
     const lamports: u64 = 100;
 
     var rpc_client = RpcClient.init(allocator, .Testnet);
@@ -41,7 +41,7 @@ pub fn run(
             defer rpc_arena.deinit();
             const blockhash = try rpc_client.getLatestBlockhash(&rpc_arena, .{});
             break :blk .{
-                try Hash.fromString(blockhash.value.blockhash),
+                try Hash.fromBase58String(blockhash.value.blockhash),
                 blockhash.value.lastValidBlockHeight,
             };
         };

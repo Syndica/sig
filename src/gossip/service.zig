@@ -1385,7 +1385,7 @@ pub const GossipService = struct {
             defer endpoint_str.deinit();
             self.logger
                 .field("from_endpoint", endpoint_str.items)
-                .field("from_pubkey", &ping_message.ping.from.data)
+                .field("from_pubkey", ping_message.ping.from.toBase58String().slice())
                 .debug("gossip: recv ping");
         }
         self.stats.pong_messages_sent.add(n_ping_messages);
@@ -1660,7 +1660,7 @@ pub const GossipService = struct {
 
             self.logger
                 .field("n_pruned_origins", prune_size)
-                .field("to_addr", &from_pubkey.data)
+                .field("to_addr", from_pubkey.toBase58String().slice())
                 .debug("gossip: send prune_message");
 
             var packet = &prune_packet_batch.items[count];

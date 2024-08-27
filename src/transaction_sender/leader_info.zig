@@ -92,7 +92,7 @@ pub const LeaderInfo = struct {
             const socket = self.leader_addresses_cache.get(leader) orelse {
                 std.debug.print(
                     "Leader {s} not found in cache, current cache size {d}\n",
-                    .{ try leader.toString(), self.leader_addresses_cache.count() },
+                    .{ leader, self.leader_addresses_cache.count() },
                 );
                 continue;
             };
@@ -138,7 +138,7 @@ fn getLeaderSchedule(allocator: Allocator, epoch_info: *const RpcEpochInfo, rpc_
 
     var rpc_leader_iter = rpc_leader_schedule.iterator();
     while (rpc_leader_iter.next()) |entry| {
-        const key = try Pubkey.fromString(entry.key_ptr.*);
+        const key = try Pubkey.fromBase58String(entry.key_ptr.*);
         for (entry.value_ptr.*) |slot| {
             leaders[leaders_index] = .{ .slot = slot, .key = key };
             leaders_index += 1;
