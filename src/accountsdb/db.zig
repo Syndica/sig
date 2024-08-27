@@ -1646,7 +1646,7 @@ pub const AccountsDB = struct {
             self.stats.number_files_deleted.add(number_of_files);
         }
 
-        var delete_queue = try std.ArrayList(struct { AccountFile, FileId }).initCapacity(
+        var delete_queue = try std.ArrayList(AccountFile).initCapacity(
             self.allocator,
             number_of_files,
         );
@@ -1671,23 +1671,21 @@ pub const AccountsDB = struct {
                 // NOTE: we can queue the actual removal of the account file without the lock because
                 // because we know 1) no account files are being accessed and 2) no files are reading
                 // from the file_map, so its no possible to access the file after this block returns.
-                delete_queue.appendAssumeCapacity(.{ account_file, file_id });
+                delete_queue.appendAssumeCapacity(account_file);
             }
         }
 
-        for (delete_queue.items) |file_to_delete| {
-            const account_file, const file_id = file_to_delete;
+        for (delete_queue.items) |account_file| {
             const slot = account_file.slot;
             self.logger.infof("deleting slot: {}...", .{slot});
-
             account_file.deinit();
 
             // delete file from disk
-            self.deleteAccountFile(slot, file_id) catch |err| {
+            self.deleteAccountFile(slot, account_file.id) catch |err| {
                 // NOTE: this should always succeed or something is wrong
                 self.logger.errf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
-                    .{ slot, file_id.toInt(), @errorName(err) },
+                    .{ slot, account_file.id, @errorName(err) },
                 );
             };
         }
@@ -1696,8 +1694,8 @@ pub const AccountsDB = struct {
             const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_counter_lg.unlock();
 
-            for (delete_queue.items) |file_to_delete| {
-                const slot = file_to_delete[0].slot;
+            for (delete_queue.items) |account_file| {
+                const slot = account_file.slot;
                 // there are two cases for an account file being queued for deletion from cleaning:
                 // 1) it was queued for shrink, and this is the *old* accountFile: dead_count == 0 and the slot DNE in the map (shrink removed it)
                 // 2) it contains 100% dead accounts (in which dead_count > 0 and we can remove it from the map)
