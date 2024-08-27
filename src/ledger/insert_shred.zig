@@ -1862,6 +1862,7 @@ fn newlinesToSpaces(comptime fmt: []const u8) [fmt.len]u8 {
 const test_shreds = @import("test_shreds.zig");
 const comptimePrint = std.fmt.comptimePrint;
 const TestDB = ledger.tests.TestDB("insert_shred");
+const TestState = ledger.tests.TestState("insert_shred");
 
 fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
@@ -1869,51 +1870,45 @@ fn assertOk(result: anytype) void {
 
 const test_dir = comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/insert_shred", .{});
 
-const TestState = struct {
+const ShredInserterTestState = struct {
+    state: *TestState,
     db: BlockstoreDB,
     inserter: ShredInserter,
-    registry: sig.prometheus.Registry(.{}),
 
-    // if this leaks, you forgot to call `TestState.deinit`
-    _leak_check: []const u8,
-
-    /// This is used instead of std.testing.allocator because it includes more stack trace frames
-    /// std.testing.allocator is already the same exact allocator, just with a call to detectLeaks
-    /// run at the end of the test. TestState does the same, so we can use the gpa directly.
-    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
-    pub const allocator = gpa.allocator();
-
-    pub fn init(comptime test_name: []const u8) !TestState {
+    pub fn init(comptime test_name: []const u8) !ShredInserterTestState {
         return initWithLogger(test_name, (sig.trace.TestLogger{}).logger());
     }
 
-    fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !TestState {
-        const db = try TestDB.initCustom(allocator, logger, test_name);
-        var registry = sig.prometheus.Registry(.{}).init(allocator);
-        const inserter = try ShredInserter.init(allocator, logger, &registry, db);
-        return .{
-            .db = db,
-            .inserter = inserter,
-            .registry = registry,
-            ._leak_check = try std.testing.allocator.alloc(u8, 1),
-        };
+    fn initWithLogger(comptime test_name: []const u8, logger: sig.trace.Logger) !ShredInserterTestState {
+        const state = try TestState.init(test_name);
+        const inserter = try ShredInserter.init(
+            state.allocator(),
+            logger,
+            &state.registry,
+            state.db,
+        );
+        return .{ .state = state, .db = state.db, .inserter = inserter };
+    }
+
+    pub fn allocator(self: ShredInserterTestState) Allocator {
+        return self.state.allocator();
     }
 
     /// Test helper to convert raw bytes into shreds and pass them to insertShreds
     fn insertShredBytes(
-        self: *TestState,
+        self: *ShredInserterTestState,
         shred_payloads: []const []const u8,
     ) !ShredInserter.InsertShredsResult {
-        const shreds = try allocator.alloc(Shred, shred_payloads.len);
+        const shreds = try self.allocator().alloc(Shred, shred_payloads.len);
         defer {
             for (shreds) |shred| shred.deinit();
-            allocator.free(shreds);
+            self.allocator().free(shreds);
         }
         for (shred_payloads, 0..) |payload, i| {
-            shreds[i] = try Shred.fromPayload(allocator, payload);
+            shreds[i] = try Shred.fromPayload(self.allocator(), payload);
         }
-        const is_repairs = try allocator.alloc(bool, shreds.len);
-        defer allocator.free(is_repairs);
+        const is_repairs = try self.allocator().alloc(bool, shreds.len);
+        defer self.allocator().free(is_repairs);
         for (0..shreds.len) |i| {
             is_repairs[i] = false;
         }
@@ -1921,17 +1916,17 @@ const TestState = struct {
     }
 
     fn checkInsertCodeShred(
-        self: *TestState,
+        self: *ShredInserterTestState,
         shred: Shred,
         write_batch: *WriteBatch,
         merkle_root_metas: *AutoHashMap(ErasureSetId, WorkingEntry(MerkleRootMeta)),
     ) !struct { bool, ArrayList(PossibleDuplicateShred) } {
-        var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(allocator);
-        var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(allocator);
+        var just_inserted_shreds = AutoHashMap(ShredId, Shred).init(self.allocator());
+        var erasure_metas = SortedMap(ErasureSetId, WorkingEntry(ErasureMeta)).init(self.allocator());
 
-        var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(allocator);
-        var index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(allocator);
-        var duplicate_shreds = ArrayList(PossibleDuplicateShred).init(allocator);
+        var slot_meta_working_set = AutoHashMap(u64, SlotMetaWorkingSetEntry).init(self.allocator());
+        var index_working_set = AutoHashMap(u64, IndexMetaWorkingSetEntry).init(self.allocator());
+        var duplicate_shreds = ArrayList(PossibleDuplicateShred).init(self.allocator());
         defer just_inserted_shreds.deinit();
         defer erasure_metas.deinit();
         defer deinitMapRecursive(&slot_meta_working_set);
@@ -1957,15 +1952,24 @@ const TestState = struct {
     }
 
     pub fn deinit(self: *@This()) void {
-        self.db.deinit();
-        self.registry.deinit();
-        std.testing.allocator.free(self._leak_check);
-        _ = gpa.detectLeaks();
+        self.state.deinit();
     }
 };
 
+pub fn insertShredsForTest(
+    inserter: *ShredInserter,
+    shreds: []const Shred,
+) !ShredInserter.InsertShredsResult {
+    const is_repairs = try inserter.allocator.alloc(bool, shreds.len);
+    defer inserter.allocator.free(is_repairs);
+    for (0..shreds.len) |i| {
+        is_repairs[i] = false;
+    }
+    return inserter.insertShreds(shreds, is_repairs, null, false, null);
+}
+
 test "insertShreds single shred" {
-    var state = try TestState.init("insertShreds single shred");
+    var state = try ShredInserterTestState.init("insertShreds single shred");
     defer state.deinit();
     const allocator = std.testing.allocator;
     const shred = try Shred.fromPayload(allocator, &sig.ledger.shred.test_data_shred);
@@ -1980,7 +1984,7 @@ test "insertShreds single shred" {
 }
 
 test "insertShreds 100 shreds from mainnet" {
-    var state = try TestState.init("insertShreds 32 shreds");
+    var state = try ShredInserterTestState.init("insertShreds 32 shreds");
     defer state.deinit();
 
     const shred_bytes = test_shreds.mainnet_shreds;
@@ -2005,7 +2009,7 @@ test "insertShreds 100 shreds from mainnet" {
 
 // agave: test_handle_chaining_basic
 test "chaining basic" {
-    var state = try TestState.init("handle chaining basic");
+    var state = try ShredInserterTestState.init("handle chaining basic");
     defer state.deinit();
 
     const shreds = test_shreds.handle_chaining_basic_shreds;
@@ -2078,9 +2082,9 @@ test "chaining basic" {
 
 // agave: test_merkle_root_metas_coding
 test "merkle root metas coding" {
-    var state = try TestState.initWithLogger("handle chaining basic", .noop);
+    var state = try ShredInserterTestState.initWithLogger("handle chaining basic", .noop);
     defer state.deinit();
-    const allocator = TestState.allocator;
+    const allocator = state.allocator();
 
     const slot = 1;
     const start_index = 0;
@@ -2208,9 +2212,9 @@ test "merkle root metas coding" {
 
 // agave: test_recovery
 test "recovery" {
-    var state = try TestState.init("handle chaining basic");
+    var state = try ShredInserterTestState.init("handle chaining basic");
     defer state.deinit();
-    const allocator = TestState.allocator;
+    const allocator = state.allocator();
 
     const shreds = try loadShredsFromFile(
         allocator,

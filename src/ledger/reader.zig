@@ -9,6 +9,7 @@ const AutoHashMap = std.AutoHashMap;
 
 // sig common
 const Counter = sig.prometheus.Counter;
+const Entry = sig.core.Entry;
 const GetMetricError = sig.prometheus.GetMetricError;
 const Hash = sig.core.Hash;
 const Histogram = sig.prometheus.Histogram;
@@ -1304,19 +1305,6 @@ pub const BlockstoreReader = struct {
 };
 
 const CompletedRanges = ArrayList(struct { u32, u32 });
-
-const Entry = struct {
-    /// The number of hashes since the previous Entry ID.
-    num_hashes: u64,
-
-    /// The SHA-256 hash `num_hashes` after the previous Entry ID.
-    hash: Hash,
-
-    /// An unordered list of transactions that were observed before the Entry ID was
-    /// generated. They may have been observed before a previous Entry ID but were
-    /// pushed back into this list to ensure deterministic interpretation of the ledger.
-    transactions: ArrayList(VersionedTransaction),
-};
 
 /// Confirmed block with type guarantees that transaction metadata
 /// is always present. Used for uploading to BigTable.

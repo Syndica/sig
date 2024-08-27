@@ -6,22 +6,26 @@ const ledger = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
-const Logger = sig.trace.Logger;
-
 const BlockstoreDB = ledger.BlockstoreDB;
+const Entry = sig.core.Entry;
+const LoadedAddresses = ledger.transaction_status.LoadedAddresses;
+const TransactionReturnData = ledger.transaction_status.TransactionReturnData;
 const Shred = ledger.shred.Shred;
+const Slot = sig.core.Slot;
+const SlotMeta = ledger.meta.SlotMeta;
+const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
 
 const comptimePrint = std.fmt.comptimePrint;
+const insertShredsForTest = ledger.insert_shred.insertShredsForTest;
 
 const schema = ledger.schema.schema;
+const test_logger = (sig.trace.TestLogger{}).logger();
 
 test "put/get data consistency for merkle root" {
-    const logger = Logger.init(std.testing.allocator, Logger.TEST_DEFAULT_LEVEL);
-    defer logger.deinit();
     var rng = std.Random.DefaultPrng.init(100);
     const random = rng.random();
 
-    var db = try TestDB("").init("bsdbMerkleRootDatabaseConsistency");
+    var db = try DB.init("bsdbMerkleRootDatabaseConsistency");
     defer db.deinit();
 
     const id = sig.ledger.shred.ErasureSetId{
@@ -43,21 +47,110 @@ test "put/get data consistency for merkle root" {
     try std.testing.expectEqualSlices(u8, &root.data, &output.merkle_root.?.data);
 }
 
-const test_dir = "test_data/ledger";
+// agave: test_get_rooted_block
+test "insert shreds and transaction statuses then getRootedBlock" {
+    const allocator = State._allocator;
+    var state = try State.init("insert rooted block shreds then get block");
+    defer state.deinit();
 
-pub fn TestDB(scope: []const u8) type {
-    const test_logger = (sig.trace.TestLogger{}).logger();
-    return struct {
-        pub fn init(comptime test_name: []const u8) !BlockstoreDB {
-            return try initCustom(std.testing.allocator, test_logger, test_name);
-        }
+    var db = state.db;
+    var inserter = try state.shredInserter();
+    var writer = try state.writer();
 
-        pub fn initCustom(allocator: Allocator, logger: Logger, comptime test_name: []const u8) !BlockstoreDB {
-            const path = comptimePrint("{s}/{s}/{s}", .{ test_dir, scope, test_name });
-            try sig.ledger.tests.freshDir(path);
-            return try BlockstoreDB.open(allocator, logger, path);
-        }
+    const slot = 10;
+
+    const prefix = "agave.blockstore.test_get_rooted_block.";
+    const entries = try loadEntriesFromFile(
+        allocator,
+        test_shreds_dir ++ "/" ++ prefix ++ "entries.bin",
+    );
+    defer {
+        for (entries) |e| e.deinit(allocator);
+        allocator.free(entries);
+    }
+    const blockhash = entries[entries.len - 1].hash;
+    _ = blockhash; // autofix
+
+    const shreds = try testShreds(prefix ++ "shreds.bin");
+    const more_shreds = try testShreds(prefix ++ "more_shreds.bin");
+    const unrooted_shreds = try testShreds(prefix ++ "unrooted_shreds.bin");
+    defer inline for (.{ shreds, more_shreds, unrooted_shreds }) |slice| {
+        deinitShreds(std.testing.allocator, slice);
     };
+
+    _ = try ledger.insert_shred.insertShredsForTest(&inserter, shreds);
+    _ = try ledger.insert_shred.insertShredsForTest(&inserter, more_shreds);
+    _ = try ledger.insert_shred.insertShredsForTest(&inserter, unrooted_shreds);
+
+    try writer.setRoots(&.{ slot - 1, slot, slot + 1 });
+
+    const parent_meta = SlotMeta.init(allocator, 0, null);
+    try db.put(schema.slot_meta, slot - 1, parent_meta);
+
+    var expected_transactions = std.ArrayList(VersionedTransactionWithStatusMeta).init(allocator);
+    defer {
+        for (expected_transactions.items) |etx| {
+            allocator.free(etx.meta.pre_balances);
+            allocator.free(etx.meta.post_balances);
+        }
+        expected_transactions.deinit();
+    }
+    for (entries) |entry| {
+        for (entry.transactions.items) |transaction| {
+            var pre_balances = std.ArrayList(u64).init(allocator);
+            var post_balances = std.ArrayList(u64).init(allocator);
+            const num_accounts = transaction.message.accountKeys().len;
+            for (0..num_accounts) |i| {
+                try pre_balances.append(i * 10);
+                try post_balances.append(i * 11);
+            }
+            const compute_units_consumed = 12345;
+            const signature = transaction.signatures[0];
+
+            var pre_cloned = try pre_balances.clone();
+            const pre_owned = try pre_cloned.toOwnedSlice();
+            defer allocator.free(pre_owned);
+            var post_cloned = try post_balances.clone();
+            const post_owned = try post_cloned.toOwnedSlice();
+            defer allocator.free(post_owned);
+
+            const status = ledger.meta.TransactionStatusMeta{
+                .status = null,
+                .fee = 42,
+                .pre_balances = pre_owned,
+                .post_balances = post_owned,
+                .inner_instructions = &.{},
+                .log_messages = &.{},
+                .pre_token_balances = &.{},
+                .post_token_balances = &.{},
+                .rewards = &.{},
+                .loaded_addresses = .{},
+                .return_data = .{},
+                .compute_units_consumed = compute_units_consumed,
+            };
+            try db.put(schema.transaction_status, .{ signature, slot }, status);
+            try db.put(schema.transaction_status, .{ signature, slot + 1 }, status);
+            try db.put(schema.transaction_status, .{ signature, slot + 2 }, status);
+            try expected_transactions.append(VersionedTransactionWithStatusMeta{
+                .transaction = transaction,
+                .meta = ledger.meta.TransactionStatusMeta{
+                    .status = null,
+                    .fee = 42,
+                    .pre_balances = try pre_balances.toOwnedSlice(),
+                    .post_balances = try post_balances.toOwnedSlice(),
+                    .inner_instructions = &.{},
+                    .log_messages = &.{},
+                    .pre_token_balances = &.{},
+                    .post_token_balances = &.{},
+                    .rewards = &.{},
+                    .loaded_addresses = .{},
+                    .return_data = .{},
+                    .compute_units_consumed = compute_units_consumed,
+                },
+            });
+        }
+    }
+    // TODO 
 }
 
 /// ensures the path exists as an empty directory.
@@ -67,6 +160,13 @@ pub fn freshDir(path: []const u8) !void {
         try std.fs.cwd().deleteTree(path);
     } else |_| {}
     try std.fs.cwd().makePath(path);
+}
+
+const test_shreds_dir = "test_data/shreds";
+
+fn testShreds(comptime filename: []const u8) ![]const Shred {
+    const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
+    return loadShredsFromFile(std.testing.allocator, path);
 }
 
 /// Read shreds from binary file structured like this:
@@ -129,4 +229,96 @@ fn writeChunk(writer: anytype, chunk: []const u8) !void {
 pub fn deinitShreds(allocator: Allocator, shreds: []const Shred) void {
     for (shreds) |shred| shred.deinit();
     allocator.free(shreds);
+}
+
+/// Read entries from binary file structured like this:
+/// [entry0_len: u64(little endian)][entry0_bincode][entry1_len...
+pub fn loadEntriesFromFile(allocator: Allocator, path: []const u8) ![]const Entry {
+    const file = try std.fs.cwd().openFile(path, .{});
+    const reader = file.reader();
+    var entries = std.ArrayList(Entry).init(allocator);
+    while (try readChunk(allocator, reader)) |chunk| {
+        defer allocator.free(chunk);
+        try entries.append(try sig.bincode.readFromSlice(allocator, Entry, chunk, .{}));
+    }
+    return entries.toOwnedSlice();
+}
+
+const State = TestState("global");
+const DB = TestDB("global");
+
+pub fn TestState(scope: []const u8) type {
+    return struct {
+        db: BlockstoreDB,
+        registry: sig.prometheus.Registry(.{}),
+        lowest_cleanup_slot: sig.sync.RwMux(Slot),
+        max_root: std.atomic.Value(Slot),
+
+        // if this leaks, you forgot to call `TestState.deinit`
+        _leak_check: *u8,
+
+        /// This is used instead of std.testing.allocator because it includes more stack trace frames
+        /// std.testing.allocator is already the same exact allocator, just with a call to detectLeaks
+        /// run at the end of the test. TestState does the same, so we can use the gpa directly.
+        var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 100 }){};
+        /// This is private to ensure _leak_check is initialized before this is used.
+        const _allocator = gpa.allocator();
+
+        const Self = @This();
+
+        pub fn init(comptime test_name: []const u8) !*Self {
+            const self = try _allocator.create(Self);
+            self.* = .{
+                .db = try TestDB(scope).initCustom(_allocator, test_name),
+                .registry = sig.prometheus.Registry(.{}).init(_allocator),
+                .lowest_cleanup_slot = sig.sync.RwMux(Slot).init(0),
+                .max_root = std.atomic.Value(Slot).init(0),
+                ._leak_check = try std.testing.allocator.create(u8),
+            };
+            return self;
+        }
+
+        pub fn allocator(_: Self) Allocator {
+            return _allocator;
+        }
+
+        pub fn shredInserter(self: *Self) !ledger.ShredInserter {
+            return ledger.ShredInserter.init(_allocator, test_logger, &self.registry, self.db);
+        }
+
+        pub fn writer(self: *Self) !ledger.BlockstoreWriter {
+            return try ledger.BlockstoreWriter.init(
+                _allocator,
+                test_logger,
+                self.db,
+                &self.lowest_cleanup_slot,
+                &self.max_root,
+                &self.registry,
+            );
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.db.deinit();
+            self.registry.deinit();
+            std.testing.allocator.destroy(self._leak_check);
+            _allocator.destroy(self);
+            _ = gpa.detectLeaks();
+        }
+    };
+}
+
+pub fn TestDB(scope: []const u8) type {
+    const dir = "test_data/blockstore";
+
+    return struct {
+        pub fn init(comptime test_name: []const u8) !BlockstoreDB {
+            return try initCustom(std.testing.allocator, test_name);
+        }
+
+        pub fn initCustom(allocator: Allocator, comptime test_name: []const u8) !BlockstoreDB {
+            const path = comptimePrint("{s}/{s}/{s}", .{ dir, scope, test_name });
+            try sig.ledger.tests.freshDir(path);
+            return try BlockstoreDB.open(allocator, test_logger, path);
+        }
+    };
 }

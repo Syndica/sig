@@ -73,14 +73,14 @@ pub const RewardType = enum {
 
 pub const LoadedAddresses = struct {
     /// List of addresses for writable loaded accounts
-    writable: []const sig.core.Pubkey,
+    writable: []const sig.core.Pubkey = &.{},
     /// List of addresses for read-only loaded accounts
-    readonly: []const sig.core.Pubkey,
+    readonly: []const sig.core.Pubkey = &.{},
 };
 
 pub const TransactionReturnData = struct {
-    program_id: sig.core.Pubkey,
-    data: []const u8,
+    program_id: sig.core.Pubkey = sig.core.Pubkey.default(),
+    data: []const u8 = &.{},
 };
 
 pub const TransactionError = union(enum) {

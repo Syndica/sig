@@ -63,6 +63,12 @@ pub fn read(allocator: std.mem.Allocator, comptime U: type, reader: anytype, par
         else => U,
     };
 
+    if (getConfig(T)) |type_config| {
+        if (type_config.deserializer) |deserialize_fcn| {
+            return deserialize_fcn(allocator, reader, params);
+        }
+    }
+
     switch (@typeInfo(T)) {
         .Void => return {},
         .Bool => return switch (try reader.readByte()) {
@@ -402,6 +408,12 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
         else => @TypeOf(data),
     };
 
+    if (getConfig(T)) |type_config| {
+        if (type_config.serializer) |serialize_fcn| {
+            return serialize_fcn(writer, data, params);
+        }
+    }
+
     switch (@typeInfo(T)) {
         .Type, .Void, .NoReturn, .Undefined, .Null, .Fn, .Opaque, .Frame, .AnyFrame => return,
         .Bool => return writer.writeByte(@intFromBool(data)),
@@ -410,11 +422,6 @@ pub fn write(writer: anytype, data: anytype, params: bincode.Params) !void {
             comptime if (@hasDecl(T, "BincodeSize")) {
                 SerializedSize = T.BincodeSize;
             };
-            if (getConfig(T)) |type_config| {
-                if (type_config.serializer) |serialize_fcn| {
-                    return serialize_fcn(writer, data, params);
-                }
-            }
 
             return bincode.write(writer, @as(SerializedSize, @intFromEnum(data)), params);
         },
@@ -708,11 +715,15 @@ pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
     };
 }
 
-pub fn getConfig(comptime struct_type: type) ?FieldConfig(struct_type) {
-    const bincode_field = "!bincode-config";
-    if (@hasDecl(struct_type, bincode_field)) {
-        const type_config = @field(struct_type, bincode_field);
-        return type_config;
+pub fn getConfig(comptime T: type) ?FieldConfig(T) {
+    const config_field_name = "!bincode-config";
+    switch (@typeInfo(T)) {
+        .Struct, .Enum, .Union, .Opaque => {
+            if (@hasDecl(T, config_field_name)) {
+                return @field(T, config_field_name);
+            }
+        },
+        else => return null,
     }
     return null;
 }
@@ -796,6 +807,21 @@ const ShredType = enum(u8) {
 
     pub const @"!bincode-config" = ShredTypeConfig();
 };
+
+pub fn testRoundTrip(comptime T: type, test_data: anytype) !void {
+    const allocator = std.testing.allocator;
+    const expected_bytes = test_data.bincode_serialized_bytes;
+    const expected_struct = try test_data.asStruct(allocator);
+    defer expected_struct.deinit(allocator);
+
+    const actual_bytes = try sig.bincode.writeAlloc(allocator, expected_struct, .{});
+    defer allocator.free(actual_bytes);
+    try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
+
+    const actual_struct = try sig.bincode.readFromSlice(allocator, T, actual_bytes, .{});
+    defer actual_struct.deinit(allocator);
+    try std.testing.expect(sig.utils.types.eql(expected_struct, actual_struct, .{}));
+}
 
 test "bincode: custom enum" {
     const x = ShredType.Data;

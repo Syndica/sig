@@ -40,6 +40,24 @@ pub const BlockstoreWriter = struct {
 
     const Self = @This();
 
+    pub fn init(
+        allocator: Allocator,
+        logger: Logger,
+        db: BlockstoreDB,
+        lowest_cleanup_slot: *RwMux(Slot),
+        max_root: *std.atomic.Value(Slot),
+        registry: *sig.prometheus.Registry(.{}),
+    ) !BlockstoreWriter {
+        return .{
+            .allocator = allocator,
+            .logger = logger,
+            .db = db,
+            .lowest_cleanup_slot = lowest_cleanup_slot,
+            .max_root = max_root,
+            .scan_and_fix_roots_metrics = try ScanAndFixRootsMetrics.init(registry),
+        };
+    }
+
     /// agave: write_transaction_status
     pub fn writeTransactionStatus(
         self: *Self,
