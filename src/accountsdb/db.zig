@@ -93,7 +93,13 @@ pub const AccountsDB = struct {
 
     geyser_writer: ?*GeyserWriter,
 
-    /// When a given counter reaches 0, it is to be removed.
+    /// Tracks how many accounts (which we have stored) are dead for a specific slot.
+    /// Used during clean to queue an AccountFile for shrink if it contains
+    /// a large percentage of dead accounts, or deletion if the file contains only
+    /// dead accounts.
+    ///
+    /// When a given counter reaches 0, it is to be removed (ie, if a slot does not exist
+    /// in this map, then its safe to assume it has 0 dead accounts).
     /// When a counter is first added, it must be initialized to 0.
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
@@ -166,6 +172,9 @@ pub const AccountsDB = struct {
         /// This RwLock is used to ensure files in the file_map are not closed while its held as a read-lock.
         /// To close any files, a write-lock must be acquired. When reading from account files contained in the
         /// file_map, a read-lock must be acquired and held for the full duration.
+        ///
+        /// NOTE: Holding a write lock on this is very expensive, so we only acquire
+        /// a write-lock inside `deleteAccountFiles` which has a minimal amount of logic.
         fd_keep_open_rw: std.Thread.RwLock = .{},
     };
 
@@ -1363,7 +1372,7 @@ pub const AccountsDB = struct {
                 // self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
-                self.deleteAccountFiles(delete_account_files.keys());
+                try self.deleteAccountFiles(delete_account_files.keys());
             }
         }
     }
@@ -1632,11 +1641,9 @@ pub const AccountsDB = struct {
 
                         const dead_percentage = 100 * accounts_dead_count / accounts_total_count;
                         if (dead_percentage == 100) {
-                            // queue for delete
-                            try delete_account_files.put(ref_file_id, {});
-
-                            // if its queued for shrink, avoid unnecessary work by directly queueing it for deletion
+                            // if its queued for shrink, remove it and queue it for deletion
                             _ = shrink_account_files.swapRemove(ref_file_id);
+                            try delete_account_files.put(ref_file_id, {});
                         } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
                             // queue for shrink
                             try shrink_account_files.put(ref_file_id, {});
@@ -1667,37 +1674,45 @@ pub const AccountsDB = struct {
     pub fn deleteAccountFiles(
         self: *Self,
         delete_account_files: []const FileId,
-    ) void {
+    ) !void {
+        const number_of_files = delete_account_files.len;
         defer {
-            const number_of_files = delete_account_files.len;
             self.stats.number_files_deleted.add(number_of_files);
         }
 
-        // hold the lock for the entire duration of delete to
-        // reduce how much contention exists with other threads.
-        self.file_map_safe.fd_keep_open_rw.lock();
-        defer self.file_map_safe.fd_keep_open_rw.unlock();
+        var account_file_infos = try std.ArrayList(struct { AccountFile, FileId }).initCapacity(
+            self.allocator,
+            number_of_files,
+        );
+        defer account_file_infos.deinit();
 
-        for (delete_account_files) |file_id| {
-            const slot = blk: {
-                const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
-                defer file_map_lg.unlock();
+        {
+            // hold the lock for the entire duration of delete to
+            // reduce how much contention exists with other threads.
+            self.file_map_safe.fd_keep_open_rw.lock();
+            defer self.file_map_safe.fd_keep_open_rw.unlock();
 
+            const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+            defer file_map_lg.unlock();
+
+            for (delete_account_files) |file_id| {
                 const account_file = file_map.get(file_id).?;
 
-                const slot = account_file.slot;
-                self.logger.infof("deleting slot: {}...", .{slot});
-
                 // remove from file map
+                // NOTE: this is the minimial amount of work we need to do with the fd_keep_open_rw lock
                 const did_remove = file_map.swapRemove(file_id);
                 std.debug.assert(did_remove);
 
-                // deinit the account file struct
-                account_file.deinit();
+                account_file_infos.appendAssumeCapacity(.{ account_file, file_id });
+            }
+        }
 
-                break :blk slot;
-            };
+        for (account_file_infos.items) |info| {
+            const account_file, const file_id = info;
+            const slot = account_file.slot;
+            self.logger.infof("deleting slot: {}...", .{slot});
 
+            account_file.deinit();
             // NOTE: this should always succeed or something is wrong
             // delete file from disk
             self.deleteAccountFile(slot, file_id) catch |err| {
@@ -1706,16 +1721,18 @@ pub const AccountsDB = struct {
                     .{ slot, file_id.toInt(), @errorName(err) },
                 );
             };
+        }
 
-            remove_dead_counter: {
-                const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
-                defer dead_accounts_counter_lg.unlock();
+        {
+            const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_counter_lg.unlock();
 
-                const current_count = dead_accounts_counter.get(slot) orelse break :remove_dead_counter;
-                if (current_count == 0) {
-                    const did_remove = dead_accounts_counter.swapRemove(slot);
-                    std.debug.assert(did_remove);
-                }
+            for (account_file_infos.items) |info| {
+                const slot = info[0].slot;
+                // there are two cases for an account file being queued for deletion from cleaning:
+                // 1) it was queued for shrink, and this is the *old* accountFile: dead_count == 0 and the slot DNE in the map (shrink removed it)
+                // 2) it contains 100% dead accounts (in which dead_count > 0 and we can remove it from the map)
+                _ = dead_accounts_counter.swapRemove(slot);
             }
         }
     }
@@ -1890,6 +1907,7 @@ pub const AccountsDB = struct {
                 reference_memory_entry.value_ptr.* = new_reference_block;
             }
 
+            // queue the old account_file for deletion
             delete_account_files.putAssumeCapacityNoClobber(shrink_file_id, {});
 
             {
@@ -3784,7 +3802,7 @@ test "full clean account file works" {
         try std.testing.expect(file_map.get(delete_file_id) != null);
     }
 
-    accounts_db.deleteAccountFiles(delete_account_files.keys());
+    try accounts_db.deleteAccountFiles(delete_account_files.keys());
 
     {
         const file_map, var file_map_lg = accounts_db.file_map_safe.file_map.readWithLock();
