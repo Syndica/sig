@@ -1673,11 +1673,13 @@ pub const AccountsDB = struct {
             self.stats.number_files_deleted.add(number_of_files);
         }
 
+        // hold the lock for the entire duration of delete to
+        // reduce how much contention exists with other threads.
+        self.file_map_safe.fd_keep_open_rw.lock();
+        defer self.file_map_safe.fd_keep_open_rw.unlock();
+
         for (delete_account_files) |file_id| {
             const slot = blk: {
-                self.file_map_safe.fd_keep_open_rw.lock();
-                defer self.file_map_safe.fd_keep_open_rw.unlock();
-
                 const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
                 defer file_map_lg.unlock();
 
