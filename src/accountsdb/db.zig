@@ -1441,7 +1441,7 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     /// Returns the unclean file id.
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
-        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+        var timer = try sig.time.Timer.start();
 
         defer self.stats.number_files_flushed.inc();
 
@@ -1587,8 +1587,6 @@ pub const AccountsDB = struct {
                 break :blk file_map.get(file_id).?;
             };
 
-            self.logger.debugf("cleaning slot: {}...", .{account_file.slot});
-
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
                 const pubkey = account.pubkey().*;
@@ -1684,7 +1682,7 @@ pub const AccountsDB = struct {
             references_to_delete.clearRetainingCapacity();
             self.stats.clean_references_deleted.set(references_to_delete.items.len);
             self.logger.debugf(
-                "cleaned slot {} -  old_state: {}, zero_lamports: {}",
+                "cleaned slot {} - old_state: {}, zero_lamports: {}",
                 .{ account_file.slot, num_old_states, num_zero_lamports },
             );
         }

@@ -39,8 +39,6 @@ pub const TrackedAccount = struct {
 };
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
-    _ = try sig.accounts_db.db.AccountsDBStats.init();
-
     const maybe_max_actions_string = args.next();
     const maybe_max_actions = blk: {
         if (maybe_max_actions_string) |max_actions_str| {
