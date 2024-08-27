@@ -62,6 +62,10 @@ pub fn SwissMapManaged(
             return @call(.always_inline, Unmanaged.remove, .{ &self.unmanaged, key });
         }
 
+        pub fn fetchRemove(self: *Self, key: Key) error{KeyNotFound}!Value {
+            return @call(.always_inline, Unmanaged.fetchRemove, .{ self, key });
+        }
+
         pub fn get(self: *const @This(), key: Key) ?Value {
             return @call(.always_inline, Unmanaged.get, .{ &self.unmanaged, key });
         }
@@ -273,7 +277,22 @@ pub fn SwissMapUnmanaged(
             value_ptr: *Value,
         };
 
-        pub fn remove(self: *@This(), key: Key) error{KeyNotFound}!void {
+        pub fn remove(self: *Self, key: Key) error{KeyNotFound}!void {
+            return @call(.always_inline, removeImpl, .{ self, key, .void });
+        }
+
+        pub fn fetchRemove(self: *Self, key: Key) error{KeyNotFound}!Value {
+            return @call(.always_inline, removeImpl, .{ self, key, .value });
+        }
+
+        fn removeImpl(
+            self: *@This(),
+            key: Key,
+            comptime ret: enum { void, value },
+        ) error{KeyNotFound}!switch (ret) {
+            .void => void,
+            .value => Value,
+        } {
             if (self._capacity == 0) return error.KeyNotFound;
             const hash = hash_fn(key);
             var group_index = hash & self.bit_mask;
@@ -293,6 +312,11 @@ pub fn SwissMapUnmanaged(
                     inline for (0..GROUP_SIZE) |j| {
                         // remove here
                         if (match_vec[j] and eq_fn(self.groups[group_index][j].key, key)) {
+                            const result = switch (ret) {
+                                .void => {},
+                                .value => self.groups[group_index][j].value,
+                            };
+
                             //
                             // search works by searching each group starting from group_index until an empty state is found
                             // because if theres an empty state, the key DNE
@@ -307,7 +331,7 @@ pub fn SwissMapUnmanaged(
                             const new_state = if (@reduce(.Or, EMPTY_STATE_VEC == state_vec)) EMPTY_STATE else DELETED_STATE;
                             self.states[group_index][j] = @bitCast(new_state);
                             self._count -= 1;
-                            return;
+                            return result;
                         }
                     }
                 }
