@@ -14,6 +14,8 @@ accounts-db opens many account files which requires admin changes to the machine
 Based on the above resources and individual testing, we concluded that to increase the number of open file descriptors and vnodes until next reboot, one must run:
 1. `ulimit -Sn 100100100`
 2. `sudo sysctl kern.maxvnodes=100100100`: warning, this has been known to crash when the SystemFdQuotaExceeded error would have been issues otherwise
+3. `sudo sysctl -w kern.maxfiles=100100100`
+4. `sudo sysctl -w kern.maxfilesperproc=100100100`
 
 ## Persistent changes
 The following details how to make the changes described above persistent, although it is not recommended, especially not in the second case.
