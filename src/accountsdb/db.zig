@@ -56,6 +56,7 @@ pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
+pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
 pub const AccountsDBStats = struct {
     number_files_flushed: *Counter,
@@ -89,7 +90,12 @@ pub const AccountsDB = struct {
 
     /// track per-slot for purge/flush
     account_cache: RwMux(AccountCache),
-    file_map_safe: ThreadSafeFileMap = .{},
+
+    /// NOTE: see accountsdb/readme.md for more details on how these are used
+    file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
+    /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
+    /// NOTE: see accountsdb/readme.md for more details on how these are used
+    file_map_fd_rw: std.Thread.RwLock = .{},
 
     geyser_writer: ?*GeyserWriter,
 
@@ -107,9 +113,7 @@ pub const AccountsDB = struct {
     // TODO: do we need this? since flushed slots will be unique
     largest_file_id: FileId = FileId.fromInt(0),
 
-    // TODO: when working on consensus, we'll swap the main rooted slot field out,
-    // and evaluate the rest.
-
+    // TODO: integrate these values into consensus
     /// Used for flushing/cleaning/purging/shrinking.
     largest_rooted_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
     /// Represents the largest slot for which all account data has been flushed to disk.
@@ -137,46 +141,6 @@ pub const AccountsDB = struct {
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
     pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
-
-    /// File Map with additional variables to ensure its used saftely across multiple threads
-    pub const ThreadSafeFileMap = struct {
-        //! USAGE/CONTEXT:
-        //!
-        //! Theres three main thread-safe scenarios we care about:
-        //!
-        //! * Adding new account files (flushing):
-        //! Adding an account file should never invalidate the
-        //! account files observed by another thread. The file-map should be
-        //! write-locked to account for map resizing if theres not enough space.
-        //!
-        //! * Reading account files (snapshot generation, account queries):
-        //! All reading threads must first acquire a read (shared) lock on the fd_keep_open_rw,
-        //! before acquiring a lock on the file map, and reading an account file - to ensure
-        //! account files will not be closed while being read.
-        //!
-        //! After doing so, the file_map_rw may be unlocked, without
-        //! releasing the fd_keep_open_rw, allowing other threads to modify the file_map,
-        //! whilst preventing any files being closed until all reading threads have finished their work.
-        //!
-        //! * Removing account files (shrinking, purging):
-        //! A thread which wants to delete/close an account files must first
-        //! acquire a write (exclusive) lock on `fd_keep_open_rw`, before acquiring
-        //! a write-lock on the file map to access the account_file and close/delete it.
-        //!
-        //! NOTE: no method modifieds/mutates account files after they have been
-        //! flushed. They are 'shrunk' with deletion + creating a 'smaller' file, or purged
-        //! with deletion. This allows us to *not* use a lock per-account-file.
-
-        file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
-
-        /// This RwLock is used to ensure files in the file_map are not closed while its held as a read-lock.
-        /// To close any files, a write-lock must be acquired. When reading from account files contained in the
-        /// file_map, a read-lock must be acquired and held for the full duration.
-        ///
-        /// NOTE: Holding a write lock on this is very expensive, so we only acquire
-        /// a write-lock inside `deleteAccountFiles` which has a minimal amount of logic.
-        fd_keep_open_rw: std.Thread.RwLock = .{},
-    };
 
     pub const InitConfig = struct {
         number_of_index_bins: usize,
@@ -272,7 +236,7 @@ pub const AccountsDB = struct {
             account_cache.deinit();
         }
         {
-            const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
             file_map.deinit(self.allocator);
         }
@@ -403,7 +367,7 @@ pub const AccountsDB = struct {
             // the the main accounts-db index
             for (loading_threads.items) |*loading_thread| {
                 // NOTE: deinit hashmap, dont close the files
-                const file_map, var file_map_lg = loading_thread.file_map_safe.file_map.writeWithLock();
+                const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
                 defer file_map_lg.unlock();
                 file_map.deinit(self.allocator);
 
@@ -480,7 +444,7 @@ pub const AccountsDB = struct {
         // NOTE: we can hold this lock for the entire function
         // because nothing else should be access the filemap
         // while loading from a snapshot
-        const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
 
         const n_account_files = file_map_end_index - file_map_start_index;
@@ -718,16 +682,16 @@ pub const AccountsDB = struct {
 
         // NOTE: nothing else should try to access the file_map
         // while we are merging so this long hold is ok.
-        const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+        const file_map, var file_map_lg = self.file_map.writeWithLock();
         defer file_map_lg.unlock();
 
         for (thread_dbs) |*thread_db| {
             // combine file maps
             {
-                thread_db.file_map_safe.fd_keep_open_rw.lockShared();
-                defer thread_db.file_map_safe.fd_keep_open_rw.unlockShared();
+                thread_db.file_map_fd_rw.lockShared();
+                defer thread_db.file_map_fd_rw.unlockShared();
 
-                const thread_file_map, var thread_file_map_lg = thread_db.file_map_safe.file_map.readWithLock();
+                const thread_file_map, var thread_file_map_lg = thread_db.file_map.readWithLock();
                 defer thread_file_map_lg.unlock();
 
                 try file_map.ensureUnusedCapacity(self.allocator, thread_file_map.count());
@@ -1248,7 +1212,6 @@ pub const AccountsDB = struct {
                 flush_slots.clearRetainingCapacity();
                 unclean_account_files.clearRetainingCapacity();
                 shrink_account_files.clearRetainingCapacity();
-                delete_account_files.clearRetainingCapacity();
             };
 
             if (must_flush_slots) {
@@ -1372,7 +1335,10 @@ pub const AccountsDB = struct {
                 // self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
-                try self.deleteAccountFiles(delete_account_files.keys());
+                if (delete_account_files.count() > DELETE_ACCOUNT_FILES_MIN) {
+                    defer delete_account_files.clearRetainingCapacity();
+                    try self.deleteAccountFiles(delete_account_files.keys());
+                }
             }
         }
     }
@@ -1471,7 +1437,7 @@ pub const AccountsDB = struct {
 
         // update the file map
         {
-            const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
             try file_map.putNoClobber(self.allocator, file_id, account_file);
         }
@@ -1557,11 +1523,11 @@ pub const AccountsDB = struct {
             // NOTE: this read-lock is held for a while but
             // is not expensive since writes only happen
             // during shrink/delete (which dont happen in parallel to this fcn)
-            self.file_map_safe.fd_keep_open_rw.lockShared();
-            defer self.file_map_safe.fd_keep_open_rw.unlockShared();
+            self.file_map_fd_rw.lockShared();
+            defer self.file_map_fd_rw.unlockShared();
 
             const account_file = blk: {
-                const file_map, var file_map_lg = self.file_map_safe.file_map.readWithLock();
+                const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
                 break :blk file_map.get(file_id).?;
             };
@@ -1630,7 +1596,7 @@ pub const AccountsDB = struct {
                             } else {
                                 // read number of accounts from another file
                                 const ref_account_file = ref_blk: {
-                                    const file_map, var file_map_lg = self.file_map_safe.file_map.readWithLock();
+                                    const file_map, var file_map_lg = self.file_map.readWithLock();
                                     defer file_map_lg.unlock();
                                     break :ref_blk file_map.get(ref_file_id).?; // we are holding a lock on `disk_accounts.file_rw`.
                                 };
@@ -1680,42 +1646,45 @@ pub const AccountsDB = struct {
             self.stats.number_files_deleted.add(number_of_files);
         }
 
-        var account_file_infos = try std.ArrayList(struct { AccountFile, FileId }).initCapacity(
+        var delete_queue = try std.ArrayList(struct { AccountFile, FileId }).initCapacity(
             self.allocator,
             number_of_files,
         );
-        defer account_file_infos.deinit();
+        defer delete_queue.deinit();
 
         {
-            // hold the lock for the entire duration of delete to
-            // reduce how much contention exists with other threads.
-            self.file_map_safe.fd_keep_open_rw.lock();
-            defer self.file_map_safe.fd_keep_open_rw.unlock();
+            // we acquire this lock to ensure no account files are being accessed
+            self.file_map_fd_rw.lock();
+            defer self.file_map_fd_rw.unlock();
 
-            const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+            // we acquire this lock to saftely remove file_id's from the file_map
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
 
             for (delete_account_files) |file_id| {
                 const account_file = file_map.get(file_id).?;
 
                 // remove from file map
-                // NOTE: this is the minimial amount of work we need to do with the fd_keep_open_rw lock
                 const did_remove = file_map.swapRemove(file_id);
                 std.debug.assert(did_remove);
 
-                account_file_infos.appendAssumeCapacity(.{ account_file, file_id });
+                // NOTE: we can queue the actual removal of the account file without the lock because
+                // because we know 1) no account files are being accessed and 2) no files are reading
+                // from the file_map, so its no possible to access the file after this block returns.
+                delete_queue.appendAssumeCapacity(.{ account_file, file_id });
             }
         }
 
-        for (account_file_infos.items) |info| {
-            const account_file, const file_id = info;
+        for (delete_queue.items) |file_to_delete| {
+            const account_file, const file_id = file_to_delete;
             const slot = account_file.slot;
             self.logger.infof("deleting slot: {}...", .{slot});
 
             account_file.deinit();
-            // NOTE: this should always succeed or something is wrong
+
             // delete file from disk
             self.deleteAccountFile(slot, file_id) catch |err| {
+                // NOTE: this should always succeed or something is wrong
                 self.logger.errf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
                     .{ slot, file_id.toInt(), @errorName(err) },
@@ -1727,8 +1696,8 @@ pub const AccountsDB = struct {
             const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_counter_lg.unlock();
 
-            for (account_file_infos.items) |info| {
-                const slot = info[0].slot;
+            for (delete_queue.items) |file_to_delete| {
+                const slot = file_to_delete[0].slot;
                 // there are two cases for an account file being queued for deletion from cleaning:
                 // 1) it was queued for shrink, and this is the *old* accountFile: dead_count == 0 and the slot DNE in the map (shrink removed it)
                 // 2) it contains 100% dead accounts (in which dead_count > 0 and we can remove it from the map)
@@ -1770,11 +1739,11 @@ pub const AccountsDB = struct {
 
         var total_accounts_deleted: u64 = 0;
         for (shrink_account_files) |shrink_file_id| {
-            self.file_map_safe.fd_keep_open_rw.lockShared();
-            defer self.file_map_safe.fd_keep_open_rw.unlockShared();
+            self.file_map_fd_rw.lockShared();
+            defer self.file_map_fd_rw.unlockShared();
 
             const shrink_account_file = blk: {
-                const file_map, var file_map_lg = self.file_map_safe.file_map.readWithLock();
+                const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
                 break :blk file_map.get(shrink_file_id).?;
             };
@@ -1843,7 +1812,7 @@ pub const AccountsDB = struct {
 
             {
                 // add file to map
-                const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+                const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
                 try file_map.ensureUnusedCapacity(self.allocator, 1);
 
@@ -2036,7 +2005,7 @@ pub const AccountsDB = struct {
                 );
                 return .{
                     .{ .file = account },
-                    .{ .file = &self.file_map_safe.fd_keep_open_rw },
+                    .{ .file = &self.file_map_fd_rw },
                 };
             },
             .Cache => |ref_info| {
@@ -2064,26 +2033,26 @@ pub const AccountsDB = struct {
         offset: usize,
     ) (GetAccountInFileError || std.mem.Allocator.Error)!Account {
         const account_in_file = try self.getAccountInFileAndLock(file_id, offset);
-        defer self.file_map_safe.fd_keep_open_rw.unlockShared();
+        defer self.file_map_fd_rw.unlockShared();
         return try account_in_file.toOwnedAccount(account_allocator);
     }
 
     /// Gets an account given an file_id and offset value.
     /// Locks the account file entries, and returns the account.
-    /// Must call `self.disk_accounts.fd_keep_open_rw.unlockShared()`
+    /// Must call `self.disk_accounts.file_map_fd_rw.unlockShared()`
     /// when done with the account.
     pub fn getAccountInFileAndLock(
         self: *Self,
         file_id: FileId,
         offset: usize,
     ) GetAccountInFileError!AccountInFile {
-        self.file_map_safe.fd_keep_open_rw.lockShared();
-        errdefer self.file_map_safe.fd_keep_open_rw.unlockShared();
+        self.file_map_fd_rw.lockShared();
+        errdefer self.file_map_fd_rw.unlockShared();
         return try self.getAccountInFileAssumeLock(file_id, offset);
     }
 
     /// Gets an account given a file_id and an offset value.
-    /// Assumes `self.disk_accounts.fd_keep_open_rw` is at least
+    /// Assumes `self.disk_accounts.file_map_fd_rw` is at least
     /// locked for reading (shared).
     pub fn getAccountInFileAssumeLock(
         self: *Self,
@@ -2091,7 +2060,7 @@ pub const AccountsDB = struct {
         offset: usize,
     ) GetAccountInFileError!AccountInFile {
         const account_file: AccountFile = blk: {
-            const file_map, var file_map_lg = self.file_map_safe.file_map.readWithLock();
+            const file_map, var file_map_lg = self.file_map.readWithLock();
             defer file_map_lg.unlock();
             break :blk file_map.get(file_id) orelse return error.FileIdNotFound;
         };
@@ -2104,11 +2073,11 @@ pub const AccountsDB = struct {
     ) (GetAccountInFileError)!struct { Hash, u64 } {
         switch (location) {
             .File => |ref_info| {
-                self.file_map_safe.fd_keep_open_rw.lockShared();
-                defer self.file_map_safe.fd_keep_open_rw.unlockShared();
+                self.file_map_fd_rw.lockShared();
+                defer self.file_map_fd_rw.unlockShared();
 
                 const account_file = blk: {
-                    const file_map, var file_map_lg = self.file_map_safe.file_map.readWithLock();
+                    const file_map, var file_map_lg = self.file_map.readWithLock();
                     defer file_map_lg.unlock();
                     break :blk file_map.get(ref_info.file_id) orelse return error.FileIdNotFound;
                 };
@@ -2210,7 +2179,7 @@ pub const AccountsDB = struct {
         try self.account_index.putReferenceBlock(account_file.slot, references);
 
         {
-            const file_map, var file_map_lg = self.file_map_safe.file_map.writeWithLock();
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
 
             try file_map.put(self.allocator, account_file.id, account_file.*);
@@ -2465,10 +2434,10 @@ pub const AccountsDB = struct {
     ) !struct { FullSnapshotGenerationPackage, FullSnapshotGenerationInfo } {
         // NOTE: we hold the lock for the entire duration of the procedure to ensure
         // flush and clean do not create files while generating a snapshot.
-        self.file_map_safe.fd_keep_open_rw.lockShared();
-        defer self.file_map_safe.fd_keep_open_rw.unlockShared();
+        self.file_map_fd_rw.lockShared();
+        defer self.file_map_fd_rw.unlockShared();
 
-        var file_map_rw = self.file_map_safe.file_map.read();
+        var file_map_rw = self.file_map.read();
         errdefer file_map_rw.unlock();
         const file_map = file_map_rw.get();
 
@@ -2654,10 +2623,10 @@ pub const AccountsDB = struct {
     ) MakeIncSnapshotPackgeError!struct { IncSnapshotGenerationPackage, IncSnapshotGenerationInfo } {
         // NOTE: we hold the lock for the entire duration of the procedure to ensure
         // flush and clean do not create files while generating a snapshot.
-        self.file_map_safe.fd_keep_open_rw.lockShared();
-        defer self.file_map_safe.fd_keep_open_rw.unlockShared();
+        self.file_map_fd_rw.lockShared();
+        defer self.file_map_fd_rw.unlockShared();
 
-        var file_map_rw = self.file_map_safe.file_map.read();
+        var file_map_rw = self.file_map.read();
         errdefer file_map_rw.unlock();
         const file_map = file_map_rw.get();
 
@@ -3507,11 +3476,11 @@ test "flushing slots works" {
     defer unclean_account_files.deinit();
     try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
-    accounts_db.file_map_safe.fd_keep_open_rw.lock();
-    defer accounts_db.file_map_safe.fd_keep_open_rw.unlock();
+    accounts_db.file_map_fd_rw.lock();
+    defer accounts_db.file_map_fd_rw.unlock();
 
     // try the validation
-    const file_map, var file_map_lg = accounts_db.file_map_safe.file_map.readWithLock();
+    const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
     defer file_map_lg.unlock();
 
     const file_id = file_map.keys()[0];
@@ -3797,7 +3766,7 @@ test "full clean account file works" {
 
     // test delete
     {
-        const file_map, var file_map_lg = accounts_db.file_map_safe.file_map.readWithLock();
+        const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
         try std.testing.expect(file_map.get(delete_file_id) != null);
     }
@@ -3805,7 +3774,7 @@ test "full clean account file works" {
     try accounts_db.deleteAccountFiles(delete_account_files.keys());
 
     {
-        const file_map, var file_map_lg = accounts_db.file_map_safe.file_map.readWithLock();
+        const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
         try std.testing.expectEqual(null, file_map.get(delete_file_id));
     }
@@ -3883,10 +3852,10 @@ test "shrink account file works" {
     try std.testing.expectEqual(9, clean_result.num_old_states);
 
     const pre_shrink_size = blk: {
-        accounts_db.file_map_safe.fd_keep_open_rw.lockShared();
-        defer accounts_db.file_map_safe.fd_keep_open_rw.unlockShared();
+        accounts_db.file_map_fd_rw.lockShared();
+        defer accounts_db.file_map_fd_rw.unlockShared();
 
-        const file_map, var file_map_lg = accounts_db.file_map_safe.file_map.readWithLock();
+        const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
 
         const slot_file_id: FileId = for (file_map.keys()) |file_id| {
@@ -3914,10 +3883,10 @@ test "shrink account file works" {
 
     // test: new account file is shrunk
     {
-        accounts_db.file_map_safe.fd_keep_open_rw.lockShared();
-        defer accounts_db.file_map_safe.fd_keep_open_rw.unlockShared();
+        accounts_db.file_map_fd_rw.lockShared();
+        defer accounts_db.file_map_fd_rw.unlockShared();
 
-        const file_map2, var file_map_lg2 = accounts_db.file_map_safe.file_map.readWithLock();
+        const file_map2, var file_map_lg2 = accounts_db.file_map.readWithLock();
         defer file_map_lg2.unlock();
 
         const new_slot_file_id: FileId = blk: {
