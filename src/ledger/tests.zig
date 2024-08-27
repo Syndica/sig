@@ -8,15 +8,12 @@ const Allocator = std.mem.Allocator;
 
 const BlockstoreDB = ledger.BlockstoreDB;
 const Entry = sig.core.Entry;
-const LoadedAddresses = ledger.transaction_status.LoadedAddresses;
-const TransactionReturnData = ledger.transaction_status.TransactionReturnData;
 const Shred = ledger.shred.Shred;
 const Slot = sig.core.Slot;
 const SlotMeta = ledger.meta.SlotMeta;
 const VersionedTransactionWithStatusMeta = ledger.reader.VersionedTransactionWithStatusMeta;
 
 const comptimePrint = std.fmt.comptimePrint;
-const insertShredsForTest = ledger.insert_shred.insertShredsForTest;
 
 const schema = ledger.schema.schema;
 const test_logger = (sig.trace.TestLogger{}).logger();
@@ -150,7 +147,7 @@ test "insert shreds and transaction statuses then getRootedBlock" {
             });
         }
     }
-    // TODO 
+    // TODO
 }
 
 /// ensures the path exists as an empty directory.
