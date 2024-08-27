@@ -323,7 +323,6 @@ fn retryTransactions(
     transaction_pool_rw: *RwMux(TransactionPool),
     logger: Logger,
 ) !void {
-    // Retry transactions
     if (retry_signatures.items.len > 0) {
         var retry_transactions = try allocator.alloc(TransactionInfo, retry_signatures.items.len);
         defer allocator.free(retry_transactions);
