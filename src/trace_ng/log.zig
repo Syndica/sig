@@ -2,8 +2,11 @@ const std = @import("std");
 const Level = @import("level.zig").Level;
 const entry = @import("entry.zig");
 const logfmt = @import("logfmt.zig");
+// TODO Improve import.
+const Channel = @import("../sync/channel.zig").Channel;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
+const AtomicBool = std.atomic.Value(bool);
 
 const Entry = entry.Entry;
 const StdEntry = entry.StdEntry;
@@ -50,18 +53,57 @@ pub const Config = struct {
     level: Level = Level.debug,
 };
 
+const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
+
 const UnScoppedLogger = StandardLogger(null);
 pub fn StandardLogger(comptime scope: ?type) type {
     return struct {
         const Self = @This();
         level: Level,
-        allocator: Allocator, // Currently not used.
+        exit_sig: AtomicBool,
+        allocator: Allocator,
+        channel: *Channel(logfmt.LogMsg),
+        handle: ?std.Thread,
+
         pub fn init(allocator: Allocator, config: Config) Self {
-            return .{ .allocator = allocator, .level = config.level };
+            return .{
+                .allocator = allocator,
+                .level = config.level,
+                .exit_sig = AtomicBool.init(false),
+                .channel = Channel(logfmt.LogMsg).init(allocator, INITIAL_LOG_CHANNEL_SIZE),
+                .handle = null,
+            };
+        }
+
+        pub fn spawn(self: *Self) void {
+            self.handle = std.Thread.spawn(.{}, Self.run, .{self}) catch @panic("could not spawn Logger");
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.channel.close();
+            if (self.handle) |handle| {
+                self.exit_sig.store(true, .seq_cst);
+                handle.join();
+            }
+            self.channel.deinit();
+        }
+
+        pub fn run(self: *Self) void {
+            while (!self.exit_sig.load(.seq_cst)) {
+                std.time.sleep(std.time.ns_per_ms * 5);
+                const messages = self.channel.drain() orelse {
+                    // channel is closed
+                    return;
+                };
+                defer self.channel.allocator.free(messages);
+
+                for (messages) |message| {
+                    logfmt.formatterLog(self.allocator, message) catch @panic("logging failed");
+                }
+            }
         }
 
         pub fn log(self: Self, message: []const u8) void {
-            const stderr = std.io.getStdErr().writer();
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -69,8 +111,14 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            // TODO take struct as input instead.
-            logfmt.formatter(stderr, self.level, maybe_scope, null, message, null, null, null) catch unreachable();
+
+            const logMessage = logfmt.LogMsg{
+                .level = self.level,
+                .maybe_scope = maybe_scope,
+                .maybe_msg = message,
+            };
+
+            self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
         pub fn logWithFields(self: Self, message: []const u8, keyvalue: anytype) void {
@@ -187,10 +235,16 @@ test "trace_ng: chaining" {
 }
 
 test "trace_ng: multiple methods" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    const logger = StandardLogger(null).init(allocator, .{ .level = Level.info });
-    logger.log("Starting the app");
+    const buffer_size = 1 * 1024 * 1024; // 1MB
+    var buffer: [buffer_size]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    const allocator = fba.allocator();
+
+    var logger = StandardLogger(null).init(allocator, .{ .level = Level.info });
+    defer logger.deinit();
+    logger.spawn();
+
+    logger.log("Logging via channel: Starting the app");
     logger.logWithFields(
         "Starting the app",
         .{
