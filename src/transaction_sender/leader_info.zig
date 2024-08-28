@@ -3,37 +3,22 @@ const network = @import("zig-network");
 const base58 = @import("base58-zig");
 const sig = @import("../sig.zig");
 
-const socket_utils = sig.net.socket_utils;
-
 const Allocator = std.mem.Allocator;
 const AutoArrayHashMap = std.AutoArrayHashMap;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
-const Thread = std.Thread;
-const UdpSocket = network.Socket;
 
-const Packet = sig.net.Packet;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
 const RwMux = sig.sync.RwMux;
-const Signature = sig.core.Signature;
-const Channel = sig.sync.Channel;
 const SocketAddr = sig.net.SocketAddr;
-const Duration = sig.time.Duration;
-const Instant = sig.time.Instant;
-const ContactInfo = sig.gossip.ContactInfo;
 const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
 const RpcEpochInfo = sig.rpc.types.EpochInfo;
-const RpcLeaderSchedule = sig.rpc.types.LeaderSchedule;
-const RpcLatestBlockhash = sig.rpc.types.LatestBlockhash;
 const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
 const Logger = sig.trace.log.Logger;
-const ClusterType = sig.accounts_db.genesis_config.ClusterType;
 const Config = sig.transaction_sender.Config;
-const TransactionInfo = sig.transaction_sender.TransactionInfo;
 
 /// LeaderInfo contains information about the cluster that is used to send transactions.
 /// It uses the RpcClient to get the epoch info and leader schedule.

@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 
 const types = sig.rpc.types;
 
-const Hash = sig.core.Hash;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;

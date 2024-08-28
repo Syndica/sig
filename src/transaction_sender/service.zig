@@ -22,7 +22,6 @@ const Stats = sig.transaction_sender.Stats;
 const LeaderInfo = sig.transaction_sender.LeaderInfo;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const TransactionPool = sig.transaction_sender.TransactionPool;
-const Timer = sig.time.Timer;
 
 /// Basic send transaction service that listens for transactions on a channel.
 /// Transactions are added to the pool and retried until they are confirmed, failed,

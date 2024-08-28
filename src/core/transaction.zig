@@ -3,7 +3,6 @@ const sig = @import("../sig.zig");
 const Ed25519 = std.crypto.sign.Ed25519;
 const KeyPair = Ed25519.KeyPair;
 
-const Packet = sig.net.Packet;
 const Signature = sig.core.Signature;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;

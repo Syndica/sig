@@ -7,8 +7,6 @@ const Transaction = sig.core.transaction.Transaction;
 const Instant = sig.time.Instant;
 const Duration = sig.time.Duration;
 
-const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
-
 /// TransactionInfo is a wrapper around a transaction that includes additional
 /// information needed to send the transaction, track retries and timeouts, etc.
 pub const TransactionInfo = struct {

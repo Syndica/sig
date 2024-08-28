@@ -2,24 +2,13 @@ const std = @import("std");
 const network = @import("zig-network");
 const sig = @import("../sig.zig");
 
-const socket_utils = sig.net.socket_utils;
-
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
-const UdpSocket = network.Socket;
 
-const Packet = sig.net.Packet;
 const Slot = sig.core.Slot;
 const RwMux = sig.sync.RwMux;
 const Signature = sig.core.Signature;
-const Channel = sig.sync.Channel;
-const Instant = sig.time.Instant;
-const GossipTable = sig.gossip.GossipTable;
-const RpcClient = sig.rpc.Client;
-const Logger = sig.trace.log.Logger;
-const Config = sig.transaction_sender.Config;
-const LeaderInfo = sig.transaction_sender.LeaderInfo;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 
 /// Pool to keep track of pending transactions, transactions are added to the
