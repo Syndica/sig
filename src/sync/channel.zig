@@ -458,6 +458,134 @@ pub fn Channel(T: type) type {
     };
 }
 
+const expect = std.testing.expect;
+
+test "smoke" {
+    var ch = Channel(u32).init(std.testing.allocator, 0);
+    defer ch.deinit();
+
+    try ch.send(7);
+    try expect(ch.receive() == 7);
+
+    try ch.send(8);
+    try expect(ch.receive() == 8);
+    try expect(ch.receive() == null);
+}
+
+test "len_empty_full" {
+    var ch = Channel(u32).init(std.testing.allocator, 0);
+    defer ch.deinit();
+
+    try expect(ch.len() == 0);
+    try expect(ch.isEmpty());
+
+    try ch.send(0);
+
+    try expect(ch.len() == 1);
+    try expect(!ch.isEmpty());
+
+    _ = ch.receive().?;
+
+    try expect(ch.len() == 0);
+    try expect(ch.isEmpty());
+}
+
+test "len" {
+    var ch = Channel(u64).init(std.testing.allocator, 0);
+    defer ch.deinit();
+
+    try expect(ch.len() == 0);
+
+    for (0..50) |i| {
+        try ch.send(i);
+        try expect(ch.len() == i + 1);
+    }
+
+    for (0..50) |i| {
+        _ = ch.receive().?;
+        try expect(ch.len() == 50 - i - 1);
+    }
+
+    try expect(ch.len() == 0);
+}
+
+test "spsc" {
+    const COUNT = 100;
+
+    const S = struct {
+        fn producer(ch: *Channel(u64)) !void {
+            for (0..COUNT) |i| {
+                try ch.send(i);
+            }
+        }
+
+        fn consumer(ch: *Channel(u64)) void {
+            for (0..COUNT) |i| {
+                while (true) {
+                    if (ch.receive()) |x| {
+                        assert(x == i);
+                        break;
+                    }
+                }
+            }
+        }
+    };
+
+    var ch = Channel(u64).init(std.testing.allocator, 0);
+    defer ch.deinit();
+
+    const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
+    const producer = try std.Thread.spawn(.{}, S.producer, .{&ch});
+
+    consumer.join();
+    producer.join();
+}
+
+test "mpmc" {
+    const COUNT = 100;
+    const THREADS = 4;
+
+    const S = struct {
+        fn producer(ch: *Channel(u64)) !void {
+            for (0..COUNT) |i| {
+                try ch.send(i);
+            }
+        }
+
+        fn consumer(ch: *Channel(u64), v: *[COUNT]Atomic(usize)) void {
+            for (0..COUNT) |_| {
+                const n = while (true) {
+                    if (ch.receive()) |x| break x;
+                };
+                _ = v[n].fetchAdd(1, .seq_cst);
+            }
+        }
+    };
+
+    var v: [COUNT]Atomic(usize) = .{Atomic(usize).init(0)} ** COUNT;
+
+    var ch = Channel(u64).init(std.testing.allocator, 0);
+    defer ch.deinit();
+
+    var c_threads: [THREADS]std.Thread = undefined;
+    var p_threads: [THREADS]std.Thread = undefined;
+
+    for (&c_threads) |*c_thread| {
+        c_thread.* = try std.Thread.spawn(.{}, S.consumer, .{ &ch, &v });
+    }
+
+    for (&p_threads) |*p_thread| {
+        p_thread.* = try std.Thread.spawn(.{}, S.producer, .{&ch});
+    }
+
+    for (c_threads, p_threads) |c_thread, p_thread| {
+        c_thread.join();
+        p_thread.join();
+    }
+
+    for (v) |c| try expect(c.load(.seq_cst) == THREADS);
+}
+
 const Block = struct {
     num: u32 = 333,
     valid: bool = true,
