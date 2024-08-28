@@ -18,7 +18,7 @@ const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const getWallclockMs = sig.time.getWallclockMs;
 
-const PACKET_DATA_SIZE = sig.net.PACKET_DATA_SIZE;
+const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 pub const MAX_WALLCLOCK: u64 = 1_000_000_000_000_000;
 
 /// Analogous to [Protocol](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/cluster_info.rs#L268)
