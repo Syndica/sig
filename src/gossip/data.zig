@@ -1556,7 +1556,7 @@ const RawOffsets = struct {
 };
 
 test "new contact info" {
-    const seed: u64 = 19;
+    const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();
 
