@@ -18,6 +18,22 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 
 ⚠️ NOTE: This is a WIP, please open any issues for any bugs/improvements.
 
+## File Structure 
+
+```
+src/
+misc/
+├─ scripts/
+├─ genesis-files/
+├─ test-data/
+├─ prometheus-grafana/
+docs/
+├─ debugging.md
+├─ fuzzing.md
+├─ sig-cli.md
+```
+
+
 ## 📋 Setup
 
 ### Build Dependencies

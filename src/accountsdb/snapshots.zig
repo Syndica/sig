@@ -1854,7 +1854,7 @@ pub fn parallelUnpackZstdTarBall(
     );
 }
 
-test "core.accounts_db.snapshots: test full snapshot path parsing" {
+test "test full snapshot path parsing" {
     const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotFileInfo.fromString(full_snapshot_path);
 
@@ -1863,7 +1863,7 @@ test "core.accounts_db.snapshots: test full snapshot path parsing" {
     try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 
-test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
+test "test incremental snapshot path parsing" {
     const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotFileInfo.fromString(path);
 
@@ -1873,27 +1873,27 @@ test "core.accounts_db.snapshots: test incremental snapshot path parsing" {
     try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 
-test "core.accounts_db.snapshotss: parse status cache" {
+test "parse status cache" {
     const allocator = std.testing.allocator;
 
-    const status_cache_path = "test_data/status_cache";
+    const status_cache_path = sig.TEST_DATA_DIR ++ "status_cache";
     var status_cache = try StatusCache.initFromPath(allocator, status_cache_path);
     defer status_cache.deinit(allocator);
 
     try std.testing.expect(status_cache.bank_slot_deltas.len > 0);
 }
 
-test "core.accounts_db.snapshotss: parse snapshot fields" {
+test "parse snapshot fields" {
     const allocator = std.testing.allocator;
-    const snapshot_path = "test_data/10";
+    const snapshot_path = sig.TEST_DATA_DIR ++ "10";
 
     var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
     defer snapshot_fields.deinit(allocator);
 }
 
-test "core.accounts_db.snapshotss: parse incremental snapshot fields" {
+test "parse incremental snapshot fields" {
     const allocator = std.testing.allocator;
-    const snapshot_path = "test_data/25";
+    const snapshot_path = sig.TEST_DATA_DIR ++ "25";
 
     var snapshot_fields = try SnapshotFields.readFromFilePath(allocator, snapshot_path);
     defer snapshot_fields.deinit(allocator);

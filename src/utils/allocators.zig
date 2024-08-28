@@ -1,4 +1,5 @@
 const std = @import("std");
+const sig = @import("../sig.zig");
 
 pub const RecycleFBA = struct {
     // this allocates the underlying memory + dynamic expansions
@@ -279,7 +280,7 @@ test "recycle allocator" {
 }
 
 test "disk allocator on hashmaps" {
-    var allocator = DiskMemoryAllocator.init("test_data/tmp");
+    var allocator = DiskMemoryAllocator.init(sig.TEST_DATA_DIR ++ "tmp");
     defer allocator.deinit(null);
 
     var refs = std.AutoHashMap(u8, u8).init(allocator.allocator());
@@ -292,7 +293,7 @@ test "disk allocator on hashmaps" {
 }
 
 test "disk allocator on arraylists" {
-    var allocator = DiskMemoryAllocator.init("test_data/tmp");
+    var allocator = DiskMemoryAllocator.init(sig.TEST_DATA_DIR ++ "tmp");
 
     var disk_account_refs = try std.ArrayList(u8).initCapacity(
         allocator.allocator(),
@@ -311,20 +312,20 @@ test "disk allocator on arraylists" {
     try std.testing.expectEqual(21, disk_account_refs.items[1]);
 
     // these should exist
-    try std.fs.cwd().access("test_data/tmp_0", .{});
-    try std.fs.cwd().access("test_data/tmp_1", .{});
+    try std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_0", .{});
+    try std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_1", .{});
 
     // this should delete them
     allocator.deinit(null);
 
     // these should no longer exist
     var did_error = false;
-    std.fs.cwd().access("test_data/tmp_0", .{}) catch {
+    std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_0", .{}) catch {
         did_error = true;
     };
     try std.testing.expect(did_error);
     did_error = false;
-    std.fs.cwd().access("test_data/tmp_1", .{}) catch {
+    std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_1", .{}) catch {
         did_error = true;
     };
     try std.testing.expect(did_error);

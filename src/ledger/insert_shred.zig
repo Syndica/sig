@@ -1866,7 +1866,7 @@ fn assertOk(result: anytype) void {
     std.debug.assert(if (result) |_| true else |_| false);
 }
 
-const test_dir = comptimePrint("test_data/blockstore/insert_shred", .{});
+const test_dir = comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/insert_shred", .{});
 
 pub const TestState = struct {
     db: BlockstoreDB,
@@ -2088,7 +2088,7 @@ test "merkle root metas coding" {
     const shreds = try loadShredsFromFile(
         allocator,
         &[1]usize{1228} ** 3,
-        "test_data/shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
+        sig.TEST_DATA_DIR ++ "shreds/merkle_root_metas_coding_test_shreds_3_1228.bin",
     );
     defer for (shreds) |shred| shred.deinit();
 
@@ -2216,7 +2216,7 @@ test "recovery" {
     const shreds = try loadShredsFromFile(
         allocator,
         &[1]usize{1203} ** 34 ++ &[1]usize{1228} ** 34,
-        "test_data/shreds/recovery_test_shreds_34_data_34_code.bin",
+        sig.TEST_DATA_DIR ++ "shreds/recovery_test_shreds_34_data_34_code.bin",
     );
     defer for (shreds) |s| s.deinit();
     const data_shreds = shreds[0..34];

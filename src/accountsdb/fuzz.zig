@@ -61,7 +61,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const use_disk = rand.boolean();
 
-    var test_data_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer test_data_dir.close();
 
     const snapshot_dir_name = "accountsdb_fuzz";

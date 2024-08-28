@@ -489,7 +489,7 @@ test "streaming accounts" {
     // setup writer
     var stream_writer = try GeyserWriter.init(
         allocator,
-        "test_data/stream_test.pipe",
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
         exit,
         1 << 18,
     );
@@ -500,7 +500,7 @@ test "streaming accounts" {
     // setup reader
     var stream_reader = try GeyserReader.init(
         allocator,
-        "test_data/stream_test.pipe",
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
         null,
         .{
             .bincode_buf_len = 1 << 18,
@@ -591,7 +591,7 @@ test "buf resizing" {
     // setup writer
     var stream_writer = try GeyserWriter.init(
         allocator,
-        "test_data/stream_test.pipe",
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
         exit,
         1 << 18,
     );
@@ -602,7 +602,7 @@ test "buf resizing" {
     // setup reader
     var stream_reader = try GeyserReader.init(
         allocator,
-        "test_data/stream_test.pipe",
+        sig.TEST_DATA_DIR ++ "stream_test.pipe",
         null,
         .{
             .bincode_buf_len = 1,

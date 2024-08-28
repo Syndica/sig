@@ -3141,7 +3141,7 @@ fn testWriteSnapshotIncremental(
 }
 
 test "testWriteSnapshot" {
-    var test_data_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
 
     const snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
@@ -3175,7 +3175,7 @@ test "testWriteSnapshot" {
 fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
-    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
 
     { // unpack both snapshots to get the acccount files
@@ -3207,7 +3207,7 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
-    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
 
     try unpackTestSnapshot(allocator, n_threads);
@@ -3236,7 +3236,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
 test "geyser stream on load" {
     const allocator = std.testing.allocator;
 
-    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
     try unpackTestSnapshot(allocator, 2);
 
@@ -3444,7 +3444,7 @@ test "load other sysvars" {
 test "flushing slots works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3495,7 +3495,7 @@ test "flushing slots works" {
 test "purge accounts in cache works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3553,7 +3553,7 @@ test "purge accounts in cache works" {
 test "clean to shrink account file works with zero-lamports" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3629,7 +3629,7 @@ test "clean to shrink account file works with zero-lamports" {
 test "clean to shrink account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3697,7 +3697,7 @@ test "clean to shrink account file works" {
 test "full clean account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3782,7 +3782,7 @@ test "full clean account file works" {
 test "shrink account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3953,7 +3953,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // NOTE: usually this will be an incremental snapshot
         // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd)
         // (because test snapshots are too small and full snapshots are too big)
-        const dir_path = "test_data/bench_snapshot/";
+        const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
         const accounts_path = dir_path ++ "accounts";
 
         // const logger = Logger{ .noop = {} };
@@ -4162,7 +4162,7 @@ pub const BenchmarkAccountsDB = struct {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         var allocator = gpa.allocator();
 
-        const disk_path = "test_data/tmp/";
+        const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
 
         var snapshot_dir = try std.fs.cwd().makeOpenPath("ledger/accounts_db", .{});

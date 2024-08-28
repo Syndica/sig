@@ -1,12 +1,14 @@
 //! genesis config fields
 
 const std = @import("std");
+const sig = @import("../sig.zig");
+const bincode = sig.bincode;
+
 const AutoHashMap = std.AutoHashMap;
-const Account = @import("../core/account.zig").Account;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const Slot = @import("../core/time.zig").Slot;
-const Epoch = @import("../core/time.zig").Epoch;
-const bincode = @import("../bincode/bincode.zig");
+const Account = sig.core.Account;
+const Pubkey = sig.core.Pubkey;
+const Slot = sig.core.Slot;
+const Epoch = sig.core.Epoch;
 
 pub const UnixTimestamp = i64;
 pub const String = std.ArrayList(u8);
@@ -246,7 +248,7 @@ pub const GenesisConfig = struct {
 test "genesis_config deserialize development config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = "./test_data/genesis.bin";
+    const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
@@ -256,7 +258,7 @@ test "genesis_config deserialize development config" {
 test "genesis_config deserialize testnet config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = "./genesis-files/testnet-genesis.bin";
+    const genesis_path = sig.GENESIS_DIR ++ "testnet-genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
@@ -266,7 +268,7 @@ test "genesis_config deserialize testnet config" {
 test "genesis_config deserialize devnet config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = "./genesis-files/devnet-genesis.bin";
+    const genesis_path = sig.GENESIS_DIR ++ "devnet-genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
@@ -276,7 +278,7 @@ test "genesis_config deserialize devnet config" {
 test "genesis_config deserialize mainnet config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = "./genesis-files/mainnet-genesis.bin";
+    const genesis_path = sig.GENESIS_DIR ++ "mainnet-genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
