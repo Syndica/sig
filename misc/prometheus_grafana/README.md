@@ -13,8 +13,8 @@ modify `/etc/hosts` to include the following line:
 
 ## Running 
 
-mac: `docker compose -f compose-mac.yaml up -d`
-linux: `docker compose -f compose-linux.yaml up -d`
+mac: `docker compose -f compose_mac.yaml up -d`
+linux: `docker compose -f compose_linux.yaml up -d`
 
 - grafana will be accessable on `localhost:3000`
   - note: `username: admin password: grafana`
@@ -24,8 +24,8 @@ need to also modify the prometheus `target` to point to the different port).
 
 ## Shutting down
 
-mac: `docker compose -f compose-mac.yaml down`
-linux: `docker compose -f compose-linux.yaml down`
+mac: `docker compose -f compose_mac.yaml down`
+linux: `docker compose -f compose_linux.yaml down`
 
 ## Compose sample
 ### Prometheus & Grafana
@@ -33,8 +33,8 @@ linux: `docker compose -f compose-linux.yaml down`
 Project structure:
 ```
 .
-├── compose-linux.yaml
-├── compose-mac.yaml
+├── compose_linux.yaml
+├── compose_mac.yaml
 ├── grafana
 │   └── dashboards/ -- this is where the sig dashboard lives (will need to copy .json export of dashboard from running container and push through git for any dashboard changes)
 │   └── datasources/ -- this points to prometheus docker

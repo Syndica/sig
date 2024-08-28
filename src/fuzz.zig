@@ -8,7 +8,7 @@ const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
 const logger = sig.trace.log;
 
 // where seeds are saved (in case of too many logs)
-const SEED_FILE_PATH = "test_data/fuzz_seeds.txt";
+const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_seeds.txt";
 
 // Supported fuzz filters.
 // NOTE: changing these enum variants will require a change to the fuzz/kcov in `scripts/`

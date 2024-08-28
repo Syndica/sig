@@ -244,7 +244,7 @@ pub const BytesRef = struct {
 fn tests(comptime Impl: fn ([]const ColumnFamily) type) type {
     @setEvalBranchQuota(10_000);
     const impl_id = sig.core.Hash.generateSha256Hash(@typeName(Impl(&.{}))).base58String();
-    const test_dir = std.fmt.comptimePrint("test_data/blockstore/database/{s}", .{impl_id.buffer});
+    const test_dir = std.fmt.comptimePrint(sig.TEST_DATA_DIR ++ "blockstore/database/{s}", .{impl_id.buffer});
 
     return struct {
         pub fn basic() !void {

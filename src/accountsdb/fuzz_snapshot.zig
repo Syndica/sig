@@ -28,7 +28,7 @@ pub fn run(args: *std.process.ArgIterator) !void {
 
     {
         // open and append seed
-        const SEED_FILE_PATH = "test_data/fuzz_snapshot_seeds.txt";
+        const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_snapshot_seeds.txt";
         const seed_file = try std.fs.cwd().createFile(SEED_FILE_PATH, .{ .truncate = false });
         defer seed_file.close();
         // try seed_file.seekFromEnd(0);

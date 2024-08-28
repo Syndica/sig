@@ -216,7 +216,7 @@ pub fn run() !void {
 
     var snapshot_dir_option = cli.Option{
         .long_name = "snapshot-dir",
-        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: ledger/accounts_db",
+        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: {VALIDATOR_DIR}/accounts_db",
         .short_alias = 's',
         .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
         .required = false,
@@ -246,6 +246,15 @@ pub fn run() !void {
         .value_ref = cli.mkRef(&config.current.accounts_db.number_of_index_bins),
         .required = false,
         .value_name = "number_of_index_bins",
+    };
+
+    var accounts_per_file_estimate = cli.Option{
+        .long_name = "accounts-per-file-estimate",
+        .short_alias = 'a',
+        .help = "number of accounts to estimate inside of account files (used for pre-allocation). Safer to set it larger than smaller (approx values we found work well testnet/devnet: 1_500, mainnet: 3_000).",
+        .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
+        .required = false,
+        .value_name = "accounts_per_file_estimate",
     };
 
     // geyser options
@@ -357,6 +366,7 @@ pub fn run() !void {
                             &trusted_validators_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            &accounts_per_file_estimate,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -452,6 +462,7 @@ pub fn run() !void {
                             &force_unpack_snapshot_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            &accounts_per_file_estimate,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -467,7 +478,7 @@ pub fn run() !void {
                     &cli.Command{
                         .name = "snapshot-create",
                         .description = .{
-                            .one_line = "Loads from a snapshot and outputs to new snapshot alt_ledger/",
+                            .one_line = "Loads from a snapshot and outputs to new snapshot alt_{VALIDATOR_DIR}/",
                         },
                         .options = &.{
                             &snapshot_dir_option,
@@ -529,6 +540,7 @@ pub fn run() !void {
                             &trusted_validators_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            &accounts_per_file_estimate,
                             // general
                             &leader_schedule_option,
                             &network_option,
@@ -611,7 +623,7 @@ fn validator() !void {
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
-        "ledger/blockstore",
+        sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
@@ -709,7 +721,7 @@ fn shredCollector() !void {
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
-        "ledger/blockstore",
+        sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
@@ -832,9 +844,8 @@ fn printManifest() !void {
 
     _ = try snapshots.collapse();
 
-    // // TODO: support better inspection of snapshots (maybe dump to a file as json?)
+    // TODO: support better inspection of snapshots (maybe dump to a file as json?)
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
-    // std.debug.print("inc snapshots: {any}\n", .{snapshots.incremental.?.accounts_db_fields.file_map.keys()});
 }
 
 fn createSnapshot() !void {
@@ -865,7 +876,7 @@ fn createSnapshot() !void {
     }
     app_base.logger.infof("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 
-    const output_dir_name = "alt_ledger"; // TODO: pull out to cli arg
+    const output_dir_name = "alt_" ++ sig.VALIDATOR_DIR; // TODO: pull out to cli arg
     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
     defer output_dir.close();
 
@@ -902,27 +913,6 @@ fn validateSnapshot() !void {
         geyser_writer,
     );
     defer snapshot_result.deinit();
-
-    // read input
-    const accounts_db = &snapshot_result.accounts_db;
-    var buf: [1024]u8 = undefined;
-
-    while (true) {
-        std.debug.print("enter pubkey:", .{});
-        const input_pubkey_str = try std.io.getStdIn().reader().readUntilDelimiterOrEof(&buf, '\n') orelse continue;
-        const input_pubkey = Pubkey.fromString(input_pubkey_str) catch {
-            std.debug.print("invalid pubkey: {s}\n", .{input_pubkey_str});
-            continue;
-        };
-
-        const account = accounts_db.getAccount(&input_pubkey) catch |err| {
-            std.debug.print("getAccount failed: {s}\n", .{@errorName(err)});
-            continue;
-        };
-        defer account.deinit(accounts_db.allocator);
-
-        std.debug.print("account: {any}\n\n", .{account});
-    }
 }
 
 /// entrypoint to print the leader schedule and then exit
@@ -1354,6 +1344,7 @@ fn loadSnapshot(
         &all_snapshot_fields,
         n_threads_snapshot_load,
         validate_snapshot,
+        config.current.accounts_db.accounts_per_file_estimate,
     );
     errdefer snapshot_fields.deinit(allocator);
     result.snapshot_fields.was_collapsed = true;

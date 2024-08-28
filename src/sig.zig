@@ -17,3 +17,7 @@ pub const version = @import("version/version.zig");
 pub const time = @import("time/lib.zig");
 pub const common = @import("common/lib.zig");
 pub const geyser = @import("geyser/lib.zig");
+
+pub const VALIDATOR_DIR = "validator/";
+pub const TEST_DATA_DIR = "misc/test_data/";
+pub const GENESIS_DIR = "misc/genesis_files/";

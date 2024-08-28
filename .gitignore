@@ -3,11 +3,13 @@ zig-cache/
 zig-out/
 data/
 
+/validator/
+alt_validator/
 /ledger/
+alt_ledger/
 index_storage/
 kcov-output/
 .vscode/
-alt_ledger/
 
 /gossip-dumps
 
