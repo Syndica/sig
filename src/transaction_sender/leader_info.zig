@@ -68,7 +68,7 @@ pub const LeaderInfo = struct {
         defer current_slot_result.deinit();
         const current_slot = current_slot_result.value;
 
-        // TODO: Improve transition to new epoch
+        // TODO: Scrutinize edge cases here.
         if (current_slot > self.epoch_info.slotsInEpoch + self.leader_schedule.start_slot) {
             const epoch_info_result = try self.rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
             defer epoch_info_result.deinit();
@@ -85,7 +85,7 @@ pub const LeaderInfo = struct {
             try leader_addresses.append(socket);
         }
 
-        if (leader_addresses.items.len != self.config.max_leaders_to_send_to) {
+        if (leader_addresses.items.len <= @divFloor(self.config.max_leaders_to_send_to, 2)) {
             try self.updateLeaderAddressesCache();
         }
 
