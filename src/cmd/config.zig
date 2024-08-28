@@ -52,7 +52,7 @@ const shred_collector_defaults = ShredCollectorConfig{
 /// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
 pub const AccountsDBConfig = struct {
     /// where to load/save snapshots from - also where disk indexes and account files are stored
-    snapshot_dir: []const u8 = "ledger/accounts_db",
+    snapshot_dir: []const u8 = sig.VALIDATOR_DIR ++ "accounts_db",
     /// number of threads to load snapshot
     num_threads_snapshot_load: u32 = 0,
     /// number of threads to unpack snapshot from .tar.zstd
@@ -73,7 +73,7 @@ pub const AccountsDBConfig = struct {
 
 pub const GeyserConfig = struct {
     enable: bool = false,
-    pipe_path: []const u8 = "ledger/geyser.pipe",
+    pipe_path: []const u8 = sig.VALIDATOR_DIR ++ "geyser.pipe",
     writer_fba_bytes: usize = 1 << 32, // 4gb
 };
 

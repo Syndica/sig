@@ -216,7 +216,7 @@ pub fn run() !void {
 
     var snapshot_dir_option = cli.Option{
         .long_name = "snapshot-dir",
-        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: ledger/accounts_db",
+        .help = "path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: {VALIDATOR_DIR}/accounts_db",
         .short_alias = 's',
         .value_ref = cli.mkRef(&config.current.accounts_db.snapshot_dir),
         .required = false,
@@ -478,7 +478,7 @@ pub fn run() !void {
                     &cli.Command{
                         .name = "snapshot-create",
                         .description = .{
-                            .one_line = "Loads from a snapshot and outputs to new snapshot alt_ledger/",
+                            .one_line = "Loads from a snapshot and outputs to new snapshot alt_{VALIDATOR_DIR}/",
                         },
                         .options = &.{
                             &snapshot_dir_option,
@@ -623,7 +623,7 @@ fn validator() !void {
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
-        "ledger/blockstore",
+        sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
@@ -721,7 +721,7 @@ fn shredCollector() !void {
     const blockstore_db = try sig.ledger.BlockstoreDB.open(
         allocator,
         app_base.logger,
-        "ledger/blockstore",
+        sig.VALIDATOR_DIR ++ "blockstore",
     );
     const shred_inserter = try sig.ledger.ShredInserter.init(
         allocator,
@@ -877,7 +877,7 @@ fn createSnapshot() !void {
     }
     app_base.logger.infof("accountsdb: indexed {d} accounts", .{n_accounts_indexed});
 
-    const output_dir_name = "alt_ledger"; // TODO: pull out to cli arg
+    const output_dir_name = "alt_" ++ sig.VALIDATOR_DIR; // TODO: pull out to cli arg
     var output_dir = try std.fs.cwd().makeOpenPath(output_dir_name, .{});
     defer output_dir.close();
 

@@ -4165,7 +4165,7 @@ pub const BenchmarkAccountsDB = struct {
         const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
 
-        var snapshot_dir = try std.fs.cwd().makeOpenPath("ledger/accounts_db", .{});
+        var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
         const logger = Logger{ .noop = {} };
