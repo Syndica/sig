@@ -33,7 +33,7 @@ const leaderScheduleFromBank = sig.core.leader_schedule.leaderScheduleFromBank;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const parseLeaderSchedule = sig.core.leader_schedule.parseLeaderSchedule;
 const requestIpEcho = sig.net.requestIpEcho;
-const servePrometheus = sig.prometheus.servePrometheus;
+const spawnMetrics = sig.prometheus.spawnMetrics;
 const writeLeaderSchedule = sig.core.leader_schedule.writeLeaderSchedule;
 
 const BlockstoreReader = sig.ledger.BlockstoreReader;
@@ -974,7 +974,9 @@ const AppBase = struct {
         // var logger: Logger = .noop;
         errdefer logger.deinit();
 
-        const metrics_registry, const metrics_thread = try spawnMetrics(logger);
+        const metrics_registry = globalRegistry();
+        logger.infof("metrics port: {d}", .{config.current.metrics_port});
+        const metrics_thread = try spawnMetrics(gpa_allocator, config.current.metrics_port);
         errdefer metrics_thread.detach();
 
         const my_keypair = try getOrInitIdentity(allocator, logger);
@@ -1242,18 +1244,6 @@ fn getEntrypoints(logger: Logger) !std.ArrayList(SocketAddr) {
     logger.infof("entrypoints: {any}", .{entrypoints.items});
 
     return entrypoints;
-}
-
-/// Initializes the global registry. Returns error if registry was already initialized.
-/// Spawns a thread to serve the metrics over http on the CLI configured port.
-fn spawnMetrics(logger: Logger) !struct { *sig.prometheus.Registry(.{}), std.Thread } {
-    const metrics_port: u16 = config.current.metrics_port;
-    logger.infof("metrics port: {d}", .{metrics_port});
-    const registry = globalRegistry();
-    return .{
-        registry,
-        try std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port }),
-    };
 }
 
 fn spawnLogger() !Logger {

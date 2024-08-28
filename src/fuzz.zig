@@ -10,6 +10,7 @@ const logger = sig.trace.log;
 
 const servePrometheus = sig.prometheus.servePrometheus;
 const globalRegistry = sig.prometheus.globalRegistry;
+const spawnMetrics = sig.prometheus.spawnMetrics;
 
 // where seeds are saved (in case of too many logs)
 const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_seeds.txt";
@@ -23,13 +24,6 @@ pub const FuzzFilter = enum {
     gossip_table,
 };
 
-fn spawnMetrics(gpa_allocator: std.mem.Allocator) !std.Thread {
-    const metrics_port: u16 = config.current.metrics_port;
-    logger.default_logger.infof("metrics port: {d}", .{metrics_port});
-    const registry = globalRegistry();
-    return std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, metrics_port });
-}
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -38,7 +32,8 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
-    const metrics_thread = try spawnMetrics(allocator);
+    logger.default_logger.infof("metrics port: {d}", .{config.current.metrics_port});
+    const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
     errdefer metrics_thread.detach();
 
     _ = cli_args.skip();
