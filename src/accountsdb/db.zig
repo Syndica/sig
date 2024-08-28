@@ -1493,7 +1493,8 @@ pub const AccountsDB = struct {
         for (unclean_account_files) |file_id| {
             // NOTE: this read-lock is held for a while but
             // is not expensive since writes only happen
-            // during shrink/delete (which dont happen in parallel to this fcn)
+            // during delete, which doesn't happen in parallel
+            // to this function.
             self.file_map_fd_rw.lockShared();
             defer self.file_map_fd_rw.unlockShared();
 
@@ -1570,7 +1571,7 @@ pub const AccountsDB = struct {
                                 const ref_account_file = ref_blk: {
                                     const file_map, var file_map_lg = self.file_map.readWithLock();
                                     defer file_map_lg.unlock();
-                                    break :ref_blk file_map.get(ref_file_id).?; // we are holding a lock on `disk_accounts.file_rw`.
+                                    break :ref_blk file_map.get(ref_file_id).?; // we are holding a lock on `file_map_fd_rw`.
                                 };
                                 break :blk .{ ref_account_file.number_of_accounts, accounts_dead_count };
                             }
@@ -1991,7 +1992,7 @@ pub const AccountsDB = struct {
 
     /// Gets an account given an file_id and offset value.
     /// Locks the account file entries, and returns the account.
-    /// Must call `self.disk_accounts.file_map_fd_rw.unlockShared()`
+    /// Must call `self.file_map_fd_rw.unlockShared()`
     /// when done with the account.
     pub fn getAccountInFileAndLock(
         self: *Self,
@@ -2004,7 +2005,7 @@ pub const AccountsDB = struct {
     }
 
     /// Gets an account given a file_id and an offset value.
-    /// Assumes `self.disk_accounts.file_map_fd_rw` is at least
+    /// Assumes `self.file_map_fd_rw` is at least
     /// locked for reading (shared).
     pub fn getAccountInFileAssumeLock(
         self: *Self,
