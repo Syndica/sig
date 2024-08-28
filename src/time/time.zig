@@ -556,6 +556,26 @@ pub const Duration = struct {
     }
 };
 
+pub const Instant = struct {
+    inner: std.time.Instant,
+
+    pub fn now() Instant {
+        return .{ .inner = std.time.Instant.now() catch @panic("std.time.Instant unsupported!") };
+    }
+
+    pub fn elapsed(self: Instant) Duration {
+        return Instant.now().elapsedSince(self);
+    }
+
+    pub fn elapsedSince(self: Instant, earlier: Instant) Duration {
+        return Duration.fromNanos(self.inner.since(earlier.inner));
+    }
+
+    pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
+        return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
+    }
+};
+
 pub const Timer = struct {
     inner: std.time.Timer,
 

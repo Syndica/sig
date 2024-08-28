@@ -551,6 +551,30 @@ pub fn run() !void {
                             },
                         },
                     },
+                    &cli.Command{
+                        .name = "test-transaction-sender",
+                        .description = .{
+                            .one_line = "Test transaction sender service",
+                            .detailed =
+                            \\Simulates a stream of transaction being sent to the transaction sender by 
+                            \\running a mock transaction generator thread. For the moment this just sends
+                            \\transfer transactions between to hard coded testnet accounts.
+                            ,
+                        },
+                        .options = &.{
+                            // gossip
+                            &gossip_host_option,
+                            &gossip_port_option,
+                            &gossip_entrypoints_option,
+                            &gossip_spy_node_option,
+                            &gossip_dump_option,
+                        },
+                        .target = .{
+                            .action = .{
+                                .exec = testTransactionSenderService,
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -955,6 +979,52 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
             try parseLeaderSchedule(allocator, (try std.fs.cwd().openFile(path, .{})).reader())
     else
         null;
+}
+
+pub fn testTransactionSenderService() !void {
+    var app_base = try AppBase.init(gpa_allocator);
+
+    const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
+    defer gossip_manager.deinit();
+
+    const transaction_channel = sig.sync.Channel(sig.transaction_sender.TransactionInfo).init(gpa_allocator, 100);
+    defer transaction_channel.deinit();
+
+    const transaction_sender_config = sig.transaction_sender.Config{
+        .cluster = .Testnet,
+        .socket = SocketAddr.init(app_base.my_ip, 8003),
+    };
+
+    var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
+        gpa_allocator,
+        transaction_channel,
+        &app_base.exit,
+    );
+
+    var transaction_sender_service = try sig.transaction_sender.Service.init(
+        gpa_allocator,
+        transaction_sender_config,
+        transaction_channel,
+        &gossip_service.gossip_table_rw,
+        &app_base.exit,
+        app_base.logger,
+    );
+
+    const mock_transfer_generator_handle = try std.Thread.spawn(
+        .{},
+        sig.transaction_sender.MockTransferService.run,
+        .{&mock_transfer_service},
+    );
+
+    const transaction_sender_handle = try std.Thread.spawn(
+        .{},
+        sig.transaction_sender.Service.run,
+        .{&transaction_sender_service},
+    );
+
+    mock_transfer_generator_handle.join();
+    transaction_sender_handle.join();
+    gossip_manager.join();
 }
 
 /// State that typically needs to be initialized at the start of the app,

@@ -69,6 +69,27 @@ pub const Pubkey = extern struct {
     pub fn isDefault(self: *const Self) bool {
         return std.mem.eql(u8, &self.data, &[_]u8{0} ** size);
     }
+
+    // METHODS TO BE REFACTORED
+    const base58Zig = @import("base58-zig");
+    const BASE58_ENCODER = base58Zig.Encoder.init(.{});
+    const BASE58_DECODER = base58Zig.Decoder.init(.{});
+    pub const BYTES_LENGTH: usize = 32;
+    pub const BASE58_MAX_LENGTH: usize = 44;
+
+    pub fn init(bytes: [size]u8) Self {
+        return Self{ .data = bytes };
+    }
+
+    pub fn toString(self: *const Self) error{EncodingError}![BASE58_MAX_LENGTH]u8 {
+        var dest: [BASE58_MAX_LENGTH]u8 = undefined;
+        @memset(&dest, 0);
+        const written = BASE58_ENCODER.encode(&self.data, &dest) catch return error.EncodingError;
+        if (written > BASE58_MAX_LENGTH) {
+            std.debug.panic("written is > {}, written: {}, dest: {any}, bytes: {any}", .{ BASE58_MAX_LENGTH, written, dest, self.data });
+        }
+        return dest;
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
