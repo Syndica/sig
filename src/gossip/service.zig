@@ -324,7 +324,7 @@ pub const GossipService = struct {
         try manager.spawn("gossip processMessages", processMessages, .{self});
 
         if (!params.spy_node) {
-            try manager.spawn("gossip buildMessages", buildMessages, .{self, 19});
+            try manager.spawn("gossip buildMessages", buildMessages, .{ self, 19 });
         }
 
         try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
@@ -2257,7 +2257,7 @@ test "build messages startup and shutdown" {
     var prng = std.Random.Xoshiro256.init(0);
     const rng = prng.random();
 
-    var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{&gossip_service, 19});
+    var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{ &gossip_service, 19 });
 
     // add some gossip values to push
     var lg = gossip_service.gossip_table_rw.write();

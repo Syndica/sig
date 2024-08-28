@@ -159,11 +159,16 @@ pub const GossipPullFilterSet = struct {
     }
 
     /// returns a list of GossipPullFilters and consumes Self by calling deinit.
-    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, rng: std.Random, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
+    pub fn consumeForGossipPullFilters(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        rng: std.Random,
+        max_size: usize,
+    ) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
-        var indexs = try ArrayList(usize).initCapacity(alloc, set_size);
+        var indexs = try ArrayList(usize).initCapacity(allocator, set_size);
         defer indexs.deinit();
         for (0..set_size) |i| {
             indexs.appendAssumeCapacity(i);
@@ -183,7 +188,7 @@ pub const GossipPullFilterSet = struct {
             }
         }
 
-        var filters = try ArrayList(GossipPullFilter).initCapacity(alloc, n_filters);
+        var filters = try ArrayList(GossipPullFilter).initCapacity(allocator, n_filters);
         for (0..n_filters) |i| {
             const index = indexs.items[i];
 
@@ -254,7 +259,6 @@ pub fn hashToU64(hash: *const Hash) u64 {
     const buf = hash.data[0..8];
     return std.mem.readInt(u64, buf, .little);
 }
-
 
 test "building pull filters" {
     const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;

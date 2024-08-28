@@ -19,6 +19,7 @@ const IpAddr = sig.net.IpAddr;
 const ClientVersion = sig.version.ClientVersion;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 
+const getWallclockMs = sig.time.getWallclockMs;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 const ShortVecArrayListConfig = sig.bincode.shortvec.ShortVecArrayListConfig;
 const sanitizeWallclock = sig.gossip.message.sanitizeWallclock;

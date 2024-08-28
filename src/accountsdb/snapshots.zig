@@ -1854,7 +1854,7 @@ pub fn parallelUnpackZstdTarBall(
     );
 }
 
-test "test full snapshot path parsing" {
+test "full snapshot path parsing" {
     const full_snapshot_path = "snapshot-269-EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn.tar.zst";
     const snapshot_info = try FullSnapshotFileInfo.fromString(full_snapshot_path);
 
@@ -1863,7 +1863,7 @@ test "test full snapshot path parsing" {
     try std.testing.expectEqual(.zstd, snapshot_info.compression);
 }
 
-test "test incremental snapshot path parsing" {
+test "incremental snapshot path parsing" {
     const path = "incremental-snapshot-269-307-4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB.tar.zst";
     const snapshot_info = try IncrementalSnapshotFileInfo.fromString(path);
 

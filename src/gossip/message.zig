@@ -182,8 +182,8 @@ pub const PruneData = struct {
             .wallclock = self.wallclock,
         };
         const out = try bincode.writeToSlice(&slice, signable_data, bincode.Params{});
-        var sig = try keypair.sign(out, null);
-        self.signature.data = sig.toBytes();
+        var signature = try keypair.sign(out, null);
+        self.signature.data = signature.toBytes();
     }
 
     pub fn verify(self: *const PruneData) !void {
@@ -203,7 +203,7 @@ pub const PruneData = struct {
 };
 
 test "gossip.message: push message serialization is predictable" {
-    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
+    var rng = DefaultPrng.init(getWallclockMs());
     const pubkey = Pubkey.random(rng.random());
     var values = std.ArrayList(SignedGossipData).init(std.testing.allocator);
     defer values.deinit();
@@ -229,7 +229,7 @@ test "gossip.message: test prune data sig verify" {
         121, 12,  227, 248, 199, 156, 253, 144, 175, 67,
     }));
 
-    var rng = DefaultPrng.init(_gossip_data.getWallclockMs());
+    var rng = DefaultPrng.init(getWallclockMs());
     var prune = try PruneData.random(rng.random(), &keypair);
 
     try prune.verify();

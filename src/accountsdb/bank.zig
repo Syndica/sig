@@ -1,5 +1,4 @@
 //! minimal logic for bank (still being built out)
-
 const std = @import("std");
 const sig = @import("../sig.zig");
 

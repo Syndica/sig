@@ -1,18 +1,16 @@
 //! all index related structs (account ref, simd hashmap, …)
-
 const std = @import("std");
-const lib = @import("../sig.zig");
+const sig = @import("../sig.zig");
 
-const Slot = lib.core.time.Slot;
-const Pubkey = lib.core.pubkey.Pubkey;
-const FileId = lib.accounts_db.accounts_file.FileId;
-const RwMux = lib.sync.RwMux;
+const Slot = sig.core.time.Slot;
+const Pubkey = sig.core.pubkey.Pubkey;
+const FileId = sig.accounts_db.accounts_file.FileId;
+const RwMux = sig.sync.RwMux;
 
-const swiss_map = @import("swiss_map.zig");
-pub const SwissMapManaged = swiss_map.SwissMapManaged;
-pub const SwissMapUnmanaged = swiss_map.SwissMapUnmanaged;
-pub const BenchmarkSwissMap = swiss_map.BenchmarkSwissMap;
-pub const BenchHashMap = swiss_map.BenchHashMap;
+pub const SwissMapManaged = sig.accounts_db.swiss_map.SwissMapManaged;
+pub const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
+pub const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
+pub const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
 
 // for sync reasons we need a stable head with a lock
 pub const AccountReferenceHead = RwMux(struct {
