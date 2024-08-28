@@ -1,16 +1,17 @@
 const std = @import("std");
-const Hash = @import("../core/hash.zig").Hash;
-const bincode = @import("../bincode/bincode.zig");
-const ArrayList = std.ArrayList;
-const Bloom = @import("../bloom/bloom.zig").Bloom;
-const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-const exp = std.math.exp;
+const sig = @import("../sig.zig");
+const bincode = sig.bincode;
 
-const GossipTable = @import("table.zig").GossipTable;
-const _gossip_data = @import("data.zig");
-const SignedGossipData = _gossip_data.SignedGossipData;
-const RwMux = @import("../sync/mux.zig").RwMux;
+const Hash = sig.core.Hash;
+const ArrayList = std.ArrayList;
+const Bloom = sig.bloom.Bloom;
+const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+const Pubkey = sig.core.Pubkey;
+const GossipTable = sig.gossip.table.GossipTable;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const RwMux = sig.sync.RwMux;
+
+const exp = std.math.exp;
 
 pub const MAX_BLOOM_SIZE: usize = 928;
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
@@ -21,7 +22,7 @@ pub const KEYS: f64 = 8;
 /// corresponding filters. Note: make sure to call deinit_gossip_filters.
 pub fn buildGossipPullFilters(
     alloc: std.mem.Allocator,
-    rand: std.Random,
+    rng: std.Random,
     gossip_table_rw: *RwMux(GossipTable),
     failed_pull_hashes: *const ArrayList(Hash),
     bloom_size: usize,
@@ -34,7 +35,7 @@ pub fn buildGossipPullFilters(
 
         const num_items = gossip_table.len() + gossip_table.purged.len() + failed_pull_hashes.items.len;
 
-        var filter_set = try GossipPullFilterSet.init(alloc, rand, num_items, bloom_size);
+        var filter_set = try GossipPullFilterSet.init(alloc, rng, num_items, bloom_size);
         errdefer filter_set.deinit();
 
         // add all gossip values
@@ -58,7 +59,7 @@ pub fn buildGossipPullFilters(
     errdefer filter_set.deinit();
 
     // note: filter set is deinit() in this fcn
-    const filters = try filter_set.consumeForGossipPullFilters(alloc, rand, max_n_filters);
+    const filters = try filter_set.consumeForGossipPullFilters(alloc, rng, max_n_filters);
     return filters;
 }
 
@@ -158,7 +159,7 @@ pub const GossipPullFilterSet = struct {
     }
 
     /// returns a list of GossipPullFilters and consumes Self by calling deinit.
-    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, rand: std.Random, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
+    pub fn consumeForGossipPullFilters(self: *Self, alloc: std.mem.Allocator, rng: std.Random, max_size: usize) error{OutOfMemory}!ArrayList(GossipPullFilter) {
         defer self.deinit(); // !
 
         const set_size = self.len();
@@ -173,7 +174,7 @@ pub const GossipPullFilterSet = struct {
 
         if (!can_consume_all) {
             // shuffle the indexs
-            shuffleFirstN(rand, usize, indexs.items, n_filters);
+            shuffleFirstN(rng, usize, indexs.items, n_filters);
 
             // release others
             for (n_filters..set_size) |i| {
@@ -254,10 +255,11 @@ pub fn hashToU64(hash: *const Hash) u64 {
     return std.mem.readInt(u64, buf, .little);
 }
 
-const LegacyContactInfo = _gossip_data.LegacyContactInfo;
 
-test "gossip.pull_request: test building filters" {
-    const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
+test "building pull filters" {
+    const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
+    const ThreadPool = sig.sync.ThreadPool;
+
     var tp = ThreadPool.init(.{});
     var gossip_table = try GossipTable.init(std.testing.allocator, &tp);
     defer gossip_table.deinit();
@@ -311,7 +313,7 @@ test "gossip.pull_request: test building filters" {
     }
 }
 
-test "gossip.pull_request: filter set deinits correct" {
+test "filter set deinits correct" {
     var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
     const rand = prng.random();
 
@@ -335,7 +337,7 @@ test "gossip.pull_request: filter set deinits correct" {
     try std.testing.expect(x.filter.contains(&hash.data));
 }
 
-test "gossip.pull_request: helper functions are correct" {
+test "GossipPullFilter helper methods are correct" {
     {
         const v = GossipPullFilter.computeMaxItems(100.5, 0.1, 10.0);
         try std.testing.expectEqual(@as(f64, 16), v);
@@ -358,7 +360,7 @@ test "gossip.pull_request: helper functions are correct" {
     }
 }
 
-test "gossip.pull_request: gossip filter matches rust bytes" {
+test "filter matches rust bytes" {
     const rust_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0 };
     var filter = GossipPullFilter.init(std.testing.allocator);
     defer filter.deinit();

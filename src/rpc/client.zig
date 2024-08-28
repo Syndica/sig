@@ -1326,7 +1326,7 @@ test "pubkey equality works" {
     try testing.expect(!pubkey1.equals(&pubkeyOther));
 }
 
-test "pubkey randome works" {
+test "pubkey random works" {
     const seed: u64 = @intCast(std.time.milliTimestamp());
     var rand = std.rand.DefaultPrng.init(seed);
     const rng = rand.random();

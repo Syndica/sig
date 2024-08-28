@@ -5,7 +5,6 @@ const testing = std.testing;
 
 const DefaultPrng = std.rand.DefaultPrng;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
-
 const LruCache = sig.common.lru.LruCache;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
@@ -14,7 +13,7 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const SocketAddr = sig.net.SocketAddr;
 const Duration = sig.time.Duration;
 
-const getWallclockMs = sig.gossip.data.getWallclockMs;
+const getWallclockMs = sig.time.getWallclockMs;
 
 const PING_TOKEN_SIZE: usize = 32;
 const PING_PONG_HASH_PREFIX: [16]u8 = .{
@@ -246,7 +245,7 @@ pub const PingCache = struct {
     }
 };
 
-test "gossip.ping_pong: PingCache works" {
+test "PingCache works" {
     var ping_cache = try PingCache.init(
         testing.allocator,
         Duration.fromNanos(10_000),
@@ -282,7 +281,7 @@ test "gossip.ping_pong: PingCache works" {
     try testing.expect(ping != null);
 }
 
-test "gossip.ping_pong: ping signatures match rust" {
+test "ping signatures match rust" {
     var keypair = try KeyPair.fromSecretKey(try std.crypto.sign.Ed25519.SecretKey.fromBytes([_]u8{
         125, 52,  162, 97,  231, 139, 58,  13,  185, 212, 57,  142, 136, 12,  21,  127, 228, 71,
         115, 126, 138, 52,  102, 69,  103, 185, 45,  255, 132, 222, 243, 138, 25,  117, 21,  11,

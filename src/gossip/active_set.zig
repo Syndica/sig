@@ -12,7 +12,7 @@ const LegacyContactInfo = sig.gossip.data.LegacyContactInfo;
 const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipTable = sig.gossip.table.GossipTable;
 
-const getWallclockMs = sig.gossip.getWallclockMs;
+const getWallclockMs = sig.time.getWallclockMs;
 const shuffleFirstN = sig.gossip.pull_request.shuffleFirstN;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
@@ -128,7 +128,7 @@ pub const ActiveSet = struct {
     }
 };
 
-test "gossip.active_set: init/deinit" {
+test "active_set init/deinit" {
     const alloc = std.testing.allocator;
 
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
@@ -154,7 +154,7 @@ test "gossip.active_set: init/deinit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.Xoshiro256.init(19);
     try active_set.rotate(prng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
@@ -175,7 +175,7 @@ test "gossip.active_set: init/deinit" {
     try std.testing.expectEqual(no_prune_fanout_len, fanout_with_prune.items.len + 1);
 }
 
-test "gossip.active_set: gracefully rotates with duplicate contact ids" {
+test "gracefully rotates with duplicate contact ids" {
     const alloc = std.testing.allocator;
 
     var rng = std.rand.DefaultPrng.init(100);
@@ -192,6 +192,6 @@ test "gossip.active_set: gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.Xoshiro256.init(19);
     try active_set.rotate(prng.random(), gossip_peers.items);
 }

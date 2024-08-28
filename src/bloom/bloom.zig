@@ -126,7 +126,7 @@ test "bloom.bloom: helper fcns match rust" {
     const n_keys = Bloom.numKeys(100.2, 10);
     try testing.expectEqual(@as(usize, 7), n_keys);
 
-    var prng = std.Random.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.Random.Xoshiro256.init(19);
     var bloom = try Bloom.random(std.testing.allocator, prng.random(), 100, 0.1, 10000);
     defer bloom.deinit();
 }

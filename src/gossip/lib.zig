@@ -18,6 +18,4 @@ pub const SignedGossipData = data.SignedGossipData;
 pub const LowestSlot = data.LowestSlot;
 pub const Ping = ping_pong.Ping;
 pub const Pong = ping_pong.Pong;
-
-pub const getWallclockMs = data.getWallclockMs;
 pub const SocketTag = data.SocketTag;

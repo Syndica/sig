@@ -516,7 +516,7 @@ pub fn enablePortReuse(self: *network.Socket, enabled: bool) !void {
     try setsockopt_fn(self.internal, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, std.mem.asBytes(&opt));
 }
 
-test "net.net: invalid ipv4 socket parsing" {
+test "invalid ipv4 socket parsing" {
     {
         const addr = "127.0.0.11234";
         const result = SocketAddr.parseIpv4(addr);
@@ -529,7 +529,7 @@ test "net.net: invalid ipv4 socket parsing" {
     }
 }
 
-test "net.net: valid ipv4 socket parsing" {
+test "valid ipv4 socket parsing" {
     const addr = "127.0.0.1:1234";
     const expected_addr = SocketAddr{ .V4 = SocketAddrV4{
         .ip = Ipv4Addr.init(127, 0, 0, 1),
@@ -539,19 +539,19 @@ test "net.net: valid ipv4 socket parsing" {
     try std.testing.expectEqual(expected_addr, actual_addr);
 }
 
-test "net.net: test random" {
+test "test random" {
     var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
     const addr = SocketAddr.random(rng.random());
     _ = addr;
 }
 
-test "net.net: set port works" {
+test "set port works" {
     var sa1 = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 1000);
     sa1.setPort(1001);
     try std.testing.expectEqual(@as(u16, 1001), sa1.port());
 }
 
-test "net.net: parse IPv6 if IPv4 fails" {
+test "parse IPv6 if IPv4 fails" {
     try std.testing.expectError(error.InvalidIp, SocketAddr.parse("[FE38:DCEq:124C:C1A2:BA03:6745:EF1C:683D]:8000"));
 
     try std.testing.expectError(error.InvalidIp, SocketAddr.parse("[FE38:DCEE:124C:C1A2:BA03:6745:EF1C:683D]:"));
