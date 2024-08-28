@@ -27,7 +27,7 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
-const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
@@ -170,6 +170,7 @@ pub const AccountsDB = struct {
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
+                logger.infof("using ram index", .{});
                 break :blk .{ null, std.heap.page_allocator };
             }
         };
@@ -314,13 +315,6 @@ pub const AccountsDB = struct {
             bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
         }
 
-        const use_disk_index = self.config.use_disk_index;
-        if (self.config.use_disk_index) {
-            self.logger.info("using disk index");
-        } else {
-            self.logger.info("using ram index");
-        }
-
         // short path
         if (n_threads == 1) {
             try self.loadAndVerifyAccountsFiles(
@@ -336,6 +330,7 @@ pub const AccountsDB = struct {
         }
 
         // setup the parallel indexing
+        const use_disk_index = self.config.use_disk_index;
         var loading_threads = try ArrayList(AccountsDB).initCapacity(
             self.allocator,
             n_parse_threads,
@@ -344,15 +339,17 @@ pub const AccountsDB = struct {
             var thread_db = loading_threads.addOneAssumeCapacity();
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
-                self.logger,
+                .noop, // dont spam the logs with init information (we set it after)
                 self.snapshot_dir,
                 self.config,
                 self.geyser_writer,
             );
+            thread_db.logger = self.logger;
 
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
                 thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
+                thread_db.account_index.reference_allocator = thread_db.disk_allocator_ptr.?.allocator();
             }
         }
         defer {
@@ -369,9 +366,9 @@ pub const AccountsDB = struct {
                 // NOTE: deinit hashmap, dont close the files
                 const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
                 defer file_map_lg.unlock();
-                file_map.deinit(self.allocator);
+                file_map.deinit(per_thread_allocator);
 
-                // NOTE: important `false` (ie, 1))
+                // NOTE: important `false` (ie, 1)
                 loading_thread.account_index.deinit(false);
             }
             loading_threads.deinit();
@@ -407,7 +404,7 @@ pub const AccountsDB = struct {
         return timer.read();
     }
 
-    /// multithread entrypoint into parseAndBinAccountFiles.
+    /// multithread entrypoint into loadAndVerifyAccountsFiles.
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         accounts_dir: std.fs.Dir,
