@@ -45,6 +45,12 @@ pub const TransactionPool = struct {
         return pts.count() == 0;
     }
 
+    pub fn count(self: *TransactionPool) usize {
+        const pts: *const PendingTransactions, var lock = self.pending_transactions.readWithLock();
+        defer lock.unlock();
+        return pts.count();
+    }
+
     pub fn contains(self: *TransactionPool, signature: Signature) bool {
         const pts: *const PendingTransactions, var lock = self.pending_transactions.readWithLock();
         defer lock.unlock();

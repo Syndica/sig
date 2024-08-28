@@ -338,7 +338,7 @@ pub const Client = struct {
 
         var retries: usize = 0;
         while (true) {
-            const result = try self.client.fetch(.{
+            const result = self.client.fetch(.{
                 .location = .{
                     .url = self.endpoint,
                 },
@@ -354,11 +354,18 @@ pub const Client = struct {
                 .payload = request_payload,
                 .response_storage = .{ .dynamic = &response_payload },
                 .max_append_size = 100 * 1024 * 1024,
-            });
+            }) catch |err| {
+                self.logger.warnf("HTTP client error, attempting reinitialisation: {any}", .{err});
+                self.client.deinit();
+                self.client = std.http.Client{ .allocator = allocator };
+                if (retries == self.retries) return err;
+                retries += 1;
+                continue;
+            };
 
             if (result.status != std.http.Status.ok) {
                 if (retries == self.retries) return error.HttpRequestFailed;
-                self.logger.warnf("HTTP request failed ({d}/{d}): {}\n", .{ retries, self.retries, result.status });
+                self.logger.warnf("HTTP request failed ({d}/{d}): {}", .{ retries, self.retries, result.status });
                 retries += 1;
                 continue;
             }

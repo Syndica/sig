@@ -16,6 +16,7 @@ const Channel = sig.sync.Channel;
 const Instant = sig.time.Instant;
 const GossipTable = sig.gossip.GossipTable;
 const RpcClient = sig.rpc.Client;
+const Timer = sig.time.Timer;
 const Logger = sig.trace.log.Logger;
 const Config = sig.transaction_sender.Config;
 const Stats = sig.transaction_sender.Stats;
@@ -120,15 +121,14 @@ pub const Service = struct {
 
         while (!self.exit.load(.unordered)) {
             const transaction = self.receive_channel.receive() orelse break;
-            self.stats.transaction_received.add(1);
+            self.stats.transactions_received_count.add(1);
 
             if (!transaction_batch.contains(transaction.signature) and
                 !self.transaction_pool.contains(transaction.signature))
             {
                 try transaction_batch.put(transaction.signature, transaction);
-            } else {
-                self.stats.duplicate_transaction_received.add(1);
-                if (transaction_batch.count() == 0) continue;
+            } else if (transaction_batch.count() == 0) {
+                continue;
             }
 
             if (transaction_batch.count() >= self.config.batch_size or
@@ -160,26 +160,34 @@ pub const Service = struct {
         while (!self.exit.load(.unordered)) {
             std.time.sleep(self.config.pool_process_rate.asNanos());
             if (self.transaction_pool.isEmpty()) continue;
+            var timer = try Timer.start();
             try self.processTransactions(&rpc_client);
+            self.stats.process_transactions_latency_millis.set(timer.lap().asMillis());
             try self.retryTransactions();
+            self.stats.retry_transactions_latency_millis.set(timer.lap().asMillis());
             self.transaction_pool.purge();
+            self.stats.transactions_pending.set(self.transaction_pool.count());
+            self.stats.log(self.logger);
         }
     }
 
     /// Checks for transactions to retry or drop from the pool
     fn processTransactions(self: *Service, rpc_client: *RpcClient) !void {
+        var block_height_timer = try Timer.start();
         const block_height_result = try rpc_client.getBlockHeight(
             self.allocator,
             .{ .commitment = .processed },
         );
         defer block_height_result.deinit();
         const block_height = block_height_result.value;
+        self.stats.rpc_block_height_latency_millis.set(block_height_timer.read().asMillis());
 
         // We need to hold a read lock until we are finished using the signatures and transactions, otherwise
         // the receiver thread could add new transactions and corrupt the underlying array
         const signatures, const transactions, var lock = self.transaction_pool.readSignaturesAndTransactionsWithLock();
         defer lock.unlock();
 
+        var signature_statuses_timer = try Timer.start();
         const signature_statuses_result = try rpc_client.getSignatureStatuses(
             self.allocator,
             signatures,
@@ -187,36 +195,37 @@ pub const Service = struct {
         );
         defer signature_statuses_result.deinit();
         const signature_statuses = signature_statuses_result.value;
+        self.stats.rpc_signature_statuses_latency_millis.set(signature_statuses_timer.read().asMillis());
 
         for (signature_statuses.value, signatures, transactions) |maybe_signature_status, signature, transaction_info| {
             if (maybe_signature_status) |signature_status| {
                 if (signature_status.confirmations == null) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transaction_rooted.add(1);
+                    self.stats.transactions_rooted_count.add(1);
                     continue;
                 }
 
                 if (signature_status.err) |_| {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transaction_failed.add(1);
+                    self.stats.transactions_failed_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.isExpired(block_height)) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transaction_expired.add(1);
+                    self.stats.transactions_expired_count.add(1);
                     continue;
                 }
             } else {
                 if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
                     try self.transaction_pool.drop_signatures.append(signature);
-                    self.stats.transaction_exceeded_max_retries.add(1);
+                    self.stats.transactions_exceeded_max_retries_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.shouldRetry(self.config.retry_rate)) {
                     try self.transaction_pool.retry_signatures.append(signature);
-                    self.stats.transaction_retried.add(1);
+                    self.stats.transactions_retry_count.add(1);
                 }
             }
         }
@@ -240,19 +249,21 @@ pub const Service = struct {
 
     /// Sends transactions to the next N leaders TPU addresses
     fn sendTransactions(self: *Service, transactions: []const TransactionInfo) !void {
+        var get_leader_addresses_timer = try Timer.start();
         const leader_addresses = blk: {
             const leader_info: *LeaderInfo, var leader_info_lock = self.leader_info_rw.writeWithLock();
             defer leader_info_lock.unlock();
             break :blk try leader_info.getLeaderAddresses(self.allocator) orelse return;
         };
         defer leader_addresses.deinit();
+        self.stats.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
 
         if (leader_addresses.items.len == 0) {
             self.logger.warn("No leader addresses found");
             return;
         }
 
-        self.stats.leaders_identified_pct.set(@divFloor(leader_addresses.items.len * 100, self.config.max_leaders_to_send_to));
+        self.stats.number_of_leaders_identified.set(leader_addresses.items.len);
 
         for (leader_addresses.items) |leader_address| {
             var packets = try std.ArrayList(Packet).initCapacity(self.allocator, transactions.len);
@@ -272,6 +283,6 @@ pub const Service = struct {
             tx.last_sent_time = last_sent_time;
         }
 
-        self.stats.transaction_sent.add(transactions.len);
+        self.stats.transactions_sent_count.add(transactions.len);
     }
 };
