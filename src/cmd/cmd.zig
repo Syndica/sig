@@ -248,6 +248,15 @@ pub fn run() !void {
         .value_name = "number_of_index_bins",
     };
 
+    var accounts_per_file_estimate = cli.Option{
+        .long_name = "accounts-per-file-estimate",
+        .short_alias = 'a',
+        .help = "number of accounts to estimate inside of account files (used for pre-allocation). Safer to set it larger than smaller (approx values we found work well testnet/devnet: 1_500, mainnet: 3_000).",
+        .value_ref = cli.mkRef(&config.current.accounts_db.accounts_per_file_estimate),
+        .required = false,
+        .value_name = "accounts_per_file_estimate",
+    };
+
     // geyser options
     var enable_geyser_option = cli.Option{
         .long_name = "enable-geyser",
@@ -357,6 +366,7 @@ pub fn run() !void {
                             &trusted_validators_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            &accounts_per_file_estimate,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -452,6 +462,7 @@ pub fn run() !void {
                             &force_unpack_snapshot_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            &accounts_per_file_estimate,
                             // geyser
                             &enable_geyser_option,
                             &geyser_pipe_path_option,
@@ -529,6 +540,7 @@ pub fn run() !void {
                             &trusted_validators_option,
                             &number_of_index_bins_option,
                             &genesis_file_path,
+                            &accounts_per_file_estimate,
                             // general
                             &leader_schedule_option,
                             &network_option,
@@ -1354,6 +1366,7 @@ fn loadSnapshot(
         &all_snapshot_fields,
         n_threads_snapshot_load,
         validate_snapshot,
+        config.current.accounts_db.accounts_per_file_estimate,
     );
     errdefer snapshot_fields.deinit(allocator);
     result.snapshot_fields.was_collapsed = true;

@@ -47,11 +47,11 @@ pub const VersionedAccountPayload = union(enum(u8)) {
 
 pub const AccountPayloadV1 = struct {
     slot: Slot,
-    pubkeys: []Pubkey,
+    pubkeys: []const Pubkey,
     // PERF: the data slice per account is the biggest to read,
     // we can probably put it into its own field (data: [][]u8)
     // and read it all in on i/o
-    accounts: []Account,
+    accounts: []const Account,
 
     const Self = @This();
 

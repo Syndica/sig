@@ -328,7 +328,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
-            _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
+            _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
             logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
         }

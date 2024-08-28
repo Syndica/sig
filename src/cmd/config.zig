@@ -58,15 +58,17 @@ pub const AccountsDBConfig = struct {
     /// number of threads to unpack snapshot from .tar.zstd
     num_threads_snapshot_unpack: u16 = 0,
     /// number of shards to use across the index
-    number_of_index_bins: usize = ACCOUNT_INDEX_BINS,
+    number_of_index_bins: u64 = ACCOUNT_INDEX_BINS,
     /// use disk based index for accounts index
     use_disk_index: bool = false,
     /// force unpacking a fresh snapshot even if an accounts/ dir exists
     force_unpack_snapshot: bool = false,
     /// minmum download speed in megabytes per second to download a snapshot from
-    min_snapshot_download_speed_mbs: usize = 20,
+    min_snapshot_download_speed_mbs: u64 = 20,
     /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
     force_new_snapshot_download: bool = false,
+    /// estimate of the number of accounts per file (used for preallocation)
+    accounts_per_file_estimate: u64 = 1_500,
 };
 
 pub const GeyserConfig = struct {
