@@ -137,7 +137,7 @@ test "active_set init/deinit" {
     defer table.deinit();
 
     // insert some contacts
-    var rng = std.rand.DefaultPrng.init(100);
+    var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
@@ -192,6 +192,6 @@ test "gracefully rotates with duplicate contact ids" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var prng = std.Random.Xoshiro256.init(19);
+    var prng = std.rand.Xoshiro256.init(@intCast(std.time.milliTimestamp()));
     try active_set.rotate(prng.random(), gossip_peers.items);
 }
