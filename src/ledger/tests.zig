@@ -45,8 +45,8 @@ test "put/get data consistency for merkle root" {
 }
 
 // agave: test_get_rooted_block
-test "insert shreds and transaction statuses then getRootedBlock" {
-    var state = try State.init("insert rooted block shreds then get block");
+test "insert shreds and transaction statuses then get blocks" {
+    var state = try State.init("insert shreds and transaction statuses then get blocks");
     defer state.deinit();
     const allocator = state.allocator();
 
@@ -67,7 +67,7 @@ test "insert shreds and transaction statuses then getRootedBlock" {
         allocator.free(entries);
     }
     const blockhash = entries[entries.len - 1].hash;
-    _ = blockhash; // autofix
+    const blockhash_string = blockhash.base58String();
 
     const shreds = try testShreds(prefix ++ "shreds.bin");
     const more_shreds = try testShreds(prefix ++ "more_shreds.bin");
@@ -155,7 +155,89 @@ test "insert shreds and transaction statuses then getRootedBlock" {
     // The previous_blockhash of `expected_block` is default because its parent slot is a root,
     // but empty of entries (eg. snapshot root slots). This now returns an error.
     try std.testing.expectError(error.ParentEntriesUnavailable, reader.getRootedBlock(slot, true));
-    // TODO
+
+    // Test if require_previous_blockhash is false
+    {
+        const confirmed_block = try reader.getRootedBlock(slot, false);
+        defer confirmed_block.deinit(allocator);
+        try std.testing.expectEqual(100, confirmed_block.transactions.len);
+        const expected_block = ledger.reader.VersionedConfirmedBlock{
+            .allocator = allocator,
+            .transactions = expected_transactions.items,
+            .parent_slot = slot - 1,
+            .blockhash = blockhash_string.slice(),
+            .previous_blockhash = sig.core.Hash.default().base58String().slice(),
+            .rewards = &.{},
+            .num_partitions = null,
+            .block_time = null,
+            .block_height = null,
+        };
+        try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block, .{}));
+    }
+
+    const confirmed_block = try reader.getRootedBlock(slot + 1, false);
+    defer confirmed_block.deinit(allocator);
+    try std.testing.expectEqual(100, confirmed_block.transactions.len);
+    var expected_block = ledger.reader.VersionedConfirmedBlock{
+        .allocator = allocator,
+        .transactions = expected_transactions.items,
+        .parent_slot = slot,
+        .blockhash = blockhash_string.slice(),
+        .previous_blockhash = blockhash_string.slice(),
+        .rewards = &.{},
+        .num_partitions = null,
+        .block_time = null,
+        .block_height = null,
+    };
+    try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block, .{}));
+
+    try std.testing.expectError(error.SlotNotRooted, reader.getRootedBlock(slot + 2, true));
+
+    const complete_block = try reader.getCompleteBlock(slot + 2, true);
+    defer complete_block.deinit(allocator);
+    try std.testing.expectEqual(100, complete_block.transactions.len);
+    var expected_complete_block = ledger.reader.VersionedConfirmedBlock{
+        .allocator = allocator,
+        .transactions = expected_transactions.items,
+        .parent_slot = slot + 1,
+        .blockhash = blockhash_string.slice(),
+        .previous_blockhash = blockhash_string.slice(),
+        .rewards = &.{},
+        .num_partitions = null,
+        .block_time = null,
+        .block_height = null,
+    };
+    try std.testing.expect(sig.utils.types.eql(expected_complete_block, complete_block, .{}));
+
+    // Test block_time & block_height return, if available
+    {
+        const timestamp = 1_576_183_541;
+        try db.put(schema.blocktime, slot + 1, timestamp);
+        expected_block.block_time = timestamp;
+        const block_height = slot - 2;
+        try db.put(schema.block_height, slot + 1, block_height);
+        expected_block.block_height = block_height;
+
+        const confirmed_block_extra = try reader.getRootedBlock(slot + 1, true);
+        defer confirmed_block_extra.deinit(allocator);
+        try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block_extra, .{}));
+    }
+    {
+        const timestamp = 1_576_183_542;
+        try db.put(schema.blocktime, slot + 2, timestamp);
+        expected_complete_block.block_time = timestamp;
+        const block_height = slot - 1;
+        try db.put(schema.block_height, slot + 2, block_height);
+        expected_complete_block.block_height = block_height;
+
+        const complete_block_extra = try reader.getCompleteBlock(slot + 2, true);
+        defer complete_block_extra.deinit(allocator);
+        try std.testing.expect(sig.utils.types.eql(
+            expected_complete_block,
+            complete_block_extra,
+            .{},
+        ));
+    }
 }
 
 /// ensures the path exists as an empty directory.

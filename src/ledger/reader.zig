@@ -521,11 +521,18 @@ pub const BlockstoreReader = struct {
             num_moved_slot_transactions += 1;
         }
 
+        // TODO perf: seems wasteful to get all of this, only to read the blockhash
         const parent_slot_entries = if (slot_meta.parent_slot) |parent_slot| blk: {
             const parent_entries, _, _ = try self
                 .getSlotEntriesWithShredInfo(parent_slot, 0, allow_dead_slots);
             break :blk parent_entries;
         } else ArrayList(Entry).init(self.allocator);
+        defer {
+            for (parent_slot_entries.items) |entry| {
+                entry.deinit(self.allocator);
+            }
+            parent_slot_entries.deinit();
+        }
         if (parent_slot_entries.items.len == 0 and require_previous_blockhash) {
             return error.ParentEntriesUnavailable;
         }
@@ -1350,7 +1357,7 @@ const CompletedRanges = ArrayList(struct { u32, u32 });
 
 /// Confirmed block with type guarantees that transaction metadata
 /// is always present. Used for uploading to BigTable.
-const VersionedConfirmedBlock = struct {
+pub const VersionedConfirmedBlock = struct {
     allocator: Allocator,
     previous_blockhash: []const u8,
     blockhash: []const u8,
@@ -1360,6 +1367,15 @@ const VersionedConfirmedBlock = struct {
     num_partitions: ?u64,
     block_time: ?UnixTimestamp,
     block_height: ?u64,
+
+    pub fn deinit(self: @This(), allocator: Allocator) void {
+        for (self.transactions) |it| it.deinit(allocator);
+        for (self.rewards) |it| it.deinit(allocator);
+        allocator.free(self.transactions);
+        allocator.free(self.rewards);
+        allocator.free(self.previous_blockhash);
+        allocator.free(self.blockhash);
+    }
 };
 
 /// Confirmed block with type guarantees that transaction metadata is always
