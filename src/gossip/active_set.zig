@@ -137,7 +137,7 @@ test "active_set init/deinit" {
     defer table.deinit();
 
     // insert some contacts
-    var rng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var rng = std.rand.DefaultPrng.init(100);
     var gossip_peers = try std.ArrayList(ThreadSafeContactInfo).initCapacity(alloc, 10);
     defer gossip_peers.deinit();
 
@@ -154,8 +154,7 @@ test "active_set init/deinit" {
 
     var active_set = ActiveSet.init(alloc);
     defer active_set.deinit();
-    var prng = std.Random.Xoshiro256.init(19);
-    try active_set.rotate(prng.random(), gossip_peers.items);
+    try active_set.rotate(rng.random(), gossip_peers.items);
 
     try std.testing.expect(active_set.len() == GOSSIP_PUSH_FANOUT);
 
