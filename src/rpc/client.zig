@@ -72,7 +72,7 @@ pub const Client = struct {
         errdefer arena.deinit();
 
         var params_builder = Request.ParamsBuilder.init(arena.allocator());
-        try params_builder.addArgument("\"{s}\"", try pubkey.toString());
+        try params_builder.addArgument("\"{s}\"", pubkey);
         try params_builder.addConfig(config);
 
         const value = try self.sendFetchRequest(arena.allocator(), types.AccountInfo, .{
@@ -93,7 +93,7 @@ pub const Client = struct {
         errdefer arena.deinit();
 
         var params_builder = Request.ParamsBuilder.init(arena.allocator());
-        try params_builder.addArgument("\"{s}\"", try pubkey.toString());
+        try params_builder.addArgument("\"{s}\"", pubkey);
         try params_builder.addConfig(config);
 
         const value = try self.sendFetchRequest(arena.allocator(), types.Balance, .{
@@ -268,7 +268,7 @@ pub const Client = struct {
 
         var signatures_base58 = try arena.allocator().alloc([]const u8, signatures.len);
         for (signatures, 0..) |signature, i| {
-            signatures_base58[i] = try signature.toStringAlloc(arena.allocator());
+            signatures_base58[i] = try signature.base58StringAlloc(arena.allocator());
         }
         const signatures_json = try std.json.stringifyAlloc(arena.allocator(), signatures_base58, .{});
 

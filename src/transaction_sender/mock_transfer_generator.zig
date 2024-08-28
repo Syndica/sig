@@ -50,7 +50,7 @@ pub const MockTransferService = struct {
                 defer blockhash_result.deinit();
                 const blockhash = blockhash_result.value;
                 break :blk .{
-                    try Hash.fromString(blockhash.value.blockhash),
+                    try Hash.parseBase58String(blockhash.value.blockhash),
                     blockhash.value.lastValidBlockHeight,
                 };
             };

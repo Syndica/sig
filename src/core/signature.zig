@@ -51,6 +51,10 @@ pub const Signature = struct {
         return base58.encode(self.data);
     }
 
+    pub fn base58StringAlloc(self: Signature, allocator: std.mem.Allocator) std.mem.Allocator.Error![]const u8 {
+        return base58.encodeAlloc(self.data, allocator);
+    }
+
     pub fn format(
         self: Signature,
         comptime _: []const u8,
@@ -58,33 +62,5 @@ pub const Signature = struct {
         writer: anytype,
     ) !void {
         return base58.format(self.data, writer);
-    }
-
-    // METHODS TO BE REFACTORED
-
-    const base58Zig = @import("base58-zig");
-    const BASE58_ENCODER = base58Zig.Encoder.init(.{});
-    const BASE58_DECODER = base58Zig.Decoder.init(.{});
-    pub const BYTES_LENGTH: usize = 64;
-    pub const BASE58_MAX_LENGTH: usize = 88;
-
-    pub fn toStringAlloc(self: *const Self, allocator: std.mem.Allocator) ![]u8 {
-        var dest: [BASE58_MAX_LENGTH]u8 = undefined;
-        @memset(&dest, 0);
-        const written = BASE58_ENCODER.encode(&self.data, &dest) catch return error.EncodingError;
-        if (written > BASE58_MAX_LENGTH) {
-            std.debug.panic("written is > {}, written: {}, dest: {any}, bytes: {any}", .{ BASE58_MAX_LENGTH, written, dest, self.data });
-        }
-        return try allocator.dupe(u8, dest[0..written]);
-    }
-
-    pub fn toString(self: *const Self) error{EncodingError}![BASE58_MAX_LENGTH]u8 {
-        var dest: [BASE58_MAX_LENGTH]u8 = undefined;
-        @memset(&dest, 0);
-        const written = BASE58_ENCODER.encode(&self.data, &dest) catch return error.EncodingError;
-        if (written > BASE58_MAX_LENGTH) {
-            std.debug.panic("written is > {}, written: {}, dest: {any}, bytes: {any}", .{ BASE58_MAX_LENGTH, written, dest, self.data });
-        }
-        return dest;
     }
 };

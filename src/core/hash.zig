@@ -73,30 +73,4 @@ pub const Hash = extern struct {
         rand.bytes(&data);
         return .{ .data = data };
     }
-
-    // METHODS TO BE REFACTORED
-    const base58Zig = @import("base58-zig");
-    const BASE58_ENCODER = base58Zig.Encoder.init(.{});
-    const BASE58_DECODER = base58Zig.Decoder.init(.{});
-    pub const BYTES_LENGTH: usize = 32;
-    pub const BASE58_MAX_LENGTH: usize = 44;
-
-    pub fn fromBytes(bytes: []const u8) !Hash {
-        if (bytes.len != BYTES_LENGTH) {
-            return Error.InvalidBytesLength;
-        }
-        return .{ .data = bytes[0..BYTES_LENGTH].* };
-    }
-
-    pub fn fromString(encoded: []const u8) !Hash {
-        var dest: [BYTES_LENGTH]u8 = undefined;
-        const written = BASE58_DECODER.decode(encoded, &dest) catch return error.DecodingError;
-        if (written != BYTES_LENGTH) {
-            return error.DecodingError;
-        }
-        return Hash.fromBytes(&dest);
-    }
 };
-
-/// TODO: InvalidEncodedLength and InvalidEncodedValue are not used
-const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
