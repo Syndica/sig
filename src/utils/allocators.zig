@@ -122,8 +122,7 @@ pub const RecycleFBA = struct {
 /// thread safe disk memory allocator
 pub const DiskMemoryAllocator = struct {
     filepath: []const u8,
-    count: usize = 0,
-    mux: std.Thread.Mutex = .{},
+    count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     const Self = @This();
 
@@ -135,12 +134,9 @@ pub const DiskMemoryAllocator = struct {
 
     /// deletes all allocated files + optionally frees the filepath with the allocator
     pub fn deinit(self: *Self, str_allocator: ?std.mem.Allocator) void {
-        self.mux.lock();
-        defer self.mux.unlock();
-
         // delete all files
         var buf: [1024]u8 = undefined;
-        for (0..self.count) |i| {
+        for (0..self.count.load(.acquire)) |i| {
             // this should never fail since we know the file exists in alloc()
             const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, i }) catch unreachable;
             std.fs.cwd().deleteFile(filepath) catch |err| {
@@ -169,13 +165,7 @@ pub const DiskMemoryAllocator = struct {
         _ = return_address;
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        const count = blk: {
-            self.mux.lock();
-            defer self.mux.unlock();
-            const c = self.count;
-            self.count += 1;
-            break :blk c;
-        };
+        const count = self.count.fetchAdd(1, .monotonic);
 
         var buf: [1024]u8 = undefined;
         const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, count }) catch |err| {

@@ -844,9 +844,8 @@ fn printManifest() !void {
 
     _ = try snapshots.collapse();
 
-    // // TODO: support better inspection of snapshots (maybe dump to a file as json?)
+    // TODO: support better inspection of snapshots (maybe dump to a file as json?)
     std.debug.print("full snapshots: {any}\n", .{snapshots.full.bank_fields});
-    // std.debug.print("inc snapshots: {any}\n", .{snapshots.incremental.?.accounts_db_fields.file_map.keys()});
 }
 
 fn createSnapshot() !void {
@@ -914,27 +913,6 @@ fn validateSnapshot() !void {
         geyser_writer,
     );
     defer snapshot_result.deinit();
-
-    // read input
-    const accounts_db = &snapshot_result.accounts_db;
-    var buf: [1024]u8 = undefined;
-
-    while (true) {
-        std.debug.print("enter pubkey:", .{});
-        const input_pubkey_str = try std.io.getStdIn().reader().readUntilDelimiterOrEof(&buf, '\n') orelse continue;
-        const input_pubkey = Pubkey.fromString(input_pubkey_str) catch {
-            std.debug.print("invalid pubkey: {s}\n", .{input_pubkey_str});
-            continue;
-        };
-
-        const account = accounts_db.getAccount(&input_pubkey) catch |err| {
-            std.debug.print("getAccount failed: {s}\n", .{@errorName(err)});
-            continue;
-        };
-        defer account.deinit(accounts_db.allocator);
-
-        std.debug.print("account: {any}\n\n", .{account});
-    }
 }
 
 /// entrypoint to print the leader schedule and then exit
