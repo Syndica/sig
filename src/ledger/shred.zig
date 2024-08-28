@@ -53,6 +53,14 @@ pub const Shred = union(ShredType) {
         };
     }
 
+    pub fn fromPayloadOwned(allocator: Allocator, payload_: []u8) !Self {
+        const variant = layout.getShredVariant(payload_) orelse return error.InvalidShredVariant;
+        return switch (variant.shred_type) {
+            .code => .{ .code = .{ .fields = try CodeShred.Fields.fromPayloadOwned(allocator, payload_) } },
+            .data => .{ .data = .{ .fields = try DataShred.Fields.fromPayloadOwned(allocator, payload_) } },
+        };
+    }
+
     pub fn payload(self: Self) []const u8 {
         return switch (self) {
             inline .code, .data => |shred| shred.fields.payload,
@@ -246,6 +254,10 @@ pub const DataShred = struct {
 
     pub fn default(allocator: std.mem.Allocator) !Self {
         return .{ .fields = try Fields.default(allocator) };
+    }
+
+    pub fn deinit(self: Self) void {
+        self.fields.deinit();
     }
 
     /// agave: ShredData::from_recovered_shard

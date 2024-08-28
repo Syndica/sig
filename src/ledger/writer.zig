@@ -44,9 +44,9 @@ pub const BlockstoreWriter = struct {
         allocator: Allocator,
         logger: Logger,
         db: BlockstoreDB,
+        registry: *sig.prometheus.Registry(.{}),
         lowest_cleanup_slot: *RwMux(Slot),
         max_root: *std.atomic.Value(Slot),
-        registry: *sig.prometheus.Registry(.{}),
     ) !BlockstoreWriter {
         return .{
             .allocator = allocator,

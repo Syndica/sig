@@ -46,13 +46,14 @@ test "put/get data consistency for merkle root" {
 
 // agave: test_get_rooted_block
 test "insert shreds and transaction statuses then getRootedBlock" {
-    const allocator = State._allocator;
     var state = try State.init("insert rooted block shreds then get block");
     defer state.deinit();
+    const allocator = state.allocator();
 
     var db = state.db;
     var inserter = try state.shredInserter();
     var writer = try state.writer();
+    var reader = try state.reader();
 
     const slot = 10;
 
@@ -147,6 +148,13 @@ test "insert shreds and transaction statuses then getRootedBlock" {
             });
         }
     }
+
+    // Even if marked as root, a slot that is empty of entries should return an error
+    try std.testing.expectError(error.SlotUnavailable, reader.getRootedBlock(slot - 1, true));
+
+    // The previous_blockhash of `expected_block` is default because its parent slot is a root,
+    // but empty of entries (eg. snapshot root slots). This now returns an error.
+    try std.testing.expectError(error.ParentEntriesUnavailable, reader.getRootedBlock(slot, true));
     // TODO
 }
 
@@ -288,9 +296,20 @@ pub fn TestState(scope: []const u8) type {
                 _allocator,
                 test_logger,
                 self.db,
+                &self.registry,
                 &self.lowest_cleanup_slot,
                 &self.max_root,
+            );
+        }
+
+        pub fn reader(self: *Self) !ledger.BlockstoreReader {
+            return try ledger.BlockstoreReader.init(
+                _allocator,
+                test_logger,
+                self.db,
                 &self.registry,
+                &self.lowest_cleanup_slot,
+                &self.max_root,
             );
         }
 
