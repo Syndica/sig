@@ -1081,7 +1081,7 @@ const AppBase = struct {
     }
 
     pub fn deinit(self: @This()) void {
-        self.exit.store(true, .unordered);
+        self.exit.store(true, .release);
         self.entrypoints.deinit();
         self.metrics_thread.detach();
         self.logger.deinit();
@@ -1501,7 +1501,7 @@ fn downloadSnapshot() !void {
 
     const handle = try std.Thread.spawn(.{}, runGossipWithConfigValues, .{&gossip_service});
     defer {
-        exit.store(true, .unordered);
+        exit.store(true, .release);
         handle.join();
     }
 

@@ -34,7 +34,7 @@ pub fn runShredProcessor(
     var is_repaired = ArrayListUnmanaged(bool){};
     var error_context = ErrorContext{};
 
-    while (!exit.load(.monotonic)) {
+    while (!exit.load(.acquire)) {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
         while (verified_shred_receiver.receive()) |packet_batch| {

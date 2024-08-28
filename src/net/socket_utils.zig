@@ -21,7 +21,7 @@ pub fn readSocket(
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-    inf_loop: while (!exit.load(.monotonic)) {
+    inf_loop: while (!exit.load(.acquire)) {
         // init a new batch
         var packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
@@ -35,7 +35,7 @@ pub fn readSocket(
             const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
                 error.WouldBlock => {
                     if (packet_batch.items.len > 0) break;
-                    if (exit.load(.monotonic)) {
+                    if (exit.load(.acquire)) {
                         packet_batch.deinit();
                         break :inf_loop;
                     }
@@ -65,7 +65,7 @@ pub fn sendSocket(
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
-    while (!exit.load(.monotonic)) {
+    while (!exit.load(.acquire)) {
         while (outgoing_channel.receive()) |*packet_batch| {
             for (packet_batch.items) |*p| {
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
@@ -113,7 +113,7 @@ pub const SocketThread = struct {
     }
 
     pub fn deinit(self: Self, allocator: Allocator) void {
-        self.exit.store(true, .unordered);
+        self.exit.store(true, .release);
         self.handle.join();
         // close the channel first, so that we can drain without waiting for new items
         self.channel.close();
@@ -183,7 +183,7 @@ pub const BenchmarkPacketProcessing = struct {
         recv_handle.join();
         const elapsed = timer.read();
 
-        exit.store(true, .unordered);
+        exit.store(true, .release);
         handle.join();
 
         return elapsed;

@@ -84,7 +84,7 @@ pub const ShredReceiver = struct {
         response_sender: *Channel(ArrayList(Packet)),
         comptime is_repair: bool,
     ) !void {
-        while (!self.exit.load(.monotonic)) {
+        while (!self.exit.load(.acquire)) {
             var responses = ArrayList(Packet).init(self.allocator);
             for (receivers) |receiver| {
                 while (receiver.receive()) |batch| {

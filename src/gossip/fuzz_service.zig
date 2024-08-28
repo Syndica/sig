@@ -219,7 +219,7 @@ pub fn waitForExit(exit: *AtomicBool) void {
     var buf: [1]u8 = undefined;
     _ = reader.read(&buf) catch unreachable;
 
-    exit.store(true, .unordered);
+    exit.store(true, .release);
 }
 
 pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
@@ -352,7 +352,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     // cleanup
     std.debug.print("\t=> shutting down...\n", .{});
-    exit.store(true, .unordered);
+    exit.store(true, .release);
     handle.join();
     gossip_client.deinit();
     std.debug.print("\t=> done.\n", .{});
@@ -370,7 +370,7 @@ pub fn fuzz(
 ) !void {
     var msg_count: usize = 0;
 
-    while (!loop_exit.load(.monotonic)) {
+    while (!loop_exit.load(.acquire)) {
         if (maybe_max_messages) |max_messages| {
             if (msg_count >= max_messages) {
                 std.debug.print("reached max messages: {d}\n", .{msg_count});

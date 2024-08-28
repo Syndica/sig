@@ -951,7 +951,11 @@ test "remove old values" {
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
+    defer {
+        tp.shutdown();
+        tp.deinit();
+        table.deinit();
+    }
 
     for (0..5) |_| {
         const value = try SignedGossipData.initSigned(
@@ -982,7 +986,11 @@ test "insert and remove value" {
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
+    defer {
+        tp.shutdown();
+        tp.deinit();
+        table.deinit();
+    }
 
     const value = try SignedGossipData.initSigned(
         GossipData.randomFromIndex(rng.random(), 0),
@@ -1002,7 +1010,11 @@ test "trim pruned values" {
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
+    defer {
+        tp.shutdown();
+        tp.deinit();
+        table.deinit();
+    }
 
     const N_VALUES = 10;
     const N_TRIM_VALUES = 5;
@@ -1072,7 +1084,11 @@ test "gossip.HashTimeQueue: trim pruned values" {
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
+    defer {
+        tp.shutdown();
+        tp.deinit();
+        table.deinit();
+    }
 
     // timestamp = 100
     _ = try table.insert(value, 100);
@@ -1105,7 +1121,11 @@ test "insert and get" {
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
+    defer {
+        tp.shutdown();
+        tp.deinit();
+        table.deinit();
+    }
 
     _ = try table.insert(value, 0);
 
@@ -1125,7 +1145,11 @@ test "insert and get contact_info" {
 
     var tp = ThreadPool.init(.{});
     var table = try GossipTable.init(std.testing.allocator, &tp);
-    defer table.deinit();
+    defer {
+        tp.shutdown();
+        tp.deinit();
+        table.deinit();
+    }
 
     // test insertion
     _ = try table.insert(gossip_value, 0);

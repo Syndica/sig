@@ -101,7 +101,7 @@ pub const RepairService = struct {
         var waiting_for_peers = false;
         var timer = try std.time.Timer.start();
         var last_iteration: u64 = 0;
-        while (!self.exit.load(.monotonic)) {
+        while (!self.exit.load(.acquire)) {
             if (self.sendNecessaryRepairs()) |_| {
                 if (waiting_for_peers) {
                     waiting_for_peers = false;

@@ -213,7 +213,7 @@ pub const BlockstoreWriter = struct {
             if (!try self.isRoot(slot)) {
                 try roots_to_fix.append(slot);
             }
-            if (exit.load(.monotonic)) {
+            if (exit.load(.acquire)) {
                 return 0;
             }
         }
@@ -224,7 +224,7 @@ pub const BlockstoreWriter = struct {
             const chunk_size = 100;
             const num_chunks = (roots_to_fix.items.len - 1) / chunk_size + 1;
             for (0..num_chunks) |chunk_index| {
-                if (exit.load(.monotonic)) {
+                if (exit.load(.acquire)) {
                     return chunk_index * chunk_size;
                 }
                 const start_index = chunk_index * chunk_size;

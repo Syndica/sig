@@ -21,7 +21,7 @@ pub fn runShredVerifier(
     leader_schedule: SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
-    while (!exit.load(.monotonic)) {
+    while (!exit.load(.acquire)) {
         while (unverified_shred_receiver.receive()) |packet_batch| {
             // TODO parallelize this once it's actually verifying signatures
             for (packet_batch.items) |*packet| {
@@ -32,7 +32,7 @@ pub fn runShredVerifier(
                 }
             }
             try verified_shred_sender.send(packet_batch);
-            if (exit.load(.monotonic)) return;
+            if (exit.load(.acquire)) return;
         }
     }
 }

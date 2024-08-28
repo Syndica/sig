@@ -160,7 +160,7 @@ pub fn runService(
     var last_iteration: u64 = 0;
     var num_oks: u64 = 0;
     var num_errors: u64 = 0;
-    while (!exit.load(.monotonic)) {
+    while (!exit.load(.acquire)) {
         const result = @call(.auto, function, args);
 
         // identify result

@@ -1207,7 +1207,7 @@ pub const AccountsDB = struct {
         var tmp_bank_fields = try BankFields.random(self.allocator, rand.random(), 128);
         defer tmp_bank_fields.deinit(self.allocator);
 
-        while (!exit.load(.monotonic)) {
+        while (!exit.load(.acquire)) {
             defer {
                 const elapsed = timer.lap();
                 if (elapsed < DB_MANAGER_LOOP_MIN.asNanos()) {
@@ -3342,7 +3342,7 @@ test "geyser stream on load" {
         null,
     });
     defer {
-        geyser_exit.store(true, .unordered);
+        geyser_exit.store(true, .release);
         _ = reader_handle.join();
     }
 

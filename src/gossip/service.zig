@@ -259,7 +259,7 @@ pub const GossipService = struct {
         self.packet_outgoing_channel.deinit();
         self.allocator.destroy(self.packet_outgoing_channel);
 
-        std.debug.assert(self.packet_outgoing_channel.len() == 0);
+        std.debug.assert(self.verified_incoming_channel.len() == 0);
         self.verified_incoming_channel.deinit();
         self.allocator.destroy(self.verified_incoming_channel);
 
@@ -410,12 +410,12 @@ pub const GossipService = struct {
             };
         }
 
-        while (!self.exit.load(.monotonic)) {
+        while (!(self.exit.load(.acquire) and self.packet_incoming_channel.len() == 0)) {
             // verify in parallel using the threadpool
             // PERF: investigate CPU pinning
             var task_search_start_idx: usize = 0;
             while (self.packet_incoming_channel.receive()) |packet_batch| {
-                self.stats.gossip_packets_received.add(1);
+                defer self.stats.gossip_packets_received.add(1);
 
                 const acquired_task_idx = VerifyMessageTask.awaitAndAcquireFirstAvailableTask(tasks, task_search_start_idx);
                 task_search_start_idx = (acquired_task_idx + 1) % tasks.len;
@@ -497,7 +497,7 @@ pub const GossipService = struct {
         // keep processing data while either,
         // - `exit` isn't set,
         // - there's still data to process in the input channel, we will block the join until that's done
-        while (!self.exit.load(.monotonic) or self.verified_incoming_channel.len() != 0) {
+        while (!(self.exit.load(.acquire) and self.verified_incoming_channel.len() == 0)) {
             var msg_count: usize = 0;
             while (self.verified_incoming_channel.receive()) |message| {
                 msg_count += 1;
@@ -621,6 +621,7 @@ pub const GossipService = struct {
             gossip_packets_processed += pull_requests.items.len;
             gossip_packets_processed += pull_responses.items.len;
             gossip_packets_processed += prune_messages.items.len;
+
             self.stats.gossip_packets_processed.add(gossip_packets_processed);
 
             self.stats.maybeLog();
@@ -769,7 +770,7 @@ pub const GossipService = struct {
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
-        while (!self.exit.load(.monotonic)) {
+        while (!self.exit.load(.acquire)) {
             defer loop_timer.reset();
 
             if (pull_req_timer.read().asNanos() > PULL_REQUEST_RATE.asNanos()) pull_blk: {
@@ -2256,7 +2257,7 @@ test "build messages startup and shutdown" {
 
     std.time.sleep(std.time.ns_per_s * 3);
 
-    exit.store(true, .unordered);
+    exit.store(true, .release);
     build_messages_handle.join();
 }
 
@@ -2518,7 +2519,7 @@ test "handle old prune & pull request message" {
     }
     try std.testing.expect(dropped_old_req);
 
-    exit.store(true, .unordered);
+    exit.store(true, .release);
     handle.join();
 }
 
@@ -3157,7 +3158,7 @@ test "init, exit, and deinit" {
     });
 
     gossip_service.echo_server.kill();
-    exit.store(true, .unordered);
+    exit.store(true, .release);
     handle.join();
     gossip_service.deinit();
 }
@@ -3234,8 +3235,8 @@ pub const BenchmarkGossipServiceGeneral = struct {
             logger,
         );
         gossip_service.echo_server.kill(); // we dont need this rn
+
         defer gossip_service.deinit();
-        // reset stats
         defer gossip_service.stats.reset();
 
         const packet_handle = try Thread.spawn(.{}, GossipService.run, .{
@@ -3298,16 +3299,16 @@ pub const BenchmarkGossipServiceGeneral = struct {
         var timer = try std.time.Timer.start();
         while (true) {
             const v = gossip_service.stats.gossip_packets_processed.get();
-            // std.debug.print("{d} messages processed\r", .{v});
-            if (v >= msg_sent) {
-                break;
-            }
+            if (v >= msg_sent) break;
         }
         const elapsed = timer.read();
-        // std.debug.print("\r", .{});
 
-        exit.store(true, .unordered);
+        exit.store(true, .release);
         packet_handle.join();
+
+        while (gossip_service.packet_incoming_channel.receive()) |_| {}
+        while (gossip_service.packet_outgoing_channel.receive()) |_| {}
+        while (gossip_service.verified_incoming_channel.receive()) |_| {}
 
         return elapsed;
     }
@@ -3436,16 +3437,16 @@ pub const BenchmarkGossipServicePullRequests = struct {
         var timer = try std.time.Timer.start();
         while (true) {
             const v = gossip_service.stats.gossip_packets_processed.get();
-            if (v >= msg_sent) {
-                break;
-            }
-            // std.debug.print("{d} messages processed\r", .{v});
+            if (v >= msg_sent) break;
         }
         const elapsed = timer.read();
-        // std.debug.print("\r", .{});
 
-        exit.store(true, .unordered);
+        exit.store(true, .release);
         packet_handle.join();
+
+        while (gossip_service.packet_incoming_channel.receive()) |_| {}
+        while (gossip_service.packet_outgoing_channel.receive()) |_| {}
+        while (gossip_service.verified_incoming_channel.receive()) |_| {}
 
         return elapsed;
     }

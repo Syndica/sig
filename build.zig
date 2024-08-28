@@ -134,6 +134,7 @@ pub fn build(b: *Build) void {
         .root_source_file = b.path("src/benchmarks.zig"),
         .target = target,
         .optimize = optimize,
+        .sanitize_thread = enable_tsan,
     });
     b.installArtifact(benchmark_exe);
     benchmark_exe.root_module.addImport("base58-zig", base58_module);

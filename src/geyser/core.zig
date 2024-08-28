@@ -111,7 +111,7 @@ pub const GeyserWriter = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.exit.store(true, .unordered);
+        self.exit.store(true, .release);
         if (self.io_handle) |*handle| handle.join();
 
         self.file.close();
@@ -130,7 +130,7 @@ pub const GeyserWriter = struct {
         var payloads = std.ArrayList([]u8).init(self.allocator);
         defer payloads.deinit();
 
-        while (!self.exit.load(.monotonic)) {
+        while (!self.exit.load(.acquire)) {
             // TODO(metrics): prometheus metrics on number of payloads written
 
             while (self.io_channel.receive()) |payload| {
@@ -176,7 +176,7 @@ pub const GeyserWriter = struct {
             const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
                 std.time.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.monotonic)) {
+                if (self.exit.load(.acquire)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }
                 continue;
@@ -206,7 +206,7 @@ pub const GeyserWriter = struct {
         while (n_bytes_written_total < buf.len) {
             const n_bytes_written = self.file.write(buf[n_bytes_written_total..]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
-                    if (self.exit.load(.monotonic)) {
+                    if (self.exit.load(.acquire)) {
                         return WritePipeError.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
@@ -424,7 +424,7 @@ pub fn streamReader(
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 
-    while (!exit.load(.monotonic)) {
+    while (!exit.load(.acquire)) {
         const n, const payload = reader.readPayload() catch |err| {
             if (err == error.PipeBlockedWithExitSignaled) {
                 break;
