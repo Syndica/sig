@@ -8,6 +8,7 @@ const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 const UdpSocket = network.Socket;
 
+const SocketAddr = sig.net.SocketAddr;
 const Packet = sig.net.Packet;
 const Slot = sig.core.Slot;
 const RwMux = sig.sync.RwMux;
@@ -134,7 +135,10 @@ pub const Service = struct {
             if (transaction_batch.count() >= self.config.batch_size or
                 last_batch_sent.elapsed().asNanos() >= self.config.batch_send_rate.asNanos())
             {
-                try self.sendTransactions(transaction_batch.values());
+                const leader_addresses = try self.getLeaderAddresses();
+                defer leader_addresses.deinit();
+
+                try self.sendTransactions(transaction_batch.values(), leader_addresses);
                 last_batch_sent = Instant.now();
 
                 self.transaction_pool.addMany(transaction_batch.values()) catch {
@@ -237,27 +241,33 @@ pub const Service = struct {
             const retry_transactions = try self.transaction_pool.getRetryTransactions(self.allocator);
             defer self.allocator.free(retry_transactions);
 
+            const leader_addresses = try self.getLeaderAddresses();
+            defer leader_addresses.deinit();
+
             var start_index: usize = 0;
             while (start_index < retry_transactions.len) {
                 const end_index = @min(start_index + self.config.batch_size, retry_transactions.len);
                 const batch = retry_transactions[start_index..end_index];
-                try self.sendTransactions(batch);
+                try self.sendTransactions(batch, leader_addresses);
                 start_index = end_index;
             }
         }
     }
 
-    /// Sends transactions to the next N leaders TPU addresses
-    fn sendTransactions(self: *Service, transactions: []const TransactionInfo) !void {
+    /// Gets the leader TPU addresses from leader info
+    fn getLeaderAddresses(self: *Service) !std.ArrayList(SocketAddr) {
         var get_leader_addresses_timer = try Timer.start();
         const leader_addresses = blk: {
             const leader_info: *LeaderInfo, var leader_info_lock = self.leader_info_rw.writeWithLock();
             defer leader_info_lock.unlock();
-            break :blk try leader_info.getLeaderAddresses(self.allocator) orelse return;
+            break :blk try leader_info.getLeaderAddresses(self.allocator);
         };
-        defer leader_addresses.deinit();
         self.stats.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
+        return leader_addresses;
+    }
 
+    /// Sends transactions to the next N leaders TPU addresses
+    fn sendTransactions(self: *Service, transactions: []const TransactionInfo, leader_addresses: std.ArrayList(SocketAddr)) !void {
         if (leader_addresses.items.len == 0) {
             self.logger.warn("No leader addresses found");
             return;

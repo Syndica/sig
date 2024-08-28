@@ -24,8 +24,9 @@ const Config = sig.transaction_sender.Config;
 /// It uses the RpcClient to get the epoch info and leader schedule.
 /// It also uses the GossipTable to get the leader addresses.
 /// TODO:
-/// - Update leader schedule on Epoch boundary
-/// - Move RPC client to be part of the LeaderInfo
+/// - This struct is relatively inefficient because it makes a lot of RPC calls.
+/// - It could be moved into its own thread to make improve speed of getting leader addresses.
+/// - It's probably not a big deal for now though, because ultimately this implementation will be replaced.
 pub const LeaderInfo = struct {
     config: Config,
     rpc_client: RpcClient,
@@ -60,7 +61,7 @@ pub const LeaderInfo = struct {
         };
     }
 
-    pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) !?std.ArrayList(SocketAddr) {
+    pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) !std.ArrayList(SocketAddr) {
         const current_slot_result = try self.rpc_client.getSlot(allocator, .{
             .commitment = .processed,
         });
