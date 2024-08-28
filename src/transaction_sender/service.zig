@@ -141,7 +141,7 @@ pub const Service = struct {
                 try self.sendTransactions(transaction_batch.values(), leader_addresses);
                 last_batch_sent = Instant.now();
 
-                self.transaction_pool.addMany(transaction_batch.values()) catch {
+                self.transaction_pool.addTransactions(transaction_batch.values()) catch {
                     self.logger.warn("Transaction pool is full, dropping transactions");
                 };
 
@@ -204,31 +204,31 @@ pub const Service = struct {
         for (signature_statuses.value, signatures, transactions) |maybe_signature_status, signature, transaction_info| {
             if (maybe_signature_status) |signature_status| {
                 if (signature_status.confirmations == null) {
-                    try self.transaction_pool.drop_signatures.append(signature);
+                    try self.transaction_pool.addDropSignature(signature);
                     self.stats.transactions_rooted_count.add(1);
                     continue;
                 }
 
                 if (signature_status.err) |_| {
-                    try self.transaction_pool.drop_signatures.append(signature);
+                    try self.transaction_pool.addDropSignature(signature);
                     self.stats.transactions_failed_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.isExpired(block_height)) {
-                    try self.transaction_pool.drop_signatures.append(signature);
+                    try self.transaction_pool.addDropSignature(signature);
                     self.stats.transactions_expired_count.add(1);
                     continue;
                 }
             } else {
                 if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
-                    try self.transaction_pool.drop_signatures.append(signature);
+                    try self.transaction_pool.addDropSignature(signature);
                     self.stats.transactions_exceeded_max_retries_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.shouldRetry(self.config.retry_rate)) {
-                    try self.transaction_pool.retry_signatures.append(signature);
+                    try self.transaction_pool.addRetrySignature(signature);
                     self.stats.transactions_retry_count.add(1);
                 }
             }
@@ -237,9 +237,14 @@ pub const Service = struct {
 
     /// Sends retry transactions in batches to the leader TPU addresses
     fn retryTransactions(self: *Service) !void {
-        if (self.transaction_pool.hasRetryTransactions()) {
-            const retry_transactions = try self.transaction_pool.getRetryTransactions(self.allocator);
-            defer self.allocator.free(retry_transactions);
+        if (self.transaction_pool.hasRetrySignatures()) {
+            // We need to hold a read lock until we are finished using the retry transactions, otherwise
+            // the receiver thread could add new transactions and corrupt the underlying array
+            const retry_transactions, var lock = try self.transaction_pool.readRetryTransactionsWithLock(self.allocator);
+            defer {
+                self.allocator.free(retry_transactions);
+                lock.unlock();
+            }
 
             const leader_addresses = try self.getLeaderAddresses();
             defer leader_addresses.deinit();
@@ -263,6 +268,7 @@ pub const Service = struct {
             break :blk try leader_info.getLeaderAddresses(self.allocator);
         };
         self.stats.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());
+        self.stats.number_of_leaders_identified.set(leader_addresses.items.len);
         return leader_addresses;
     }
 
@@ -272,8 +278,6 @@ pub const Service = struct {
             self.logger.warn("No leader addresses found");
             return;
         }
-
-        self.stats.number_of_leaders_identified.set(leader_addresses.items.len);
 
         for (leader_addresses.items) |leader_address| {
             var packets = try std.ArrayList(Packet).initCapacity(self.allocator, transactions.len);

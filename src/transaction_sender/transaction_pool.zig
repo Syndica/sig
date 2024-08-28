@@ -14,6 +14,10 @@ const TransactionInfo = sig.transaction_sender.TransactionInfo;
 /// Pool to keep track of pending transactions, transactions are added to the
 /// pool after they are received off the incomming channel, and removed when
 /// they are confirmed, failed, timed out, or reach the max retries.
+/// pending_transactions requires a lock as it is accessed by both the receive
+/// thread and the process transactions thread.
+/// retry_signatures and drop_signatures do not need a lock as they are
+/// only accessed by the process transactions thread.
 pub const TransactionPool = struct {
     pending_transactions: RwMux(PendingTransactions),
     retry_signatures: std.ArrayList(Signature),
@@ -62,23 +66,30 @@ pub const TransactionPool = struct {
         return .{ pts.keys(), pts.values(), lock };
     }
 
-    pub fn hasRetryTransactions(self: *TransactionPool) bool {
-        return self.retry_signatures.items.len > 0;
-    }
-
-    pub fn getRetryTransactions(self: *TransactionPool, allocator: Allocator) ![]const TransactionInfo {
-        const pts: *const PendingTransactions, var lock = self.pending_transactions.readWithLock();
-        defer lock.unlock();
+    pub fn readRetryTransactionsWithLock(self: *TransactionPool, allocator: Allocator) !struct { []const TransactionInfo, RwMux(PendingTransactions).RLockGuard } {
+        const pts: *const PendingTransactions, const lock = self.pending_transactions.readWithLock();
         var retry_transactions = try allocator.alloc(TransactionInfo, self.retry_signatures.items.len);
         for (self.retry_signatures.items, 0..) |signature, i| {
             retry_transactions[i] = pts.get(signature) orelse {
                 @panic("Retry transaction not found in pool");
             };
         }
-        return retry_transactions;
+        return .{ retry_transactions, lock };
     }
 
-    pub fn addMany(self: *TransactionPool, transactions: []TransactionInfo) !void {
+    pub fn hasRetrySignatures(self: *TransactionPool) bool {
+        return self.retry_signatures.items.len > 0;
+    }
+
+    pub fn addDropSignature(self: *TransactionPool, signature: Signature) !void {
+        try self.drop_signatures.append(signature);
+    }
+
+    pub fn addRetrySignature(self: *TransactionPool, signature: Signature) !void {
+        try self.retry_signatures.append(signature);
+    }
+
+    pub fn addTransactions(self: *TransactionPool, transactions: []TransactionInfo) !void {
         const pts: *PendingTransactions, var lock = self.pending_transactions.writeWithLock();
         defer lock.unlock();
         for (transactions) |transaction| {
@@ -90,17 +101,12 @@ pub const TransactionPool = struct {
     }
 
     pub fn purge(self: *TransactionPool) void {
-        if (self.retry_signatures.items.len > 0) {
-            self.retry_signatures.clearRetainingCapacity();
+        const pts: *PendingTransactions, var lock = self.pending_transactions.writeWithLock();
+        defer lock.unlock();
+        for (self.drop_signatures.items) |signature| {
+            _ = pts.swapRemove(signature);
         }
-
-        if (self.drop_signatures.items.len > 0) {
-            const pts: *PendingTransactions, var lock = self.pending_transactions.writeWithLock();
-            defer lock.unlock();
-            for (self.drop_signatures.items) |signature| {
-                _ = pts.swapRemove(signature);
-            }
-            self.drop_signatures.clearRetainingCapacity();
-        }
+        self.drop_signatures.clearRetainingCapacity();
+        self.retry_signatures.clearRetainingCapacity();
     }
 };
