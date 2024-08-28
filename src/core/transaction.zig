@@ -264,7 +264,7 @@ pub const Message = struct {
         };
     }
 
-    pub fn deinit(self: Message, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Message, allocator: std.mem.Allocator) void {
         allocator.free(self.account_keys);
         for (self.instructions) |*ci| ci.deinit(allocator);
         allocator.free(self.instructions);
@@ -359,7 +359,7 @@ pub const CompiledInstruction = struct {
         };
     }
 
-    pub fn deinit(self: CompiledInstruction, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const CompiledInstruction, allocator: std.mem.Allocator) void {
         allocator.free(self.accounts);
         allocator.free(self.data);
     }

@@ -21,14 +21,8 @@ pub fn runShredVerifier(
     leader_schedule: SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
-    var buf = ArrayList(ArrayList(Packet)).init(unverified_shred_receiver.allocator);
-    while (!exit.load(.unordered)) {
-        try unverified_shred_receiver.tryDrainRecycle(&buf);
-        if (buf.items.len == 0) {
-            std.time.sleep(10 * std.time.ns_per_ms);
-            continue;
-        }
-        for (buf.items) |packet_batch| {
+    while (!exit.load(.monotonic)) {
+        while (unverified_shred_receiver.receive()) |packet_batch| {
             // TODO parallelize this once it's actually verifying signatures
             for (packet_batch.items) |*packet| {
                 if (!verifyShred(packet, leader_schedule)) {

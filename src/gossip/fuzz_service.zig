@@ -370,7 +370,7 @@ pub fn fuzz(
 ) !void {
     var msg_count: usize = 0;
 
-    while (!loop_exit.load(.unordered)) {
+    while (!loop_exit.load(.monotonic)) {
         if (maybe_max_messages) |max_messages| {
             if (msg_count >= max_messages) {
                 std.debug.print("reached max messages: {d}\n", .{msg_count});

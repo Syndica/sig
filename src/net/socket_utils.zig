@@ -21,7 +21,7 @@ pub fn readSocket(
     var socket = socket_;
     try socket.setReadTimeout(SOCKET_TIMEOUT_US);
 
-    inf_loop: while (!exit.load(.unordered)) {
+    inf_loop: while (!exit.load(.monotonic)) {
         // init a new batch
         var packet_batch = try std.ArrayList(Packet).initCapacity(
             allocator,
@@ -35,7 +35,7 @@ pub fn readSocket(
             const recv_meta = socket.receiveFrom(&packet.data) catch |err| switch (err) {
                 error.WouldBlock => {
                     if (packet_batch.items.len > 0) break;
-                    if (exit.load(.unordered)) {
+                    if (exit.load(.monotonic)) {
                         packet_batch.deinit();
                         break :inf_loop;
                     }
@@ -65,21 +65,8 @@ pub fn sendSocket(
 ) error{ SocketSendError, OutOfMemory, ChannelClosed }!void {
     var packets_sent: u64 = 0;
 
-    while (!exit.load(.unordered)) {
-        const maybe_packet_batches = try outgoing_channel.try_drain();
-        const packet_batches = maybe_packet_batches orelse {
-            // sleep for 1ms
-            // std.time.sleep(std.time.ns_per_ms * 1);
-            continue;
-        };
-        defer {
-            for (packet_batches) |*packet_batch| {
-                packet_batch.deinit();
-            }
-            outgoing_channel.allocator.free(packet_batches);
-        }
-
-        for (packet_batches) |*packet_batch| {
+    while (!exit.load(.monotonic)) {
+        while (outgoing_channel.receive()) |*packet_batch| {
             for (packet_batch.items) |*p| {
                 const bytes_sent = socket.sendTo(p.addr, p.data[0..p.size]) catch |e| {
                     logger.debugf("send_socket error: {s}", .{@errorName(e)});
@@ -88,6 +75,7 @@ pub fn sendSocket(
                 packets_sent +|= 1;
                 std.debug.assert(bytes_sent == p.size);
             }
+            packet_batch.deinit();
         }
     }
     logger.debugf("sendSocket loop closed", .{});
@@ -107,7 +95,7 @@ pub const SocketThread = struct {
     const Self = @This();
 
     pub fn initSender(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
-        const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
+        const channel = try Channel(std.ArrayList(Packet)).create(allocator, 0);
         return .{
             .channel = channel,
             .exit = exit,
@@ -116,7 +104,7 @@ pub const SocketThread = struct {
     }
 
     pub fn initReceiver(allocator: Allocator, logger: Logger, socket: UdpSocket, exit: *Atomic(bool)) !Self {
-        const channel = Channel(std.ArrayList(Packet)).init(allocator, 0);
+        const channel = try Channel(std.ArrayList(Packet)).create(allocator, 0);
         return .{
             .channel = channel,
             .exit = exit,
@@ -124,16 +112,16 @@ pub const SocketThread = struct {
         };
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: Self, allocator: Allocator) void {
         self.exit.store(true, .unordered);
         self.handle.join();
         // close the channel first, so that we can drain without waiting for new items
         self.channel.close();
-        if (self.channel.drain()) |lists| {
-            for (lists) |list| list.deinit();
-            self.channel.allocator.free(lists);
+        while (self.channel.receive()) |list| {
+            list.deinit();
         }
         self.channel.deinit();
+        allocator.destroy(self.channel);
     }
 };
 
@@ -168,8 +156,8 @@ pub const BenchmarkPacketProcessing = struct {
 
         var exit = std.atomic.Value(bool).init(false);
 
-        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, channel, &exit, .noop });
-        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ channel, n_packets });
+        var handle = try std.Thread.spawn(.{}, readSocket, .{ allocator, socket, &channel, &exit, .noop });
+        var recv_handle = try std.Thread.spawn(.{}, benchmarkChannelRecv, .{ &channel, n_packets });
 
         var rand = std.rand.DefaultPrng.init(0);
         var packet_buf: [PACKET_DATA_SIZE]u8 = undefined;
@@ -208,13 +196,9 @@ pub fn benchmarkChannelRecv(
 ) !void {
     var count: usize = 0;
     while (true) {
-        const values = (try channel.try_drain()) orelse {
-            continue;
-        };
-        for (values) |packet_batch| {
-            count += packet_batch.items.len;
+        if (channel.receive()) |value| {
+            count += value.items.len;
         }
-        // std.debug.print("recv packet count: {d}\r", .{count});
         if (count >= n_values_to_receive) {
             break;
         }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const logger = @import("./trace/log.zig");
 
 const Decl = std.builtin.Type.Declaration;
@@ -12,6 +13,8 @@ const meta = std.meta;
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
+
+    if (builtin.mode == .Debug) std.debug.print("warning: running benchmark in Debug mode\n", .{});
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();

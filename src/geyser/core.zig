@@ -96,7 +96,7 @@ pub const GeyserWriter = struct {
         io_fba_bytes: u64,
     ) !Self {
         const file = try openPipe(pipe_path);
-        const io_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
+        const io_channel = try sig.sync.Channel([]u8).create(allocator, 1_000);
         const io_allocator_state = try allocator.create(RecycleFBA(.{}));
         io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
 
@@ -115,8 +115,8 @@ pub const GeyserWriter = struct {
         if (self.io_handle) |*handle| handle.join();
 
         self.file.close();
-        self.io_channel.close();
         self.io_channel.deinit();
+        self.allocator.destroy(self.io_channel);
         self.io_allocator_state.deinit();
         self.allocator.destroy(self.io_allocator_state);
     }
@@ -130,11 +130,10 @@ pub const GeyserWriter = struct {
         var payloads = std.ArrayList([]u8).init(self.allocator);
         defer payloads.deinit();
 
-        while (!self.exit.load(.unordered)) {
-            try self.io_channel.tryDrainRecycle(&payloads);
+        while (!self.exit.load(.monotonic)) {
             // TODO(metrics): prometheus metrics on number of payloads written
 
-            for (payloads.items) |payload| {
+            while (self.io_channel.receive()) |payload| {
                 _ = self.writeToPipe(payload) catch |err| {
                     if (err == WritePipeError.PipeBlockedWithExitSignaled) {
                         return;
@@ -177,7 +176,7 @@ pub const GeyserWriter = struct {
             const buf = self.io_allocator.alloc(u8, total_len) catch {
                 // no memory available rn - unlock and wait
                 std.time.sleep(std.time.ns_per_ms);
-                if (self.exit.load(.unordered)) {
+                if (self.exit.load(.monotonic)) {
                     return error.MemoryBlockedWithExitSignaled;
                 }
                 continue;
@@ -207,7 +206,7 @@ pub const GeyserWriter = struct {
         while (n_bytes_written_total < buf.len) {
             const n_bytes_written = self.file.write(buf[n_bytes_written_total..]) catch |err| {
                 if (err == std.posix.WriteError.WouldBlock) {
-                    if (self.exit.load(.unordered)) {
+                    if (self.exit.load(.monotonic)) {
                         return WritePipeError.PipeBlockedWithExitSignaled;
                     } else {
                         // pipe is full but we dont need to exit, so we try again
@@ -425,7 +424,7 @@ pub fn streamReader(
     var bytes_read: usize = 0;
     var timer = try sig.time.Timer.start();
 
-    while (!exit.load(.unordered)) {
+    while (!exit.load(.monotonic)) {
         const n, const payload = reader.readPayload() catch |err| {
             if (err == error.PipeBlockedWithExitSignaled) {
                 break;

@@ -2,13 +2,12 @@ const std = @import("std");
 const Atomic = std.atomic.Value;
 const Allocator = std.mem.Allocator;
 const Condition = std.Thread.Condition;
-const testing = std.testing;
 const assert = std.debug.assert;
 const Mux = @import("mux.zig").Mux;
-const Backoff = @import("Backoff.zig");
+const Backoff = @import("backoff.zig").Backoff;
 
 /// A very basic mpmc channel implementation - TODO: replace with a legit channel impl
-pub fn Channel(comptime T: type) type {
+pub fn OldChannel(comptime T: type) type {
     return struct {
         buffer: Mux(std.ArrayList(T)),
         has_value: Condition = .{},
@@ -169,7 +168,7 @@ pub fn Channel(comptime T: type) type {
     };
 }
 
-pub fn NewChannel(T: type) type {
+pub fn Channel(T: type) type {
     return struct {
         head: Position,
         tail: Position,
@@ -365,6 +364,7 @@ pub fn NewChannel(T: type) type {
                 } else {
                     if (offset + 1 == BLOCK_CAP) {
                         const next = while (true) {
+                            backoff.snooze();
                             const next = block.?.next.load(.acquire);
                             if (next != null) break next.?;
                         };
@@ -468,8 +468,8 @@ const logger = std.log.scoped(.sync_channel_tests);
 
 fn testUsizeReceiver(chan: anytype, recv_count: usize) void {
     var count: usize = 0;
-    while (count < recv_count) : (count += 1) {
-        while (chan.receive() == null) {}
+    while (count < recv_count) {
+        if (chan.receive()) |_| count += 1;
     }
 }
 
@@ -498,8 +498,8 @@ fn testPacketSender(chan: anytype, total_send: usize) void {
 
 fn testPacketReceiver(chan: anytype, total_recv: usize) void {
     var count: usize = 0;
-    while (count < total_recv) : (count += 1) {
-        while (chan.receive() != null) {}
+    while (count < total_recv) {
+        if (chan.receive()) |_| count += 1;
     }
 }
 
@@ -549,7 +549,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
-        var channel = Channel(usize).init(allocator, 0);
+        var channel = OldChannel(usize).init(allocator, 0);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;
@@ -585,7 +585,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
-        var channel = NewChannel(usize).init(allocator, n_items / 2);
+        var channel = Channel(usize).init(allocator, n_items / 2);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;
@@ -621,7 +621,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
-        var channel = Channel(Packet).init(allocator, n_items / 2);
+        var channel = OldChannel(Packet).init(allocator, n_items / 2);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;
@@ -657,7 +657,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
-        var channel = NewChannel(Packet).init(allocator, n_items / 2);
+        var channel = Channel(Packet).init(allocator, n_items / 2);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;

@@ -102,7 +102,7 @@ pub const SignedGossipData = struct {
         };
     }
 
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
         self.data.deinit(allocator);
     }
 
@@ -312,7 +312,7 @@ pub const GossipData = union(GossipDataTag) {
         };
     }
 
-    pub fn deinit(self: *GossipData, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const GossipData, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .LegacyContactInfo => {},
             .Vote => |*v| v[1].deinit(allocator),
@@ -624,7 +624,7 @@ pub const Vote = struct {
         };
     }
 
-    pub fn deinit(self: *Vote, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Vote, allocator: std.mem.Allocator) void {
         self.transaction.deinit(allocator);
     }
 
@@ -664,7 +664,7 @@ pub const LowestSlot = struct {
         };
     }
 
-    pub fn deinit(self: *LowestSlot, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const LowestSlot, allocator: std.mem.Allocator) void {
         allocator.free(self.slots);
         for (self.stash) |*item| item.deinit(allocator);
         allocator.free(self.stash);
@@ -713,7 +713,7 @@ pub const DeprecatedEpochIncompleteSlots = struct {
         };
     }
 
-    pub fn deinit(self: *DeprecatedEpochIncompleteSlots, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const DeprecatedEpochIncompleteSlots, allocator: std.mem.Allocator) void {
         allocator.free(self.compressed_list);
     }
 };
@@ -741,7 +741,7 @@ pub const AccountsHashes = struct {
         };
     }
 
-    pub fn deinit(self: *AccountsHashes, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const AccountsHashes, allocator: std.mem.Allocator) void {
         allocator.free(self.hashes);
     }
 
@@ -779,7 +779,7 @@ pub const EpochSlots = struct {
         };
     }
 
-    pub fn deinit(self: *EpochSlots, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const EpochSlots, allocator: std.mem.Allocator) void {
         for (self.slots) |*slot| slot.deinit(allocator);
         allocator.free(self.slots);
     }
@@ -812,7 +812,7 @@ pub const CompressedSlots = union(enum(u32)) {
         };
     }
 
-    pub fn deinit(self: *CompressedSlots, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const CompressedSlots, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .Flate2 => |*v| v.deinit(allocator),
             .Uncompressed => |*v| v.deinit(allocator),
@@ -840,7 +840,7 @@ pub const Flate2 = struct {
         };
     }
 
-    pub fn deinit(self: *Flate2, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Flate2, allocator: std.mem.Allocator) void {
         allocator.free(self.compressed);
     }
 
@@ -867,7 +867,7 @@ pub const Uncompressed = struct {
         };
     }
 
-    pub fn deinit(self: *Uncompressed, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Uncompressed, allocator: std.mem.Allocator) void {
         self.slots.deinit(allocator);
     }
 
@@ -898,7 +898,7 @@ pub fn BitVec(comptime T: type) type {
             };
         }
 
-        pub fn deinit(self: *BitVec(T), allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *const BitVec(T), allocator: std.mem.Allocator) void {
             allocator.free(self.bits.?);
         }
     };
@@ -1089,7 +1089,7 @@ pub const DuplicateShred = struct {
         };
     }
 
-    pub fn deinit(self: *DuplicateShred, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const DuplicateShred, allocator: std.mem.Allocator) void {
         allocator.free(self.chunk);
     }
 
@@ -1134,7 +1134,7 @@ pub const SnapshotHashes = struct {
         };
     }
 
-    pub fn deinit(self: *SnapshotHashes, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const SnapshotHashes, allocator: std.mem.Allocator) void {
         allocator.free(self.incremental);
     }
 
@@ -1224,7 +1224,7 @@ pub const ContactInfo = struct {
         return NodeInstance.init(rand, self.pubkey, @intCast(std.time.milliTimestamp()));
     }
 
-    pub fn deinit(self: Self) void {
+    pub fn deinit(self: *const Self) void {
         self.addrs.deinit();
         self.sockets.deinit();
         self.extensions.deinit();
@@ -1519,7 +1519,7 @@ pub const RestartLastVotedForkSlots = struct {
         };
     }
 
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const Self, allocator: std.mem.Allocator) void {
         self.offsets.deinit(allocator);
     }
 
@@ -1539,7 +1539,7 @@ pub const SlotsOffsets = union(enum(u32)) {
         };
     }
 
-    pub fn deinit(self: *SlotsOffsets, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const SlotsOffsets, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .RunLengthEncoding => |*arr| arr.deinit(),
             .RawOffsets => |*bits| bits.deinit(allocator),
@@ -1558,7 +1558,7 @@ const RawOffsets = struct {
         };
     }
 
-    pub fn deinit(self: *RawOffsets, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *const RawOffsets, allocator: std.mem.Allocator) void {
         self.bits.deinit(allocator);
     }
 };

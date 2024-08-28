@@ -101,7 +101,7 @@ pub const RepairService = struct {
         var waiting_for_peers = false;
         var timer = try std.time.Timer.start();
         var last_iteration: u64 = 0;
-        while (!self.exit.load(.unordered)) {
+        while (!self.exit.load(.monotonic)) {
             if (self.sendNecessaryRepairs()) |_| {
                 if (waiting_for_peers) {
                     waiting_for_peers = false;
@@ -244,7 +244,7 @@ pub const RepairRequester = struct {
     }
 
     pub fn deinit(self: Self) void {
-        self.sender.deinit();
+        self.sender.deinit(self.allocator);
     }
 
     pub fn sendRepairRequestBatch(

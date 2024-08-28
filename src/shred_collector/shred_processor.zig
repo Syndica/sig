@@ -30,20 +30,14 @@ pub fn runShredProcessor(
     leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
 ) !void {
     var shred_inserter = shred_inserter_;
-    var packet_buf = ArrayList(ArrayList(Packet)).init(allocator);
     var shreds = ArrayListUnmanaged(Shred){};
     var is_repaired = ArrayListUnmanaged(bool){};
     var error_context = ErrorContext{};
 
-    while (!exit.load(.unordered)) {
+    while (!exit.load(.monotonic)) {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
-        try verified_shred_receiver.tryDrainRecycle(&packet_buf);
-        if (packet_buf.items.len == 0) {
-            std.time.sleep(10 * std.time.ns_per_ms);
-            continue;
-        }
-        for (packet_buf.items) |packet_batch| {
+        while (verified_shred_receiver.receive()) |packet_batch| {
             for (packet_batch.items) |*packet| if (!packet.flags.isSet(.discard)) {
                 processShred(
                     allocator,

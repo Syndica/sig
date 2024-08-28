@@ -34,7 +34,7 @@ pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     }
     var slot: Slot = 0;
 
-    while (!exit.load(.unordered)) {
+    while (!exit.load(.monotonic)) {
         // since the i/o happens in another thread, we cant easily track bytes/second here
         geyser_writer.writePayloadToPipe(
             VersionedAccountPayload{
@@ -63,12 +63,11 @@ pub fn runBenchmark() !void {
 
     exit.* = std.atomic.Value(bool).init(false);
 
-    const reader_handle = try std.Thread.spawn(.{}, geyser.core.streamReader, .{
-        exit,
-        PIPE_PATH,
-        MEASURE_RATE,
-        null,
-    });
+    const reader_handle = try std.Thread.spawn(
+        .{},
+        geyser.core.streamReader,
+        .{ exit, PIPE_PATH, MEASURE_RATE, null },
+    );
     const writer_handle = try std.Thread.spawn(.{}, streamWriter, .{exit});
 
     // let it run for ~4 measurements

@@ -47,10 +47,10 @@ pub const ShredReceiver = struct {
 
         var response_sender = try SocketThread
             .initSender(self.allocator, self.logger, self.repair_socket, self.exit);
-        defer response_sender.deinit();
+        defer response_sender.deinit(self.allocator);
         var repair_receiver = try SocketThread
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
-        defer repair_receiver.deinit();
+        defer repair_receiver.deinit(self.allocator);
 
         var turbine_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
         for (0..NUM_TVU_RECEIVERS) |i| {
@@ -84,20 +84,16 @@ pub const ShredReceiver = struct {
         response_sender: *Channel(ArrayList(Packet)),
         comptime is_repair: bool,
     ) !void {
-        var buf = ArrayList(ArrayList(Packet)).init(self.allocator);
-        while (!self.exit.load(.unordered)) {
+        while (!self.exit.load(.monotonic)) {
             var responses = ArrayList(Packet).init(self.allocator);
             for (receivers) |receiver| {
-                try receiver.tryDrainRecycle(&buf);
-                if (buf.items.len > 0) {
+                while (receiver.receive()) |batch| {
                     const shred_version = self.shred_version.load(.monotonic);
-                    for (buf.items) |batch| {
-                        for (batch.items) |*packet| {
-                            if (is_repair) packet.flags.set(.repair);
-                            try self.handlePacket(packet, &responses, shred_version);
-                        }
-                        try self.unverified_shred_sender.send(batch);
+                    for (batch.items) |*packet| {
+                        try self.handlePacket(packet, &responses, shred_version);
+                        if (is_repair) packet.flags.set(.repair);
                     }
+                    try self.unverified_shred_sender.send(batch);
                 } else {
                     std.time.sleep(10 * std.time.ns_per_ms);
                 }

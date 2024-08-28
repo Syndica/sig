@@ -336,7 +336,7 @@ pub const GossipTable = struct {
     pub fn insertValuesMinAllocs(
         self: *Self,
         now: u64,
-        values: []SignedGossipData,
+        values: []const SignedGossipData,
         timeout: u64,
         failed_indexes: *std.ArrayList(usize),
     ) error{OutOfMemory}!void {
