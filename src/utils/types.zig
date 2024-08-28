@@ -276,12 +276,20 @@ pub const EqlConfig = struct {
 
 /// Compare equality of two items with the same type.
 ///
+/// see eqlCustom for more information.
+/// use eqlCustom to customize the behavior.
+pub inline fn eql(a: anytype, b: @TypeOf(a)) bool {
+    return eqlCustom(a, b, .{});
+}
+
+/// Compare equality of two items with the same type.
+///
 /// By default:
 /// - follows pointers
 /// - treats Allocators as equal
 /// - uses an `eql` method if defined for the type
 /// - compares only the `items` field in ArrayLists
-pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
+pub fn eqlCustom(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
     var config = config_;
     const T: type = @TypeOf(a);
 
@@ -290,7 +298,7 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
         return true;
     }
     if (arrayListInfo(@TypeOf(a))) |_| {
-        return eql(a.items, b.items, config);
+        return eqlCustom(a.items, b.items, config);
     }
 
     // use the type's eql method if it exists
@@ -331,7 +339,7 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
     switch (@typeInfo(T)) {
         .Struct => {
             inline for (@typeInfo((T)).Struct.fields) |field| {
-                if (!eql(@field(a, field.name), @field(b, field.name), config)) {
+                if (!eqlCustom(@field(a, field.name), @field(b, field.name), config)) {
                     return false;
                 }
             }
@@ -339,7 +347,7 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
         },
         .ErrorUnion => {
             if (a) |a_p| {
-                if (b) |b_p| return eql(a_p, b_p, config) else |_| return false;
+                if (b) |b_p| return eqlCustom(a_p, b_p, config) else |_| return false;
             } else |a_e| {
                 if (b) |_| return false else |b_e| return a_e == b_e;
             }
@@ -349,7 +357,11 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
                 if (@intFromEnum(a) != @intFromEnum(b)) return false;
                 inline for (info.fields) |field_info| {
                     if (@field(UnionTag, field_info.name) == @as(std.meta.Tag(T), a)) {
-                        return eql(@field(a, field_info.name), @field(b, field_info.name), config);
+                        return eqlCustom(
+                            @field(a, field_info.name),
+                            @field(b, field_info.name),
+                            config,
+                        );
                     }
                 }
                 return false;
@@ -364,13 +376,13 @@ pub fn eql(a: anytype, b: @TypeOf(a), config_: EqlConfig) bool {
                 return a.len == b.len and a.ptr == b.ptr;
             },
             else => if (config.follow_pointers == .yes) {
-                return eql(a.*, b.*, config);
+                return eqlCustom(a.*, b.*, config);
             } else {
                 return a == b;
             },
         },
         .Optional => return a == null and b == null or
-            a != null and b != null and eql(a.?, b.?, config),
+            a != null and b != null and eqlCustom(a.?, b.?, config),
 
         else => return a == b,
     }
@@ -394,7 +406,7 @@ fn sliceEql(comptime T: type, a: []const T, b: []const T, config: EqlConfig) boo
     if (a.len == 0 or a.ptr == b.ptr) return true;
 
     for (a, b) |a_elem, b_elem| {
-        if (!eql(a_elem, b_elem, config)) return false;
+        if (!eqlCustom(a_elem, b_elem, config)) return false;
     }
     return true;
 }
@@ -434,7 +446,7 @@ pub fn containsPointer(comptime T: type) ?bool {
 /// This is an exact copy of std.mem.eqlBytes because it is private
 fn eqlBytes(a: []const u8, b: []const u8) bool {
     if (!backend_can_use_eql_bytes) {
-        return eql(u8, a, b);
+        return eqlCustom(u8, a, b);
     }
 
     if (a.len != b.len) return false;
@@ -506,7 +518,7 @@ test "eql follows slices" {
     b_slice[0] = 1;
     const a = Foo{ .slice = a_slice };
     const b = Foo{ .slice = b_slice };
-    try std.testing.expect(eql(a, b, .{}));
-    try std.testing.expect(!eql(a, b, .{ .follow_pointers = .no }));
+    try std.testing.expect(eql(a, b));
+    try std.testing.expect(!eqlCustom(a, b, .{ .follow_pointers = .no }));
     try std.testing.expect(!std.meta.eql(a, b));
 }

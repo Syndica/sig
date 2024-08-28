@@ -394,7 +394,7 @@ test "recover mainnet shreds - end to end" {
         try std.testing.expectEqualSlices(u8, expected, actual.payload());
         const expected_shred = try Shred.fromPayload(allocator, expected);
         defer expected_shred.deinit();
-        try std.testing.expect(sig.utils.types.eql(expected_shred, actual, .{}));
+        try std.testing.expect(sig.utils.types.eql(expected_shred, actual));
     }
 }
 
@@ -416,7 +416,6 @@ test "recover mainnet shreds - correct input shards" {
     try std.testing.expect(sig.utils.types.eql(
         @as([]const ?[]const u8, &mainnet_shards),
         @as([]const ?[]const u8, organized.shards),
-        .{},
     ));
 }
 
@@ -452,7 +451,7 @@ test "recover mainnet shreds - construct shreds from shards" {
                 try std.testing.expectEqual(c.fields.custom, recovered_shred.data.fields.custom);
             },
         }
-        try std.testing.expect(sig.utils.types.eql(expected_shred, recovered_shred, .{}));
+        try std.testing.expect(sig.utils.types.eql(expected_shred, recovered_shred));
         i += 1;
     }
 }

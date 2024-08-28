@@ -820,7 +820,7 @@ pub fn testRoundTrip(comptime T: type, test_data: anytype) !void {
 
     const actual_struct = try sig.bincode.readFromSlice(allocator, T, actual_bytes, .{});
     defer actual_struct.deinit(allocator);
-    try std.testing.expect(sig.utils.types.eql(expected_struct, actual_struct, .{}));
+    try std.testing.expect(sig.utils.types.eql(expected_struct, actual_struct));
 }
 
 test "bincode: custom enum" {

@@ -172,7 +172,7 @@ test "insert shreds and transaction statuses then get blocks" {
             .block_time = null,
             .block_height = null,
         };
-        try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block, .{}));
+        try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block));
     }
 
     const confirmed_block = try reader.getRootedBlock(slot + 1, false);
@@ -189,7 +189,7 @@ test "insert shreds and transaction statuses then get blocks" {
         .block_time = null,
         .block_height = null,
     };
-    try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block, .{}));
+    try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block));
 
     try std.testing.expectError(error.SlotNotRooted, reader.getRootedBlock(slot + 2, true));
 
@@ -207,7 +207,7 @@ test "insert shreds and transaction statuses then get blocks" {
         .block_time = null,
         .block_height = null,
     };
-    try std.testing.expect(sig.utils.types.eql(expected_complete_block, complete_block, .{}));
+    try std.testing.expect(sig.utils.types.eql(expected_complete_block, complete_block));
 
     // Test block_time & block_height return, if available
     {
@@ -220,7 +220,7 @@ test "insert shreds and transaction statuses then get blocks" {
 
         const confirmed_block_extra = try reader.getRootedBlock(slot + 1, true);
         defer confirmed_block_extra.deinit(allocator);
-        try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block_extra, .{}));
+        try std.testing.expect(sig.utils.types.eql(expected_block, confirmed_block_extra));
     }
     {
         const timestamp = 1_576_183_542;
@@ -232,11 +232,7 @@ test "insert shreds and transaction statuses then get blocks" {
 
         const complete_block_extra = try reader.getCompleteBlock(slot + 2, true);
         defer complete_block_extra.deinit(allocator);
-        try std.testing.expect(sig.utils.types.eql(
-            expected_complete_block,
-            complete_block_extra,
-            .{},
-        ));
+        try std.testing.expect(sig.utils.types.eql(expected_complete_block, complete_block_extra));
     }
 }
 

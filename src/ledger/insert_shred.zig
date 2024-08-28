@@ -1535,7 +1535,7 @@ pub const ShredInserter = struct {
         chained_merkle_root: ?Hash,
     ) bool {
         return chained_merkle_root == null or // Chained merkle roots have not been enabled yet
-            sig.utils.types.eql(chained_merkle_root, merkle_root, .{});
+            sig.utils.types.eql(chained_merkle_root, merkle_root);
     }
 
     /// For each slot in the slot_meta_working_set which has any change, include
