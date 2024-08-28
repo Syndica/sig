@@ -236,8 +236,8 @@ pub const AccountIndex = struct {
     }
 
     pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {
-        const head_ref, var head_reference_lg = self.getReferenceHeadRead(pubkey) orelse return false;
-        defer head_reference_lg.unlock();
+        const head_ref, var head_ref_lg = self.getReferenceHeadRead(pubkey) orelse return false;
+        defer head_ref_lg.unlock();
 
         // find the slot in the reference list
         var curr_ref: ?*AccountRef = head_ref.ref_ptr;
@@ -268,11 +268,6 @@ pub const AccountIndex = struct {
             if (curr.slot == account_ref.slot) {
                 // found a duplicate => dont do the insertion
                 return false;
-            }
-
-            if (curr.next_ptr == null) {
-                curr.next_ptr = account_ref;
-                return true;
             }
 
             const next_ptr = curr.next_ptr orelse {
