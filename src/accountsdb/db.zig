@@ -99,25 +99,18 @@ pub const AccountsDBStats = struct {
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(Self).Struct;
         inline for (stats_struct_info.fields) |field| {
-            switch (field.type) {
-                *Counter => {
-                    const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
-                    @field(self, field.name) = field_counter;
-                },
-                *Histogram => {
+            @field(self, field.name) = switch (field.type) {
+                *Counter => try registry.getOrCreateCounter(field.name),
+                *Histogram => blk: {
                     const histogram_kind = comptime std.meta.stringToEnum(
                         HistogramKind,
                         field.name,
                     ) orelse @compileError("no matching HistogramKind for AccountsDBStats *Histogram field");
 
-                    const buckets = histogram_kind.buckets();
-                    const field_histogram: *Histogram = try registry.getOrCreateHistogram(field.name, buckets);
-                    @field(self, field.name) = field_histogram;
+                    break :blk try registry.getOrCreateHistogram(field.name, histogram_kind.buckets());
                 },
-                else => {
-                    @compileError("Unsupported field type");
-                },
-            }
+                else => @compileError("Unsupported field type"),
+            };
         }
         return self;
     }
