@@ -3248,7 +3248,7 @@ test "geyser stream on load" {
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
-    const geyser_pipe_path = "test_data/geyser.pipe";
+    const geyser_pipe_path = sig.TEST_DATA_DIR ++ "geyser.pipe";
     var geyser_writer: ?*GeyserWriter = null;
 
     const geyser_exit = try allocator.create(std.atomic.Value(bool));
@@ -3299,7 +3299,7 @@ test "geyser stream on load" {
         snapshots.deinit(allocator);
     }
 
-    var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
+    var accounts_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR ++ "accounts", .{});
     defer accounts_dir.close();
 
     _ = try accounts_db.loadFromSnapshot(

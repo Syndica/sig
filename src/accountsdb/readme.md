@@ -174,9 +174,9 @@ to support disk-based account references, we created a general purpose
 disk allocator which creates memory from mmap-ing files stored on disk.
 
 ```zig
-// files are created using `test_data/tmp_{i}` format where `i` is 
+// files are created using `misc/test_data/tmp_{i}` format where `i` is 
 // incremented by one for each alloc call.
-var allocator = try DiskMemoryAllocator.init("test_data/tmp");
+var allocator = try DiskMemoryAllocator.init("misc/test_data/tmp");
 defer allocator.deinit(null);
 ```
 
