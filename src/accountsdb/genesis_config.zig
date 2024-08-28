@@ -258,7 +258,7 @@ test "genesis_config deserialize development config" {
 test "genesis_config deserialize testnet config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = sig.GENESIS_DIR ++ "testnet-genesis.bin";
+    const genesis_path = sig.GENESIS_DIR ++ "testnet_genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
@@ -268,7 +268,7 @@ test "genesis_config deserialize testnet config" {
 test "genesis_config deserialize devnet config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = sig.GENESIS_DIR ++ "devnet-genesis.bin";
+    const genesis_path = sig.GENESIS_DIR ++ "devnet_genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
@@ -278,7 +278,7 @@ test "genesis_config deserialize devnet config" {
 test "genesis_config deserialize mainnet config" {
     const allocator = std.testing.allocator;
 
-    const genesis_path = sig.GENESIS_DIR ++ "mainnet-genesis.bin";
+    const genesis_path = sig.GENESIS_DIR ++ "mainnet_genesis.bin";
     const config = try GenesisConfig.init(allocator, genesis_path);
     defer config.deinit(allocator);
 
