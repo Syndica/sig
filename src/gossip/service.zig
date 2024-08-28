@@ -3103,16 +3103,6 @@ test "process contact info push packet" {
     };
     try verified_channel.send(erroneous_pull_request_msg);
 
-    // correct insertion into table
-    var buf2: [100]ContactInfo = undefined;
-    {
-        var lg = gossip_service.gossip_table_rw.read();
-        defer lg.unlock();
-
-        const res = lg.get().getContactInfos(&buf2, 0);
-        try std.testing.expect(res.len == 1);
-    }
-
     // close everything up before looking at the output channel in order to
     // not race with work processMessages is doing
     exit.store(true, .release);
@@ -3123,6 +3113,16 @@ test "process contact info push packet" {
     if (responder_channel.receive()) |batch| {
         batch.deinit();
     } else return error.NoPong;
+
+    // correct insertion into table
+    var buf2: [100]ContactInfo = undefined;
+    {
+        var lg = gossip_service.gossip_table_rw.read();
+        defer lg.unlock();
+
+        const res = lg.get().getContactInfos(&buf2, 0);
+        try std.testing.expect(res.len == 1);
+    }
 }
 
 test "init, exit, and deinit" {
