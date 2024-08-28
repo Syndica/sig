@@ -8,7 +8,6 @@ const AutoArrayHashMap = std.AutoArrayHashMap;
 const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 
-const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const RwMux = sig.sync.RwMux;
