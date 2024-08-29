@@ -45,7 +45,7 @@ pub fn keyValueToString(
     args: anytype,
 ) ![]const u8 {
     comptime var size: usize = keyValueSize(args);
-    var array: [size]u8 = undefined;
+    var array: [102]u8 = undefined;
     var fbs = std.io.fixedBufferStream(array[0..]);
     const writer = fbs.writer().any();
     switch (@typeInfo(@TypeOf(args))) {
@@ -53,7 +53,7 @@ pub fn keyValueToString(
             inline for (struc.fields) |field| {
                 size += field.name.len;
                 size += @sizeOf(@TypeOf(field.name));
-                // For the '=' and ' ' characters
+                //For the '=' and ' ' characters
                 size += 2;
                 try std.fmt.format(writer, "{s}={s} ", .{ field.name, @field(args, field.name) });
             }
@@ -64,7 +64,7 @@ pub fn keyValueToString(
     return fbs.getWritten();
 }
 
-fn keyValueSize(
+pub fn keyValueSize(
     args: anytype,
 ) usize {
     comptime var size: usize = 0;
@@ -72,7 +72,8 @@ fn keyValueSize(
         .Struct => |struc| {
             inline for (struc.fields) |field| {
                 size += field.name.len;
-                size += @sizeOf(@TypeOf(field.name));
+                size += @field(args, field.name).len;
+                // For "=" and " "
                 size += 2;
             }
         },

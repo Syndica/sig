@@ -113,6 +113,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
         }
 
         fn createLogMessage(
+            _: Self,
             free_fba: *RecycleFBA,
             total_len: u64,
             level: Level,
@@ -145,15 +146,14 @@ pub fn StandardLogger(comptime scope: ?type) type {
 
             if (maybe_fmt) |fmt| {
                 std.fmt.format(writer, fmt, args) catch @panic("could not format");
-                std.fmt.format(writer, "{s}", .{"\n"}) catch @panic("could not format");
             }
-
+            const log_message = fmt_message.getWritten();
             return logfmt.LogMsg{
                 .level = level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
                 .maybe_kv = maybe_kv,
-                .maybe_fmt = fmt_message.getWritten(),
+                .maybe_fmt = log_message,
             };
         }
 
@@ -167,7 +167,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             };
 
             var free_fba = self.free_fba;
-            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, null, null, null);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, null, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -180,8 +180,11 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
             const kv_str = logfmt.keyValueToString(keyvalue) catch @panic("Could not parse key values");
+            // TODO Revisit why this is needed to remove the Unicode replacement character.
+            var slice: [logfmt.keyValueSize(keyvalue)]u8 = undefined;
+            @memcpy(slice[0..kv_str.len], kv_str);
             var free_fba = self.free_fba;
-            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, kv_str, null, null);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, &slice, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -194,7 +197,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
             var free_fba = self.free_fba;
-            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, null, fmt, args);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, null, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -207,8 +210,13 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
             const kv_str = logfmt.keyValueToString(keyvalue) catch @panic("Could not parse key values");
+
+            // TODO Revisit why this is needed to remove the Unicode replacement character.
+            var slice: [logfmt.keyValueSize(keyvalue)]u8 = undefined;
+            @memcpy(slice[0..kv_str.len], kv_str);
+
             var free_fba = self.free_fba;
-            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, kv_str, fmt, args);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, &slice, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };
@@ -300,7 +308,7 @@ test "trace_ng: multiple methods" {
     // TODO switch to testing allocator and fix any leaks.
     const allocator = std.heap.page_allocator;
 
-    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
+    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 25 });
     defer logger.deinit();
     logger.spawn();
 
@@ -322,6 +330,8 @@ test "trace_ng: multiple methods" {
         .{
             .f_agent = "Firefox",
             .f_version = "2.0",
+            .f_local = "en",
+            .f_stock = "nvidia",
         },
     );
 }
