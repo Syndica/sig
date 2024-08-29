@@ -6,8 +6,9 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 pub const LogMsg = struct {
     level: Level,
-    maybe_scope: ?[]const u8,
-    maybe_msg: ?[]const u8,
+    maybe_scope: ?[]const u8 = null,
+    maybe_msg: ?[]const u8 = null,
+    maybe_kv: ?[]const u8 = null,
 };
 
 pub fn formatterLog(
@@ -54,6 +55,46 @@ pub fn formatterLog(
 
     const stderr_writer = std.io.getStdErr().writer();
     try std.fmt.format(stderr_writer, "{s}", .{log_message.getWritten()});
+}
+
+pub fn keyValueToString(
+    args: anytype,
+) ![]u8 {
+    comptime var size: usize = keyValueSize(args);
+    var array: [size]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(array[0..]);
+    const writer = fbs.writer().any();
+    switch (@typeInfo(@TypeOf(args))) {
+        .Struct => |struc| {
+            inline for (struc.fields) |field| {
+                size += field.name.len;
+                size += @sizeOf(@TypeOf(field.name));
+                // For the '=' and ' ' characters
+                size += 2;
+                try std.fmt.format(writer, "{s}={s} ", .{ field.name, @field(args, field.name) });
+            }
+        },
+        else => {},
+    }
+
+    return fbs.getWritten();
+}
+
+fn keyValueSize(
+    args: anytype,
+) usize {
+    comptime var size: usize = 0;
+    switch (@typeInfo(@TypeOf(args))) {
+        .Struct => |struc| {
+            inline for (struc.fields) |field| {
+                size += field.name.len;
+                size += @sizeOf(@TypeOf(field.name));
+                size += 2;
+            }
+        },
+        else => {},
+    }
+    return size;
 }
 
 pub fn formatter(
