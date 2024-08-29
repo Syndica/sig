@@ -107,29 +107,53 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 defer self.channel.allocator.free(messages);
 
                 for (messages) |message| {
-                    logfmt.formatterLog(&self.free_fba, self.fba_bytes, message) catch @panic("logging failed");
+                    logfmt.formatterLog(message) catch @panic("logging failed");
                 }
             }
         }
 
         fn createLogMessage(
+            free_fba: *RecycleFBA,
+            total_len: u64,
             level: Level,
             maybe_scope: ?[]const u8,
             maybe_msg: ?[]const u8,
             maybe_kv: ?[]const u8,
             comptime maybe_fmt: ?[]const u8,
             args: anytype,
-            keyvalue: anytype,
         ) logfmt.LogMsg {
-            _ = &maybe_fmt;
-            _ = &args;
-            _ = &keyvalue;
+            // obtain a memory to write to
+            free_fba.mux.lock();
+            const buf = blk: while (true) {
+                const buf = free_fba.allocator().alloc(u8, total_len) catch {
+                    // no memory available rn - unlock and wait
+                    free_fba.mux.unlock();
+                    std.time.sleep(std.time.ns_per_ms);
+                    free_fba.mux.lock();
+                    continue;
+                };
+                break :blk buf;
+            };
+            free_fba.mux.unlock();
+            errdefer {
+                free_fba.mux.lock();
+                free_fba.allocator().free(buf);
+                free_fba.mux.unlock();
+            }
+            var fmt_message = std.io.fixedBufferStream(buf);
+            const writer = fmt_message.writer();
+
+            if (maybe_fmt) |fmt| {
+                std.fmt.format(writer, fmt, args) catch @panic("could not format");
+                std.fmt.format(writer, "{s}", .{"\n"}) catch @panic("could not format");
+            }
 
             return logfmt.LogMsg{
                 .level = level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
                 .maybe_kv = maybe_kv,
+                .maybe_fmt = fmt_message.getWritten(),
             };
         }
 
@@ -142,8 +166,8 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = createLogMessage(self.level, maybe_scope, message, null, null, null, null);
-
+            var free_fba = self.free_fba;
+            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, null, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -156,12 +180,12 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
             const kv_str = logfmt.keyValueToString(keyvalue) catch @panic("Could not parse key values");
-            const logMessage = createLogMessage(self.level, maybe_scope, message, kv_str, null, null, null);
+            var free_fba = self.free_fba;
+            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, kv_str, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
         pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
-            const stderr = std.io.getStdErr().writer();
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -169,12 +193,12 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            // TODO take struct as input instead.
-            logfmt.formatter(stderr, self.level, maybe_scope, null, null, fmt, args, null) catch unreachable();
+            var free_fba = self.free_fba;
+            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, null, fmt, args);
+            self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
         pub fn logfWithFields(self: Self, comptime fmt: []const u8, args: anytype, keyvalue: anytype) void {
-            const stderr = std.io.getStdErr().writer();
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -182,8 +206,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            // TODO take struct as input instead.
-            logfmt.formatter(stderr, self.level, maybe_scope, null, null, fmt, args, keyvalue) catch unreachable();
+            const kv_str = logfmt.keyValueToString(keyvalue) catch @panic("Could not parse key values");
+            var free_fba = self.free_fba;
+            const logMessage = createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, kv_str, fmt, args);
+            self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };
 }
@@ -271,30 +297,31 @@ test "trace_ng: multiple methods" {
     //    allocator: std.mem.Allocator,
     //    fba_bytes: u64,
 
+    // TODO switch to testing allocator and fix any leaks.
     const allocator = std.heap.page_allocator;
 
     var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
     defer logger.deinit();
     logger.spawn();
 
+    logger.log("Logging with log");
+    logger.logf(
+        "{s}",
+        .{"Logging with logf"},
+    );
     logger.logWithFields(
-        "Starting the app with fields",
+        "Logging with logWithFields",
         .{
             .f_agent = "Firefox",
             .f_version = "2.0",
         },
     );
-    // logger.log("Logging via channel: Starting the app");
-    // logger.logf(
-    //     "{s}",
-    //     .{"Starting the app"},
-    // );
-    // logger.logfWithFields(
-    //     "{s}",
-    //     .{"Starting the app"},
-    //     .{
-    //         .f_agent = "Firefox",
-    //         .f_version = "2.0",
-    //     },
-    // );
+    logger.logfWithFields(
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
 }

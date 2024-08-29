@@ -9,33 +9,13 @@ pub const LogMsg = struct {
     maybe_scope: ?[]const u8 = null,
     maybe_msg: ?[]const u8 = null,
     maybe_kv: ?[]const u8 = null,
+    maybe_fmt: ?[]const u8 = null,
 };
 
 pub fn formatterLog(
-    free_fba: *RecycleFBA,
-    total_len: u64,
     message: LogMsg,
 ) !void {
-    // obtain a memory to write to
-    free_fba.mux.lock();
-    const buf = blk: while (true) {
-        const buf = free_fba.allocator().alloc(u8, total_len) catch {
-            // no memory available rn - unlock and wait
-            free_fba.mux.unlock();
-            std.time.sleep(std.time.ns_per_ms);
-            free_fba.mux.lock();
-            continue;
-        };
-        break :blk buf;
-    };
-    free_fba.mux.unlock();
-    errdefer {
-        free_fba.mux.lock();
-        free_fba.allocator().free(buf);
-        free_fba.mux.unlock();
-    }
-    var log_message = std.io.fixedBufferStream(buf);
-    const writer = log_message.writer();
+    const writer = std.io.getStdErr().writer();
 
     if (message.maybe_scope) |scope| {
         std.fmt.format(writer, "[{s}] ", .{scope}) catch unreachable();
@@ -49,17 +29,21 @@ pub fn formatterLog(
     try std.fmt.format(writer, "Z ", .{});
     try std.fmt.format(writer, "level={s} ", .{message.level.asText()});
 
+    if (message.maybe_kv) |kv| {
+        try std.fmt.format(writer, "{s}", .{kv});
+    }
+
     if (message.maybe_msg) |msg| {
         try std.fmt.format(writer, "{s}\n", .{msg});
     }
-
-    const stderr_writer = std.io.getStdErr().writer();
-    try std.fmt.format(stderr_writer, "{s}", .{log_message.getWritten()});
+    if (message.maybe_fmt) |fmt| {
+        try std.fmt.format(writer, "{s}\n", .{fmt});
+    }
 }
 
 pub fn keyValueToString(
     args: anytype,
-) ![]u8 {
+) ![]const u8 {
     comptime var size: usize = keyValueSize(args);
     var array: [size]u8 = undefined;
     var fbs = std.io.fixedBufferStream(array[0..]);
