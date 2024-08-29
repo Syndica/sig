@@ -61,15 +61,28 @@ pub const AccountsDBStats = struct {
         shrink_file_shrunk_by,
         shrink_alive_accounts,
         shrink_dead_accounts,
+        time_flush,
+        time_clean,
+        time_shrink,
+        time_purge,
+
         fn buckets(self: HistogramKind) []const f64 {
-            const account_size_buckets = &.{ 10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000 };
+            const account_size_buckets = &.{
+                // 10 bytes -> 10MB (solana max account size)
+                10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000,
+            };
             const account_count_buckets = &.{ 1, 5, 10, 50, 100, 500, 1_000, 10_000 };
+            const nanosecond_buckets = &.{
+                // 0.01ms -> 10ms
+                1_000,      10_000,      100_000,     1_000_000,   10_000_000,
+                // 50ms -> 1000ms
+                50_000_000, 100_000_000, 200_000_000, 400_000_000, 1_000_000_000,
+            };
 
             return switch (self) {
-                .flush_account_file_size => account_size_buckets,
-                .shrink_file_shrunk_by => account_size_buckets,
-                .shrink_alive_accounts => account_count_buckets,
-                .shrink_dead_accounts => account_count_buckets,
+                .flush_account_file_size, .shrink_file_shrunk_by => account_size_buckets,
+                .shrink_alive_accounts, .shrink_dead_accounts => account_count_buckets,
+                .time_flush, .time_clean, .time_shrink, .time_purge => nanosecond_buckets,
             };
         }
     };
@@ -78,6 +91,11 @@ pub const AccountsDBStats = struct {
     number_files_cleaned: *Counter,
     number_files_shrunk: *Counter,
     number_files_deleted: *Counter,
+
+    time_flush: *Histogram,
+    time_clean: *Histogram,
+    time_shrink: *Histogram,
+    time_purge: *Histogram,
 
     flush_account_file_size: *Histogram,
     flush_accounts_written: *Counter,
@@ -102,6 +120,7 @@ pub const AccountsDBStats = struct {
             @field(self, field.name) = switch (field.type) {
                 *Counter => try registry.getOrCreateCounter(field.name),
                 *Histogram => blk: {
+                    @setEvalBranchQuota(2000); // stringToEnum requires a little more than default
                     const histogram_kind = comptime std.meta.stringToEnum(
                         HistogramKind,
                         field.name,
@@ -1526,7 +1545,7 @@ pub const AccountsDB = struct {
             self.allocator.free(pubkeys);
         }
 
-        self.logger.debugf("flushSlot time elapsed: {}ns", .{timer.read()});
+        self.stats.time_flush.observe(@floatFromInt(timer.read().asNanos()));
 
         // return to queue for cleaning
         return file_id;
@@ -1548,7 +1567,7 @@ pub const AccountsDB = struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
-        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+        var timer = try sig.time.Timer.start();
 
         defer {
             const number_of_files = unclean_account_files.len;
@@ -1685,7 +1704,7 @@ pub const AccountsDB = struct {
         self.stats.clean_slot_old_state.set(num_old_states);
         self.stats.clean_slot_zero_lamports.set(num_zero_lamports);
 
-        self.logger.debugf("cleanAccountFiles time elapsed: {}ns", .{timer.read()});
+        self.stats.time_clean.observe(@floatFromInt(timer.read().asNanos()));
         return .{
             .num_zero_lamports = num_zero_lamports,
             .num_old_states = num_old_states,
@@ -1782,7 +1801,7 @@ pub const AccountsDB = struct {
         shrink_account_files: []const FileId,
         delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
-        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+        var timer = try sig.time.Timer.start();
 
         defer {
             const number_of_files = shrink_account_files.len;
@@ -1959,7 +1978,7 @@ pub const AccountsDB = struct {
             }
         }
 
-        self.logger.debugf("shrinkAccountFiles time elapsed: {}ns", .{timer.read()});
+        self.stats.time_shrink.observe(@floatFromInt(timer.read().asNanos()));
 
         return .{
             .num_accounts_deleted = total_accounts_deleted,
@@ -1971,7 +1990,7 @@ pub const AccountsDB = struct {
     /// only exist in the cache, and not on disk). this is mainly used for dropping
     /// forks.
     pub fn purgeSlot(self: *Self, slot: Slot) void {
-        var timer = std.time.Timer.start() catch @panic("Timer unsupported");
+        var timer = sig.time.Timer.start() catch @panic("Timer unsupported");
 
         const pubkeys, const accounts = blk: {
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
@@ -2023,7 +2042,7 @@ pub const AccountsDB = struct {
         self.allocator.free(accounts);
         self.allocator.free(pubkeys);
 
-        self.logger.debugf("purgeSlot time elapsed: {}ns", .{timer.read()});
+        self.stats.time_purge.observe(@floatFromInt(timer.read().asNanos()));
     }
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
