@@ -19,5 +19,5 @@ pub const common = @import("common/lib.zig");
 pub const geyser = @import("geyser/lib.zig");
 
 pub const VALIDATOR_DIR = "validator/";
-pub const TEST_DATA_DIR = "misc/test_data/";
-pub const GENESIS_DIR = "misc/genesis_files/";
+pub const TEST_DATA_DIR = "data/test_data/";
+pub const GENESIS_DIR = "data/genesis_files/";

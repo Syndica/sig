@@ -34,7 +34,7 @@ jobs:
           python-version: "3.10"      
 
       - name: remove unused imports
-        run: python misc/scripts/remove_unused.py src/
+        run: python scripts/remove_unused.py src/
 
   test:
     strategy:
@@ -89,11 +89,11 @@ jobs:
 
       - name: Run kcov
         run: |
-          bash misc/scripts/kcov_test.sh
+          bash scripts/kcov_test.sh
 
       - name: Print coverage report
         run: |
-          python misc/scripts/parse_kcov.py kcov-output/test/coverage.json
+          python scripts/parse_kcov.py kcov-output/test/coverage.json
 
   benchmarks:
     strategy:
@@ -133,4 +133,4 @@ jobs:
       - name: build release 
         run: zig build -Doptimize=ReleaseSafe 
       - name: run gossip
-        run: bash misc/scripts/gossip_test.sh 120 # in seconds
+        run: bash scripts/gossip_test.sh 120 # in seconds
