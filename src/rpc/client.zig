@@ -134,6 +134,7 @@ pub const Client = struct {
 
         var params_builder = Request.ParamsBuilder.init(arena.allocator());
         try params_builder.addArgument("{d}", block);
+
         const value = try self.sendFetchRequest(arena.allocator(), types.BlockCommitment, .{
             .method = "getBlockCommitment",
             .params = try params_builder.build(),
@@ -180,6 +181,7 @@ pub const Client = struct {
         var params_builder = Request.ParamsBuilder.init(arena.allocator());
         try params_builder.addOptionalArgument("{d}", maybe_epoch);
         try params_builder.addConfig(config);
+
         const value = try self.sendFetchRequest(arena.allocator(), types.EpochInfo, .{
             .method = "getEpochInfo",
             .params = try params_builder.build(),
@@ -237,14 +239,18 @@ pub const Client = struct {
             .params = try params_builder.build(),
         });
 
+        const leader_schedule_map = switch (leader_schedule_json) {
+            .object => |obj| obj,
+            else => return error.UnexpectedRpcResponse,
+        };
+
         var leader_schedule = types.LeaderSchedule.init(arena.allocator());
-        var json_iter = leader_schedule_json.object.iterator();
-        while (json_iter.next()) |entry| {
-            var slots = try arena.allocator().alloc(u64, entry.value_ptr.*.array.items.len);
-            for (entry.value_ptr.*.array.items, 0..) |slot, i| {
+        for (leader_schedule_map.keys(), leader_schedule_map.values()) |key, value| {
+            var slots = try arena.allocator().alloc(u64, value.array.items.len);
+            for (value.array.items, 0..) |slot, i| {
                 slots[i] = @intCast(slot.integer);
             }
-            try leader_schedule.put(entry.key_ptr.*, slots);
+            try leader_schedule.put(key, slots);
         }
 
         return .{ .arena = arena, .value = leader_schedule };

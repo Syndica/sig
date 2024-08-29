@@ -343,10 +343,7 @@ pub const CompiledKeys = struct {
         var readonly_non_signer_keys = std.ArrayList(Pubkey).init(allocator);
         defer readonly_non_signer_keys.deinit();
 
-        var key_meta_map_iter = self.key_meta_map.iterator();
-        while (key_meta_map_iter.next()) |entry| {
-            const key = entry.key_ptr.*;
-            const meta = entry.value_ptr.*;
+        for (self.key_meta_map.keys(), self.key_meta_map.values()) |key, meta| {
             switch (meta.is_signer) {
                 true => switch (meta.is_writable) {
                     true => try writable_signer_keys.append(key),
@@ -381,7 +378,7 @@ pub const CompiledKeys = struct {
     }
 };
 
-pub const CompiledKeyMeta = struct {
+pub const CompiledKeyMeta = packed struct {
     is_signer: bool,
     is_writable: bool,
     is_invoked: bool,
