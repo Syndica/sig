@@ -564,7 +564,7 @@ pub const AccountsDB = struct {
                 const file_name_bounded = sig.utils.fmt.boundedFmt("{d}.{d}", .{ slot, file_info.id.toInt() });
 
                 const accounts_file_file = accounts_dir.openFile(file_name_bounded.constSlice(), .{ .mode = .read_write }) catch |err| {
-                    self.logger.errf("Failed to open accounts/{s}: {s}", .{file_name_bounded.constSlice(), @errorName(err)});
+                    self.logger.errf("Failed to open accounts/{s}: {s}", .{ file_name_bounded.constSlice(), @errorName(err) });
                     return err;
                 };
                 errdefer accounts_file_file.close();
