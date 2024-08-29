@@ -15,7 +15,7 @@ the main files include:
 
 `--help` output of accounts-db related flags:
 ```
--s, --snapshot-dir <snapshot_dir>                                    path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/
+-s, --snapshot-dir <snapshot_dir>                                    path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test-data/
 
 -t, --n-threads-snapshot-load <n_threads_snapshot_load>              number of threads to load snapshots: - default: ncpus
 
@@ -39,7 +39,7 @@ Additional context on specific cli flags is given throughout these docs.
 ```bash
 zig-out/bin/sig snapshot-download \
     # where to save snapshot
-    -s test_data/tmp \
+    -s test-data/tmp \
     # gossip peers to join network from
     --entrypoint 34.83.231.102:8001 \
     --entrypoint 145.40.67.83:8001 \
@@ -174,9 +174,9 @@ to support disk-based account references, we created a general purpose
 disk allocator which creates memory from mmap-ing files stored on disk.
 
 ```zig
-// files are created using `data/test_data/tmp_{i}` format where `i` is 
+// files are created using `data/test-data/tmp_{i}` format where `i` is 
 // incremented by one for each alloc call.
-var allocator = try DiskMemoryAllocator.init("data/test_data/tmp");
+var allocator = try DiskMemoryAllocator.init("data/test-data/tmp");
 defer allocator.deinit(null);
 ```
 

@@ -22,8 +22,8 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 
 ```
 data/
-├─ genesis_files/
-├─ test_data/
+├─ genesis-files/
+├─ test-data/
 docs/
 ├─ debugging.md
 ├─ fuzzing.md
