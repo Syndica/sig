@@ -18,9 +18,153 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 4,
+  "id": 6,
   "links": [],
   "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          },
+          "unit": "ns"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "11.1.4",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "disableTextWrap": false,
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "time_flush_sum / time_flush_count",
+          "fullMetaSearch": false,
+          "hide": false,
+          "includeNullMetadata": true,
+          "instant": false,
+          "interval": "",
+          "legendFormat": "Average flush time",
+          "range": true,
+          "refId": "A",
+          "useBackend": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time_clean_sum / time_clean_count",
+          "hide": false,
+          "instant": false,
+          "interval": "",
+          "legendFormat": "Average clean time",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time_purge_sum / time_purge_count",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Average purge time",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "time_shrink_sum / time_shrink_count",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Average shrink time",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Operation times",
+      "type": "timeseries"
+    },
     {
       "datasource": {
         "type": "prometheus",
@@ -84,7 +228,7 @@
         "h": 11,
         "w": 12,
         "x": 0,
-        "y": 0
+        "y": 8
       },
       "id": 1,
       "options": {
@@ -234,7 +378,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 8
       },
       "id": 2,
       "options": {
@@ -350,7 +494,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 14
       },
       "id": 4,
       "options": {
@@ -434,7 +578,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 11
+        "y": 19
       },
       "id": 5,
       "options": {
@@ -542,7 +686,7 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 20
       },
       "id": 3,
       "options": {
@@ -609,7 +753,7 @@
         "h": 7,
         "w": 8,
         "x": 0,
-        "y": 18
+        "y": 26
       },
       "id": 6,
       "options": {
@@ -685,7 +829,7 @@
         "h": 7,
         "w": 8,
         "x": 8,
-        "y": 18
+        "y": 26
       },
       "id": 8,
       "options": {
@@ -761,7 +905,7 @@
         "h": 7,
         "w": 8,
         "x": 16,
-        "y": 18
+        "y": 26
       },
       "id": 7,
       "options": {
@@ -814,13 +958,13 @@
     "list": []
   },
   "time": {
-    "from": "2024-08-26T19:40:11.380Z",
-    "to": "2024-08-26T19:41:31.684Z"
+    "from": "2024-08-29T19:11:48.260Z",
+    "to": "2024-08-29T19:29:07.545Z"
   },
   "timepicker": {},
   "timezone": "browser",
   "title": "AccountsDB Metrics",
   "uid": "bdvslmsxnm29sc",
-  "version": 3,
+  "version": 2,
   "weekStart": ""
 }
