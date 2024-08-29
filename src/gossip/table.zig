@@ -287,7 +287,7 @@ pub const GossipTable = struct {
     pub fn insertValues(
         self: *Self,
         now: u64,
-        values: []SignedGossipData,
+        values: []const SignedGossipData,
         timeout: u64,
         comptime record_inserts: bool,
         comptime record_timeouts: bool,

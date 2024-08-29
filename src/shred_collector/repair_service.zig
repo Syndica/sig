@@ -59,10 +59,7 @@ pub const RepairService = struct {
         requests: []AddressedRepairRequest,
 
         pub fn run(self: *@This()) !void {
-            return self.requester.sendRepairRequestBatch(
-                self.requester.allocator,
-                self.requests,
-            );
+            return self.requester.sendRepairRequestBatch(self.requests);
         }
     });
 
@@ -128,7 +125,7 @@ pub const RepairService = struct {
         defer addressed_requests.deinit();
 
         if (addressed_requests.items.len < 4) {
-            try self.requester.sendRepairRequestBatch(self.allocator, addressed_requests.items);
+            try self.requester.sendRepairRequestBatch(addressed_requests.items);
         } else {
             for (0..4) |i| {
                 const start = (addressed_requests.items.len * i) / 4;
@@ -249,14 +246,11 @@ pub const RepairRequester = struct {
 
     pub fn sendRepairRequestBatch(
         self: *const Self,
-        allocator: Allocator,
-        requests: []AddressedRepairRequest,
+        requests: []const AddressedRepairRequest,
     ) !void {
-        var packet_batch = try std.ArrayList(Packet).initCapacity(allocator, requests.len);
         const timestamp = std.time.milliTimestamp();
         for (requests) |request| {
-            const packet = packet_batch.addOneAssumeCapacity();
-            packet.* = Packet{
+            var packet: Packet = .{
                 .addr = request.recipient_addr.toEndpoint(),
                 .data = undefined,
                 .size = undefined,
@@ -270,8 +264,8 @@ pub const RepairRequester = struct {
                 self.rng.int(Nonce),
             );
             packet.size = data.len;
+            try self.sender.channel.send(packet);
         }
-        try self.sender.channel.send(packet_batch);
     }
 };
 
@@ -431,7 +425,7 @@ test "RepairService sends repair request to gossip peer" {
     var random = rand.random();
 
     // my details
-    const keypair = KeyPair.create(null) catch unreachable;
+    const keypair = try KeyPair.create(null);
     const my_shred_version = Atomic(u16).init(random.int(u16));
     const wallclock = 100;
     var gossip = try GossipTable.init(allocator, undefined);
@@ -449,7 +443,7 @@ test "RepairService sends repair request to gossip peer" {
 
     // peer
     const peer_port = random.intRangeAtMost(u16, 1000, std.math.maxInt(u16));
-    const peer_keypair = KeyPair.create(null) catch unreachable;
+    const peer_keypair = try KeyPair.create(null);
     var peer_socket = try Socket.create(.ipv4, .udp);
     const peer_endpoint = .{
         .address = .{ .ipv4 = .{ .value = .{ 127, 0, 0, 1 } } },

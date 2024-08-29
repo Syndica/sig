@@ -32,7 +32,7 @@ pub const ShredReceiver = struct {
     repair_socket: Socket,
     turbine_socket: Socket,
     /// me --> shred verifier
-    unverified_shred_sender: *Channel(ArrayList(Packet)),
+    unverified_shred_sender: *Channel(Packet),
     shred_version: *const Atomic(u16),
     metrics: ShredReceiverMetrics,
     root_slot: Slot, // TODO: eventually, this should be handled by BankForks
@@ -52,7 +52,7 @@ pub const ShredReceiver = struct {
             .initReceiver(self.allocator, self.logger, self.repair_socket, self.exit);
         defer repair_receiver.deinit(self.allocator);
 
-        var turbine_receivers: [NUM_TVU_RECEIVERS]*Channel(ArrayList(Packet)) = undefined;
+        var turbine_receivers: [NUM_TVU_RECEIVERS]*Channel(Packet) = undefined;
         for (0..NUM_TVU_RECEIVERS) |i| {
             turbine_receivers[i] = (try SocketThread.initReceiver(
                 self.allocator,
@@ -80,72 +80,69 @@ pub const ShredReceiver = struct {
     /// Returns when exit is set to true.
     fn runPacketHandler(
         self: *Self,
-        receivers: []const *Channel(ArrayList(Packet)),
-        response_sender: *Channel(ArrayList(Packet)),
+        receivers: []const *Channel(Packet),
+        response_sender: *Channel(Packet),
         comptime is_repair: bool,
     ) !void {
         while (!self.exit.load(.acquire)) {
             var responses = ArrayList(Packet).init(self.allocator);
             for (receivers) |receiver| {
-                while (receiver.receive()) |batch| {
-                    const shred_version = self.shred_version.load(.monotonic);
-                    for (batch.items) |*packet| {
-                        try self.handlePacket(packet, &responses, shred_version);
-                        if (is_repair) packet.flags.set(.repair);
-                    }
-                    try self.unverified_shred_sender.send(batch);
+                while (receiver.receive()) |packet| {
+                    var our_packet = packet;
+                    try self.handlePacket(&our_packet, &responses);
+                    if (is_repair) our_packet.flags.set(.repair);
+                    try self.unverified_shred_sender.send(our_packet);
                 } else {
                     std.time.sleep(10 * std.time.ns_per_ms);
                 }
             }
-            if (responses.items.len > 0) {
-                try response_sender.send(responses);
+            for (responses.items) |response| {
+                try response_sender.send(response);
             }
         }
     }
 
     /// Handle a single packet and return
     fn handlePacket(
-        self: *Self,
+        self: Self,
         packet: *Packet,
         responses: *ArrayList(Packet),
-        shred_version: u16,
     ) !void {
         if (packet.size == REPAIR_RESPONSE_SERIALIZED_PING_BYTES) {
-            try self.handlePing(packet, responses);
-            packet.flags.set(.discard);
+            if (try self.handlePing(packet)) |p| try responses.append(p);
         } else {
             const max_slot = std.math.maxInt(Slot); // TODO agave uses BankForks for this
-            if (shouldDiscardShred(packet, self.root_slot, shred_version, max_slot)) {
+            if (shouldDiscardShred(packet, self.root_slot, self.shred_version, max_slot)) {
                 packet.flags.set(.discard);
             }
         }
     }
 
-    /// Handle a ping message and return
-    fn handlePing(self: *Self, packet: *const Packet, responses: *ArrayList(Packet)) !void {
+    /// Handle a ping message and returns the repair message.
+    fn handlePing(self: *const Self, packet: *const Packet) !?Packet {
         const repair_ping = bincode.readFromSlice(self.allocator, RepairPing, &packet.data, .{}) catch {
             self.metrics.invalid_repair_pings.inc();
-            return;
+            return null;
         };
         const ping = repair_ping.Ping;
         ping.verify() catch {
             self.metrics.invalid_repair_pings.inc();
-            return;
+            return null;
         };
+        const reply: RepairMessage = .{ .Pong = try Pong.init(&ping, self.keypair) };
 
-        const reply = RepairMessage{ .Pong = try Pong.init(&ping, self.keypair) };
-        const reply_packet = try responses.addOne();
+        var reply_packet = Packet.default();
         const reply_bytes = try bincode.writeToSlice(&reply_packet.data, reply, .{});
         reply_packet.size = reply_bytes.len;
         reply_packet.addr = packet.addr;
+        return reply_packet;
     }
 };
 
 fn shouldDiscardShred(
     packet: *const Packet,
     root: Slot,
-    shred_version: u16,
+    shred_version: *const Atomic(u16),
     max_slot: Slot,
 ) bool {
     const shred = layout.getShred(packet) orelse return true;
@@ -154,7 +151,7 @@ fn shouldDiscardShred(
     const index = layout.getIndex(shred) orelse return true;
     const variant = layout.getShredVariant(shred) orelse return true;
 
-    if (version != shred_version) return true;
+    if (version != shred_version.load(.acquire)) return true;
     if (slot > max_slot) return true;
     switch (variant.shred_type) {
         .code => {

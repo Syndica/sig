@@ -40,7 +40,7 @@ pub fn main() !void {
         try benchmark(
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
-            TimeUnits.nanoseconds,
+            .milliseconds,
         );
     }
 
@@ -59,7 +59,7 @@ pub fn main() !void {
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
-                TimeUnits.nanoseconds,
+                .nanoseconds,
             );
         }
 
@@ -69,7 +69,7 @@ pub fn main() !void {
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
-                TimeUnits.nanoseconds,
+                .milliseconds,
             );
         }
     }
@@ -78,7 +78,7 @@ pub fn main() !void {
         try benchmark(
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
-            TimeUnits.milliseconds,
+            .milliseconds,
         );
     }
 
@@ -86,12 +86,12 @@ pub fn main() !void {
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
-            TimeUnits.milliseconds,
+            .milliseconds,
         );
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
-            TimeUnits.milliseconds,
+            .milliseconds,
         );
     }
 
@@ -111,19 +111,19 @@ const TimeUnits = enum {
 
     const Self = @This();
 
-    pub fn toString(self: *const Self) []const u8 {
-        return switch (self.*) {
+    pub fn toString(self: Self) []const u8 {
+        return switch (self) {
             .nanoseconds => "ns",
             .milliseconds => "ms",
             .microseconds => "us",
         };
     }
 
-    pub fn unitsfromNanoseconds(self: *const Self, time_ns: u64) u64 {
-        return switch (self.*) {
+    pub fn unitsfromNanoseconds(self: Self, time_ns: u64) !u64 {
+        return switch (self) {
             .nanoseconds => time_ns,
-            .milliseconds => time_ns / std.time.ns_per_ms,
-            .microseconds => time_ns / std.time.ns_per_us,
+            .milliseconds => try std.math.divCeil(u64, time_ns, std.time.ns_per_ms),
+            .microseconds => try std.math.divCeil(u64, time_ns, std.time.ns_per_us),
         };
     }
 };
@@ -218,11 +218,12 @@ pub fn benchmark(
                     else => @field(B, def.name)(arg),
                 };
 
-                const runtime = time_unit.unitsfromNanoseconds(ns_time);
+                const runtime = try time_unit.unitsfromNanoseconds(ns_time);
+
                 runtimes[i] = runtime;
                 runtime_sum += runtime;
-                if (runtimes[i] < min) min = runtimes[i];
-                if (runtimes[i] > max) max = runtimes[i];
+                min = @min(runtimes[i], min);
+                max = @max(runtimes[i], max);
             }
 
             const runtime_mean: u64 = @intCast(runtime_sum / i);
@@ -233,12 +234,17 @@ pub fn benchmark(
                 d_sq_sum += @as(u64, @intCast(d * d));
             }
             const variance = d_sq_sum / i;
-
-            if (@TypeOf(arg) == void) {
-                _ = try printBenchmark(stderr, min_width, def.name, formatter("{s}", ""), i, min, max, variance, runtime_mean);
-            } else {
-                _ = try printBenchmark(stderr, min_width, def.name, formatter("{s}", arg.name), i, min, max, variance, runtime_mean);
-            }
+            _ = try printBenchmark(
+                stderr,
+                min_width,
+                def.name,
+                formatter("{s}", if (@TypeOf(arg) == void) "" else arg.name),
+                i,
+                min,
+                max,
+                variance,
+                runtime_mean,
+            );
             try stderr.writeAll("\n");
             try stderr.context.flush();
         }

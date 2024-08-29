@@ -4,7 +4,6 @@ const sig = @import("../sig.zig");
 const shred_collector = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 const Random = std.rand.Random;
@@ -72,10 +71,10 @@ pub fn start(
     const turbine_socket = try bindUdpReusable(conf.turbine_recv_port);
 
     // receiver (threads)
-    const unverified_shred_channel = try Channel(ArrayList(Packet)).create(deps.allocator, 1000);
-    const verified_shred_channel = try Channel(ArrayList(Packet)).create(deps.allocator, 1000);
+    const unverified_shred_channel = try Channel(Packet).create(deps.allocator, 1000);
+    const verified_shred_channel = try Channel(Packet).create(deps.allocator, 1000);
     const shred_receiver = try arena.create(ShredReceiver);
-    shred_receiver.* = ShredReceiver{
+    shred_receiver.* = .{
         .allocator = deps.allocator,
         .keypair = deps.my_keypair,
         .exit = deps.exit,

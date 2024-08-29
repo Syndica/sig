@@ -4,7 +4,6 @@ const shred_collector = @import("lib.zig");
 
 const shred_layout = sig.ledger.shred.layout;
 
-const ArrayList = std.ArrayList;
 const Atomic = std.atomic.Value;
 
 const Channel = sig.sync.Channel;
@@ -15,23 +14,22 @@ const Packet = sig.net.Packet;
 pub fn runShredVerifier(
     exit: *Atomic(bool),
     /// shred receiver --> me
-    unverified_shred_receiver: *Channel(ArrayList(Packet)),
+    unverified_shred_receiver: *Channel(Packet),
     /// me --> shred processor
-    verified_shred_sender: *Channel(ArrayList(Packet)),
+    verified_shred_sender: *Channel(Packet),
     leader_schedule: SlotLeaderProvider,
 ) !void {
     var verified_count: usize = 0;
     while (!exit.load(.acquire)) {
-        while (unverified_shred_receiver.receive()) |packet_batch| {
+        while (unverified_shred_receiver.receive()) |packet| {
             // TODO parallelize this once it's actually verifying signatures
-            for (packet_batch.items) |*packet| {
-                if (!verifyShred(packet, leader_schedule)) {
-                    packet.flags.set(.discard);
-                } else {
-                    verified_count += 1;
-                }
+            var our_packet = packet;
+            if (!verifyShred(&packet, leader_schedule)) {
+                our_packet.flags.set(.discard);
+            } else {
+                verified_count += 1;
             }
-            try verified_shred_sender.send(packet_batch);
+            try verified_shred_sender.send(our_packet);
             if (exit.load(.acquire)) return;
         }
     }

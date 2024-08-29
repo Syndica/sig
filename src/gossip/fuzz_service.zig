@@ -366,7 +366,7 @@ pub fn fuzz(
     keypair: *const KeyPair,
     contact_info: LegacyContactInfo,
     to_endpoint: EndPoint,
-    outgoing_channel: *sig.sync.Channel(std.ArrayList(Packet)),
+    outgoing_channel: *sig.sync.Channel(Packet),
 ) !void {
     var msg_count: usize = 0;
 
@@ -429,25 +429,22 @@ pub fn fuzz(
                 );
                 break :blk packet;
             },
-        };
-        const send_packet = packet catch |err| {
+        } catch |err| {
             std.debug.print("ERROR: {s}\n", .{@errorName(err)});
             continue;
         };
 
         // batch it
-        var packet_batch = std.ArrayList(Packet).init(allocator);
-        try packet_batch.append(send_packet);
         msg_count +|= 1;
+
+        // send it
+        try outgoing_channel.send(packet);
 
         const send_duplicate = rng.boolean();
         if (send_duplicate) {
             msg_count +|= 1;
-            try packet_batch.append(send_packet);
+            try outgoing_channel.send(packet);
         }
-
-        // send it
-        try outgoing_channel.send(packet_batch);
 
         std.time.sleep(SLEEP_TIME.asNanos());
 

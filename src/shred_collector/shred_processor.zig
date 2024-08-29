@@ -5,7 +5,6 @@ const shred_collector = @import("lib.zig");
 const layout = sig.ledger.shred.layout;
 
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
 const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
@@ -24,7 +23,7 @@ pub fn runShredProcessor(
     exit: *Atomic(bool),
     logger: Logger,
     // shred verifier --> me
-    verified_shred_receiver: *Channel(ArrayList(Packet)),
+    verified_shred_receiver: *Channel(Packet),
     tracker: *BasicShredTracker,
     shred_inserter_: ShredInserter,
     leader_schedule: sig.core.leader_schedule.SlotLeaderProvider,
@@ -37,12 +36,12 @@ pub fn runShredProcessor(
     while (!exit.load(.acquire)) {
         shreds.clearRetainingCapacity();
         is_repaired.clearRetainingCapacity();
-        while (verified_shred_receiver.receive()) |packet_batch| {
-            for (packet_batch.items) |*packet| if (!packet.flags.isSet(.discard)) {
+        while (verified_shred_receiver.receive()) |packet| {
+            if (!packet.flags.isSet(.discard)) {
                 processShred(
                     allocator,
                     tracker,
-                    packet,
+                    &packet,
                     &shreds,
                     &is_repaired,
                     &error_context,
@@ -53,7 +52,7 @@ pub fn runShredProcessor(
                     );
                     error_context = .{};
                 };
-            };
+            }
         }
         _ = try shred_inserter.insertShreds(
             shreds.items,
