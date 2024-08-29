@@ -777,7 +777,6 @@ pub const GossipService = struct {
             }
         };
 
-        self.logger.infof("gossip table: dropped {} pubkeys", .{n_pubkeys_dropped});
         self.stats.table_pubkeys_dropped.add(n_pubkeys_dropped);
     }
 
@@ -1700,7 +1699,6 @@ pub const GossipService = struct {
             //   - if all nodes have zero stake: epoch duration
             //   - if any other nodes have non-zero stake: GOSSIP_PULL_TIMEOUT_MS (15s)
             const n_values_removed = try gossip_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
-            self.logger.infof("gossip table: removed {} old labels", .{n_values_removed});
             self.stats.table_old_values_removed.add(n_values_removed);
             self.stats.table_remove_old_values_call_count.inc();
         }
