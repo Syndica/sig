@@ -909,7 +909,7 @@ fn validateSnapshot() !void {
         allocator,
         app_base.logger,
         null,
-        false,
+        true,
         geyser_writer,
     );
     defer snapshot_result.deinit();
