@@ -618,7 +618,7 @@ pub const AccountsDB = struct {
         while (slot_iter.next()) |slot| {
             const refs = reference_memory.get(slot.*).?;
             for (refs.items) |*ref| {
-                _ = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+                _ = try self.account_index.indexRefIfNotDuplicateSlotAssumeBinCapacity(ref);
                 ref_count += 1;
             }
 
@@ -739,6 +739,7 @@ pub const AccountsDB = struct {
 
                 bin_n_accounts += bin.count();
             }
+
             // prealloc
             if (bin_n_accounts > 0) {
                 const index_bin, var index_bin_lg = index.getBin(bin_index).writeWithLock();
@@ -751,13 +752,18 @@ pub const AccountsDB = struct {
                 const bin, var bin_lg = thread_db.account_index.getBin(bin_index).readWithLock();
                 defer bin_lg.unlock();
 
+                index.ref_head_pool_mtx.lock();
+                defer index.ref_head_pool_mtx.unlock();
+                try index.ref_head_pool.ensureUnusedCapacity(index.allocator, bin_n_accounts);
+
                 // insert all of the thread entries into the main index
                 var iter = bin.iterator();
                 while (iter.next()) |thread_entry| {
-                    const thread_head_ref = thread_entry.value_ptr.*;
+                    const thread_head_ref, var thread_head_ref_lg = thread_entry.value_ptr.*.readWithLock();
+                    defer thread_head_ref_lg.unlock();
                     // NOTE: we dont have to check for duplicates because the duplicate
                     // slots have already been handled in the prev step
-                    index.indexRefAssumeCapacity(thread_head_ref.ref_ptr);
+                    index.indexRefAssumeCapacityPoolLocked(thread_head_ref.ref_ptr);
                 }
             }
 
@@ -1011,7 +1017,8 @@ pub const AccountsDB = struct {
 
             // get the hashes
             for (bin_pubkeys) |key| {
-                const ref_head = bin.getPtr(key).?;
+                const ref_head, var ref_head_lg = bin.get(key).?.readWithLock();
+                defer ref_head_lg.unlock();
 
                 // get the most recent state of the account
                 const ref_ptr = ref_head.ref_ptr;
@@ -2165,7 +2172,7 @@ pub const AccountsDB = struct {
         // compute how many account_references for each pubkey
         var accounts_dead_count: u64 = 0;
         for (references.items) |*ref| {
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref);
+            const was_inserted = try self.account_index.indexRefIfNotDuplicateSlotAssumeBinCapacity(ref);
             if (!was_inserted) {
                 accounts_dead_count += 1;
                 self.logger.warnf(
@@ -2268,7 +2275,7 @@ pub const AccountsDB = struct {
                 .location = .{ .Cache = .{ .index = i } },
             };
 
-            const was_inserted = self.account_index.indexRefIfNotDuplicateSlotAssumeCapacity(ref_ptr);
+            const was_inserted = try self.account_index.indexRefIfNotDuplicateSlotAssumeBinCapacity(ref_ptr);
             if (!was_inserted) {
                 self.logger.warnf(
                     "duplicate reference not inserted: slot: {d} pubkey: {s}",

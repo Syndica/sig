@@ -1,12 +1,12 @@
 //! all index related structs (account ref, simd hashmap, …)
 
 const std = @import("std");
-const lib = @import("../sig.zig");
+const sig = @import("../sig.zig");
 
-const Slot = lib.core.time.Slot;
-const Pubkey = lib.core.pubkey.Pubkey;
-const FileId = lib.accounts_db.accounts_file.FileId;
-const RwMux = lib.sync.RwMux;
+const Slot = sig.core.time.Slot;
+const Pubkey = sig.core.pubkey.Pubkey;
+const FileId = sig.accounts_db.accounts_file.FileId;
+const RwMux = sig.sync.RwMux;
 
 const swiss_map = @import("swiss_map.zig");
 pub const SwissMapManaged = swiss_map.SwissMapManaged;
@@ -102,11 +102,17 @@ pub const AccountIndex = struct {
     reference_allocator: std.mem.Allocator,
     reference_memory: RwMux(ReferenceMemory),
     bins: []RwMux(RefMap),
+
+    /// Guards exclusive access to `ref_head_pool`.
+    ref_head_pool_mtx: std.Thread.Mutex = .{},
+    /// Must be passed the `allocator` field for allocating methods.
+    ref_head_pool: RefHeadPool = .{},
+
     pubkey_bin_calculator: PubkeyBinCalculator,
     const Self = @This();
 
     pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
-    pub const RefMap = SwissMapManaged(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
+    pub const RefMap = SwissMapManaged(Pubkey, *RwMux(AccountReferenceHead), pubkey_hash, pubkey_eql);
 
     pub fn init(
         /// used to allocate the hashmap data
@@ -138,6 +144,11 @@ pub const AccountIndex = struct {
         self.allocator.free(self.bins);
 
         {
+            _ = self.ref_head_pool_mtx; // no point in locking at this point, anything trying to access the pool at this point would be committing a UAF.
+            self.ref_head_pool.deinit(self.allocator);
+        }
+
+        {
             const reference_memory, var reference_memory_lg = self.reference_memory.writeWithLock();
             defer reference_memory_lg.unlock();
 
@@ -151,13 +162,15 @@ pub const AccountIndex = struct {
         }
     }
 
-    pub fn ensureTotalCapacity(self: *Self, size: u32) !void {
+    pub fn ensureBinsTotalCapacity(self: *Self, size: u32) !void {
         for (self.bins) |*bin_rw| {
             const bin, var bin_lg = bin_rw.writeWithLock();
             defer bin_lg.unlock();
-
             try bin.ensureTotalCapacity(size);
         }
+        self.ref_head_pool_mtx.lock();
+        defer self.ref_head_pool_mtx.unlock();
+        try self.ref_head_pool.ensureTotalCapacity(self.allocator, size * self.bins.len);
     }
 
     pub fn putReferenceBlock(self: *Self, slot: Slot, references: std.ArrayList(AccountRef)) !void {
@@ -177,22 +190,21 @@ pub const AccountIndex = struct {
     /// Get a read-safe account reference head, and its associated lock guard.
     /// If access to many different account reference heads which are potentially in the same bin is
     /// required, prefer instead to use `getBinFromPubkey(pubkey).read*(){.get(pubkey)}` directly.
-    pub fn getReferenceHeadRead(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(RefMap).RLockGuard } {
+    pub fn getReferenceHeadRead(self: *Self, pubkey: *const Pubkey) ?struct { *const AccountReferenceHead, RwMux(AccountReferenceHead).RLockGuard } {
         const bin, var bin_lg = self.getBinFromPubkey(pubkey).readWithLock();
-        const ref_head = bin.get(pubkey.*) orelse {
-            bin_lg.unlock();
-            return null;
-        };
-        return .{ ref_head, bin_lg };
+        defer bin_lg.unlock();
+        const ref_head_rw = bin.get(pubkey.*) orelse return null;
+        return ref_head_rw.readWithLock();
     }
 
     /// Get a write-safe account reference head, and its associated lock guard.
     /// If access to many different account reference heads which are potentially in the same bin is
     /// required, prefer instead to use `getBinFromPubkey(pubkey).write*(){.get(pubkey)}` directly.
-    pub fn getReferenceHeadWrite(self: *Self, pubkey: *const Pubkey) ?struct { AccountReferenceHead, RwMux(RefMap).WLockGuard } {
-        const bin, const bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
-        const ref_head = bin.get(pubkey.*) orelse return null;
-        return .{ ref_head, bin_lg };
+    pub fn getReferenceHeadWrite(self: *Self, pubkey: *const Pubkey) ?struct { *AccountReferenceHead, RwMux(AccountReferenceHead).WLockGuard } {
+        const bin, var bin_lg = self.getBinFromPubkey(pubkey).readWithLock();
+        defer bin_lg.unlock();
+        const ref_head_rw = bin.get(pubkey.*) orelse return null;
+        return ref_head_rw.writeWithLock();
     }
 
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
@@ -205,17 +217,22 @@ pub const AccountIndex = struct {
         self: *const Self,
         pubkey: *const Pubkey,
         slot: Slot,
-    ) GetAccountRefError!struct { **AccountRef, RwMux(RefMap).WLockGuard } {
-        const bin, var bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
-        errdefer bin_lg.unlock();
+    ) GetAccountRefError!struct { **AccountRef, RwMux(AccountReferenceHead).WLockGuard } {
+        const head_ref, var head_ref_lg = blk: {
+            const bin, var bin_lg = self.getBinFromPubkey(pubkey).readWithLock();
+            defer bin_lg.unlock();
 
-        const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
+            const head_ref_rw = bin.get(pubkey.*) orelse return error.PubkeyNotFound;
+            break :blk head_ref_rw.writeWithLock();
+        };
+        errdefer head_ref_lg.unlock();
+
         const ref_ptr_ptr = switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
             .null => return error.SlotNotFound,
             .head => &head_ref.ref_ptr,
             .inner => |inner| &inner.*.?,
         };
-        return .{ ref_ptr_ptr, bin_lg };
+        return .{ ref_ptr_ptr, head_ref_lg };
     }
 
     /// returns a reference to the slot in the index which is a local copy
@@ -248,21 +265,46 @@ pub const AccountIndex = struct {
         return does_exist;
     }
 
-    /// adds the reference to the index if there is not a duplicate (ie, the same slot).
-    /// returns if the reference was inserted.
-    pub fn indexRefIfNotDuplicateSlotAssumeCapacity(self: *Self, account_ref: *AccountRef) bool {
-        const bin, var bin_lg = self.getBinFromPubkey(&account_ref.pubkey).writeWithLock();
-        defer bin_lg.unlock(); // the lock on the bin also locks the reference map
+    /// Adds the reference to the index if there is not a duplicate (ie, the same slot).
+    ///
+    /// Returns if the reference was inserted.
+    ///
+    /// Assumes `self.getBinFromPubkey(&account_ref.pubkey)` has enough capacity for at
+    /// least onef more entry.
+    ///
+    /// Locks `self.ref_head_pool_mtx` and allocates if necessary.
+    pub fn indexRefIfNotDuplicateSlotAssumeBinCapacity(self: *Self, account_ref: *AccountRef) std.mem.Allocator.Error!bool {
+        self.ref_head_pool_mtx.lock();
+        defer self.ref_head_pool_mtx.unlock();
+        try self.ref_head_pool.ensureUnusedCapacity(self.allocator, 1);
+        return self.indexRefIfNotDuplicateSlotAssumeCapacityPoolLocked(account_ref);
+    }
 
-        const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = .{ .ref_ptr = account_ref };
-            return true;
-        }
+    /// Adds the reference to the index if there is not a duplicate (ie, the same slot).
+    ///
+    /// Returns if the reference was inserted.
+    ///
+    /// Assumes `self.getBinFromPubkey(&account_ref.pubkey)` has enough capacity for at
+    /// least onef more entry.
+    ///
+    /// Assumes `self.ref_head_pool_mtx` is already locked, and that there is capacity
+    /// in `self.ref_head_pool` for at least one more element.
+    pub fn indexRefIfNotDuplicateSlotAssumeCapacityPoolLocked(self: *Self, account_ref: *AccountRef) bool {
+        const head_ref, var head_ref_lg = blk: {
+            const bin, var bin_lg = self.getBinFromPubkey(&account_ref.pubkey).writeWithLock();
+            defer bin_lg.unlock(); // the lock on the bin also locks the reference map
+
+            const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = self.acquireAndInitRwHeadRefAssumeCapacityLocked(.{ .ref_ptr = account_ref });
+                return true;
+            }
+
+            break :blk gop.value_ptr.*.writeWithLock();
+        };
+        defer head_ref_lg.unlock();
 
         // traverse until you find the end
-        const head_ref = gop.value_ptr.*;
-
         var curr = head_ref.ref_ptr;
         while (true) {
             if (curr.slot == account_ref.slot) {
@@ -281,25 +323,48 @@ pub const AccountIndex = struct {
         }
     }
 
-    /// adds a reference to the index
+    /// Adds a reference to the index.
+    ///
+    /// Assumes `self.getBinFromPubkey(&account_ref.pubkey)` has enough capacity for at
+    /// least onef more entry.
+    ///
+    /// Locks `self.ref_head_pool_mtx` and allocates if necessary.
+    ///
     /// NOTE: this should only be used when you know the reference does not exist
     /// because we never want duplicate state references in the index
-    pub fn indexRefAssumeCapacity(
-        self: *const Self,
-        account_ref: *AccountRef,
-    ) void {
-        const bin, var bin_lg = self.getBinFromPubkey(&account_ref.pubkey).writeWithLock();
-        defer bin_lg.unlock(); // the lock on the bin also locks the reference map
+    pub fn indexRefAssumeBinCapacity(self: *Self, account_ref: *AccountRef) std.mem.Allocator.Error!void {
+        self.ref_head_pool_mtx.lock();
+        defer self.ref_head_pool_mtx.unlock();
+        try self.ref_head_pool.ensureUnusedCapacity(self.allocator, 1);
+        self.indexRefAssumeCapacityPoolLocked(account_ref);
+    }
 
-        const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
-        if (!gop.found_existing) {
-            gop.value_ptr.* = .{ .ref_ptr = account_ref };
-            return;
-        }
+    /// Adds a reference to the index.
+    ///
+    /// Assumes `self.getBinFromPubkey(&account_ref.pubkey)` has enough capacity for at
+    /// least onef more entry.
+    ///
+    /// Assumes `self.ref_head_pool_mtx` is already locked, and that there is capacity
+    /// in `self.ref_head_pool` for at least one more element.
+    ///
+    /// NOTE: this should only be used when you know the reference does not exist
+    /// because we never want duplicate state references in the index
+    pub fn indexRefAssumeCapacityPoolLocked(self: *Self, account_ref: *AccountRef) void {
+        const head_ref, var head_ref_lg = blk: {
+            const bin, var bin_lg = self.getBinFromPubkey(&account_ref.pubkey).writeWithLock();
+            defer bin_lg.unlock(); // the lock on the bin also locks the reference map
+
+            const gop = bin.getOrPutAssumeCapacity(account_ref.pubkey); // 1)
+            if (!gop.found_existing) {
+                gop.value_ptr.* = self.acquireAndInitRwHeadRefAssumeCapacityLocked(.{ .ref_ptr = account_ref });
+                return;
+            }
+
+            break :blk gop.value_ptr.*.writeWithLock();
+        };
+        defer head_ref_lg.unlock();
 
         // traverse until you find the end
-        const head_ref = gop.value_ptr.*;
-
         var curr_ref = head_ref.ref_ptr;
         while (curr_ref.next_ptr) |next_ref| {
             curr_ref = next_ref;
@@ -314,8 +379,8 @@ pub const AccountIndex = struct {
         slot: Slot,
         new_ref: *AccountRef,
     ) GetAccountRefError!void {
-        const ref_ptr_ptr, var bin_lg = try self.getReferencePtrPtrWrite(pubkey, slot);
-        defer bin_lg.unlock();
+        const ref_ptr_ptr, var head_ref_lg = try self.getReferencePtrPtrWrite(pubkey, slot);
+        defer head_ref_lg.unlock();
         std.debug.assert(ref_ptr_ptr.*.slot == slot);
         std.debug.assert(ref_ptr_ptr.*.pubkey.equals(pubkey));
         ref_ptr_ptr.* = new_ref;
@@ -325,16 +390,46 @@ pub const AccountIndex = struct {
         const bin, var bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
         defer bin_lg.unlock();
 
-        const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
+        const head_ref_rw = bin.get(pubkey.*) orelse return error.PubkeyNotFound;
+        const head_ref, var head_ref_lg = head_ref_rw.writeWithLock();
         switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
-            .null => return error.SlotNotFound,
-            .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
-                return bin.remove(pubkey.*) catch |err| switch (err) {
-                    error.KeyNotFound => error.PubkeyNotFound,
-                };
+            .null => {
+                head_ref_lg.unlock();
+                return error.SlotNotFound;
             },
-            .inner => |inner| inner.* = if (inner.*) |ref| ref.next_ptr else null,
+            .inner => |inner| {
+                inner.* = if (inner.*) |ref| ref.next_ptr else null;
+                head_ref_lg.unlock();
+            },
+            .head => {
+                head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
+                    bin.remove(pubkey.*) catch |err| switch (err) {
+                        error.KeyNotFound => unreachable, // we already know it exists
+                    };
+                    self.recycleRwHeadRef(head_ref_rw); // we don't unlock `head_ref_lg` at this point, because it can no longer be assumed to possess valid state.
+                    return;
+                };
+                head_ref_lg.unlock();
+            },
         }
+    }
+
+    fn acquireAndInitRwHeadRefAssumeCapacity(self: *Self, init_value: AccountReferenceHead) *RwMux(AccountReferenceHead) {
+        self.ref_head_pool_mtx.lock();
+        defer self.ref_head_pool_mtx.unlock();
+        return self.acquireAndInitRwHeadRefAssumeCapacityLocked(init_value);
+    }
+    /// Assumes `self.ref_head_pool_mtx` is locked.
+    fn acquireAndInitRwHeadRefAssumeCapacityLocked(self: *Self, init_value: AccountReferenceHead) *RwMux(AccountReferenceHead) {
+        const elem = self.ref_head_pool.acquireUndefElemAssumeCapacity();
+        elem.* = RwMux(AccountReferenceHead).init(init_value);
+        return elem;
+    }
+
+    fn recycleRwHeadRef(self: *Self, head_ref_rw: *RwMux(AccountReferenceHead)) void {
+        self.ref_head_pool_mtx.lock();
+        defer self.ref_head_pool_mtx.unlock();
+        self.ref_head_pool.recycleElem(head_ref_rw);
     }
 
     pub inline fn getBinIndex(self: *const Self, pubkey: *const Pubkey) usize {
@@ -355,6 +450,95 @@ pub const AccountIndex = struct {
 
     pub inline fn numberOfBins(self: *const Self) usize {
         return self.bins.len;
+    }
+};
+
+pub const RefHeadPool = struct {
+    store: std.SegmentedList(Elem, 0) = .{},
+    free_list: FreeList = .{},
+
+    comptime {
+        std.debug.assert(@sizeOf(Elem) >= @sizeOf(Node));
+    }
+
+    pub const Elem = RwMux(AccountReferenceHead);
+
+    /// Each `*Node` is an `*Elem` in disguise.
+    pub const Node = extern struct {
+        next: ?*Node align(@alignOf(Elem)) = null,
+
+        pub fn fromUndefElem(elem: *Elem) *Node {
+            const node: *Node = @ptrCast(elem);
+            node.* = .{};
+            return node;
+        }
+
+        pub fn toUndefElem(self: *Node) *Elem {
+            const res: *Elem = @ptrCast(self);
+            res.* = undefined;
+            return res;
+        }
+    };
+
+    pub const FreeList = struct {
+        head: ?*Node = null,
+        len: usize = 0,
+
+        pub fn push(free_list: *FreeList, node: *Node) void {
+            node.next = free_list.head;
+            free_list.head = node;
+            free_list.len += 1;
+        }
+
+        pub fn pop(free_list: *FreeList) ?*Node {
+            const popped = free_list.head orelse return null;
+            free_list.head = popped.next;
+            popped.next = null;
+            free_list.len -= 1;
+            return popped;
+        }
+    };
+
+    pub fn deinit(pool: *RefHeadPool, allocator: std.mem.Allocator) void {
+        pool.store.deinit(allocator);
+    }
+
+    /// Create `count` new elements that can be acquired.
+    pub fn prepareCapacity(pool: *RefHeadPool, allocator: std.mem.Allocator, count: usize) std.mem.Allocator.Error!void {
+        try pool.store.growCapacity(allocator, pool.store.len + count);
+        for (0..count) |_| {
+            const new_elem = pool.store.addOne(sig.utils.allocators.failing.allocator(.{})) catch unreachable; // the call to `growCapacity` should make this impossible
+            const new_node = Node.fromUndefElem(new_elem);
+            pool.free_list.push(new_node);
+        }
+    }
+
+    /// Ensures there are `count` minus however many elements already exist (acquired or otherwise)
+    /// elements ready to be acquired, aka `count` elements in total.
+    pub fn ensureTotalCapacity(pool: *RefHeadPool, allocator: std.mem.Allocator, count: usize) std.mem.Allocator.Error!void {
+        if (count <= pool.store.count()) return;
+        return pool.prepareCapacity(allocator, count - pool.store.count());
+    }
+
+    /// Ensures there are at least `count` elements that can be acquired.
+    pub fn ensureUnusedCapacity(pool: *RefHeadPool, allocator: std.mem.Allocator, count: usize) std.mem.Allocator.Error!void {
+        if (count <= pool.free_list.len) return;
+        return pool.prepareCapacity(allocator, count - pool.free_list.len);
+    }
+
+    /// Caller should preempt this with a call to preallocate space for at least one element.
+    pub fn acquireUndefElemAssumeCapacity(pool: *RefHeadPool) *Elem {
+        return pool.free_list.pop().?.toUndefElem();
+    }
+
+    pub fn acquireUndefElem(pool: *RefHeadPool) std.mem.Allocator!*Elem {
+        if (pool.free_list.pop()) |node| return node.toUndefElem();
+        return try pool.store.addOne();
+    }
+
+    /// Recycle the element if it's no longer in use.
+    pub fn recycleElem(pool: *RefHeadPool, elem: *Elem) void {
+        pool.free_list.push(Node.fromUndefElem(elem));
     }
 };
 
@@ -428,15 +612,15 @@ test "account index update/remove reference" {
 
     var index = try AccountIndex.init(allocator, allocator, 8);
     defer index.deinit(true);
-    try index.ensureTotalCapacity(100);
+    try index.ensureBinsTotalCapacity(100);
 
     // pubkey -> a
     var ref_a = AccountRef.default();
-    index.indexRefAssumeCapacity(&ref_a);
+    try index.indexRefAssumeBinCapacity(&ref_a);
 
     var ref_b = AccountRef.default();
     ref_b.slot = 1;
-    index.indexRefAssumeCapacity(&ref_b);
+    try index.indexRefAssumeBinCapacity(&ref_b);
 
     // make sure indexRef works
     {
