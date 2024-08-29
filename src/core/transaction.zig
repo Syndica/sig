@@ -361,7 +361,7 @@ pub const CompiledKeys = struct {
             } else unreachable;
         }
 
-        std.debug.assert(account_keys.len == account_keys_buf.len);
+        std.debug.assert(account_keys.items.len == account_keys_buf.len);
 
         const header = MessageHeader{
             .num_required_signatures = @intCast(readonly_signers_end + 1),
