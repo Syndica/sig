@@ -245,7 +245,7 @@ pub fn freshDir(path: []const u8) !void {
     try std.fs.cwd().makePath(path);
 }
 
-const test_shreds_dir = "test_data/shreds";
+const test_shreds_dir = sig.TEST_DATA_DIR ++ "/shreds";
 
 fn testShreds(comptime filename: []const u8) ![]const Shred {
     const path = comptimePrint("{s}/{s}", .{ test_shreds_dir, filename });
@@ -402,7 +402,7 @@ pub fn TestState(scope: []const u8) type {
 }
 
 pub fn TestDB(scope: []const u8) type {
-    const dir = "test_data/blockstore";
+    const dir = sig.TEST_DATA_DIR ++ "blockstore";
 
     return struct {
         pub fn init(comptime test_name: []const u8) !BlockstoreDB {
