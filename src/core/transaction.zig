@@ -148,8 +148,9 @@ pub const Message = struct {
         };
     }
 
-    pub fn new(allocator: std.mem.Allocator, instructions: []Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
-        var compiled_keys = try CompiledKeys.compile(allocator, instructions, payer);
+    pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, payer: Pubkey, recent_blockhash: Hash) !Message {
+        var compiled_keys = try CompiledKeys.init(allocator, instructions, payer);
+        defer compiled_keys.deinit();
         const header, const account_keys = try compiled_keys.into_message_header_and_account_keys(allocator);
         const compiled_instructions = try compileInstructions(allocator, instructions, account_keys);
         return .{
@@ -240,6 +241,11 @@ pub const Instruction = struct {
             .data = try sig.bincode.writeAlloc(allocator, data, .{}),
         };
     }
+
+    pub fn deinit(self: *const Instruction, allocator: std.mem.Allocator) void {
+        allocator.free(self.accounts);
+        allocator.free(self.data);
+    }
 };
 
 pub const CompiledInstruction = struct {
@@ -293,7 +299,7 @@ pub const CompiledKeys = struct {
     maybe_payer: ?Pubkey,
     key_meta_map: std.AutoArrayHashMap(Pubkey, CompiledKeyMeta),
 
-    pub fn compile(allocator: std.mem.Allocator, instructions: []Instruction, maybe_payer: ?Pubkey) !CompiledKeys {
+    pub fn init(allocator: std.mem.Allocator, instructions: []const Instruction, maybe_payer: ?Pubkey) !CompiledKeys {
         var key_meta_map = std.AutoArrayHashMap(Pubkey, CompiledKeyMeta).init(allocator);
         for (instructions) |instruction| {
             const instruction_meta_gopr = try key_meta_map.getOrPut(instruction.program_id);
@@ -321,6 +327,10 @@ pub const CompiledKeys = struct {
             }
         }
         return .{ .maybe_payer = maybe_payer, .key_meta_map = key_meta_map };
+    }
+
+    pub fn deinit(self: *CompiledKeys) void {
+        self.key_meta_map.deinit();
     }
 
     /// Creates message header and account keys from the compiled keys.
@@ -364,7 +374,7 @@ pub const CompiledKeys = struct {
         std.debug.assert(account_keys.items.len == account_keys_buf.len);
 
         const header = MessageHeader{
-            .num_required_signatures = @intCast(readonly_signers_end + 1),
+            .num_required_signatures = @intCast(readonly_signers_end),
             .num_readonly_signed_accounts = @intCast(readonly_signers_end - writable_signers_end),
             .num_readonly_unsigned_accounts = @intCast(account_keys.items.len - writable_non_signers_end),
         };
@@ -404,10 +414,11 @@ const SystemInstruction = union(enum(u8)) {
 };
 
 pub fn buildTransferTansaction(allocator: std.mem.Allocator, from_keypair: KeyPair, from_pubkey: Pubkey, to_pubkey: Pubkey, lamports: u64, recent_blockhash: Hash) !Transaction {
-    const instructions = try allocator.alloc(Instruction, 1);
-    instructions[0] = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+    const transfer_instruction = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+    defer transfer_instruction.deinit(allocator);
+    const instructions = [_]Instruction{transfer_instruction};
 
-    const message = try Message.new(allocator, instructions, from_pubkey, recent_blockhash);
+    const message = try Message.init(allocator, &instructions, from_pubkey, recent_blockhash);
     const message_bytes = try sig.bincode.writeAlloc(allocator, message, .{});
     defer allocator.free(message_bytes);
 
@@ -434,7 +445,7 @@ fn indexOf(comptime T: type, slice: []const T, value: T) ?usize {
     } else return null;
 }
 
-pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []Pubkey) !CompiledInstruction {
+pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []const Pubkey) !CompiledInstruction {
     const program_id_index = indexOf(Pubkey, account_keys, instruction.program_id).?;
     var accounts = try allocator.alloc(u8, instruction.accounts.len);
     for (instruction.accounts, 0..) |account, i| {
@@ -447,7 +458,7 @@ pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction
     };
 }
 
-pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []Instruction, account_keys: []Pubkey) ![]CompiledInstruction {
+pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []const Instruction, account_keys: []const Pubkey) ![]CompiledInstruction {
     var compiled_instructions = try allocator.alloc(CompiledInstruction, instructions.len);
     for (instructions, 0..) |instruction, i| {
         compiled_instructions[i] = try compileInstruction(allocator, instruction, account_keys);
@@ -455,12 +466,28 @@ pub fn compileInstructions(allocator: std.mem.Allocator, instructions: []Instruc
     return compiled_instructions;
 }
 
-test "transfer instruction compiles" {
-    const allocator = std.heap.page_allocator;
-    const from_pubkey = Pubkey.default();
-    const to_pubkey = Pubkey.default();
-    const lamports: u64 = 100;
-    _ = try transfer(allocator, from_pubkey, to_pubkey, lamports);
+test "create transfer transaction" {
+    const allocator = std.testing.allocator;
+    const from_keypair = try KeyPair.create([_]u8{0} ** KeyPair.seed_length);
+    const from_pubkey = Pubkey{ .data = from_keypair.public_key.bytes };
+    const to_pubkey = Pubkey{ .data = [_]u8{1} ** Pubkey.size };
+    const recent_blockhash = Hash.generateSha256Hash(&[_]u8{0});
+    const tx = try buildTransferTansaction(allocator, from_keypair, from_pubkey, to_pubkey, 100, recent_blockhash);
+    defer tx.deinit(allocator);
+    const actual_bytes = try sig.bincode.writeAlloc(allocator, tx, .{});
+    defer allocator.free(actual_bytes);
+    const expected_bytes = [_]u8{
+        1,   179, 96,  234, 171, 102, 151, 31,  74,  246, 57,  213, 75,  38,  199, 70,  105, 32,  146, 18,  245, 92,  92,  138,
+        253, 30,  247, 119, 174, 140, 95,  67,  39,  148, 154, 255, 94,  118, 221, 113, 29,  20,  87,  102, 114, 28,  40,  39,
+        125, 107, 122, 16,  63,  237, 139, 165, 163, 143, 40,  229, 32,  132, 188, 201, 2,   1,   0,   1,   3,   59,  106, 39,
+        188, 206, 182, 164, 45,  98,  163, 168, 208, 42,  111, 13,  115, 101, 50,  21,  119, 29,  226, 67,  166, 58,  192, 72,
+        161, 139, 89,  218, 41,  1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+        1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   110, 52,  11,
+        156, 255, 179, 122, 152, 156, 165, 68,  230, 187, 120, 10,  44,  120, 144, 29,  63,  179, 55,  56,  118, 133, 17,  163,
+        6,   23,  175, 160, 29,  1,   2,   2,   0,   1,   12,  2,   0,   0,   0,   100, 0,   0,   0,   0,   0,   0,   0,
+    };
+    try std.testing.expectEqualSlices(u8, &expected_bytes, actual_bytes);
 }
 
 test "tmp" {
