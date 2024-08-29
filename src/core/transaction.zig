@@ -325,56 +325,51 @@ pub const CompiledKeys = struct {
 
     /// Creates message header and account keys from the compiled keys.
     /// Account keys memory is allocated and owned by the caller.
-    /// TODO: Depending on whether the order of account keys is important, the code could be
-    /// optimized by simply counting the key types and appending them to account_keys direclty.
     pub fn into_message_header_and_account_keys(self: *CompiledKeys, allocator: std.mem.Allocator) !struct { MessageHeader, []Pubkey } {
-        var writable_signer_keys = std.ArrayList(Pubkey).init(allocator);
-        defer writable_signer_keys.deinit();
+        const account_keys_buf = try allocator.alloc(Pubkey, self.key_meta_map.count() - @intFromBool(self.maybe_payer == null));
+        errdefer allocator.free(account_keys_buf);
+
+        var account_keys = std.ArrayListUnmanaged(Pubkey).initBuffer(account_keys_buf);
+
+        var writable_signers_end: usize = 0;
+        var readonly_signers_end: usize = 0;
+        var writable_non_signers_end: usize = 0;
 
         if (self.maybe_payer) |payer| {
             _ = self.key_meta_map.swapRemove(payer);
-            try writable_signer_keys.append(payer);
+            account_keys.insertAssumeCapacity(writable_signers_end, payer);
+            writable_signers_end += 1;
+            readonly_signers_end += 1;
+            writable_non_signers_end += 1;
         }
-
-        var writable_non_signer_keys = std.ArrayList(Pubkey).init(allocator);
-        defer writable_non_signer_keys.deinit();
-        var readonly_signer_keys = std.ArrayList(Pubkey).init(allocator);
-        defer readonly_signer_keys.deinit();
-        var readonly_non_signer_keys = std.ArrayList(Pubkey).init(allocator);
-        defer readonly_non_signer_keys.deinit();
 
         for (self.key_meta_map.keys(), self.key_meta_map.values()) |key, meta| {
-            switch (meta.is_signer) {
-                true => switch (meta.is_writable) {
-                    true => try writable_signer_keys.append(key),
-                    false => try readonly_signer_keys.append(key),
-                },
-                false => switch (meta.is_writable) {
-                    true => try writable_non_signer_keys.append(key),
-                    false => try readonly_non_signer_keys.append(key),
-                },
-            }
+            if (meta.is_signer and meta.is_writable) {
+                account_keys.insertAssumeCapacity(writable_signers_end, key);
+                writable_signers_end += 1;
+                readonly_signers_end += 1;
+                writable_non_signers_end += 1;
+            } else if (meta.is_signer and !meta.is_writable) {
+                account_keys.insertAssumeCapacity(readonly_signers_end, key);
+                readonly_signers_end += 1;
+                writable_non_signers_end += 1;
+            } else if (!meta.is_signer and meta.is_writable) {
+                account_keys.insertAssumeCapacity(writable_non_signers_end, key);
+                writable_non_signers_end += 1;
+            } else if (!meta.is_signer and !meta.is_writable) {
+                account_keys.appendAssumeCapacity(key);
+            } else unreachable;
         }
 
+        std.debug.assert(account_keys.len == account_keys_buf.len);
+
         const header = MessageHeader{
-            .num_required_signatures = @truncate(writable_signer_keys.items.len + readonly_signer_keys.items.len),
-            .num_readonly_signed_accounts = @truncate(readonly_signer_keys.items.len),
-            .num_readonly_unsigned_accounts = @truncate(readonly_non_signer_keys.items.len),
+            .num_required_signatures = @intCast(readonly_signers_end + 1),
+            .num_readonly_signed_accounts = @intCast(readonly_signers_end - writable_signers_end),
+            .num_readonly_unsigned_accounts = @intCast(account_keys.items.len - writable_non_signers_end),
         };
 
-        const account_keys_len =
-            writable_signer_keys.items.len +
-            readonly_signer_keys.items.len +
-            writable_non_signer_keys.items.len +
-            readonly_non_signer_keys.items.len;
-
-        var account_keys = try std.ArrayList(Pubkey).initCapacity(allocator, account_keys_len);
-        try account_keys.appendSlice(writable_signer_keys.items);
-        try account_keys.appendSlice(readonly_signer_keys.items);
-        try account_keys.appendSlice(writable_non_signer_keys.items);
-        try account_keys.appendSlice(readonly_non_signer_keys.items);
-
-        return .{ header, account_keys.items };
+        return .{ header, account_keys_buf };
     }
 };
 
