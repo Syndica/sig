@@ -757,7 +757,7 @@ pub const AccountsDB = struct {
                 }
             }
             self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
-            _ = self.largest_rooted_slot.fetchMax(thread_db.largest_rooted_slot.load(.unordered), .monotonic);
+            _ = self.largest_rooted_slot.fetchMax(thread_db.largest_rooted_slot.load(.acquire), .monotonic);
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
 
             // combine underlying memory

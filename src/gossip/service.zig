@@ -1168,7 +1168,7 @@ pub const GossipService = struct {
             var self: *@This() = @fieldParentPtr("task", task);
             defer self.done.store(true, .release);
 
-            const output_limit = self.output_limit.load(.unordered);
+            const output_limit = self.output_limit.load(.acquire);
             if (output_limit <= 0) {
                 return;
             }

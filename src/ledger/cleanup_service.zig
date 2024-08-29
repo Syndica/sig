@@ -80,7 +80,7 @@ pub fn cleanBlockstore(
     purge_interval: u64,
 ) !Slot {
     // // TODO: add back when max_root is implemented with consensus
-    // const root = blockstore_reader.max_root.load(.unordered);
+    // const root = blockstore_reader.max_root.load(.acquire);
     // if (root - last_purge_slot <= purge_interval) return last_purge_slot;
     _ = last_purge_slot;
     _ = purge_interval;
