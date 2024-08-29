@@ -1,6 +1,8 @@
 const std = @import("std");
 const time = @import("../time/time.zig");
 const Level = @import("level.zig").Level;
+const sig = @import("../sig.zig");
+const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 pub const LogMsg = struct {
     level: Level,
@@ -9,11 +11,29 @@ pub const LogMsg = struct {
 };
 
 pub fn formatterLog(
-    allocator: std.mem.Allocator,
+    free_fba: *RecycleFBA,
+    total_len: u64,
     message: LogMsg,
 ) !void {
-    var log_message = std.ArrayList(u8).init(allocator);
-    defer log_message.deinit();
+    // obtain a memory to write to
+    free_fba.mux.lock();
+    const buf = blk: while (true) {
+        const buf = free_fba.allocator().alloc(u8, total_len) catch {
+            // no memory available rn - unlock and wait
+            free_fba.mux.unlock();
+            std.time.sleep(std.time.ns_per_ms);
+            free_fba.mux.lock();
+            continue;
+        };
+        break :blk buf;
+    };
+    free_fba.mux.unlock();
+    errdefer {
+        free_fba.mux.lock();
+        free_fba.allocator().free(buf);
+        free_fba.mux.unlock();
+    }
+    var log_message = std.io.fixedBufferStream(buf);
     const writer = log_message.writer();
 
     if (message.maybe_scope) |scope| {
@@ -33,7 +53,7 @@ pub fn formatterLog(
     }
 
     const stderr_writer = std.io.getStdErr().writer();
-    try std.fmt.format(stderr_writer, "{s}", .{log_message.toOwnedSlice() catch unreachable()});
+    try std.fmt.format(stderr_writer, "{s}", .{log_message.getWritten()});
 }
 
 pub fn formatter(

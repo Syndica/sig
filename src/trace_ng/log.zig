@@ -2,11 +2,13 @@ const std = @import("std");
 const Level = @import("level.zig").Level;
 const entry = @import("entry.zig");
 const logfmt = @import("logfmt.zig");
+const sig = @import("../sig.zig");
 // TODO Improve import.
 const Channel = @import("../sync/channel.zig").Channel;
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const AtomicBool = std.atomic.Value(bool);
+const RecycleFBA = sig.utils.allocators.RecycleFBA;
 
 const Entry = entry.Entry;
 const StdEntry = entry.StdEntry;
@@ -51,6 +53,8 @@ pub const LogConfig = struct {
 
 pub const Config = struct {
     level: Level = Level.debug,
+    allocator: std.mem.Allocator,
+    fba_bytes: u64,
 };
 
 const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
@@ -62,15 +66,19 @@ pub fn StandardLogger(comptime scope: ?type) type {
         level: Level,
         exit_sig: AtomicBool,
         allocator: Allocator,
+        free_fba: RecycleFBA,
+        fba_bytes: u64,
         channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
 
-        pub fn init(allocator: Allocator, config: Config) Self {
+        pub fn init(config: Config) Self {
             return .{
-                .allocator = allocator,
+                .allocator = config.allocator,
+                .free_fba = RecycleFBA.init(config.allocator, config.fba_bytes) catch @panic("could not create RecycleFBA"),
+                .fba_bytes = config.fba_bytes,
                 .level = config.level,
                 .exit_sig = AtomicBool.init(false),
-                .channel = Channel(logfmt.LogMsg).init(allocator, INITIAL_LOG_CHANNEL_SIZE),
+                .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
                 .handle = null,
             };
         }
@@ -86,6 +94,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 handle.join();
             }
             self.channel.deinit();
+            self.free_fba.deinit();
         }
 
         pub fn run(self: *Self) void {
@@ -98,7 +107,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 defer self.channel.allocator.free(messages);
 
                 for (messages) |message| {
-                    logfmt.formatterLog(self.allocator, message) catch @panic("logging failed");
+                    logfmt.formatterLog(&self.free_fba, self.fba_bytes, message) catch @panic("logging failed");
                 }
             }
         }
@@ -235,12 +244,18 @@ test "trace_ng: chaining" {
 }
 
 test "trace_ng: multiple methods" {
-    const buffer_size = 1 * 1024 * 1024; // 1MB
-    var buffer: [buffer_size]u8 = undefined;
-    var fba = std.heap.FixedBufferAllocator.init(&buffer);
-    const allocator = fba.allocator();
+    // const buffer_size = 1 * 1024 * 1024; // 1MB
+    // var buffer: [buffer_size]u8 = undefined;
+    // var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    // const allocator = fba.allocator();
 
-    var logger = StandardLogger(null).init(allocator, .{ .level = Level.info });
+//     level: Level = Level.debug,
+//    allocator: std.mem.Allocator,
+//    fba_bytes: u64,
+
+    const allocator = std.heap.page_allocator;
+
+    var logger = StandardLogger(null).init(.{.allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
     defer logger.deinit();
     logger.spawn();
 
