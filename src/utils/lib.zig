@@ -1,3 +1,4 @@
+pub const allocators = @import("allocators.zig");
 pub const collections = @import("collections.zig");
 pub const closure = @import("closure.zig");
 pub const bitflags = @import("bitflags.zig");
@@ -12,4 +13,3 @@ pub const tar = @import("tar.zig");
 pub const thread = @import("thread.zig");
 pub const types = @import("types.zig");
 pub const fmt = @import("fmt.zig");
-pub const allocators = @import("allocators.zig");
