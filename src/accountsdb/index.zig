@@ -327,9 +327,10 @@ pub const AccountIndex = struct {
         switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
             .null => return error.SlotNotFound,
             .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
-                return bin.remove(pubkey.*) catch |err| switch (err) {
+                _ = bin.remove(pubkey.*) catch |err| return switch (err) {
                     error.KeyNotFound => error.PubkeyNotFound,
                 };
+                return;
             },
             .inner => |inner| inner.* = if (inner.*) |ref| ref.next_ptr else null,
         }
