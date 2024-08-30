@@ -8,8 +8,6 @@ const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
 const logger = sig.trace.log;
 
-const servePrometheus = sig.prometheus.servePrometheus;
-const globalRegistry = sig.prometheus.globalRegistry;
 const spawnMetrics = sig.prometheus.spawnMetrics;
 
 // where seeds are saved (in case of too many logs)
