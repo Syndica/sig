@@ -70,7 +70,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 defer self.channel.allocator.free(messages);
 
                 for (messages) |message| {
-                    logfmt.formatterLog(message) catch @panic("logging failed");
+                    logfmt.writeLog(message) catch @panic("logging failed");
                 }
             }
         }
@@ -82,7 +82,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             level: Level,
             maybe_scope: ?[]const u8,
             maybe_msg: ?[]const u8,
-            maybe_kv: ?[]const u8,
+            maybe_kv: anytype,
             comptime maybe_fmt: ?[]const u8,
             args: anytype,
         ) logfmt.LogMsg {
@@ -111,11 +111,15 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 std.fmt.format(writer, fmt, args) catch @panic("could not format");
             }
             const log_message = fmt_message.getWritten();
+
+            // Reset buffer before re-using to construct key/value.
+            fmt_message.reset();
+
             return logfmt.LogMsg{
                 .level = level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
-                .maybe_kv = maybe_kv,
+                .maybe_kv = logfmt.keyValueToStr(buf, maybe_kv),
                 .maybe_fmt = log_message,
             };
         }
@@ -142,12 +146,8 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            const kv_str = logfmt.keyValueToString(keyvalue) catch @panic("Could not parse key values");
-            // TODO Revisit why this is needed to remove the Unicode replacement character.
-            var slice: [logfmt.keyValueSize(keyvalue)]u8 = undefined;
-            @memcpy(slice[0..kv_str.len], kv_str);
             var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, &slice, null, null);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, keyvalue, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -172,14 +172,8 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            const kv_str = logfmt.keyValueToString(keyvalue) catch @panic("Could not parse key values");
-
-            // TODO Revisit why this is needed to remove the Unicode replacement character.
-            var slice: [logfmt.keyValueSize(keyvalue)]u8 = undefined;
-            @memcpy(slice[0..kv_str.len], kv_str);
-
             var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, &slice, fmt, args);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, keyvalue, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };
@@ -243,7 +237,7 @@ test "trace_ng" {
         .{"Logging with logfWithFields"},
         .{
             .f_agent = "Firefox",
-            .f_version = "2.0",
+            .f_version = 120,
             .f_local = "en",
             .f_stock = "nvidia",
         },

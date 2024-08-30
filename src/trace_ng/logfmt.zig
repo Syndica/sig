@@ -12,7 +12,7 @@ pub const LogMsg = struct {
     maybe_fmt: ?[]const u8 = null,
 };
 
-pub fn formatterLog(
+pub fn writeLog(
     message: LogMsg,
 ) !void {
     const writer = std.io.getStdErr().writer();
@@ -41,43 +41,38 @@ pub fn formatterLog(
     }
 }
 
-pub fn keyValueToString(
+pub fn keyValueToStr(
+    buffer: anytype,
     args: anytype,
-) ![]const u8 {
-    comptime var size: usize = keyValueSize(args);
-    var array: [102]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(array[0..]);
-    const writer = fbs.writer().any();
+) ?[]const u8 {
+    var fmt_message = std.io.fixedBufferStream(buffer);
+    const writer = fmt_message.writer();
+
     switch (@typeInfo(@TypeOf(args))) {
         .Struct => |struc| {
             inline for (struc.fields) |field| {
-                size += field.name.len;
-                size += @sizeOf(@TypeOf(field.name));
-                //For the '=' and ' ' characters
-                size += 2;
-                try std.fmt.format(writer, "{s}={s} ", .{ field.name, @field(args, field.name) });
+                const field_value = @field(args, field.name);
+                // Check the field's type and format accordingly
+                switch (@typeInfo(@TypeOf(field_value))) {
+                    .Pointer, .Array => {
+                        // Assume it's a string type
+                        std.fmt.format(writer, "{s}={s} ", .{ field.name, field_value }) catch return null;
+                    },
+                    .Int, .ComptimeInt, .Float, .ComptimeFloat => {
+                        // Handle numeric types
+                        std.fmt.format(writer, "{s}={} ", .{ field.name, field_value }) catch return null;
+                    },
+                    else => {
+                        // Fallback for unsupported types
+                        std.fmt.format(writer, "{s}=<?> ", .{field.name}) catch return null;
+                    },
+                }
             }
         },
-        else => {},
-    }
-
-    return fbs.getWritten();
-}
-
-pub fn keyValueSize(
-    args: anytype,
-) usize {
-    comptime var size: usize = 0;
-    switch (@typeInfo(@TypeOf(args))) {
-        .Struct => |struc| {
-            inline for (struc.fields) |field| {
-                size += field.name.len;
-                size += @field(args, field.name).len;
-                // For "=" and " "
-                size += 2;
-            }
+        else => {
+            return null;
         },
-        else => {},
     }
-    return size;
+
+    return fmt_message.getWritten();
 }
