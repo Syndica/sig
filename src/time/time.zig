@@ -560,7 +560,7 @@ pub const Instant = struct {
     inner: std.time.Instant,
 
     pub fn now() Instant {
-        return .{ .inner = std.time.Instant.now() catch @panic("std.time.Instant unsupported!") };
+        return .{ .inner = std.time.Instant.now() catch unreachable };
     }
 
     pub fn elapsed(self: Instant) Duration {
