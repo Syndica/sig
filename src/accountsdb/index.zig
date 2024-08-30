@@ -37,7 +37,7 @@ pub const AccountReferenceHead = struct {
         return .{ rooted_ref_count, ref_slot_max };
     }
 
-    pub const PtrToFieldThatIsPtrToRef = union(enum) {
+    pub const PtrToAccountRefField = union(enum) {
         null,
         head,
         inner: *?*AccountRef,
@@ -50,15 +50,15 @@ pub const AccountReferenceHead = struct {
     pub inline fn getPtrToFieldThatIsPtrToRefWithSlot(
         head_ref: *const AccountReferenceHead,
         slot: Slot,
-    ) PtrToFieldThatIsPtrToRef {
+    ) PtrToAccountRefField {
         if (head_ref.ref_ptr.slot == slot) return .head;
-        var curr_ref_ptr_ptr: *?*AccountRef = &head_ref.ref_ptr.next_ptr;
+        var curr_ptr_to_ref_field: *?*AccountRef = &head_ref.ref_ptr.next_ptr;
         while (true) {
-            const curr_ref = curr_ref_ptr_ptr.* orelse return .null;
+            const curr_ref = curr_ptr_to_ref_field.* orelse return .null;
             if (curr_ref.slot == slot) {
-                return .{ .inner = curr_ref_ptr_ptr };
+                return .{ .inner = curr_ptr_to_ref_field };
             }
-            curr_ref_ptr_ptr = &curr_ref.next_ptr;
+            curr_ptr_to_ref_field = &curr_ref.next_ptr;
         }
     }
 };

@@ -1906,7 +1906,7 @@ pub const AccountsDB = struct {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
 
-                    const ref_ptr_ptr, var ref_lg = self.account_index.getReferencePtrPtrWrite(pubkey, slot) catch |err| switch (err) {
+                    const ptr_to_ref_field, var ref_lg = self.account_index.getReferencePtrPtrWrite(pubkey, slot) catch |err| switch (err) {
                         // SAFE: we know the pubkey exists in the index because its alive
                         error.SlotNotFound, error.PubkeyNotFound => unreachable,
                     };
@@ -1914,13 +1914,13 @@ pub const AccountsDB = struct {
 
                     // copy + update the values
                     const new_ref_ptr = new_reference_block.addOneAssumeCapacity();
-                    new_ref_ptr.* = ref_ptr_ptr.*.*;
+                    new_ref_ptr.* = ptr_to_ref_field.*.*;
                     new_ref_ptr.location.File = .{
                         .offset = offsets.items[offset_index],
                         .file_id = new_file_id,
                     };
                     offset_index += 1;
-                    ref_ptr_ptr.* = new_ref_ptr;
+                    ptr_to_ref_field.* = new_ref_ptr;
                 }
             }
 
@@ -1975,12 +1975,12 @@ pub const AccountsDB = struct {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
             defer account_cache_lg.unlock();
 
-            const removed = account_cache.fetchRemove(slot) orelse {
+            const removed_entry = account_cache.fetchRemove(slot) orelse {
                 // the way it works right now, account files only exist for rooted slots
                 // rooted slots should never need to be purged so we should never get here
                 @panic("purging an account file not supported");
             };
-            break :blk removed.value;
+            break :blk removed_entry.value;
         };
 
         // remove the references
