@@ -40,25 +40,26 @@ pub const AccountReferenceHead = struct {
     pub const PtrToAccountRefField = union(enum) {
         null,
         head,
-        inner: *?*AccountRef,
+        parent: *AccountRef,
     };
-    /// Returns a pointer to the field which is a pointer to the
-    /// account reference pointer with a field `.slot` == `slot`.
+    /// Returns a pointer to the account reference with a `next_ptr`
+    /// field which is a pointer to the account reference pointer with
+    /// a field `.slot` == `slot`.
     /// Returns `.null` if no account reference has said slot value.
     /// Returns `.head` if `head_ref.ref_ptr.slot == slot`.
-    /// Returns `.inner = ptr` if `ptr.*.?.*.slot == slot`.
-    pub inline fn getPtrToFieldThatIsPtrToRefWithSlot(
+    /// Returns `.parent = parent` if `parent.next_ptr.?.slot == slot`.
+    pub inline fn getParentRefOf(
         head_ref: *const AccountReferenceHead,
         slot: Slot,
     ) PtrToAccountRefField {
         if (head_ref.ref_ptr.slot == slot) return .head;
-        var curr_ptr_to_ref_field: *?*AccountRef = &head_ref.ref_ptr.next_ptr;
+        var curr_parent: *AccountRef = head_ref.ref_ptr;
         while (true) {
-            const curr_ref = curr_ptr_to_ref_field.* orelse return .null;
+            const curr_ref = curr_parent.next_ptr orelse return .null;
             if (curr_ref.slot == slot) {
-                return .{ .inner = curr_ptr_to_ref_field };
+                return .{ .parent = curr_parent };
             }
-            curr_ptr_to_ref_field = &curr_ref.next_ptr;
+            curr_parent = curr_ref;
         }
     }
 };
@@ -208,10 +209,10 @@ pub const AccountIndex = struct {
         errdefer bin_lg.unlock();
 
         const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
-        const ref_ptr_ptr = switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
+        const ref_ptr_ptr = switch (head_ref.getParentRefOf(slot)) {
             .null => return error.SlotNotFound,
             .head => &head_ref.ref_ptr,
-            .inner => |inner| &inner.*.?,
+            .parent => |parent| &parent.next_ptr.?,
         };
         return .{ ref_ptr_ptr, bin_lg };
     }
@@ -323,7 +324,7 @@ pub const AccountIndex = struct {
         defer bin_lg.unlock();
 
         const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
-        switch (head_ref.getPtrToFieldThatIsPtrToRefWithSlot(slot)) {
+        switch (head_ref.getParentRefOf(slot)) {
             .null => return error.SlotNotFound,
             .head => head_ref.ref_ptr = head_ref.ref_ptr.next_ptr orelse {
                 _ = bin.remove(pubkey.*) catch |err| return switch (err) {
@@ -331,7 +332,7 @@ pub const AccountIndex = struct {
                 };
                 return;
             },
-            .inner => |inner| inner.* = if (inner.*) |ref| ref.next_ptr else null,
+            .parent => |parent| parent.next_ptr = if (parent.next_ptr) |ref| ref.next_ptr else null,
         }
     }
 
