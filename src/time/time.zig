@@ -572,7 +572,7 @@ pub const Instant = struct {
     }
 
     pub fn format(self: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) error{OutOfMemory}!void {
-        return writer.print("{s}", .{std.fmt.fmtDuration(self.ns)}) catch unreachable;
+        return try writer.print("{s}", .{std.fmt.fmtDuration(self.ns)});
     }
 };
 
