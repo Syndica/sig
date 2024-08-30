@@ -40,7 +40,7 @@ pub fn main() !void {
         try benchmark(
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
-            .milliseconds,
+            .microseconds,
         );
     }
 
@@ -59,7 +59,7 @@ pub fn main() !void {
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
-                .nanoseconds,
+                .milliseconds,
             );
         }
 
@@ -99,7 +99,7 @@ pub fn main() !void {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
-            TimeUnits.microseconds,
+            .microseconds,
         );
     }
 }
