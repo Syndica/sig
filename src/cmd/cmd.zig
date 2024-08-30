@@ -992,7 +992,7 @@ pub fn testTransactionSenderService() !void {
 
     const transaction_sender_config = sig.transaction_sender.Config{
         .cluster = .Testnet,
-        .socket = SocketAddr.init(app_base.my_ip, 8003),
+        .socket = SocketAddr.init(app_base.my_ip, 0),
     };
 
     var mock_transfer_service = try sig.transaction_sender.MockTransferService.init(
