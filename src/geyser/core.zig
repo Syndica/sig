@@ -70,7 +70,7 @@ pub const GeyserWriter = struct {
     /// used to alloc/free the data being streamed
     io_allocator: std.mem.Allocator,
     /// backing state for io_allocator
-    io_allocator_state: RecycleFBA(.{}),
+    io_allocator_state: *RecycleFBA(.{}),
     /// pipe to write to
     file: std.fs.File,
     /// channel which data is streamed into and then written to the pipe
@@ -97,7 +97,8 @@ pub const GeyserWriter = struct {
     ) !Self {
         const file = try openPipe(pipe_path);
         const io_channel = sig.sync.Channel([]u8).init(allocator, 1_000);
-        const io_allocator_state = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
+        const io_allocator_state = try allocator.create(RecycleFBA(.{}));
+        io_allocator_state.* = try RecycleFBA(.{}).init(allocator, io_fba_bytes);
 
         return .{
             .allocator = allocator,
@@ -117,6 +118,7 @@ pub const GeyserWriter = struct {
         self.io_channel.close();
         self.io_channel.deinit();
         self.io_allocator_state.deinit();
+        self.allocator.destroy(self.io_allocator_state);
     }
 
     pub fn spawnIOLoop(self: *Self) !void {
