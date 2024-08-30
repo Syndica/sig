@@ -82,7 +82,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             level: Level,
             maybe_scope: ?[]const u8,
             maybe_msg: ?[]const u8,
-            maybe_kv: anytype,
+            maybe_fields: anytype,
             comptime maybe_fmt: ?[]const u8,
             args: anytype,
         ) logfmt.LogMsg {
@@ -112,14 +112,14 @@ pub fn StandardLogger(comptime scope: ?type) type {
             }
             const log_message = fmt_message.getWritten();
 
-            // Reset buffer before re-using to construct key/value.
+            // Reset buffer before re-using to construct fields.
             fmt_message.reset();
 
             return logfmt.LogMsg{
                 .level = level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
-                .maybe_kv = logfmt.keyValueToStr(buf, maybe_kv),
+                .maybe_fields = logfmt.fieldsToStr(buf, maybe_fields),
                 .maybe_fmt = log_message,
             };
         }
@@ -138,7 +138,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
-        pub fn logWithFields(self: Self, message: []const u8, keyvalue: anytype) void {
+        pub fn logWithFields(self: Self, message: []const u8, fields: anytype) void {
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -147,7 +147,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
             var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, keyvalue, null, null);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, fields, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -164,7 +164,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
-        pub fn logfWithFields(self: Self, comptime fmt: []const u8, args: anytype, keyvalue: anytype) void {
+        pub fn logfWithFields(self: Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -173,7 +173,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
             var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, keyvalue, fmt, args);
+            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, fields, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };

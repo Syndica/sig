@@ -8,7 +8,7 @@ pub const LogMsg = struct {
     level: Level,
     maybe_scope: ?[]const u8 = null,
     maybe_msg: ?[]const u8 = null,
-    maybe_kv: ?[]const u8 = null,
+    maybe_fields: ?[]const u8 = null,
     maybe_fmt: ?[]const u8 = null,
 };
 
@@ -29,7 +29,7 @@ pub fn writeLog(
     try std.fmt.format(writer, "Z ", .{});
     try std.fmt.format(writer, "level={s} ", .{message.level.asText()});
 
-    if (message.maybe_kv) |kv| {
+    if (message.maybe_fields) |kv| {
         try std.fmt.format(writer, "{s}", .{kv});
     }
 
@@ -41,7 +41,7 @@ pub fn writeLog(
     }
 }
 
-pub fn keyValueToStr(
+pub fn fieldsToStr(
     buffer: anytype,
     args: anytype,
 ) ?[]const u8 {
