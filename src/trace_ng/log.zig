@@ -18,6 +18,7 @@ pub const Config = struct {
     level: Level = Level.debug,
     allocator: std.mem.Allocator,
     fba_bytes: u64,
+    exit_sig: *std.atomic.Value(bool),
 };
 
 const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
@@ -27,9 +28,9 @@ pub fn StandardLogger(comptime scope: ?type) type {
     return struct {
         const Self = @This();
         level: Level,
-        exit_sig: AtomicBool,
+        exit_sig: *std.atomic.Value(bool),
         allocator: Allocator,
-        free_fba: RecycleFBA,
+        recycle_fba: RecycleFBA,
         fba_bytes: u64,
         channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
@@ -37,21 +38,21 @@ pub fn StandardLogger(comptime scope: ?type) type {
         pub fn init(config: Config) Self {
             return .{
                 .allocator = config.allocator,
-                .free_fba = RecycleFBA.init(config.allocator, config.fba_bytes) catch @panic("could not create RecycleFBA"),
+                .recycle_fba = RecycleFBA.init(config.allocator, config.fba_bytes) catch @panic("could not create RecycleFBA"),
                 .fba_bytes = config.fba_bytes,
                 .level = config.level,
-                .exit_sig = AtomicBool.init(false),
+                .exit_sig = config.exit_sig,
                 .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
                 .handle = null,
             };
         }
 
-        fn unscoped(self: Self) UnscopedLogger {
+        fn unscoped(self: *Self) UnscopedLogger {
             return .{
                 .level = self.level,
                 .exit_sig = self.exit_sig,
                 .allocator = self.allocator,
-                .free_fba = self.free_fba,
+                .recycle_fba = self.recycle_fba,
                 .fba_bytes = self.fba_bytes,
                 .channel = self.channel,
                 .handle = self.handle,
@@ -63,7 +64,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .level = self.level,
                 .exit_sig = self.exit_sig,
                 .allocator = self.allocator,
-                .free_fba = self.free_fba,
+                .recycle_fba = self.recycle_fba,
                 .fba_bytes = self.fba_bytes,
                 .channel = self.channel,
                 .handle = self.handle,
@@ -81,7 +82,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 handle.join();
             }
             self.channel.deinit();
-            self.free_fba.deinit();
+            self.recycle_fba.deinit();
         }
 
         pub fn run(self: *Self) void {
@@ -100,10 +101,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
         }
 
         fn createLogMessage(
-            _: Self,
-            free_fba: *RecycleFBA,
-            total_len: u64,
-            level: Level,
+            self: *Self,
             maybe_scope: ?[]const u8,
             maybe_msg: ?[]const u8,
             maybe_fields: anytype,
@@ -111,22 +109,23 @@ pub fn StandardLogger(comptime scope: ?type) type {
             args: anytype,
         ) logfmt.LogMsg {
             // obtain a memory to write to
-            free_fba.mux.lock();
+            self.recycle_fba.mux.lock();
             const buf = blk: while (true) {
-                const buf = free_fba.allocator().alloc(u8, total_len) catch {
+                // TODO allocate based on need.
+                const buf = self.recycle_fba.allocator().alloc(u8, 256) catch {
                     // no memory available rn - unlock and wait
-                    free_fba.mux.unlock();
+                    self.recycle_fba.mux.unlock();
                     std.time.sleep(std.time.ns_per_ms);
-                    free_fba.mux.lock();
+                    self.recycle_fba.mux.lock();
                     continue;
                 };
                 break :blk buf;
             };
-            free_fba.mux.unlock();
+            self.recycle_fba.mux.unlock();
             errdefer {
-                free_fba.mux.lock();
-                free_fba.allocator().free(buf);
-                free_fba.mux.unlock();
+                self.recycle_fba.mux.lock();
+                self.recycle_fba.allocator().free(buf);
+                self.recycle_fba.mux.unlock();
             }
             var fmt_message = std.io.fixedBufferStream(buf);
             const writer = fmt_message.writer();
@@ -135,12 +134,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 std.fmt.format(writer, fmt, args) catch @panic("could not format");
             }
             const log_message = fmt_message.getWritten();
-
             // Reset buffer before re-using to construct fields.
             fmt_message.reset();
-
             return logfmt.LogMsg{
-                .level = level,
+                .level = self.level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
                 .maybe_fields = logfmt.fieldsToStr(buf, maybe_fields),
@@ -148,7 +145,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             };
         }
 
-        pub fn log(self: Self, message: []const u8) void {
+        pub fn log(self: *Self, message: []const u8) void {
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -157,12 +154,11 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, null, null, null);
+            const logMessage = self.createLogMessage(maybe_scope, message, null, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
-        pub fn logWithFields(self: Self, message: []const u8, fields: anytype) void {
+        pub fn logWithFields(self: *Self, message: []const u8, fields: anytype) void {
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -170,12 +166,11 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, message, fields, null, null);
+            const logMessage = self.createLogMessage(maybe_scope, message, fields, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
-        pub fn logf(self: Self, comptime fmt: []const u8, args: anytype) void {
+        pub fn logf(self: *Self, comptime fmt: []const u8, args: anytype) void {
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -183,12 +178,11 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, null, fmt, args);
+            const logMessage = self.createLogMessage(maybe_scope, null, null, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
-        pub fn logfWithFields(self: Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+        pub fn logfWithFields(self: *Self, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             const maybe_scope = blk: {
                 if (scope) |s| {
                     break :blk @typeName(s);
@@ -196,8 +190,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            var free_fba = self.free_fba;
-            const logMessage = self.createLogMessage(&free_fba, self.fba_bytes, self.level, maybe_scope, null, fields, fmt, args);
+            const logMessage = self.createLogMessage(maybe_scope, null, fields, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };
@@ -210,9 +203,9 @@ const Stuff = struct {
         return .{ .logger = logger.withScope(@This()) };
     }
 
-    pub fn doStuff(self: @This()) void {
-        self.logger.log("doing stuff");
-        const child = StuffChild.init(self.logger.unscoped());
+    pub fn doStuff(self: *@This()) void {
+        //self.logger.log("doing stuff");
+        var child = StuffChild.init(self.logger.unscoped());
         child.doStuffDetails();
     }
 };
@@ -224,27 +217,46 @@ const StuffChild = struct {
         return .{ .logger = logger.withScope(@This()) };
     }
 
-    pub fn doStuffDetails(self: @This()) void {
+    pub fn doStuffDetails(self: *@This()) void {
         self.logger.log("doing stuff details");
     }
 };
 
 test "trace_ng: scope switch" {
-    const allocator = std.heap.page_allocator;
+    // TODO Fix leak.
+    const allocator = std.testing.allocator;
 
-    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+    exit.* = std.atomic.Value(bool).init(false);
+
+    var logger = StandardLogger(null).init(.{
+        .allocator = allocator,
+        .exit_sig = exit,
+        .level = Level.info,
+        .fba_bytes = 2048,
+    });
     defer logger.deinit();
     logger.spawn();
 
-    const stuff = Stuff.init(logger);
+    var stuff = Stuff.init(logger);
     stuff.doStuff();
 }
 
-test "trace_ng" {
-    // TODO switch to testing allocator and fix any leaks.
-    const allocator = std.heap.page_allocator;
+test "trace_ng: testing.allocator" {
+    const allocator = std.testing.allocator;
 
-    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+    exit.* = std.atomic.Value(bool).init(false);
+
+    var logger = StandardLogger(null).init(.{
+        .allocator = allocator,
+        .exit_sig = exit,
+        .level = Level.info,
+        .fba_bytes = 2048,
+    });
+
     defer logger.deinit();
     logger.spawn();
 
