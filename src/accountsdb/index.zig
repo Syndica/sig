@@ -106,6 +106,8 @@ pub const AccountIndex = struct {
     pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
     pub const RefMap = SwissMapManaged(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
 
+    pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
+
     pub fn init(
         /// used to allocate the hashmap data
         allocator: std.mem.Allocator,
@@ -192,8 +194,6 @@ pub const AccountIndex = struct {
         const ref_head = bin.get(pubkey.*) orelse return null;
         return .{ ref_head, bin_lg };
     }
-
-    pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
     /// Get a pointer to the account reference pointer with slot `slot` and pubkey `pubkey`,
     /// alongside the write lock guard for the parent bin, and thus by extension the account
