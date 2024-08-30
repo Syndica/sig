@@ -178,8 +178,8 @@ pub fn benchmark(
         break :blk res;
     };
 
-    var _stderr = std.io.bufferedWriter(std.io.getStdErr().writer());
-    const stderr = _stderr.writer();
+    var buffered_stderr = std.io.bufferedWriter(std.io.getStdErr().writer());
+    const stderr = buffered_stderr.writer();
     try stderr.writeAll("\n");
     _ = try printBenchmark(
         stderr,

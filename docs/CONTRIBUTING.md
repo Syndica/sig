@@ -10,6 +10,13 @@ See the [readme](../readme.md#-setup).
 
 ## Style Guide
 
+### Identifiers
+
+We follow the [Zig Style](https://ziglang.org/documentation/master/#Style-Guide) guide as is reasonable.
+
+- Do not use identifier names that start with a `_`, i.e (`_foo` or `__bar`). These are the bane of all codebases and the product 
+of not enough time spent thinking about naming. Every decl is unique in some way, use that to your advantage when naming. 
+
 ### Imports 
 
 #### Sig Dependencies

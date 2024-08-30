@@ -908,23 +908,23 @@ test "bincode: test serialization" {
     var expected2 = [_]u8{ 65, 0, 0, 0, 66, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1 };
     try std.testing.expectEqualSlices(u8, &expected2, out3);
 
-    const s = struct {
+    const S = struct {
         a: u32,
         b: ?u16,
         c: Bar,
     };
-    const _s = s{
+    const s: S = .{
         .a = 65,
         .b = null,
         .c = Bar{ .a = 66, .b = 67, .c = Foo2{ .B = 16843009 } },
     };
     var buf6: [100]u8 = undefined;
-    const out4 = try writeToSlice(&buf6, _s, Params.standard);
-    const result = try readFromSlice(std.testing.allocator, s, out4, Params{});
-    try std.testing.expectEqual(result, _s);
+    const out4 = try writeToSlice(&buf6, s, Params.standard);
+    const result = try readFromSlice(std.testing.allocator, S, out4, Params{});
+    try std.testing.expectEqual(result, s);
 
     // ensure write to array works too
-    var array_buf = try writeToArray(std.testing.allocator, _s, Params.standard);
+    var array_buf = try writeToArray(std.testing.allocator, s, Params.standard);
     defer array_buf.deinit();
     try std.testing.expectEqualSlices(u8, out4, array_buf.items);
 }
