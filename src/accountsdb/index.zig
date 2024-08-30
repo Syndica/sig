@@ -302,7 +302,6 @@ pub const AccountIndex = struct {
         while (curr_ref.next_ptr) |next_ref| {
             curr_ref = next_ref;
         }
-        std.debug.assert(curr_ref.next_ptr == null);
         curr_ref.next_ptr = account_ref;
     }
 
