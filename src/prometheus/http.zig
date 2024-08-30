@@ -30,6 +30,13 @@ const MetricsEndpoint = struct {
     registry: *Registry(.{}),
 };
 
+/// Initializes the global registry. Returns error if registry was already initialized.
+/// Spawns a thread to serve the metrics over http on the given port.
+pub fn spawnMetrics(gpa_allocator: std.mem.Allocator, port: u16) !std.Thread {
+    const registry = globalRegistry();
+    return std.Thread.spawn(.{}, servePrometheus, .{ gpa_allocator, registry, port });
+}
+
 pub fn getMetrics(
     self: *const MetricsEndpoint,
     _: *httpz.Request,

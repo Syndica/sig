@@ -33,6 +33,7 @@ const Logger = sig.trace.log.Logger;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
+const Histogram = sig.prometheus.histogram.Histogram;
 const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
@@ -55,10 +56,59 @@ pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more 
 pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
 pub const AccountsDBStats = struct {
+    const HistogramKind = enum {
+        flush_account_file_size,
+        shrink_file_shrunk_by,
+        shrink_alive_accounts,
+        shrink_dead_accounts,
+        time_flush,
+        time_clean,
+        time_shrink,
+        time_purge,
+
+        fn buckets(self: HistogramKind) []const f64 {
+            const account_size_buckets = &.{
+                // 10 bytes -> 10MB (solana max account size)
+                10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000,
+            };
+            const account_count_buckets = &.{ 1, 5, 10, 50, 100, 500, 1_000, 10_000 };
+            const nanosecond_buckets = &.{
+                // 0.01ms -> 10ms
+                1_000,      10_000,      100_000,     1_000_000,   10_000_000,
+                // 50ms -> 1000ms
+                50_000_000, 100_000_000, 200_000_000, 400_000_000, 1_000_000_000,
+            };
+
+            return switch (self) {
+                .flush_account_file_size, .shrink_file_shrunk_by => account_size_buckets,
+                .shrink_alive_accounts, .shrink_dead_accounts => account_count_buckets,
+                .time_flush, .time_clean, .time_shrink, .time_purge => nanosecond_buckets,
+            };
+        }
+    };
+
     number_files_flushed: *Counter,
     number_files_cleaned: *Counter,
     number_files_shrunk: *Counter,
     number_files_deleted: *Counter,
+
+    time_flush: *Histogram,
+    time_clean: *Histogram,
+    time_shrink: *Histogram,
+    time_purge: *Histogram,
+
+    flush_account_file_size: *Histogram,
+    flush_accounts_written: *Counter,
+
+    clean_references_deleted: *Counter,
+    clean_files_queued_deletion: *Counter,
+    clean_files_queued_shrink: *Counter,
+    clean_slot_old_state: *Counter,
+    clean_slot_zero_lamports: *Counter,
+
+    shrink_file_shrunk_by: *Histogram,
+    shrink_alive_accounts: *Histogram,
+    shrink_dead_accounts: *Histogram,
 
     const Self = @This();
 
@@ -67,8 +117,19 @@ pub const AccountsDBStats = struct {
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(Self).Struct;
         inline for (stats_struct_info.fields) |field| {
-            const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
-            @field(self, field.name) = field_counter;
+            @field(self, field.name) = switch (field.type) {
+                *Counter => try registry.getOrCreateCounter(field.name),
+                *Histogram => blk: {
+                    @setEvalBranchQuota(2000); // stringToEnum requires a little more than default
+                    const histogram_kind = comptime std.meta.stringToEnum(
+                        HistogramKind,
+                        field.name,
+                    ) orelse @compileError("no matching HistogramKind for AccountsDBStats *Histogram field");
+
+                    break :blk try registry.getOrCreateHistogram(field.name, histogram_kind.buckets());
+                },
+                else => @compileError("Unsupported field type"),
+            };
         }
         return self;
     }
@@ -1392,6 +1453,8 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     /// Returns the unclean file id.
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
+        var timer = try sig.time.Timer.start();
+
         defer self.stats.number_files_flushed.inc();
 
         const pubkeys, const accounts: []const Account = blk: {
@@ -1408,8 +1471,11 @@ pub const AccountsDB = struct {
         // create account file which is big enough
         var size: usize = 0;
         for (accounts) |*account| {
-            size += account.getSizeInFile();
+            const account_size_in_file = account.getSizeInFile();
+            size += account_size_in_file;
+            self.stats.flush_account_file_size.observe(@floatFromInt(account_size_in_file));
         }
+
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
@@ -1435,6 +1501,8 @@ pub const AccountsDB = struct {
             try file_map.putNoClobber(self.allocator, file_id, account_file);
         }
 
+        self.stats.flush_accounts_written.add(account_file.number_of_accounts);
+
         // update the reference AFTER the data exists
         for (pubkeys, offsets) |pubkey, offset| {
             var head_reference_rw = self.account_index.getReference(&pubkey) orelse return error.PubkeyNotFound;
@@ -1458,6 +1526,8 @@ pub const AccountsDB = struct {
             std.debug.assert(did_update);
         }
 
+        self.logger.debugf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
+
         // remove old references
         {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
@@ -1474,6 +1544,8 @@ pub const AccountsDB = struct {
             self.allocator.free(accounts);
             self.allocator.free(pubkeys);
         }
+
+        self.stats.time_flush.observe(@floatFromInt(timer.read().asNanos()));
 
         // return to queue for cleaning
         return file_id;
@@ -1495,6 +1567,8 @@ pub const AccountsDB = struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
+        var timer = try sig.time.Timer.start();
+
         defer {
             const number_of_files = unclean_account_files.len;
             self.stats.number_files_cleaned.add(number_of_files);
@@ -1524,8 +1598,6 @@ pub const AccountsDB = struct {
                 defer file_map_lg.unlock();
                 break :blk file_map.get(file_id).?;
             };
-
-            // self.logger.debugf("cleaning slot: {}...", .{account_file.slot});
 
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
@@ -1620,8 +1692,19 @@ pub const AccountsDB = struct {
                 }
             }
             references_to_delete.clearRetainingCapacity();
+            self.stats.clean_references_deleted.set(references_to_delete.items.len);
+            self.logger.debugf(
+                "cleaned slot {} - old_state: {}, zero_lamports: {}",
+                .{ account_file.slot, num_old_states, num_zero_lamports },
+            );
         }
 
+        self.stats.clean_files_queued_deletion.set(delete_account_files.count());
+        self.stats.clean_files_queued_shrink.set(delete_account_files.count());
+        self.stats.clean_slot_old_state.set(num_old_states);
+        self.stats.clean_slot_zero_lamports.set(num_zero_lamports);
+
+        self.stats.time_clean.observe(@floatFromInt(timer.read().asNanos()));
         return .{
             .num_zero_lamports = num_zero_lamports,
             .num_old_states = num_old_states,
@@ -1718,6 +1801,8 @@ pub const AccountsDB = struct {
         shrink_account_files: []const FileId,
         delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
+        var timer = try sig.time.Timer.start();
+
         defer {
             const number_of_files = shrink_account_files.len;
             self.stats.number_files_shrunk.add(number_of_files);
@@ -1756,6 +1841,7 @@ pub const AccountsDB = struct {
             try alive_pubkeys.ensureTotalCapacity(shrink_account_file.number_of_accounts);
 
             var accounts_alive_size: u64 = 0;
+            var accounts_dead_size: u64 = 0;
             var account_iter = shrink_account_file.iterator();
             while (account_iter.next()) |*account_in_file| {
                 const pubkey = account_in_file.pubkey();
@@ -1770,6 +1856,7 @@ pub const AccountsDB = struct {
                     is_alive_flags.appendAssumeCapacity(true);
                     alive_pubkeys.putAssumeCapacity(pubkey.*, {});
                 } else {
+                    accounts_dead_size += account_in_file.getSizeInFile();
                     accounts_dead_count += 1;
                     is_alive_flags.appendAssumeCapacity(false);
                 }
@@ -1779,6 +1866,14 @@ pub const AccountsDB = struct {
             // if there are no dead accounts, it should have not been queued for shrink
             std.debug.assert(accounts_dead_count > 0);
             total_accounts_deleted += accounts_dead_count;
+
+            self.stats.shrink_alive_accounts.observe(@floatFromInt(accounts_alive_count));
+            self.stats.shrink_dead_accounts.observe(@floatFromInt(accounts_dead_count));
+            self.stats.shrink_file_shrunk_by.observe(@floatFromInt(accounts_dead_size));
+
+            self.logger.debugf("n alive accounts: {}", .{accounts_alive_count});
+            self.logger.debugf("n dead accounts: {}", .{accounts_dead_count});
+            self.logger.debugf("shrunk by: {}", .{accounts_dead_size});
 
             // alloc account file for accounts
             const new_file, const new_file_id, const new_memory = try self.createAccountFile(
@@ -1883,6 +1978,8 @@ pub const AccountsDB = struct {
             }
         }
 
+        self.stats.time_shrink.observe(@floatFromInt(timer.read().asNanos()));
+
         return .{
             .num_accounts_deleted = total_accounts_deleted,
         };
@@ -1893,6 +1990,8 @@ pub const AccountsDB = struct {
     /// only exist in the cache, and not on disk). this is mainly used for dropping
     /// forks.
     pub fn purgeSlot(self: *Self, slot: Slot) void {
+        var timer = sig.time.Timer.start() catch @panic("Timer unsupported");
+
         const pubkeys, const accounts = blk: {
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
             defer account_cache_lg.unlock();
@@ -1942,6 +2041,8 @@ pub const AccountsDB = struct {
         }
         self.allocator.free(accounts);
         self.allocator.free(pubkeys);
+
+        self.stats.time_purge.observe(@floatFromInt(timer.read().asNanos()));
     }
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data

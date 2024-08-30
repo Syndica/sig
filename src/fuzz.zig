@@ -1,11 +1,14 @@
 const std = @import("std");
 const sig = @import("sig.zig");
+const config = @import("./cmd/config.zig");
 
 const accountsdb_fuzz = sig.accounts_db.fuzz;
 const gossip_fuzz_service = sig.gossip.fuzz_service;
 const gossip_fuzz_table = sig.gossip.fuzz_table;
 const accountsdb_snapshot_fuzz = sig.accounts_db.fuzz_snapshot;
 const logger = sig.trace.log;
+
+const spawnMetrics = sig.prometheus.spawnMetrics;
 
 // where seeds are saved (in case of too many logs)
 const SEED_FILE_PATH = sig.TEST_DATA_DIR ++ "fuzz_seeds.txt";
@@ -26,6 +29,10 @@ pub fn main() !void {
 
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
+
+    logger.default_logger.infof("metrics port: {d}", .{config.current.metrics_port});
+    const metrics_thread = try spawnMetrics(allocator, config.current.metrics_port);
+    errdefer metrics_thread.detach();
 
     _ = cli_args.skip();
     const filter = blk: {
