@@ -22,7 +22,7 @@ pub const Config = struct {
 
 const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
 
-const Logger = StandardLogger(null);
+const UnscopedLogger = StandardLogger(null);
 pub fn StandardLogger(comptime scope: ?type) type {
     return struct {
         const Self = @This();
@@ -43,6 +43,30 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .exit_sig = AtomicBool.init(false),
                 .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
                 .handle = null,
+            };
+        }
+
+        fn unscoped(self: Self) UnscopedLogger {
+            return .{
+                .level = self.level,
+                .exit_sig = self.exit_sig,
+                .allocator = self.allocator,
+                .free_fba = self.free_fba,
+                .fba_bytes = self.fba_bytes,
+                .channel = self.channel,
+                .handle = self.handle,
+            };
+        }
+
+        fn withScope(self: Self, comptime new_scope: anytype) StandardLogger(new_scope) {
+            return .{
+                .level = self.level,
+                .exit_sig = self.exit_sig,
+                .allocator = self.allocator,
+                .free_fba = self.free_fba,
+                .fba_bytes = self.fba_bytes,
+                .channel = self.channel,
+                .handle = self.handle,
             };
         }
 
@@ -179,44 +203,48 @@ pub fn StandardLogger(comptime scope: ?type) type {
     };
 }
 
-// const Stuff = struct {
-//     logger: StandardLogger(@This()),
+const Stuff = struct {
+    logger: StandardLogger(@This()),
 
-//     pub fn init(logger: Logger) @This() {
-//         return .{ .logger = logger.withScope(@This()) };
-//     }
+    pub fn init(logger: UnscopedLogger) @This() {
+        return .{ .logger = logger.withScope(@This()) };
+    }
 
-//     pub fn doStuff(self: @This()) void {
-//         self.logger.info().log("doing stuff");
-//         const child = StuffChild.init(self.logger.unscoped());
-//         child.doStuffDetails();
-//     }
-// };
+    pub fn doStuff(self: @This()) void {
+        self.logger.log("doing stuff");
+        const child = StuffChild.init(self.logger.unscoped());
+        child.doStuffDetails();
+    }
+};
 
-// const StuffChild = struct {
-//     logger: ScopedLogger(@This()),
+const StuffChild = struct {
+    logger: StandardLogger(@This()),
 
-//     pub fn init(logger: Logger) @This() {
-//         return .{ .logger = logger.withScope(@This()) };
-//     }
+    pub fn init(logger: UnscopedLogger) @This() {
+        return .{ .logger = logger.withScope(@This()) };
+    }
 
-//     pub fn doStuffDetails(self: @This()) void {
-//         self.logger.info().log("doing stuff details");
-//     }
-// };
+    pub fn doStuffDetails(self: @This()) void {
+        self.logger.log("doing stuff details");
+    }
+};
 
-// test "trace_ng: scope switch" {
-//     const logger: Logger = Logger.init(.{});
-//     logger.info().log("starting the app");
-//     const stuff = Stuff.init(logger);
-//     stuff.doStuff();
-// }
+test "trace_ng: scope switch" {
+    const allocator = std.heap.page_allocator;
+
+    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
+    defer logger.deinit();
+    logger.spawn();
+
+    const stuff = Stuff.init(logger);
+    stuff.doStuff();
+}
 
 test "trace_ng" {
     // TODO switch to testing allocator and fix any leaks.
     const allocator = std.heap.page_allocator;
 
-    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 25 });
+    var logger = StandardLogger(null).init(.{ .allocator = allocator, .level = Level.info, .fba_bytes = 1 << 18 });
     defer logger.deinit();
     logger.spawn();
 
