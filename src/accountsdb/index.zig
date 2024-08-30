@@ -234,8 +234,8 @@ pub const AccountIndex = struct {
     }
 
     pub fn exists(self: *Self, pubkey: *const Pubkey, slot: Slot) bool {
-        const head_ref, var head_ref_lg = self.getReferenceHeadRead(pubkey) orelse return false;
-        defer head_ref_lg.unlock();
+        const head_ref, var bin_lg = self.getReferenceHeadRead(pubkey) orelse return false;
+        defer bin_lg.unlock();
 
         // find the slot in the reference list
         var curr_ref: ?*AccountRef = head_ref.ref_ptr;
