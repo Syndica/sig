@@ -1,17 +1,20 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
+
 const bincode = sig.bincode;
 
-const Hash = sig.core.Hash;
 const ArrayList = std.ArrayList;
-const Bloom = sig.bloom.Bloom;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
+
+const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
-const GossipTable = sig.gossip.table.GossipTable;
-const SignedGossipData = sig.gossip.data.SignedGossipData;
+const Bloom = sig.bloom.Bloom;
+const GossipTable = sig.gossip.GossipTable;
+const SignedGossipData = sig.gossip.SignedGossipData;
 const RwMux = sig.sync.RwMux;
 
 const exp = std.math.exp;
+const shuffleFirstN = sig.utils.slice.shuffleFirstN;
 
 pub const MAX_BLOOM_SIZE: usize = 928;
 pub const MAX_NUM_PULL_REQUESTS: usize = 20; // labs - 1024;
@@ -68,13 +71,6 @@ pub fn deinitGossipPullFilters(filters: *ArrayList(GossipPullFilter)) void {
         filter.deinit();
     }
     filters.deinit();
-}
-
-pub fn shuffleFirstN(rng: std.rand.Random, comptime T: type, buf: []T, n: usize) void {
-    for (0..n) |i| {
-        const j = rng.intRangeLessThan(usize, 0, buf.len);
-        std.mem.swap(T, &buf[i], &buf[j]);
-    }
 }
 
 pub const GossipPullFilterSet = struct {
@@ -341,7 +337,7 @@ test "filter set deinits correct" {
     try std.testing.expect(x.filter.contains(&hash.data));
 }
 
-test "GossipPullFilter helper methods are correct" {
+test "helper functions are correct" {
     {
         const v = GossipPullFilter.computeMaxItems(100.5, 0.1, 10.0);
         try std.testing.expectEqual(@as(f64, 16), v);

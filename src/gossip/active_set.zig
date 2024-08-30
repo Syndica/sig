@@ -13,7 +13,7 @@ const ThreadSafeContactInfo = sig.gossip.data.ThreadSafeContactInfo;
 const GossipTable = sig.gossip.table.GossipTable;
 
 const getWallclockMs = sig.time.getWallclockMs;
-const shuffleFirstN = sig.gossip.pull_request.shuffleFirstN;
+const shuffleFirstN = sig.utils.slice.shuffleFirstN;
 
 const NUM_ACTIVE_SET_ENTRIES: usize = 25;
 pub const GOSSIP_PUSH_FANOUT: usize = 6;

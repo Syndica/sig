@@ -6,6 +6,8 @@ const KeyPair = Ed25519.KeyPair;
 const Signature = sig.core.Signature;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
+
+const indexOf = sig.utils.slice.indexOf;
 const ShortVecConfig = sig.bincode.shortvec.ShortVecConfig;
 
 pub const VersionedTransaction = struct {
@@ -436,13 +438,6 @@ pub fn transfer(allocator: std.mem.Allocator, from_pubkey: Pubkey, to_pubkey: Pu
     account_metas[0] = AccountMeta.newMutable(from_pubkey, true);
     account_metas[1] = AccountMeta.newMutable(to_pubkey, false);
     return try Instruction.initSystemInstruction(allocator, SystemInstruction{ .Transfer = .{ .lamports = lamports } }, account_metas);
-}
-
-/// TODO: Move to a more general location.
-fn indexOf(comptime T: type, slice: []const T, value: T) ?usize {
-    for (slice, 0..) |element, index| {
-        if (std.meta.eql(value, element)) return index;
-    } else return null;
 }
 
 pub fn compileInstruction(allocator: std.mem.Allocator, instruction: Instruction, account_keys: []const Pubkey) !CompiledInstruction {
