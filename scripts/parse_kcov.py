@@ -19,7 +19,7 @@ filtered_files.sort(key=lambda x: float(x["percent_covered"]))
 
 output = ""
 for file_info in filtered_files:
-    path = file_info["file"].split("sig/")[1]
+    path = file_info["file"].split("sig/")[-1]
     file_coverage = float(file_info["percent_covered"])
 
     # Determine the color based on the coverage percentage
