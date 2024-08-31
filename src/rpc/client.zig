@@ -83,14 +83,6 @@ pub const Client = struct {
         rewards: ?bool = null,
     };
 
-    pub fn getBlock(self: *Client, allocator: std.mem.Allocator, slot: Slot, config: GetBlockConfig) !Response(?types.Block) {
-        var request = try Request.init(allocator, "getBlock");
-        defer request.deinit();
-        try request.addParameter(slot);
-        try request.addConfig(config);
-        return self.sendFetchRequest(allocator, ?types.Block, request);
-    }
-
     pub fn getBlockCommitment(self: *Client, allocator: std.mem.Allocator, block: u64) !Response(types.BlockCommitment) {
         var request = try Request.init(allocator, "getBlockCommitment");
         defer request.deinit();
@@ -343,20 +335,6 @@ test "getBalance" {
     defer client.deinit();
     const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
     const response = try client.getBalance(allocator, pubkey, .{});
-    defer response.deinit();
-    _ = try response.result();
-}
-
-test "getBlock" {
-    const allocator = std.testing.allocator;
-    var client = Client.init(allocator, .Testnet, .{});
-    defer client.deinit();
-    const block_response = try client.getSlot(allocator, .{ .commitment = .finalized });
-    defer block_response.deinit();
-    const response = try client.getBlock(allocator, block_response.parsed.result.?, .{
-        .transactionDetails = "none",
-        .rewards = false,
-    });
     defer response.deinit();
     _ = try response.result();
 }

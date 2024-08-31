@@ -6,16 +6,16 @@ pub const Commitment = enum {
     processed,
 };
 
+pub const Context = struct {
+    slot: u64,
+    apiVersion: []const u8,
+};
+
 pub const AccountInfo = struct {
     context: Context,
     value: Value,
 
-    const Context = struct {
-        slot: u64,
-        apiVersion: []const u8,
-    };
-
-    const Value = struct {
+    pub const Value = struct {
         data: []const u8,
         executable: bool,
         lamports: u64,
@@ -28,48 +28,18 @@ pub const AccountInfo = struct {
 pub const Balance = struct {
     context: Context,
     value: u64,
-
-    const Context = struct {
-        slot: u64,
-        apiVersion: []const u8,
-    };
-
-    pub fn deinit(self: *const Balance, allocator: std.mem.Allocator) void {
-        allocator.free(self.context.apiVersion);
-    }
-};
-
-pub const Block = struct {
-    blockhash: []const u8,
-    previousBlockhash: []const u8,
-    parentSlot: u64,
-    blockTime: ?u64 = null,
-    blockHeight: ?u64 = null,
-    transactions: ?[]const _Transaction = null,
-    signatures: ?[]const _Signature = null,
-    rewards: ?[]const _Rewards = null,
-
-    const _Transaction = struct {
-        // TODO: Implement
-    };
-
-    const _Signature = struct {
-        // TODO: Implement
-    };
-
-    const _Rewards = struct {
-        pubkey: []const u8,
-        lamports: u64,
-        postBalance: u64,
-        rewardType: ?[]const u8,
-        commission: ?u8,
-    };
 };
 
 pub const BlockCommitment = struct {
     commitment: ?[]const u64,
     totalStake: u64,
 };
+
+// TODO: BlockProduction
+// TODO: BlockTime
+// TODO: Blocks
+// TODO: BlocksWithLimit
+// TODO: ClusterNodes
 
 pub const EpochInfo = struct {
     absoluteSlot: u64,
@@ -80,16 +50,23 @@ pub const EpochInfo = struct {
     transactionCount: u64,
 };
 
+// TODO: EpochSchedule
+// TODO: FeeForMessage
+// TODO: FirstAvailableBlock
+// TODO: GenesisHash
+// TODO: Health
+// TODO: HighestSnapshotSlot
+// TODO: Identity
+// TODO: InflationGovernor
+// TODO: InflationRate
+// TODO: InflationReward
+// TODO: LargeAccounts
+
 pub const LatestBlockhash = struct {
     context: Context,
     value: Value,
 
-    const Context = struct {
-        slot: u64,
-        apiVersion: []const u8,
-    };
-
-    const Value = struct {
+    pub const Value = struct {
         blockhash: []const u8,
         lastValidBlockHeight: u64,
     };
@@ -97,14 +74,17 @@ pub const LatestBlockhash = struct {
 
 pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
 
+// TODO: MaxRetransmitSlot
+// TODO: MaxShredInsertSlot
+// TODO: MinimumBalanceForRentExemption
+// TODO: MultipleAccounts
+// TODO: ProgramAccounts
+// TODO: RecentPerformanceSamples
+// TODO: RecentPrioritizationFees
+
 pub const SignatureStatuses = struct {
     context: Context,
     value: []const ?Status,
-
-    pub const Context = struct {
-        apiVersion: []const u8,
-        slot: u64,
-    };
 
     pub const Status = struct {
         slot: u64,
