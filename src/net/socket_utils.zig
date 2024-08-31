@@ -126,7 +126,7 @@ pub const BenchmarkPacketProcessing = struct {
         const n_packets = bench_args.n_packets;
         const allocator = std.heap.page_allocator;
 
-        var channel = Channel(Packet).init(allocator, n_packets);
+        var channel = try Channel(Packet).init(allocator, n_packets);
         defer channel.deinit();
 
         var socket = try UdpSocket.create(.ipv4, .udp);

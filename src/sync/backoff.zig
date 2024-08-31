@@ -2,13 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const Backoff = struct {
-    step: u32,
+    step: u32 = 0,
 
     const SPIN_LIMIT = 6;
-
-    pub fn init() Backoff {
-        return .{ .step = 0 };
-    }
 
     pub fn snooze(_: *Backoff) void {
         switch (builtin.cpu.arch) {

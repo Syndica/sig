@@ -17,22 +17,15 @@ pub fn Channel(T: type) type {
         const SHIFT = 1;
         const LAP = 32;
 
-        const WRITE: usize = 0b01;
-        const READ: usize = 0b10;
-        const DESTROY: usize = 0b100;
+        const WRITTEN_TO: usize = 0b01;
+        const READ_FROM: usize = 0b10;
+        const DESTROYED: usize = 0b100;
 
         const HAS_NEXT: usize = 0b01;
 
         const Position = struct {
             index: Atomic(usize),
             block: Atomic(?*Buffer),
-
-            fn init() Position {
-                return .{
-                    .index = Atomic(usize).init(0),
-                    .block = Atomic(?*Buffer).init(null),
-                };
-            }
 
             fn deinit(pos: *Position, allocator: Allocator) void {
                 if (pos.block.load(.monotonic)) |block| {
@@ -57,8 +50,8 @@ pub fn Channel(T: type) type {
                 for (start..BLOCK_CAP - 1) |i| {
                     const slot = &block.slots[i];
 
-                    if (slot.state.load(.acquire) & READ == 0 and
-                        slot.state.fetchOr(DESTROY, .acq_rel) & READ == 0)
+                    if (slot.state.load(.acquire) & READ_FROM == 0 and
+                        slot.state.fetchOr(DESTROYED, .acq_rel) & READ_FROM == 0)
                     {
                         return;
                     }
@@ -85,23 +78,28 @@ pub fn Channel(T: type) type {
             };
         };
 
-        pub fn init(allocator: Allocator, initial_capacity: usize) Self {
+        pub fn init(allocator: Allocator, initial_capacity: usize) !Self {
             _ = initial_capacity; // TODO: do something with this
+            const first_block = try Buffer.create(allocator);
+            const first_position: Position = .{
+                .index = Atomic(usize).init(0),
+                .block = Atomic(?*Buffer).init(first_block),
+            };
             return .{
-                .head = Position.init(),
-                .tail = Position.init(),
+                .head = first_position,
+                .tail = first_position,
                 .allocator = allocator,
             };
         }
 
         pub fn create(allocator: Allocator, initial_capacity: usize) !*Self {
             const channel = try allocator.create(Self);
-            channel.* = Self.init(allocator, initial_capacity);
+            channel.* = try Self.init(allocator, initial_capacity);
             return channel;
         }
 
         pub fn send(channel: *Self, value: T) !void {
-            var backoff = Backoff.init();
+            var backoff: Backoff = .{};
             var tail = channel.tail.index.load(.acquire);
             var block = channel.tail.block.load(.acquire);
             var next_block: ?*Buffer = null;
@@ -109,6 +107,8 @@ pub fn Channel(T: type) type {
             while (true) {
                 const offset = (tail >> SHIFT) % LAP;
                 if (offset == BLOCK_CAP) {
+                    // Another block has incremented the tail index before us,
+                    // we need to wait for the next block to be installed.
                     backoff.snooze();
                     tail = channel.tail.index.load(.acquire);
                     block = channel.tail.block.load(.acquire);
@@ -119,52 +119,55 @@ pub fn Channel(T: type) type {
                     next_block = try Buffer.create(channel.allocator);
                 }
 
-                if (block == null) {
-                    const new = try Buffer.create(channel.allocator);
-
-                    if (channel.tail.block.cmpxchgStrong(block, new, .release, .monotonic) == null) {
-                        channel.head.block.store(new, .release);
-                        block = new;
-                    } else {
-                        next_block = new;
-                        tail = channel.tail.index.load(.acquire);
-                        block = channel.tail.block.load(.acquire);
-                        continue;
-                    }
-                }
-
                 const new_tail = tail + (1 << SHIFT);
 
+                // Try to increment the tail index by one to block all future producers
+                // until we install the next_block and next_index.
                 if (channel.tail.index.cmpxchgWeak(tail, new_tail, .seq_cst, .acquire)) |t| {
+                    // We failed the CAS, another thread has installed a new tail index.
                     tail = t;
                     block = channel.tail.block.load(.acquire);
                     backoff.spin();
                 } else {
+                    // We won the race, now we install the next_block and next_index for other threads
+                    // to see and unblock.
                     if (offset + 1 == BLOCK_CAP) {
+                        // We're now one over the block cap and the next slot we write to
+                        // will be inside of the next block. Wrap the offset around the block,
+                        // and shift to get the next index.
                         const next_index = new_tail +% (1 << SHIFT);
                         channel.tail.block.store(next_block, .release);
                         channel.tail.index.store(next_index, .release);
                         block.?.next.store(next_block, .release);
                     } else if (next_block) |b| {
+                        // When you win the CAS the time other threads snooze is from the CAS to the tail.index store above.
+                        // Moving allocation after the CAS increases the amount of time other threads must snooze.
+                        // Moving the allocation before the CAS lowers it, but you need to handle the install
+                        // failures by de-allocating the next_block.
                         channel.allocator.destroy(b);
                     }
 
                     const slot = &block.?.slots[offset];
                     slot.value = value;
-                    _ = slot.state.fetchOr(WRITE, .release);
+                    // Release the exclusive lock on the slot's value, which allows a consumer
+                    // to read the data we've just assigned.
+                    _ = slot.state.fetchOr(WRITTEN_TO, .release);
                     return;
                 }
             }
         }
 
         pub fn receive(channel: *Self) ?T {
-            var backoff = Backoff.init();
+            var backoff: Backoff = .{};
             var head = channel.head.index.load(.acquire);
             var block = channel.head.block.load(.acquire);
 
             while (true) {
+                // Shift away the meta-data bits and get the index into whichever block we're in.
                 const offset = (head >> SHIFT) % LAP;
 
+                // This means another thread has begun the process of installing a new head block and index,
+                // we just need to wait until that's done.
                 if (offset == BLOCK_CAP) {
                     backoff.snooze();
                     head = channel.head.index.load(.acquire);
@@ -172,34 +175,42 @@ pub fn Channel(T: type) type {
                     continue;
                 }
 
+                // After we consume this, this will be our next head.
                 var new_head = head + (1 << SHIFT);
 
+                // A bit confusing, but this checks if the current head *doesn't* have a next block linked.
+                // It's encoded as a bit in order to be able to tell without dereferencing it.
                 if (new_head & HAS_NEXT == 0) {
+                    // A rare usecase for fence :P, we need to create a barrier before anything else modifying
+                    // the index. This is just easier than creating an acquire-release pair.
                     channel.tail.index.fence(.seq_cst);
                     const tail = channel.tail.index.load(.monotonic);
 
+                    // If the indicies are the same, the channel is empty and there's nothing to receive.
                     if (head >> SHIFT == tail >> SHIFT) {
                         return null;
                     }
 
+                    // The head index must always be less than or equal to the tail index.
+                    // Using this invariance, we can prove that if the head is in a different block than
+                    // the tail, it *must* be ahead of it and in a "next" block. Hence we set the "HAS_NEXT"
+                    // bit in the index.
                     if ((head >> SHIFT) / LAP != (tail >> SHIFT) / LAP) {
                         new_head |= HAS_NEXT;
                     }
                 }
 
-                if (block == null) {
-                    backoff.snooze();
-                    head = channel.head.index.load(.acquire);
-                    block = channel.head.block.load(.acquire);
-                    continue;
-                }
-
+                // Try to install a new head index.
                 if (channel.head.index.cmpxchgWeak(head, new_head, .seq_cst, .acquire)) |h| {
+                    // We lost the install race against something, the new head index is acquired,
+                    // and we update the block as it could have changed due to a new block being installed.
                     head = h;
                     block = channel.head.block.load(.acquire);
                     backoff.spin();
                 } else {
+                    // There is a consumer on the other end that should be installing the next block right now.
                     if (offset + 1 == BLOCK_CAP) {
+                        // Wait until it installs the next block and update the references.
                         const next = while (true) {
                             backoff.snooze();
                             const next = block.?.next.load(.acquire);
@@ -215,13 +226,20 @@ pub fn Channel(T: type) type {
                         channel.head.index.store(next_index, .release);
                     }
 
+                    // Now we should have a stable reference to a slot. Loop if there's a producer
+                    // currently writing to this slot.
                     const slot = &block.?.slots[offset];
-                    while (slot.state.load(.acquire) & WRITE == 0) {}
+                    while (slot.state.load(.acquire) & WRITTEN_TO == 0) {
+                        backoff.snooze();
+                    }
                     const value = slot.value;
 
+                    // If this is the last block, we can just destroy it.
                     if (offset + 1 == BLOCK_CAP) {
                         block.?.destroy(0, channel.allocator);
-                    } else if (slot.state.fetchOr(READ, .acq_rel) & DESTROY != 0) {
+                    } else
+                    // Set the slot as READ_FROM, and if DESTROYED was set, destroy the block.
+                    if (slot.state.fetchOr(READ_FROM, .acq_rel) & DESTROYED != 0) {
                         block.?.destroy(offset + 1, channel.allocator);
                     }
 
@@ -235,24 +253,34 @@ pub fn Channel(T: type) type {
                 var tail = channel.tail.index.load(.seq_cst);
                 var head = channel.head.index.load(.seq_cst);
 
+                // Make sure `tail` wasn't modified while we were loading `head`.
                 if (channel.tail.index.load(.seq_cst) == tail) {
+                    // Shift out the bottom bit, which is used to indicate whether
+                    // there is a next link in the block.
                     tail &= ~((@as(usize, 1) << SHIFT) - 1);
                     head &= ~((@as(usize, 1) << SHIFT) - 1);
 
-                    if ((tail >> SHIFT) & (LAP - 1) == (LAP - 1)) {
+                    // We're waiting for another thread to install the next_block
+                    // and next_index, so we "mock" increment our tail as if it was installed.
+                    if ((tail >> SHIFT) % (LAP - 1) == (LAP - 1)) {
                         tail +%= (1 << SHIFT);
                     }
-                    if ((head >> SHIFT) & (LAP - 1) == (LAP - 1)) {
+                    if ((head >> SHIFT) % (LAP - 1) == (LAP - 1)) {
                         head +%= (1 << SHIFT);
                     }
 
+                    // Calculate on which block link we're on. Between 0-31 is block 1, 32-63 is block 2, etc.
                     const lap = (head >> SHIFT) / LAP;
+                    // Rotates the indices to fall into the first slot.
+                    // (lap * LAP) is the first index of the block we're in.
                     tail -%= (lap * LAP) << SHIFT;
                     head -%= (lap * LAP) << SHIFT;
 
+                    // Remove the lower bits.
                     tail >>= SHIFT;
                     head >>= SHIFT;
 
+                    // Return the difference minus the number of blocks between tail and head.
                     return tail - head - tail / LAP;
                 }
             }
@@ -261,6 +289,7 @@ pub fn Channel(T: type) type {
         pub fn isEmpty(channel: *Self) bool {
             const head = channel.head.index.load(.seq_cst);
             const tail = channel.tail.index.load(.seq_cst);
+            // The channel is empty if the indices are pointing at the same slot.
             return (head >> SHIFT) == (tail >> SHIFT);
         }
 
@@ -298,7 +327,7 @@ pub fn Channel(T: type) type {
 const expect = std.testing.expect;
 
 test "smoke" {
-    var ch = Channel(u32).init(std.testing.allocator, 0);
+    var ch = try Channel(u32).init(std.testing.allocator, 0);
     defer ch.deinit();
 
     try ch.send(7);
@@ -310,7 +339,7 @@ test "smoke" {
 }
 
 test "len_empty_full" {
-    var ch = Channel(u32).init(std.testing.allocator, 0);
+    var ch = try Channel(u32).init(std.testing.allocator, 0);
     defer ch.deinit();
 
     try expect(ch.len() == 0);
@@ -328,7 +357,7 @@ test "len_empty_full" {
 }
 
 test "len" {
-    var ch = Channel(u64).init(std.testing.allocator, 0);
+    var ch = try Channel(u64).init(std.testing.allocator, 0);
     defer ch.deinit();
 
     try expect(ch.len() == 0);
@@ -368,7 +397,7 @@ test "spsc" {
         }
     };
 
-    var ch = Channel(u64).init(std.testing.allocator, 0);
+    var ch = try Channel(u64).init(std.testing.allocator, 0);
     defer ch.deinit();
 
     const consumer = try std.Thread.spawn(.{}, S.consumer, .{&ch});
@@ -401,7 +430,7 @@ test "mpmc" {
 
     var v: [COUNT]Atomic(usize) = .{Atomic(usize).init(0)} ** COUNT;
 
-    var ch = Channel(u64).init(std.testing.allocator, 0);
+    var ch = try Channel(u64).init(std.testing.allocator, 0);
     defer ch.deinit();
 
     var c_threads: [THREADS]std.Thread = undefined;
@@ -514,7 +543,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
-        var channel = Channel(usize).init(allocator, n_items / 2);
+        var channel = try Channel(usize).init(allocator, n_items / 2);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;
@@ -550,7 +579,7 @@ pub const BenchmarkChannel = struct {
         var timer = try std.time.Timer.start();
 
         const allocator = std.heap.page_allocator;
-        var channel = Channel(Packet).init(allocator, n_items / 2);
+        var channel = try Channel(Packet).init(allocator, n_items / 2);
         defer channel.deinit();
 
         const sends_per_sender: usize = n_items / senders_count;
