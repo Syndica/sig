@@ -1,6 +1,4 @@
 import json
-
-# read path from cli
 import sys
 
 if len(sys.argv) != 2:
@@ -11,19 +9,17 @@ coverage_path = sys.argv[1]
 with open(coverage_path, "r") as f:
     coverage = json.load(f)
 
-max_path_length = max(len(file_info["file"]) for file_info in coverage["files"])
+filtered_files = [
+    file_info for file_info in coverage["files"]
+    if "sig/" in file_info["file"]
+]
 
-# order by coverage percentage
-coverage["files"].sort(key=lambda x: float(x["percent_covered"]), reverse=False)
+max_path_length = max(len(file_info["file"].split("sig/")[1]) for file_info in filtered_files)
+filtered_files.sort(key=lambda x: float(x["percent_covered"]))
 
 output = ""
-for file_info in coverage["files"]:
-    path = file_info["file"]
-    split_path = path.split("sig/")
-    if len(split_path) < 2:
-        # this means the file is not part of sig, so we can ignore it
-        continue
-    path = split_path[1]
+for file_info in filtered_files:
+    path = file_info["file"].split("sig/")[1]
     file_coverage = float(file_info["percent_covered"])
 
     # Determine the color based on the coverage percentage
@@ -36,6 +32,6 @@ for file_info in coverage["files"]:
 
     # Reset color
     reset = "\033[0m"
-    output += f"{color}{path:<{max_path_length}} --- {file_coverage:>10}%{reset}\n"
+    output += f"{color}{path:<{max_path_length}} --- {file_coverage:>10.2f}%{reset}\n"
 
 print(output)
