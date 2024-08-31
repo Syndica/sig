@@ -46,9 +46,9 @@ pub const MockTransferService = struct {
             std.time.sleep(Duration.fromSecs(10).asNanos());
 
             const latest_blockhash, const last_valid_blockheight = blk: {
-                const blockhash_result = try rpc_client.getLatestBlockhash(self.allocator, .{});
-                defer blockhash_result.deinit();
-                const blockhash = blockhash_result.value;
+                const blockhash_response = try rpc_client.getLatestBlockhash(self.allocator, .{});
+                defer blockhash_response.deinit();
+                const blockhash = try blockhash_response.result();
                 break :blk .{
                     try Hash.parseBase58String(blockhash.value.blockhash),
                     blockhash.value.lastValidBlockHeight,

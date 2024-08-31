@@ -43,12 +43,12 @@ pub const LeaderInfo = struct {
         var rpc_client = RpcClient.init(
             allocator,
             config.cluster,
-            .{ .retries = config.rpc_retries, .logger = logger },
+            .{ .max_retries = config.rpc_retries, .logger = logger },
         );
 
-        const epoch_info_result = try rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
-        defer epoch_info_result.deinit();
-        const epoch_info = epoch_info_result.value;
+        const epoch_info_response = try rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
+        defer epoch_info_response.deinit(); // Deinit safe because EpochInfo contians only u64's.
+        const epoch_info = try epoch_info_response.result();
 
         return .{
             .rpc_client = rpc_client,
@@ -61,17 +61,17 @@ pub const LeaderInfo = struct {
     }
 
     pub fn getLeaderAddresses(self: *LeaderInfo, allocator: Allocator) !std.ArrayList(SocketAddr) {
-        const current_slot_result = try self.rpc_client.getSlot(allocator, .{
+        const current_slot_response = try self.rpc_client.getSlot(allocator, .{
             .commitment = .processed,
         });
-        defer current_slot_result.deinit();
-        const current_slot = current_slot_result.value;
+        defer current_slot_response.deinit();
+        const current_slot = try current_slot_response.result();
 
         // TODO: Scrutinize edge cases here.
         if (current_slot > self.epoch_info.slotsInEpoch + self.leader_schedule.start_slot) {
-            const epoch_info_result = try self.rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
-            defer epoch_info_result.deinit();
-            self.epoch_info = epoch_info_result.value;
+            const epoch_info_response = try self.rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
+            defer epoch_info_response.deinit();
+            self.epoch_info = try epoch_info_response.result();
             self.leader_schedule = try getLeaderSchedule(allocator, &self.epoch_info, &self.rpc_client);
             try self.updateLeaderAddressesCache();
         }
@@ -106,9 +106,9 @@ pub const LeaderInfo = struct {
 };
 
 fn getLeaderSchedule(allocator: Allocator, epoch_info: *const RpcEpochInfo, rpc_client: *RpcClient) !LeaderSchedule {
-    const rpc_leader_schedule_result = try rpc_client.getLeaderSchedule(allocator, null, .{});
-    defer rpc_leader_schedule_result.deinit();
-    const rpc_leader_schedule = rpc_leader_schedule_result.value;
+    const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, null, .{});
+    defer rpc_leader_schedule_response.deinit();
+    const rpc_leader_schedule = try rpc_leader_schedule_response.result();
 
     var num_leaders: u64 = 0;
     for (rpc_leader_schedule.values()) |leader_slots| {

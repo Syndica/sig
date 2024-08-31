@@ -157,7 +157,7 @@ pub const Service = struct {
         var rpc_client = RpcClient.init(
             self.allocator,
             self.config.cluster,
-            .{ .retries = self.config.rpc_retries, .logger = self.logger },
+            .{ .max_retries = self.config.rpc_retries, .logger = self.logger },
         );
         defer rpc_client.deinit();
 
@@ -165,12 +165,16 @@ pub const Service = struct {
             std.time.sleep(self.config.pool_process_rate.asNanos());
             if (self.transaction_pool.isEmpty()) continue;
             var timer = try Timer.start();
+
             try self.processTransactions(&rpc_client);
             self.stats.process_transactions_latency_millis.set(timer.lap().asMillis());
+
             try self.retryTransactions();
             self.stats.retry_transactions_latency_millis.set(timer.lap().asMillis());
+
             self.transaction_pool.purge();
             self.stats.transactions_pending.set(self.transaction_pool.count());
+
             self.stats.log(self.logger);
         }
     }
@@ -178,12 +182,12 @@ pub const Service = struct {
     /// Checks for transactions to retry or drop from the pool
     fn processTransactions(self: *Service, rpc_client: *RpcClient) !void {
         var block_height_timer = try Timer.start();
-        const block_height_result = try rpc_client.getBlockHeight(
+        const block_height_response = try rpc_client.getBlockHeight(
             self.allocator,
             .{ .commitment = .processed },
         );
-        defer block_height_result.deinit();
-        const block_height = block_height_result.value;
+        defer block_height_response.deinit();
+        const block_height = try block_height_response.result();
         self.stats.rpc_block_height_latency_millis.set(block_height_timer.read().asMillis());
 
         // We need to hold a read lock until we are finished using the signatures and transactions, otherwise
@@ -192,13 +196,13 @@ pub const Service = struct {
         defer lock.unlock();
 
         var signature_statuses_timer = try Timer.start();
-        const signature_statuses_result = try rpc_client.getSignatureStatuses(
+        const signature_statuses_response = try rpc_client.getSignatureStatuses(
             self.allocator,
             signatures,
             .{ .searchTransactionHistory = false },
         );
-        defer signature_statuses_result.deinit();
-        const signature_statuses = signature_statuses_result.value;
+        defer signature_statuses_response.deinit();
+        const signature_statuses = try signature_statuses_response.result();
         self.stats.rpc_signature_statuses_latency_millis.set(signature_statuses_timer.read().asMillis());
 
         for (signature_statuses.value, signatures, transactions) |maybe_signature_status, signature, transaction_info| {

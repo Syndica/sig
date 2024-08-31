@@ -13,64 +13,40 @@ const Response = sig.rpc.Response;
 const Logger = sig.trace.log.Logger;
 
 pub const Client = struct {
-    endpoint: []const u8,
-    client: std.http.Client,
-    retries: usize,
+    http_endpoint: []const u8,
+    http_client: std.http.Client,
+    max_retries: usize,
     logger: Logger,
 
     pub const Options = struct {
-        retries: usize = 0,
+        max_retries: usize = 0,
         logger: Logger = .noop,
     };
 
     pub fn init(allocator: std.mem.Allocator, cluster_type: ClusterType, options: Options) Client {
-        const endpoint = switch (cluster_type) {
+        const http_endpoint = switch (cluster_type) {
             .MainnetBeta => "https://api.mainnet-beta.solana.com",
             .Testnet => "https://api.testnet.solana.com",
             .Devnet => "https://api.devnet.solana.com",
             .Development => @panic("Unsupported cluster type 'Development'"),
         };
         return .{
-            .endpoint = endpoint,
-            .client = std.http.Client{ .allocator = allocator },
-            .retries = options.retries,
+            .http_endpoint = http_endpoint,
+            .http_client = std.http.Client{ .allocator = allocator },
+            .max_retries = options.max_retries,
             .logger = options.logger,
         };
     }
 
     pub fn deinit(self: *Client) void {
-        self.client.deinit();
-    }
-
-    /// Wraps a parsed response from the RPC server with an arena
-    /// used for request, response, and json parsing allocations
-    pub fn Result(comptime T: type) type {
-        return struct {
-            arena: *std.heap.ArenaAllocator,
-            value: T,
-
-            pub fn init(allocator: std.mem.Allocator) !Result(T) {
-                const result = .{
-                    .arena = try allocator.create(std.heap.ArenaAllocator),
-                    .value = undefined,
-                };
-                result.arena.* = std.heap.ArenaAllocator.init(allocator);
-                return result;
-            }
-
-            pub fn deinit(self: *const Result(T)) void {
-                const allocator = self.arena.child_allocator;
-                self.arena.deinit();
-                allocator.destroy(self.arena);
-            }
-        };
+        self.http_client.deinit();
     }
 
     pub const GetAccountInfoConfig = struct {
         commitment: ?types.Commitment = null,
+        minContextSlot: ?u64 = null,
         encoding: ?[]const u8 = null,
         dataSlice: ?DataSlice = null,
-        minContextSlot: ?u64 = null,
 
         const DataSlice = struct {
             offset: usize,
@@ -78,20 +54,12 @@ pub const Client = struct {
         };
     };
 
-    pub fn getAccountInfo(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetAccountInfoConfig) !Result(types.AccountInfo) {
-        var result = try Result(types.AccountInfo).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addArgument("\"{s}\"", pubkey);
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, types.AccountInfo, .{
-            .method = "getAccountInfo",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getAccountInfo(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetAccountInfoConfig) !Response(types.AccountInfo) {
+        var request = try Request.init(allocator, "getAccountInfo");
+        defer request.deinit();
+        try request.addParameter(pubkey.string().slice());
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.AccountInfo, request);
     }
 
     pub const GetBalanceConfig = struct {
@@ -99,20 +67,12 @@ pub const Client = struct {
         minContextSlot: ?u64 = null,
     };
 
-    pub fn getBalance(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetBalanceConfig) !Result(types.Balance) {
-        var result = try Result(types.Balance).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addArgument("\"{s}\"", pubkey);
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, types.Balance, .{
-            .method = "getBalance",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getBalance(self: *Client, allocator: std.mem.Allocator, pubkey: Pubkey, config: GetBalanceConfig) !Response(types.Balance) {
+        var request = try Request.init(allocator, "getBalance");
+        defer request.deinit();
+        try request.addParameter(pubkey.string().slice());
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.Balance, request);
     }
 
     pub const GetBlockConfig = struct {
@@ -123,35 +83,19 @@ pub const Client = struct {
         rewards: ?bool = null,
     };
 
-    pub fn getBlock(self: *Client, allocator: std.mem.Allocator, slot: Slot, config: GetBlockConfig) !Result(?types.Block) {
-        var result = try Result(?types.Block).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addArgument("{d}", slot);
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, ?types.Block, .{
-            .method = "getBlock",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getBlock(self: *Client, allocator: std.mem.Allocator, slot: Slot, config: GetBlockConfig) !Response(?types.Block) {
+        var request = try Request.init(allocator, "getBlock");
+        defer request.deinit();
+        try request.addParameter(slot);
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, ?types.Block, request);
     }
 
-    pub fn getBlockCommitment(self: *Client, allocator: std.mem.Allocator, block: u64) !Result(types.BlockCommitment) {
-        var result = try Result(types.BlockCommitment).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addArgument("{d}", block);
-
-        result.value = try self.sendFetchRequest(result.arena, types.BlockCommitment, .{
-            .method = "getBlockCommitment",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getBlockCommitment(self: *Client, allocator: std.mem.Allocator, block: u64) !Response(types.BlockCommitment) {
+        var request = try Request.init(allocator, "getBlockCommitment");
+        defer request.deinit();
+        try request.addParameter(block);
+        return self.sendFetchRequest(allocator, types.BlockCommitment, request);
     }
 
     pub const GetBlockHeightConfig = struct {
@@ -159,19 +103,11 @@ pub const Client = struct {
         minContextSlot: ?u64 = null,
     };
 
-    pub fn getBlockHeight(self: *Client, allocator: std.mem.Allocator, config: GetBlockHeightConfig) !Result(u64) {
-        var result = try Result(u64).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, u64, .{
-            .method = "getBlockHeight",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getBlockHeight(self: *Client, allocator: std.mem.Allocator, config: GetBlockHeightConfig) !Response(u64) {
+        var request = try Request.init(allocator, "getBlockHeight");
+        defer request.deinit();
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, u64, request);
     }
 
     // TODO: getBlockProduction()
@@ -185,21 +121,14 @@ pub const Client = struct {
         minContextSlot: ?u64 = null,
     };
 
-    pub fn getEpochInfo(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetEpochInfoConfig) !Result(types.EpochInfo) {
-        var result = try Result(types.EpochInfo).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addOptionalArgument("{d}", maybe_epoch);
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, types.EpochInfo, .{
-            .method = "getEpochInfo",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getEpochInfo(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetEpochInfoConfig) !Response(types.EpochInfo) {
+        var request = try Request.init(allocator, "getEpochInfo");
+        defer request.deinit();
+        try request.addParameter(maybe_epoch);
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.EpochInfo, request);
     }
+
     // TODO: getEpochSchedule()
     // TODO: getFeeForMessage()
     // TODO: getFirstAvailableBlock()
@@ -217,56 +146,66 @@ pub const Client = struct {
         minContextSlot: ?Slot = null,
     };
 
-    pub fn getLatestBlockhash(self: *Client, allocator: std.mem.Allocator, config: GetLatestBlockhashConfig) !Result(types.LatestBlockhash) {
-        var result = try Result(types.LatestBlockhash).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, types.LatestBlockhash, .{
-            .method = "getLatestBlockhash",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getLatestBlockhash(self: *Client, allocator: std.mem.Allocator, config: GetLatestBlockhashConfig) !Response(types.LatestBlockhash) {
+        var request = try Request.init(allocator, "getLatestBlockhash");
+        defer request.deinit();
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.LatestBlockhash, request);
     }
 
     pub const GetLeaderScheduleConfig = struct {
-        identity: ?[]const u8 = null,
         commitment: ?types.Commitment = null,
+        identity: ?[]const u8 = null,
     };
 
-    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetLeaderScheduleConfig) !Result(types.LeaderSchedule) {
-        var result = try Result(types.LeaderSchedule).init(allocator);
-        errdefer result.deinit();
+    /// NOTE: Is there a way in zig to implement your own methods on a type from an external library?
+    /// For example I would like to impelement jsonParse for the RPC return type of leader schedule which is:
+    /// pub const LeaderSchedule = std.StringArrayHashMap([]const u64);
+    /// I could use a wrapper like
+    /// pub const LeaderSchedule = struct {
+    ///    inner: std.StringArrayHashMap([]const u64),
+    ///    pub fn jsonParse(...) !void
+    /// }
+    /// however, this introduces another layer of indirection.
+    /// Not a big deal here but I am curious if there is a way to do this.
+    pub fn getLeaderSchedule(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetLeaderScheduleConfig) !Response(types.LeaderSchedule) {
+        var request = try Request.init(allocator, "getLeaderSchedule");
+        defer request.deinit();
+        try request.addParameter(maybe_epoch);
+        try request.addConfig(config);
+        const json_response = try self.sendFetchRequest(allocator, std.json.Value, request);
 
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addOptionalArgument("{d}", maybe_epoch);
-        try params_builder.addConfig(config);
+        // Convert the result type from std.json.Value to types.LeaderSchedule
+        var type_converted_result: ?types.LeaderSchedule = null;
+        if (json_response.parsed.result) |json_value| {
+            // The json result should always be an object
+            const json_object = switch (json_value) {
+                .object => |obj| obj,
+                else => return error.LeaderScheduleResultIsNotAnObject,
+            };
 
-        const leader_schedule_json = try self.sendFetchRequest(result.arena, std.json.Value, .{
-            .method = "getLeaderSchedule",
-            .params = try params_builder.build(),
-        });
-
-        const leader_schedule_map = switch (leader_schedule_json) {
-            .object => |obj| obj,
-            else => return error.UnexpectedRpcResponse,
-        };
-
-        var leader_schedule = types.LeaderSchedule.init(result.arena.allocator());
-        for (leader_schedule_map.keys(), leader_schedule_map.values()) |key, value| {
-            var slots = try result.arena.allocator().alloc(u64, value.array.items.len);
-            for (value.array.items, 0..) |slot, i| {
-                slots[i] = @intCast(slot.integer);
+            // Convert the json object to the LeaderSchedule type
+            type_converted_result = types.LeaderSchedule.init(json_response.arena.allocator());
+            for (json_object.keys(), json_object.values()) |key, value| {
+                const slots = try json_response.arena.allocator().alloc(u64, value.array.items.len);
+                for (value.array.items, 0..) |slot, i| {
+                    slots[i] = @intCast(slot.integer);
+                }
+                try type_converted_result.?.put(key, slots);
             }
-            try leader_schedule.put(key, slots);
         }
 
-        result.value = leader_schedule;
-
-        return result;
+        // Return the response with the type converted result
+        return .{
+            .arena = json_response.arena,
+            .bytes = json_response.bytes,
+            .parsed = .{
+                .id = json_response.parsed.id,
+                .jsonrpc = json_response.parsed.jsonrpc,
+                .result = type_converted_result,
+                .@"error" = json_response.parsed.@"error",
+            },
+        };
     }
 
     // TODO: getMaxRetransmitSlot()
@@ -281,27 +220,12 @@ pub const Client = struct {
         searchTransactionHistory: ?bool = null,
     };
 
-    pub fn getSignatureStatuses(self: *Client, allocator: std.mem.Allocator, signatures: []const Signature, config: GetSignatureStatusesConfig) !Result(types.SignatureStatuses) {
-        var result = try Result(types.SignatureStatuses).init(allocator);
-        errdefer result.deinit();
-
-        var signatures_base58 = try result.arena.allocator().alloc([]const u8, signatures.len);
-        for (signatures, 0..) |signature, i| {
-            signatures_base58[i] = try signature.base58StringAlloc(result.arena.allocator());
-        }
-        const signatures_json = try std.json.stringifyAlloc(result.arena.allocator(), signatures_base58, .{});
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addArgument("{s}", signatures_json);
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, types.SignatureStatuses, .{
-            .method = "getSignatureStatuses",
-            .params = try params_builder.build(),
-            .parse_options = .{ .ignore_unknown_fields = true },
-        });
-
-        return result;
+    pub fn getSignatureStatuses(self: *Client, allocator: std.mem.Allocator, signatures: []const Signature, config: GetSignatureStatusesConfig) !Response(types.SignatureStatuses) {
+        var request = try Request.init(allocator, "getSignatureStatuses");
+        defer request.deinit();
+        try request.addParameter(signatures);
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, types.SignatureStatuses, request);
     }
 
     // TODO: getSignaturesForAddress()
@@ -311,19 +235,11 @@ pub const Client = struct {
         minContextSlot: ?Slot = null,
     };
 
-    pub fn getSlot(self: *Client, allocator: std.mem.Allocator, config: GetSlotConfig) !Result(Slot) {
-        var result = try Result(Slot).init(allocator);
-        errdefer result.deinit();
-
-        var params_builder = Request.ParamsBuilder.init(result.arena.allocator());
-        try params_builder.addConfig(config);
-
-        result.value = try self.sendFetchRequest(result.arena, Slot, .{
-            .method = "getSlot",
-            .params = try params_builder.build(),
-        });
-
-        return result;
+    pub fn getSlot(self: *Client, allocator: std.mem.Allocator, config: GetSlotConfig) !Response(Slot) {
+        var request = try Request.init(allocator, "getSlot");
+        defer request.deinit();
+        try request.addConfig(config);
+        return self.sendFetchRequest(allocator, Slot, request);
     }
 
     // TODO: getSlotLeader()
@@ -346,72 +262,68 @@ pub const Client = struct {
     // TODO: sendTransaction()
     // TODO: simulateTransaction()
 
-    /// Sends a oneshot HTTP request to the RPC server
-    /// and parses the response into a JSON object of type T
-    /// or returns an error if the request fails or the response
-    /// cannot be parsed. Retries the request up to self.retries times.
-    fn sendFetchRequest(self: *Client, arena: *std.heap.ArenaAllocator, comptime T: type, request: Request) !T {
-        var response_payload = std.ArrayList(u8).init(arena.allocator()); // Could use a fixed size buffer based on request type
-        const request_payload = try request.toJsonString(arena.allocator());
+    /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
+    /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
+    /// if necessary. If the response fails to parse, an error will be returned.
+    fn sendFetchRequest(self: *Client, allocator: std.mem.Allocator, comptime T: type, request: Request) !Response(T) {
+        var response = try Response(T).init(allocator);
+        errdefer response.deinit();
 
-        var retries: usize = 0;
-        while (true) {
-            const result = self.client.fetch(.{
-                .location = .{
-                    .url = self.endpoint,
-                },
-                .method = .POST,
-                .headers = .{
-                    .content_type = .{
-                        .override = "application/json",
-                    },
-                    .user_agent = .{
-                        .override = "sig/0.1",
-                    },
-                },
-                .payload = request_payload,
-                .response_storage = .{ .dynamic = &response_payload },
-                .max_append_size = 100 * 1024 * 1024, // 100MB - this could be adjusted based on request type
-            }) catch |err| {
-                self.logger.warnf("HTTP client error, attempting reinitialisation: {any}", .{err});
-                self.client.deinit();
-                self.client = std.http.Client{ .allocator = arena.allocator() };
-                if (retries == self.retries) return err;
-                retries += 1;
+        const payload = try request.toJsonString(allocator);
+        defer allocator.free(payload);
+
+        for (0..self.max_retries + 1) |curr_retries| {
+            const result = self.fetchRequest(payload, &response.bytes) catch |fetch_error| {
+                self.logger.warnf("HTTP client error, attempting reinitialisation: error={any}", .{fetch_error});
+                if (curr_retries == self.max_retries) return fetch_error;
+                response.bytes.clearRetainingCapacity();
+                self.restartHttpClient();
                 continue;
             };
 
             if (result.status != std.http.Status.ok) {
-                if (retries == self.retries) return error.HttpRequestFailed;
-                self.logger.warnf("HTTP request failed ({d}/{d}): {}", .{ retries, self.retries, result.status });
-                retries += 1;
+                self.logger.warnf("HTTP request failed ({d}/{d}): {}", .{ curr_retries, self.max_retries, result.status });
+                if (curr_retries == self.max_retries) return error.HttpRequestFailed;
+                response.bytes.clearRetainingCapacity();
                 continue;
             }
 
             break;
         }
 
-        const response = std.json.parseFromSliceLeaky(
-            Response(T),
-            arena.allocator(),
-            response_payload.items,
-            request.parse_options,
-        ) catch |err| {
-            self.logger.errf("Failed to parse JSON response: error={} response={s}\n", .{ err, response_payload.items });
+        response.parse() catch |err| {
+            self.logger.errf("Failed to parse response: error={} response={s}", .{ err, response.bytes.items });
             return err;
         };
 
-        if (response.@"error") |err| {
-            self.logger.errf("Rpc request failed: request={s} error={s}\n", .{ request_payload, try err.toJsonString(arena.allocator()) });
-            return error.RpcRequestFailed;
-        }
+        return response;
+    }
 
-        if (response.result) |res| {
-            return res;
-        }
+    fn fetchRequest(self: *Client, request_payload: []const u8, response_payload: *std.ArrayList(u8)) !std.http.Client.FetchResult {
+        return self.http_client.fetch(.{
+            .location = .{
+                .url = self.http_endpoint,
+            },
+            .method = .POST,
+            .headers = .{
+                .content_type = .{
+                    .override = "application/json",
+                },
+                .user_agent = .{
+                    .override = "sig/0.1",
+                },
+            },
+            .payload = request_payload,
+            .response_storage = .{
+                .dynamic = response_payload,
+            },
+            .max_append_size = 100 * 1024 * 1024,
+        });
+    }
 
-        self.logger.err("Rpc response has null error and result\n");
-        return error.UnknownRpcError;
+    fn restartHttpClient(self: *Client) void {
+        self.http_client.deinit();
+        self.http_client = std.http.Client{ .allocator = self.http_client.allocator };
     }
 };
 
@@ -420,8 +332,9 @@ test "getAccountInfo" {
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
     const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
-    const result = try client.getAccountInfo(allocator, pubkey, .{});
-    defer result.deinit();
+    const response = try client.getAccountInfo(allocator, pubkey, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 test "getBalance" {
@@ -429,47 +342,52 @@ test "getBalance" {
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
     const pubkey = try Pubkey.fromString("Bkd9xbHF7JgwXmEib6uU3y582WaPWWiasPxzMesiBwWm");
-    const result = try client.getBalance(allocator, pubkey, .{});
-    defer result.deinit();
+    const response = try client.getBalance(allocator, pubkey, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 test "getBlock" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const block_result = try client.getSlot(allocator, .{ .commitment = .finalized });
-    defer block_result.deinit();
-    const result = try client.getBlock(allocator, block_result.value, .{
+    const block_response = try client.getSlot(allocator, .{ .commitment = .finalized });
+    defer block_response.deinit();
+    const response = try client.getBlock(allocator, block_response.parsed.result.?, .{
         .transactionDetails = "none",
         .rewards = false,
     });
-    defer result.deinit();
+    defer response.deinit();
+    _ = try response.result();
 }
 
 test "getBlockHeight" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const result = try client.getBlockHeight(allocator, .{});
-    defer result.deinit();
+    const response = try client.getBlockHeight(allocator, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 test "getBlockCommitment" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const slot_result = try client.getSlot(allocator, .{ .commitment = .finalized });
-    defer slot_result.deinit();
-    const result = try client.getBlockCommitment(allocator, slot_result.value);
-    defer result.deinit();
+    const slot_response = try client.getSlot(allocator, .{ .commitment = .finalized });
+    defer slot_response.deinit();
+    const response = try client.getBlockCommitment(allocator, slot_response.parsed.result.?);
+    defer response.deinit();
+    _ = try response.result();
 }
 
 test "getEpochInfo" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const result = try client.getEpochInfo(allocator, null, .{});
-    defer result.deinit();
+    const response = try client.getEpochInfo(allocator, null, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 // TODO: test getEpochSchedule()
@@ -488,16 +406,18 @@ test "getLatestBlockhash" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const result = try client.getLatestBlockhash(allocator, .{});
-    defer result.deinit();
+    const response = try client.getLatestBlockhash(allocator, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 test "getLeaderSchedule" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const result = try client.getLeaderSchedule(allocator, null, .{});
-    defer result.deinit();
+    const response = try client.getLeaderSchedule(allocator, null, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 // TODO: test getMaxRetransmitSlot()
@@ -520,8 +440,9 @@ test "getSignatureStatuses" {
     signatures[1] = try Signature.fromString(
         "4K6Gjut37p3ajRtsN2s6q1Miywit8VyP7bAYLfVSkripdNJkF3bL6BWG7dauzZGMr3jfsuFaPR91k2NuuCc7EqAz",
     );
-    const result = try client.getSignatureStatuses(allocator, signatures, .{});
-    defer result.deinit();
+    const response = try client.getSignatureStatuses(allocator, signatures, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 // TODO: test getSignaturesForAddress()
@@ -530,8 +451,9 @@ test "getSlot" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const result = try client.getSlot(allocator, .{});
-    defer result.deinit();
+    const response = try client.getSlot(allocator, .{});
+    defer response.deinit();
+    _ = try response.result();
 }
 
 // TODO: test getSlotLeader()

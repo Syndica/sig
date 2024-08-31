@@ -1,16 +1,53 @@
 const std = @import("std");
 
-const JsonParseOptions = std.json.ParseOptions;
-
+/// Request is a struct that represents a JSON-RPC request.
+/// It is used to build a JSON-RPC request and serialize it to a string.
+/// Parameters and config added must contain primitive types, or types
+/// implementing jsonStringify (see std.json.Value.jsonStringify for example)
 pub const Request = struct {
-    id: u64 = 1,
-    jsonrpc: []const u8 = "2.0",
+    id: u64,
+    jsonrpc: []const u8,
     method: []const u8,
-    params: ?[]const u8 = null,
-    parse_options: JsonParseOptions = .{},
+    params: std.ArrayList(u8),
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        method: []const u8,
+    ) !Request {
+        var params = std.ArrayList(u8).init(allocator);
+        try params.append('[');
+        return .{
+            .id = 1,
+            .jsonrpc = "2.0",
+            .method = method,
+            .params = params,
+        };
+    }
+
+    pub fn deinit(self: Request) void {
+        self.params.deinit();
+    }
+
+    pub fn addParameter(self: *Request, param: anytype) !void {
+        try std.json.stringify(param, .{}, self.params.writer());
+        try self.params.append(',');
+    }
+
+    pub fn addOptionalParameter(self: *Request, maybe_param: anytype) !void {
+        if (maybe_param) |param| try self.addParameter(param);
+    }
+
+    pub fn addConfig(self: *Request, config: anytype) !void {
+        const default = @TypeOf(config){};
+        if (!std.meta.eql(default, config)) {
+            try std.json.stringify(config, .{ .emit_null_optional_fields = true }, self.params.writer());
+            try self.params.append(',');
+        }
+    }
 
     pub fn toJsonString(self: Request, allocator: std.mem.Allocator) ![]const u8 {
-        if (self.params) |params|
+        if (self.params.items.len > 1) {
+            self.params.items[self.params.items.len - 1] = ']';
             return try std.fmt.allocPrint(
                 allocator,
                 "{{\"id\":{},\"jsonrpc\":\"{s}\",\"method\":\"{s}\",\"params\":{s}}}",
@@ -18,59 +55,49 @@ pub const Request = struct {
                     self.id,
                     self.jsonrpc,
                     self.method,
-                    params,
+                    self.params.items,
                 },
             );
-        return try std.fmt.allocPrint(
-            allocator,
-            "{{\"id\":{d},\"jsonrpc\":\"{s}\",\"method\":\"{s}\"}}",
-            .{
-                self.id,
-                self.jsonrpc,
-                self.method,
-            },
-        );
-    }
-
-    pub const ParamsBuilder = struct {
-        allocator: std.mem.Allocator,
-        array: std.ArrayList([]const u8),
-
-        pub fn init(allocator: std.mem.Allocator) ParamsBuilder {
-            return .{
-                .allocator = allocator,
-                .array = std.ArrayList([]const u8).init(allocator),
-            };
-        }
-
-        pub fn addArgument(self: *ParamsBuilder, comptime fmt: []const u8, arg: anytype) !void {
-            try self.array.append(try std.fmt.allocPrint(self.allocator, fmt, .{arg}));
-        }
-
-        pub fn addOptionalArgument(self: *ParamsBuilder, comptime fmt: []const u8, maybe_arg: anytype) !void {
-            if (maybe_arg) |arg| {
-                try self.array.append(try std.fmt.allocPrint(self.allocator, fmt, .{arg}));
-            }
-        }
-
-        pub fn addConfig(self: *ParamsBuilder, config: anytype) !void {
-            const config_string = try std.json.stringifyAlloc(
-                self.allocator,
-                config,
-                .{ .emit_null_optional_fields = false },
+        } else {
+            return try std.fmt.allocPrint(
+                allocator,
+                "{{\"id\":{d},\"jsonrpc\":\"{s}\",\"method\":\"{s}\"}}",
+                .{
+                    self.id,
+                    self.jsonrpc,
+                    self.method,
+                },
             );
-            if (!std.mem.eql(u8, config_string, "{}")) {
-                try self.array.append(try std.fmt.allocPrint(self.allocator, "{s}", .{config_string}));
-            }
         }
-
-        pub fn build(self: *ParamsBuilder) !?[]const u8 {
-            if (self.array.items.len == 0) return null;
-            // TODO: Replace hacky solution with proper json serialization
-            var params = try std.fmt.allocPrint(self.allocator, "{s}", .{self.array.items});
-            params[0] = '[';
-            params[params.len - 1] = ']';
-            return params;
-        }
-    };
+    }
 };
+
+test "Request.toJsonString" {
+    const allocator = std.testing.allocator;
+
+    const Config = struct {
+        key: []const u8 = "default",
+    };
+
+    var request = try Request.init(allocator, "getAccountInfo");
+    defer request.deinit();
+
+    var signatures = std.ArrayList([]const u8).init(allocator);
+    defer signatures.deinit();
+    try signatures.append("signature1");
+    try signatures.append("signature2");
+
+    try request.addParameter("mypubkey");
+    try request.addParameter(35);
+    try request.addParameter(true);
+    try request.addParameter(null);
+    try request.addParameter(signatures.items);
+    try request.addConfig(Config{});
+    try request.addConfig(Config{ .key = "non-default" });
+
+    const expected = "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"getAccountInfo\",\"params\":[\"mypubkey\",35,true,null,[\"signature1\",\"signature2\"],{\"key\":\"non-default\"}]}";
+    const actual = try request.toJsonString(allocator);
+    defer allocator.free(actual);
+
+    try std.testing.expectEqualSlices(u8, expected, actual);
+}

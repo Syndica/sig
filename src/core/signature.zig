@@ -63,4 +63,8 @@ pub const Signature = struct {
     ) !void {
         return base58.format(self.data, writer);
     }
+
+    pub fn jsonStringify(self: Signature, writer: anytype) !void {
+        try writer.print("\"{s}\"", .{self.base58String().slice()});
+    }
 };
