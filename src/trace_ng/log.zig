@@ -12,7 +12,8 @@ const RecycleFBA = sig.utils.allocators.RecycleFBA;
 pub const Config = struct {
     max_level: Level = Level.debug,
     allocator: std.mem.Allocator,
-    fba_bytes: u64,
+    /// Maximum memory that logger can use.
+    max_buffer: u64,
     exit_sig: *std.atomic.Value(bool),
 };
 
@@ -31,15 +32,15 @@ pub fn StandardLogger(comptime scope: ?type) type {
         exit_sig: *std.atomic.Value(bool),
         allocator: Allocator,
         recycle_fba: RecycleFBA,
-        fba_bytes: u64,
+        max_buffer: u64,
         channel: *Channel(logfmt.LogMsg),
         handle: ?std.Thread,
 
         pub fn init(config: Config) Self {
             return .{
                 .allocator = config.allocator,
-                .recycle_fba = RecycleFBA.init(config.allocator, config.fba_bytes) catch @panic("could not create RecycleFBA"),
-                .fba_bytes = config.fba_bytes,
+                .recycle_fba = RecycleFBA.init(config.allocator, config.max_buffer) catch @panic("could not create RecycleFBA"),
+                .max_buffer = config.max_buffer,
                 .max_level = config.max_level,
                 .exit_sig = config.exit_sig,
                 .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
@@ -205,7 +206,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .allocator = config.allocator,
                 .exit_sig = config.exit_sig,
                 .max_level = config.max_level,
-                .fba_bytes = config.fba_bytes,
+                .max_buffer = config.max_buffer,
             }) };
         }
 
@@ -311,7 +312,7 @@ test "trace_ng: scope switch" {
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.info,
-        .fba_bytes = 2048,
+        .max_buffer = 2048,
     });
     defer logger.deinit();
     logger.spawn();
@@ -331,7 +332,7 @@ test "trace_ng: testing.allocator" {
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.info,
-        .fba_bytes = 2048,
+        .max_buffer = 2048,
     });
 
     defer logger.deinit();
@@ -375,7 +376,7 @@ test "trace_ng: level" {
         .allocator = allocator,
         .exit_sig = exit,
         .max_level = Level.err,
-        .fba_bytes = 2048,
+        .max_buffer = 2048,
     });
 
     defer logger.deinit();
