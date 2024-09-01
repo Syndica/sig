@@ -47,28 +47,12 @@ pub fn StandardLogger(comptime scope: ?type) type {
             };
         }
 
-        fn unscoped(self: *Self) UnscopedLogger {
-            return .{
-                .level = self.level,
-                .exit_sig = self.exit_sig,
-                .allocator = self.allocator,
-                .recycle_fba = self.recycle_fba,
-                .fba_bytes = self.fba_bytes,
-                .channel = self.channel,
-                .handle = self.handle,
-            };
+        fn unscoped(self: *Self) *UnscopedLogger {
+            return @ptrCast(self);
         }
 
-        fn withScope(self: Self, comptime new_scope: anytype) StandardLogger(new_scope) {
-            return .{
-                .level = self.level,
-                .exit_sig = self.exit_sig,
-                .allocator = self.allocator,
-                .recycle_fba = self.recycle_fba,
-                .fba_bytes = self.fba_bytes,
-                .channel = self.channel,
-                .handle = self.handle,
-            };
+        fn withScope(self: *Self, comptime new_scope: anytype) *StandardLogger(new_scope) {
+            return @ptrCast(self);
         }
 
         pub fn spawn(self: *Self) void {
@@ -197,27 +181,27 @@ pub fn StandardLogger(comptime scope: ?type) type {
 }
 
 const Stuff = struct {
-    logger: StandardLogger(@This()),
+    logger: *StandardLogger(Stuff),
 
-    pub fn init(logger: UnscopedLogger) @This() {
-        return .{ .logger = logger.withScope(@This()) };
+    pub fn init(logger: *UnscopedLogger) Stuff {
+        return .{ .logger = logger.withScope(Stuff) };
     }
 
-    pub fn doStuff(self: *@This()) void {
-        //self.logger.log("doing stuff");
+    pub fn doStuff(self: *Stuff) void {
+        self.logger.log("doing stuff");
         var child = StuffChild.init(self.logger.unscoped());
         child.doStuffDetails();
     }
 };
 
 const StuffChild = struct {
-    logger: StandardLogger(@This()),
+    logger: *StandardLogger(StuffChild),
 
-    pub fn init(logger: UnscopedLogger) @This() {
-        return .{ .logger = logger.withScope(@This()) };
+    pub fn init(logger: *UnscopedLogger) StuffChild {
+        return .{ .logger = logger.withScope(StuffChild) };
     }
 
-    pub fn doStuffDetails(self: *@This()) void {
+    pub fn doStuffDetails(self: *StuffChild) void {
         self.logger.log("doing stuff details");
     }
 };
@@ -239,7 +223,7 @@ test "trace_ng: scope switch" {
     defer logger.deinit();
     logger.spawn();
 
-    var stuff = Stuff.init(logger);
+    var stuff = Stuff.init(&logger);
     stuff.doStuff();
 }
 
