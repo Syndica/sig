@@ -219,7 +219,6 @@ const StuffChild = struct {
 };
 
 test "trace_ng: scope switch" {
-    // TODO Fix leak.
     const allocator = std.testing.allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
