@@ -18,9 +18,14 @@ pub const Config = struct {
 
 const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
 
+const LogType = enum {
+    standard,
+    noop,
+};
+
 const UnscopedLogger = StandardLogger(null);
 pub fn StandardLogger(comptime scope: ?type) type {
-    return struct {
+    const StanardErrLogger = struct {
         const Self = @This();
         max_level: Level,
         exit_sig: *std.atomic.Value(bool),
@@ -188,6 +193,83 @@ pub fn StandardLogger(comptime scope: ?type) type {
             };
             const logMessage = self.createLogMessage(level, maybe_scope, null, fields, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
+        }
+    };
+
+    return union(LogType) {
+        const Self = @This();
+        standard: StanardErrLogger,
+        noop: void,
+        pub fn init(config: Config) Self {
+            return .{ .standard = StanardErrLogger.init(.{
+                .allocator = config.allocator,
+                .exit_sig = config.exit_sig,
+                .max_level = config.max_level,
+                .fba_bytes = config.fba_bytes,
+            }) };
+        }
+
+        pub fn deinit(self: *Self) void {
+            switch (self.*) {
+                .standard => |logger| {
+                    var standard = logger;
+                    standard.deinit();
+                },
+                .noop => {},
+            }
+        }
+
+        pub fn spawn(self: *Self) void {
+            switch (self.*) {
+                .standard => |*logger| {
+                    logger.spawn();
+                },
+                .noop => {},
+            }
+        }
+
+        pub fn unscoped(self: *Self) *UnscopedLogger {
+            return @ptrCast(self);
+        }
+
+        pub fn withScope(self: *Self, comptime new_scope: anytype) *StandardLogger(new_scope) {
+            return @ptrCast(self);
+        }
+
+        pub fn log(self: *Self, level: Level, message: []const u8) void {
+            switch (self.*) {
+                .standard => |*logger| {
+                    logger.log(level, message);
+                },
+                .noop => {},
+            }
+        }
+
+        pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+            switch (self.*) {
+                .standard => |*logger| {
+                    logger.logf(level, fmt, args);
+                },
+                .noop => {},
+            }
+        }
+
+        pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
+            switch (self.*) {
+                .standard => |*logger| {
+                    logger.logWithFields(level, message, fields);
+                },
+                .noop => {},
+            }
+        }
+
+        pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            switch (self.*) {
+                .standard => |*logger| {
+                    logger.logfWithFields(level, fmt, args, fields);
+                },
+                .noop => {},
+            }
         }
     };
 }
