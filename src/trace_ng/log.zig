@@ -94,40 +94,43 @@ pub fn StandardLogger(comptime scope: ?type) type {
             comptime maybe_fmt: ?[]const u8,
             args: anytype,
         ) logfmt.LogMsg {
-            // obtain a memory to write to
-            self.recycle_fba.mux.lock();
-            const buf = blk: while (true) {
-                // TODO allocate based on need.
-                const buf = self.recycle_fba.allocator().alloc(u8, 256) catch {
-                    // no memory available rn - unlock and wait
-                    self.recycle_fba.mux.unlock();
-                    std.time.sleep(std.time.ns_per_ms);
-                    self.recycle_fba.mux.lock();
-                    continue;
-                };
-                break :blk buf;
-            };
-            self.recycle_fba.mux.unlock();
-            errdefer {
+            // Allocate memory for formatting messages.
+            var maybe_fmt_message: ?[]const u8 = null;
+            if (maybe_fmt) |msg_fmt| {
+                const message_size = std.fmt.count(msg_fmt, args);
+                // obtain a memory to write to
                 self.recycle_fba.mux.lock();
-                self.recycle_fba.allocator().free(buf);
+                const buf = blk: while (true) {
+                    const buf = self.recycle_fba.allocator().alloc(u8, message_size) catch {
+                        // no memory available rn - unlock and wait
+                        self.recycle_fba.mux.unlock();
+                        std.time.sleep(std.time.ns_per_ms);
+                        self.recycle_fba.mux.lock();
+                        continue;
+                    };
+                    break :blk buf;
+                };
                 self.recycle_fba.mux.unlock();
-            }
-            var fmt_message = std.io.fixedBufferStream(buf);
-            const writer = fmt_message.writer();
+                errdefer {
+                    self.recycle_fba.mux.lock();
+                    self.recycle_fba.allocator().free(buf);
+                    self.recycle_fba.mux.unlock();
+                }
+                var fmt_message = std.io.fixedBufferStream(buf);
+                const writer = fmt_message.writer();
 
-            if (maybe_fmt) |fmt| {
-                std.fmt.format(writer, fmt, args) catch @panic("could not format");
+                if (maybe_fmt) |fmt| {
+                    std.fmt.format(writer, fmt, args) catch @panic("could not format");
+                }
+                maybe_fmt_message = fmt_message.getWritten();
             }
-            const log_message = fmt_message.getWritten();
-            // Reset buffer before re-using to construct fields.
-            fmt_message.reset();
+
             return logfmt.LogMsg{
                 .level = level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
-                .maybe_fields = logfmt.fieldsToStr(buf, maybe_fields),
-                .maybe_fmt = log_message,
+                .maybe_fields = logfmt.fieldsToStr(&self.recycle_fba, self.max_buffer, maybe_fields),
+                .maybe_fmt = maybe_fmt_message,
             };
         }
 

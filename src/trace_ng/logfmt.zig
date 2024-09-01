@@ -42,11 +42,32 @@ pub fn writeLog(
 }
 
 pub fn fieldsToStr(
-    buffer: anytype,
+    recycle_fba: *RecycleFBA,
+    max_buffer: u64,
     args: anytype,
 ) ?[]const u8 {
-    var fmt_message = std.io.fixedBufferStream(buffer);
-    const writer = fmt_message.writer();
+    _ = &max_buffer;
+
+    // obtain a memory to write to
+    recycle_fba.mux.lock();
+    const buf = blk: while (true) {
+        const buf = recycle_fba.allocator().alloc(u8, 256) catch {
+            // no memory available rn - unlock and wait
+            recycle_fba.mux.unlock();
+            std.time.sleep(std.time.ns_per_ms);
+            recycle_fba.mux.lock();
+            continue;
+        };
+        break :blk buf;
+    };
+    recycle_fba.mux.unlock();
+    errdefer {
+        recycle_fba.mux.lock();
+        recycle_fba.allocator().free(buf);
+        recycle_fba.mux.unlock();
+    }
+    var field_message = std.io.fixedBufferStream(buf);
+    const writer = field_message.writer();
 
     switch (@typeInfo(@TypeOf(args))) {
         .Struct => |struc| {
@@ -74,5 +95,5 @@ pub fn fieldsToStr(
         },
     }
 
-    return fmt_message.getWritten();
+    return field_message.getWritten();
 }
