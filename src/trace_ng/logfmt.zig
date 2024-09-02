@@ -13,12 +13,12 @@ pub const LogMsg = struct {
 };
 
 pub fn writeLog(
-    message: LogMsg,
+    message: *LogMsg,
 ) !void {
     const writer = std.io.getStdErr().writer();
 
-    if (message.maybe_scope) |scope| {
-        std.fmt.format(writer, "[{s}] ", .{scope}) catch unreachable();
+    if (message.*.maybe_scope) |scope| {
+        try std.fmt.format(writer, "[{s}] ", .{scope});
     }
 
     // format time as ISO8601
@@ -27,16 +27,16 @@ pub fn writeLog(
     try std.fmt.format(writer, "time=", .{});
     try now.format(utc_format, .{}, writer);
     try std.fmt.format(writer, "Z ", .{});
-    try std.fmt.format(writer, "level={s} ", .{message.level.asText()});
+    try std.fmt.format(writer, "level={s} ", .{message.*.level.asText()});
 
-    if (message.maybe_fields) |kv| {
+    if (message.*.maybe_fields) |kv| {
         try std.fmt.format(writer, "{s}", .{kv});
     }
 
-    if (message.maybe_msg) |msg| {
+    if (message.*.maybe_msg) |msg| {
         try std.fmt.format(writer, "{s}\n", .{msg});
     }
-    if (message.maybe_fmt) |fmt| {
+    if (message.*.maybe_fmt) |fmt| {
         try std.fmt.format(writer, "{s}\n", .{fmt});
     }
 }
@@ -47,11 +47,13 @@ pub fn fieldsToStr(
     args: anytype,
 ) ?[]const u8 {
     _ = &max_buffer;
-
+    if (@typeInfo(@TypeOf(args)) == .Null) {
+        return null;
+    }
     // obtain a memory to write to
     recycle_fba.mux.lock();
     const buf = blk: while (true) {
-        const buf = recycle_fba.allocator().alloc(u8, 256) catch {
+        const buf = recycle_fba.allocator().alloc(u8, 512) catch {
             // no memory available rn - unlock and wait
             recycle_fba.mux.unlock();
             std.time.sleep(std.time.ns_per_ms);

@@ -33,7 +33,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
         allocator: Allocator,
         recycle_fba: RecycleFBA,
         max_buffer: u64,
-        channel: *Channel(logfmt.LogMsg),
+        channel: *Channel(*logfmt.LogMsg),
         handle: ?std.Thread,
 
         pub fn init(config: Config) Self {
@@ -43,7 +43,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .max_buffer = config.max_buffer,
                 .max_level = config.max_level,
                 .exit_sig = config.exit_sig,
-                .channel = Channel(logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
+                .channel = Channel(*logfmt.LogMsg).init(config.allocator, INITIAL_LOG_CHANNEL_SIZE),
                 .handle = null,
             };
         }
@@ -61,11 +61,11 @@ pub fn StandardLogger(comptime scope: ?type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.channel.close();
-            if (self.handle) |handle| {
+            if (self.handle) |*handle| {
                 self.exit_sig.store(true, .seq_cst);
                 handle.join();
             }
+            self.channel.close();
             self.channel.deinit();
             self.recycle_fba.deinit();
         }
@@ -81,6 +81,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
 
                 for (messages) |message| {
                     logfmt.writeLog(message) catch @panic("logging failed");
+                    defer self.allocator.destroy(message);
                 }
             }
         }
@@ -93,7 +94,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
             maybe_fields: anytype,
             comptime maybe_fmt: ?[]const u8,
             args: anytype,
-        ) logfmt.LogMsg {
+        ) *logfmt.LogMsg {
             // Allocate memory for formatting messages.
             var maybe_fmt_message: ?[]const u8 = null;
             if (maybe_fmt) |msg_fmt| {
@@ -124,14 +125,16 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
                 maybe_fmt_message = fmt_message.getWritten();
             }
-
-            return logfmt.LogMsg{
+            const log_msg = self.allocator.create(logfmt.LogMsg) catch @panic("could not allocate.Create logfmt.LogMsg");
+            log_msg.* = logfmt.LogMsg{
                 .level = level,
                 .maybe_scope = maybe_scope,
                 .maybe_msg = maybe_msg,
                 .maybe_fields = logfmt.fieldsToStr(&self.recycle_fba, self.max_buffer, maybe_fields),
                 .maybe_fmt = maybe_fmt_message,
             };
+
+            return log_msg;
         }
 
         pub fn log(self: *Self, level: Level, message: []const u8) void {
