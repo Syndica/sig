@@ -15,12 +15,14 @@ pub const Config = struct {
     /// Maximum memory that logger can use.
     max_buffer: u64,
     exit_sig: *std.atomic.Value(bool),
+    kind: LogKind = LogKind.standard,
 };
 
 const INITIAL_LOG_CHANNEL_SIZE: usize = 1024;
 
-const LogType = enum {
+const LogKind = enum {
     standard,
+    testing,
     noop,
 };
 
@@ -80,61 +82,11 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 defer self.channel.allocator.free(messages);
 
                 for (messages) |message| {
-                    logfmt.writeLog(message) catch @panic("logging failed");
+                    const writer = std.io.getStdErr().writer();
+                    logfmt.writeLog(writer, message) catch @panic("logging failed");
                     defer self.allocator.destroy(message);
                 }
             }
-        }
-
-        fn createLogMessage(
-            self: *Self,
-            level: Level,
-            maybe_scope: ?[]const u8,
-            maybe_msg: ?[]const u8,
-            maybe_fields: anytype,
-            comptime maybe_fmt: ?[]const u8,
-            args: anytype,
-        ) *logfmt.LogMsg {
-            // Allocate memory for formatting messages.
-            var maybe_fmt_message: ?[]const u8 = null;
-            if (maybe_fmt) |msg_fmt| {
-                const message_size = std.fmt.count(msg_fmt, args);
-                // obtain a memory to write to
-                self.recycle_fba.mux.lock();
-                const buf = blk: while (true) {
-                    const buf = self.recycle_fba.allocator().alloc(u8, message_size) catch {
-                        // no memory available rn - unlock and wait
-                        self.recycle_fba.mux.unlock();
-                        std.time.sleep(std.time.ns_per_ms);
-                        self.recycle_fba.mux.lock();
-                        continue;
-                    };
-                    break :blk buf;
-                };
-                self.recycle_fba.mux.unlock();
-                errdefer {
-                    self.recycle_fba.mux.lock();
-                    self.recycle_fba.allocator().free(buf);
-                    self.recycle_fba.mux.unlock();
-                }
-                var fmt_message = std.io.fixedBufferStream(buf);
-                const writer = fmt_message.writer();
-
-                if (maybe_fmt) |fmt| {
-                    std.fmt.format(writer, fmt, args) catch @panic("could not format");
-                }
-                maybe_fmt_message = fmt_message.getWritten();
-            }
-            const log_msg = self.allocator.create(logfmt.LogMsg) catch @panic("could not allocate.Create logfmt.LogMsg");
-            log_msg.* = logfmt.LogMsg{
-                .level = level,
-                .maybe_scope = maybe_scope,
-                .maybe_msg = maybe_msg,
-                .maybe_fields = logfmt.fieldsToStr(&self.recycle_fba, self.max_buffer, maybe_fields),
-                .maybe_fmt = maybe_fmt_message,
-            };
-
-            return log_msg;
         }
 
         pub fn log(self: *Self, level: Level, message: []const u8) void {
@@ -150,7 +102,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = self.createLogMessage(level, maybe_scope, message, null, null, null);
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, null, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -166,7 +118,8 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            const logMessage = self.createLogMessage(level, maybe_scope, message, fields, null, null);
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, fields, null, null);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -182,7 +135,8 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            const logMessage = self.createLogMessage(level, maybe_scope, null, null, fmt, args);
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, null, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
 
@@ -198,22 +152,146 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     break :blk null;
                 }
             };
-            const logMessage = self.createLogMessage(level, maybe_scope, null, fields, fmt, args);
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, fields, fmt, args);
             self.channel.send(logMessage) catch @panic("could not send to channel");
         }
     };
 
-    return union(LogType) {
+    const TestingLogger = struct {
+        const Self = @This();
+        max_level: Level,
+        allocator: Allocator,
+        recycle_fba: RecycleFBA,
+        max_buffer: u64,
+        log_msg: ?std.ArrayList(u8),
+
+        pub fn init(config: Config) Self {
+            return .{
+                .max_level = config.max_level,
+                .allocator = config.allocator,
+                .recycle_fba = RecycleFBA.init(config.allocator, 2048) catch @panic("could not create RecycleFBA"),
+                .max_buffer = config.max_buffer,
+                .log_msg = std.ArrayList(u8).init(config.allocator),
+            };
+        }
+
+        fn unscoped(self: *Self) *UnscopedLogger {
+            return @ptrCast(self);
+        }
+
+        fn withScope(self: *Self, comptime new_scope: anytype) *StandardLogger(new_scope) {
+            return @ptrCast(self);
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.recycle_fba.deinit();
+            if (self.log_msg) |log_msg| {
+                log_msg.deinit();
+            }
+        }
+
+        pub fn log(self: *Self, level: Level, message: []const u8) void {
+            if (@intFromEnum(level) > @intFromEnum(self.max_level)) {
+                // noop
+                return;
+            }
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, null, null, null);
+            defer self.allocator.destroy(logMessage);
+            const writer = self.log_msg.?.writer();
+            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+        }
+
+        pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
+            if (@intFromEnum(level) > @intFromEnum(self.max_level)) {
+                // noop
+                return;
+            }
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, message, fields, null, null);
+            defer self.allocator.destroy(logMessage);
+            const writer = self.log_msg.?.writer();
+            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+        }
+
+        pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
+            if (@intFromEnum(level) > @intFromEnum(self.max_level)) {
+                // noop
+                return;
+            }
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, null, fmt, args);
+            defer self.allocator.destroy(logMessage);
+            const writer = self.log_msg.?.writer();
+            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+        }
+
+        pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
+            if (@intFromEnum(level) > @intFromEnum(self.max_level)) {
+                // noop
+                return;
+            }
+            const maybe_scope = blk: {
+                if (scope) |s| {
+                    break :blk @typeName(s);
+                } else {
+                    break :blk null;
+                }
+            };
+
+            const logMessage = logfmt.createLogMessage(self.allocator, &self.recycle_fba, self.max_buffer, level, maybe_scope, null, fields, fmt, args);
+            defer self.allocator.destroy(logMessage);
+            const writer = self.log_msg.?.writer();
+            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+        }
+    };
+
+    return union(LogKind) {
         const Self = @This();
         standard: StanardErrLogger,
+        testing: TestingLogger,
         noop: void,
         pub fn init(config: Config) Self {
-            return .{ .standard = StanardErrLogger.init(.{
-                .allocator = config.allocator,
-                .exit_sig = config.exit_sig,
-                .max_level = config.max_level,
-                .max_buffer = config.max_buffer,
-            }) };
+            switch (config.kind) {
+                .standard => {
+                    return .{ .standard = StanardErrLogger.init(.{
+                        .allocator = config.allocator,
+                        .exit_sig = config.exit_sig,
+                        .max_level = config.max_level,
+                        .max_buffer = config.max_buffer,
+                    }) };
+                },
+                .testing, .noop => {
+                    return .{ .testing = TestingLogger.init(.{
+                        .allocator = config.allocator,
+                        .exit_sig = config.exit_sig,
+                        .max_level = config.max_level,
+                        .max_buffer = config.max_buffer,
+                    }) };
+                },
+            }
         }
 
         pub fn deinit(self: *Self) void {
@@ -221,6 +299,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .standard => |logger| {
                     var standard = logger;
                     standard.deinit();
+                },
+                .testing => |logger| {
+                    var test_logger = logger;
+                    test_logger.deinit();
                 },
                 .noop => {},
             }
@@ -231,7 +313,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .standard => |*logger| {
                     logger.spawn();
                 },
-                .noop => {},
+                .noop, .testing => {},
             }
         }
 
@@ -248,6 +330,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .standard => |*logger| {
                     logger.log(level, message);
                 },
+                .testing => |*logger| {
+                    logger.log_msg.?.clearAndFree();
+                    logger.log(level, message);
+                },
                 .noop => {},
             }
         }
@@ -255,6 +341,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
             switch (self.*) {
                 .standard => |*logger| {
+                    logger.logf(level, fmt, args);
+                },
+                .testing => |*logger| {
+                    logger.log_msg.?.clearAndFree();
                     logger.logf(level, fmt, args);
                 },
                 .noop => {},
@@ -266,6 +356,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 .standard => |*logger| {
                     logger.logWithFields(level, message, fields);
                 },
+                .testing => |*logger| {
+                    logger.log_msg.?.clearAndFree();
+                    logger.logWithFields(level, message, fields);
+                },
                 .noop => {},
             }
         }
@@ -273,6 +367,10 @@ pub fn StandardLogger(comptime scope: ?type) type {
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
             switch (self.*) {
                 .standard => |*logger| {
+                    logger.logfWithFields(level, fmt, args, fields);
+                },
+                .testing => |*logger| {
+                    logger.log_msg.?.clearAndFree();
                     logger.logfWithFields(level, fmt, args, fields);
                 },
                 .noop => {},
@@ -414,4 +512,89 @@ test "trace_ng: level" {
             .f_stock = "nvidia",
         },
     );
+}
+
+test "trace_ng: format" {
+    const allocator = std.testing.allocator;
+
+    const exit = try allocator.create(std.atomic.Value(bool));
+    defer allocator.destroy(exit);
+    exit.* = std.atomic.Value(bool).init(false);
+
+    var logger = StandardLogger(null).init(.{
+        .allocator = allocator,
+        .exit_sig = exit,
+        .max_level = Level.debug,
+        .max_buffer = 2048,
+        .kind = LogKind.testing,
+    });
+
+    defer logger.deinit();
+
+    logger.log(.err, "Logging with log");
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=error Logging with log\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.logf(
+        .warn,
+        "Log message: {s}",
+        .{"Logging with logf"},
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=warning Log message: Logging with logf\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.logWithFields(
+        .info,
+        "Logging with logWithFields",
+        .{
+            .f_agent = "Firefox",
+            .f_version = "2.0",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=info f_agent=Firefox f_version=2.0 Logging with logWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    logger.logfWithFields(
+        .debug,
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = 120,
+            .f_local = "en",
+            .f_stock = "nvidia",
+        },
+    );
+
+    if (logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "time="));
+    }
+
+    // Add scope.
+    const scoped_logger = logger.withScope(@This());
+    scoped_logger.logfWithFields(
+        .debug,
+        "{s}",
+        .{"Logging with logfWithFields"},
+        .{
+            .f_agent = "Firefox",
+            .f_version = 120,
+            .f_local = "en",
+            .f_stock = "nvidia",
+        },
+    );
+
+    if (scoped_logger.testing.log_msg) |log_msg| {
+        try std.testing.expect(std.mem.endsWith(u8, log_msg.items, "level=debug f_agent=Firefox f_version=120 f_local=en f_stock=nvidia Logging with logfWithFields\n"));
+        try std.testing.expect(std.mem.startsWith(u8, log_msg.items, "[trace_ng.log] time="));
+    }
 }
