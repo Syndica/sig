@@ -616,8 +616,8 @@ fn generateData(allocator: std.mem.Allocator, n_accounts: usize) !struct {
 }
 
 pub const BenchmarkSwissMap = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const min_iterations = 3;
+    pub const max_iterations = 10;
 
     pub const BenchArgs = struct {
         n_accounts: usize,
@@ -681,7 +681,7 @@ pub const BenchmarkSwissMap = struct {
 
         const write_speedup = @as(f32, @floatFromInt(std_write_time)) / @as(f32, @floatFromInt(write_time));
         const write_faster_or_slower = if (write_speedup < 1.0) "slower" else "faster";
-        std.debug.print("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
+        std.log.debug("\tWRITE: {} ({d:.2}x {s} than std)\n", .{
             std.fmt.fmtDuration(write_time),
             write_speedup,
             write_faster_or_slower,
@@ -689,7 +689,7 @@ pub const BenchmarkSwissMap = struct {
 
         const read_speedup = @as(f32, @floatFromInt(std_read_time)) / @as(f32, @floatFromInt(read_time));
         const read_faster_or_slower = if (read_speedup < 1.0) "slower" else "faster";
-        std.debug.print("\tREAD: {} ({d:.2}x {s} than std)\n", .{
+        std.log.debug("\tREAD: {} ({d:.2}x {s} than std)\n", .{
             std.fmt.fmtDuration(read_time),
             read_speedup,
             read_faster_or_slower,

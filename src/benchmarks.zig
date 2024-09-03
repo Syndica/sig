@@ -10,6 +10,9 @@ const meta = std.meta;
 
 /// to run gossip benchmarks:
 /// zig build benchmark -- gossip
+///
+/// optional flag to add --telemetry={git_hash} in the CI
+/// this will upload the benchmark results to the Nyrkiö UI.
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
     logger.default_logger.* = logger.Logger.init(allocator, .debug);
@@ -19,89 +22,150 @@ pub fn main() !void {
     var cli_args = try std.process.argsWithAllocator(allocator);
     defer cli_args.deinit();
 
+    // skip the benchmark argv[0]
     _ = cli_args.skip();
-    const maybe_filter = cli_args.next();
-    const filter = blk: {
-        if (maybe_filter) |filter| {
-            std.debug.print("filtering benchmarks with prefix: {s}\n", .{filter});
-            break :blk filter;
-        } else {
-            std.debug.print("no filter: running all benchmarks\n", .{});
-            break :blk "";
+
+    var telemetry: ?[]const u8 = null;
+    var filter: ?Benchmark = null;
+
+    while (cli_args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--help")) {
+            usage();
+        } else if (std.mem.startsWith(u8, arg, "--telemetry=")) {
+            const hash_string = std.mem.trim(u8, arg["--telemetry=".len..], &std.ascii.whitespace);
+            if (hash_string.len == 0) @panic("--telemetry expected the current git commit hash");
+            telemetry = hash_string;
+            continue;
         }
-    };
 
-    // TODO: very manual for now (bc we only have 2 benchmarks)
-    // if we have more benchmarks we can make this more efficient
-    const max_time_per_bench = 2 * std.time.ms_per_s; // !!
-    const run_all_benchmarks = filter.len == 0;
+        filter = std.meta.stringToEnum(Benchmark, arg) orelse usage();
+    }
+    if (telemetry != null and builtin.mode != .ReleaseSafe) @panic("only send telemetry in ReleaseSafe");
+    if (filter == null) usage();
 
-    if (std.mem.startsWith(u8, filter, "swissmap") or run_all_benchmarks) {
+    const max_time_per_bench = std.time.ns_per_s;
+    const run_all_benchmarks = filter == .all;
+
+    var metrics = std.ArrayList(Metric).init(allocator);
+    defer metrics.deinit();
+
+    if (filter == .swissmap or run_all_benchmarks) {
         try benchmark(
             @import("accountsdb/index.zig").BenchmarkSwissMap,
             max_time_per_bench,
             .microseconds,
+            &metrics,
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "geyser") or run_all_benchmarks) {
+    if (filter == .geyser or run_all_benchmarks) {
         std.debug.print("Geyser Streaming Benchmark:\n", .{});
         try @import("geyser/lib.zig").benchmark.runBenchmark();
     }
 
-    if (std.mem.startsWith(u8, filter, "accounts_db") or run_all_benchmarks) {
+    if (std.mem.startsWith(u8, @tagName(filter.?), "accounts_db") or run_all_benchmarks) {
         var run_all = false;
-        if (std.mem.eql(u8, "accounts_db", filter) or run_all_benchmarks) {
+        if (filter == .accounts_db or run_all_benchmarks) {
             run_all = true;
         }
 
-        if (std.mem.eql(u8, "accounts_db_readwrite", filter) or run_all) {
+        if (filter == .accounts_db_readwrite or run_all) {
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDB,
                 max_time_per_bench,
                 .milliseconds,
+                &metrics,
             );
         }
 
-        if (std.mem.eql(u8, "accounts_db_snapshot", filter) or run_all) {
+        if (filter == .accounts_db_snapshot or run_all) {
             // NOTE: for this benchmark you need to setup a snapshot in test-data/snapshot_bench
             // and run as a binary ./zig-out/bin/... so the open file limits are ok
             try benchmark(
                 @import("accountsdb/db.zig").BenchmarkAccountsDBSnapshotLoad,
                 max_time_per_bench,
                 .milliseconds,
+                &metrics,
             );
         }
     }
 
-    if (std.mem.startsWith(u8, filter, "socket_utils") or run_all_benchmarks) {
+    if (filter == .socket_utils or run_all_benchmarks) {
         try benchmark(
             @import("net/socket_utils.zig").BenchmarkPacketProcessing,
             max_time_per_bench,
             .milliseconds,
+            &metrics,
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "gossip") or run_all_benchmarks) {
+    if (filter == .gossip or run_all_benchmarks) {
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServiceGeneral,
             max_time_per_bench,
             .milliseconds,
+            &metrics,
         );
         try benchmark(
             @import("gossip/service.zig").BenchmarkGossipServicePullRequests,
             max_time_per_bench,
             .milliseconds,
+            &metrics,
         );
     }
 
-    if (std.mem.startsWith(u8, filter, "sync") or run_all_benchmarks) {
+    if (filter == .sync or run_all_benchmarks) {
         try benchmark(
             @import("sync/channel.zig").BenchmarkChannel,
             max_time_per_bench,
             .microseconds,
+            &metrics,
         );
     }
+
+    if (telemetry) |hash| {
+        try sendTelemetry(allocator, hash, try metrics.toOwnedSlice());
+    }
+}
+
+const Benchmark = enum {
+    all,
+    swissmap,
+    geyser,
+    accounts_db,
+    accounts_db_readwrite,
+    accounts_db_snapshot,
+    socket_utils,
+    gossip,
+    sync,
+};
+
+fn usage() noreturn {
+    var stdout = std.io.getStdOut().writer();
+    stdout.writeAll(
+        \\ benchmark name [options]
+        \\
+        \\ Available Benchmarks:
+        \\  all
+        \\  swissmap
+        \\  geyser
+        \\  accounts_db
+        \\      accounts_db_readwrite
+        \\      accounts_db_snapshot
+        \\  
+        \\  socket_utils
+        \\  gossip
+        \\  sync
+        \\
+        \\ Options:
+        \\  --help
+        \\    Prints this usage message
+        \\
+        \\  --telemetry=git_hash 
+        \\    Sends benchmark to the Nyrkio endpoint, needs the NYRKIO_KEY env-var to be set
+        \\
+    ) catch @panic("failed to print usage");
+    std.posix.exit(1);
 }
 
 const TimeUnits = enum {
@@ -131,12 +195,14 @@ const TimeUnits = enum {
 // src: https://github.com/Hejsil/zig-bench
 pub fn benchmark(
     comptime B: type,
-    max_time: u128,
+    /// in nanoseconds
+    max_time: u64,
     time_unit: TimeUnits,
+    metrics: *std.ArrayList(Metric),
 ) !void {
     const args = if (@hasDecl(B, "args")) B.args else [_]void{{}};
-    const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10000;
-    const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 100000;
+    const min_iterations = if (@hasDecl(B, "min_iterations")) B.min_iterations else 10;
+    const max_iterations = if (@hasDecl(B, "max_iterations")) B.max_iterations else 5000;
 
     const functions = comptime blk: {
         var res: []const Decl = &[_]Decl{};
@@ -162,7 +228,7 @@ pub fn benchmark(
             formatter("{s}", "Iterations"),
             formatter("Min({s})", time_unit.toString()),
             formatter("Max({s})", time_unit.toString()),
-            formatter("Variance{s}", ""),
+            formatter("SDev{s}", ""),
             formatter("Mean({s})", time_unit.toString()),
         );
         inline for (functions) |f| {
@@ -189,7 +255,7 @@ pub fn benchmark(
         formatter("{s}", "Iterations"),
         formatter("Min({s})", time_unit.toString()),
         formatter("Max({s})", time_unit.toString()),
-        formatter("Variance{s}", ""),
+        formatter("SDev{s}", ""),
         formatter("Mean({s})", time_unit.toString()),
     );
     try stderr.writeAll("\n");
@@ -207,7 +273,7 @@ pub fn benchmark(
             var runtimes: [max_iterations]u64 = undefined;
             var min: u64 = math.maxInt(u64);
             var max: u64 = 0;
-            var runtime_sum: u128 = 0;
+            var runtime_sum: u64 = 0;
 
             var i: usize = 0;
             while (i < min_iterations or
@@ -226,27 +292,39 @@ pub fn benchmark(
                 max = @max(runtimes[i], max);
             }
 
-            const runtime_mean: u64 = @intCast(runtime_sum / i);
+            const runtime_mean = runtime_sum / i;
 
-            var d_sq_sum: u128 = 0;
+            var squared_difference_sum: u64 = 0;
             for (runtimes[0..i]) |runtime| {
-                const d = @as(i64, @intCast(@as(i128, @intCast(runtime)) - runtime_mean));
-                d_sq_sum += @as(u64, @intCast(d * d));
+                const d = @as(i64, @intCast(runtime)) - @as(i64, @intCast(runtime_mean));
+                squared_difference_sum += @intCast(d * d);
             }
-            const variance = d_sq_sum / i;
+            // o^2
+            const variance = squared_difference_sum / i;
+            // o
+            const sd = std.math.sqrt(variance);
+
             _ = try printBenchmark(
                 stderr,
                 min_width,
                 def.name,
                 formatter("{s}", if (@TypeOf(arg) == void) "" else arg.name),
                 i,
-                min,
-                max,
-                variance,
-                runtime_mean,
+                try time_unit.unitsfromNanoseconds(min),
+                try time_unit.unitsfromNanoseconds(max),
+                try time_unit.unitsfromNanoseconds(sd),
+                try time_unit.unitsfromNanoseconds(runtime_mean),
             );
+
             try stderr.writeAll("\n");
             try stderr.context.flush();
+
+            const metric: Metric = .{
+                .name = if (@TypeOf(arg) == void) "" else arg.name,
+                .unit = time_unit.toString(),
+                .value = try time_unit.unitsfromNanoseconds(runtime_mean),
+            };
+            try metrics.append(metric);
         }
     }
 }
@@ -279,7 +357,6 @@ fn printBenchmark(
     const variance_len = try alignedPrint(writer, .right, min_widths[4], "{}", .{variance});
     try writer.writeAll(" ");
     const mean_runtime_len = try alignedPrint(writer, .right, min_widths[5], "{}", .{mean_runtime});
-
     return [_]u64{ name_len, it_len, min_runtime_len, max_runtime_len, variance_len, mean_runtime_len };
 }
 
@@ -314,4 +391,82 @@ fn alignedPrint(writer: anytype, dir: enum { left, right }, width: u64, comptime
     if (dir == .left)
         try cow.writer().writeByteNTimes(' ', math.sub(u64, width, value_len) catch 0);
     return cow.bytes_written;
+}
+
+const Metric = struct {
+    name: []const u8,
+    unit: []const u8,
+    value: u64,
+};
+
+const MetricBatch = struct {
+    timestamp: u64,
+    metrics: []const Metric,
+    attributes: struct {
+        git_repo: []const u8,
+        branch: []const u8,
+        git_commit: []const u8,
+    },
+};
+
+pub fn sendTelemetry(
+    allocator: std.mem.Allocator,
+    hash: []const u8,
+    metrics: []const Metric,
+) !void {
+    const git_args = &.{
+        "git",
+        "show",
+        "-s",
+        "--format=%ct",
+        hash,
+    };
+    const git_result = try std.process.Child.run(.{
+        .argv = git_args,
+        .allocator = allocator,
+    });
+
+    if (git_result.term != .Exited) @panic("git failed");
+    const timestamp = try std.fmt.parseInt(u64, std.mem.sliceTo(git_result.stdout, '\n'), 10);
+
+    const batch: *const MetricBatch = &.{
+        .timestamp = timestamp,
+        .metrics = metrics,
+        .attributes = .{
+            .git_repo = "https://github.com/Syndica/sig",
+            .branch = "main",
+            .git_commit = hash,
+        },
+    };
+
+    const payload = try std.json.stringifyAlloc(
+        allocator,
+        [_]*const MetricBatch{batch}, // Nyrkiö needs an _array_ of batches.
+        .{},
+    );
+    defer allocator.free(payload);
+
+    const token = try std.process.getEnvVarOwned(allocator, "NYRKIO_KEY");
+    defer allocator.free(token);
+
+    const curl_args = &.{
+        "curl",
+        "-X",
+        "POST",
+        "-H",
+        "Content-type: application/json",
+        "-H",
+        try std.fmt.allocPrint(allocator, "Authorization: Bearer {s}", .{token}),
+        try std.fmt.allocPrint(allocator, "-d {s}", .{payload}),
+        "https://nyrkio.com/api/v0/result/sig",
+    };
+
+    const result = try std.process.Child.run(.{
+        .argv = curl_args,
+        .allocator = allocator,
+    });
+    if (result.term != .Exited) {
+        std.debug.print("curl stderr: {s}\n", .{result.stderr});
+        @panic("curl failed");
+    }
 }

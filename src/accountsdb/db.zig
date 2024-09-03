@@ -3993,8 +3993,8 @@ test "shrink account file works" {
 }
 
 pub const BenchmarkAccountsDBSnapshotLoad = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const min_iterations = 3;
+    pub const max_iterations = 10;
 
     pub const BenchArgs = struct {
         use_disk: bool,
@@ -4083,8 +4083,8 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
 };
 
 pub const BenchmarkAccountsDB = struct {
-    pub const min_iterations = 1;
-    pub const max_iterations = 1;
+    pub const min_iterations = 3;
+    pub const max_iterations = 10;
 
     pub const MemoryType = enum {
         ram,
@@ -4104,7 +4104,7 @@ pub const BenchmarkAccountsDB = struct {
         /// ie, if n_accounts = 100 and n_accounts_multiple = 10, then the index will have 10x100=1000 accounts prepopulated
         n_accounts_multiple: usize = 0,
         /// the name of the benchmark
-        name: []const u8 = "",
+        name: []const u8,
     };
 
     pub const args = [_]BenchArgs{
@@ -4137,44 +4137,44 @@ pub const BenchmarkAccountsDB = struct {
             .name = "100k accounts (1_slot - disk index - disk accounts)",
         },
 
-        // // test accounts in ram
-        // BenchArgs{
-        //     .n_accounts = 100_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .ram,
-        //     .index = .ram,
-        //     .name = "100k accounts (1_slot - ram index - ram accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 10_000,
-        //     .slot_list_len = 10,
-        //     .accounts = .ram,
-        //     .index = .ram,
-        //     .name = "10k accounts (10_slots - ram index - ram accounts)",
-        // },
+        // test accounts in ram
+        BenchArgs{
+            .n_accounts = 100_000,
+            .slot_list_len = 1,
+            .accounts = .ram,
+            .index = .ram,
+            .name = "100k accounts (1_slot - ram index - ram accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+            .accounts = .ram,
+            .index = .ram,
+            .name = "10k accounts (10_slots - ram index - ram accounts)",
+        },
 
-        // // tests large number of accounts on disk
-        // BenchArgs{
-        //     .n_accounts = 10_000,
-        //     .slot_list_len = 10,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "10k accounts (10_slots - ram index - disk accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "500k accounts (1_slot - ram index - disk accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 3,
-        //     .accounts = .disk,
-        //     .index = .ram,
-        //     .name = "500k accounts (3_slot - ram index - disk accounts)",
-        // },
+        // tests large number of accounts on disk
+        BenchArgs{
+            .n_accounts = 10_000,
+            .slot_list_len = 10,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "10k accounts (10_slots - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "500k accounts (1_slot - ram index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 3,
+            .accounts = .disk,
+            .index = .ram,
+            .name = "500k accounts (3_slot - ram index - disk accounts)",
+        },
         // BenchArgs{
         //     .n_accounts = 3_000_000,
         //     .slot_list_len = 1,
@@ -4198,28 +4198,28 @@ pub const BenchmarkAccountsDB = struct {
         //     .name = "3M accounts (3_slot - ram index - disk accounts)",
         // },
 
-        // // testing disk indexes
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .name = "500k accounts (1_slot - disk index - disk accounts)",
-        // },
+        // testing disk indexes
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .name = "500k accounts (1_slot - disk index - disk accounts)",
+        },
+        BenchArgs{
+            .n_accounts = 500_000,
+            .slot_list_len = 1,
+            .accounts = .disk,
+            .index = .disk,
+            .n_accounts_multiple = 2,
+            .name = "500k accounts (1_slot - disk index - disk accounts)",
+        },
         // BenchArgs{
         //     .n_accounts = 3_000_000,
         //     .slot_list_len = 1,
         //     .accounts = .disk,
         //     .index = .disk,
         //     .name = "3m accounts (1_slot - disk index - disk accounts)",
-        // },
-        // BenchArgs{
-        //     .n_accounts = 500_000,
-        //     .slot_list_len = 1,
-        //     .accounts = .disk,
-        //     .index = .disk,
-        //     .n_accounts_multiple = 2,
-        //     .name = "500k accounts (1_slot - disk index - disk accounts)",
         // },
     };
 
@@ -4288,7 +4288,7 @@ pub const BenchmarkAccountsDB = struct {
                 );
             }
             const elapsed = timer.read();
-            std.debug.print("WRITE: {d}\n", .{elapsed});
+            std.log.debug("WRITE: {d}\n", .{elapsed});
         } else {
             var account_files = try ArrayList(AccountFile).initCapacity(allocator, slot_list_len);
             defer account_files.deinit();
@@ -4359,7 +4359,7 @@ pub const BenchmarkAccountsDB = struct {
             }
             const elapsed = timer.read();
 
-            std.debug.print("WRITE: {d}\n", .{elapsed});
+            std.log.debug("WRITE: {d}\n", .{elapsed});
         }
 
         var timer = try std.time.Timer.start();

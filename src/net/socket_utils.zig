@@ -133,7 +133,7 @@ pub const SocketThread = struct {
 
 pub const BenchmarkPacketProcessing = struct {
     pub const min_iterations = 3;
-    pub const max_iterations = 5;
+    pub const max_iterations = 10;
 
     pub const BenchmarkArgs = struct {
         n_packets: usize,

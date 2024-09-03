@@ -104,7 +104,8 @@ jobs:
           version: 0.13.0
 
       - name: benchmarks 
-        run: zig build -Doptimize=ReleaseSafe benchmark
+        # run all the benchmarks to make sure it compiles and works, but don't send telemetry.
+        run: zig build -Doptimize=ReleaseSafe benchmark -- all
 
   gossip:
     strategy:
