@@ -338,3 +338,65 @@ test "disk allocator on arraylists" {
     };
     try std.testing.expect(did_error);
 }
+
+/// Namespace housing the different components for the stateless failing allocator.
+/// This allows easily importing everything related therein.
+/// NOTE: we represent it in this way instead of as a struct like GPA, because
+/// the allocator doesn't have any meaningful state to point to, being much more
+/// similar to allocators like `page_allocator`, `c_allocator`, etc, except
+/// parameterized at compile time.
+pub const failing = struct {
+    pub const Config = struct {
+        alloc: Mode = .noop_or_fail,
+        resize: Mode = .noop_or_fail,
+        free: Mode = .noop_or_fail,
+    };
+
+    pub const Mode = enum {
+        /// alloc = return null
+        /// resize = return false
+        /// free = noop
+        noop_or_fail,
+        /// Panics with 'Unexpected call to <method>'.
+        panics,
+        /// Asserts the method is never reached with `unreachable`.
+        assert,
+    };
+
+    /// Returns a comptime-known stateless allocator where each method fails in the specified manner.
+    /// By default each method is a simple failure or noop, and can be escalated to a panic which is
+    /// enabled in safe and unsafe modes, or to an assertion which triggers checked illegal behaviour.
+    pub inline fn allocator(config: Config) std.mem.Allocator {
+        const S = struct {
+            fn alloc(_: *anyopaque, _: usize, _: u8, _: usize) ?[*]u8 {
+                return switch (config.alloc) {
+                    .noop_or_fail => null,
+                    .panics => @panic("Unexpected call to alloc"),
+                    .assert => unreachable,
+                };
+            }
+            fn resize(_: *anyopaque, _: []u8, _: u8, _: usize, _: usize) bool {
+                return switch (config.resize) {
+                    .noop_or_fail => false,
+                    .panics => @panic("Unexpected call to resize"),
+                    .assert => unreachable,
+                };
+            }
+            fn free(_: *anyopaque, _: []u8, _: u8, _: usize) void {
+                return switch (config.free) {
+                    .noop_or_fail => {},
+                    .panics => @panic("Unexpected call to free"),
+                    .assert => unreachable,
+                };
+            }
+        };
+        comptime return .{
+            .ptr = undefined,
+            .vtable = &.{
+                .alloc = S.alloc,
+                .resize = S.resize,
+                .free = S.free,
+            },
+        };
+    }
+};
