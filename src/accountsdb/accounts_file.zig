@@ -2,13 +2,14 @@
 const std = @import("std");
 const sig = @import("../sig.zig");
 
-const Account = sig.core.Account;
-const writeIntLittleMem = sig.core.account.writeIntLittleMem;
-const Hash = sig.core.Hash;
-const Slot = sig.core.Slot;
-const Epoch = sig.core.Epoch;
-const Pubkey = sig.core.Pubkey;
+const Account = sig.core.account.Account;
+const Hash = sig.core.hash.Hash;
+const Slot = sig.core.time.Slot;
+const Epoch = sig.core.time.Epoch;
+const Pubkey = sig.core.pubkey.Pubkey;
 const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
+
+const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
 /// Simple strictly-typed alias for an integer, used to represent a file ID.
 ///

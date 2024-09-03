@@ -54,7 +54,7 @@ const Duration = sig.time.Duration;
 
 const endpointToString = sig.net.endpointToString;
 const globalRegistry = sig.prometheus.globalRegistry;
-const getWallclockMs = sig.gossip.data.getWallclockMs;
+const getWallclockMs = sig.time.getWallclockMs;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
 const UNIQUE_PUBKEY_CAPACITY = sig.gossip.table.UNIQUE_PUBKEY_CAPACITY;
@@ -321,10 +321,10 @@ pub const GossipService = struct {
             self.logger,
         });
         try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
-        try manager.spawn("gossip processMessages", processMessages, .{self});
+        try manager.spawn("gossip processMessages", processMessages, .{ self, 19 });
 
         if (!params.spy_node) {
-            try manager.spawn("gossip buildMessages", buildMessages, .{self});
+            try manager.spawn("gossip buildMessages", buildMessages, .{ self, 19 });
         }
 
         try manager.spawn("gossip sendSocket", socket_utils.sendSocket, .{
@@ -471,7 +471,7 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self) !void {
+    pub fn processMessages(self: *Self, seed: u64) !void {
         var trim_table_timer = try sig.time.Timer.start();
         var msg_count: usize = 0;
 
@@ -689,7 +689,7 @@ pub const GossipService = struct {
 
             if (pull_requests.items.len > 0) {
                 var x_timer = sig.time.Timer.start() catch unreachable;
-                self.handleBatchPullRequest(pull_requests) catch |err| {
+                self.handleBatchPullRequest(pull_requests, seed + msg_count) catch |err| {
                     self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
@@ -777,19 +777,21 @@ pub const GossipService = struct {
             }
         };
 
-        self.logger.infof("gossip table: dropped {} pubkeys", .{n_pubkeys_dropped});
         self.stats.table_pubkeys_dropped.add(n_pubkeys_dropped);
     }
 
     /// main gossip loop for periodically sending new GossipMessagemessages.
     /// this includes sending push messages, pull requests, and triming old
     /// gossip data (in the gossip_table, active_set, and failed_pull_hashes).
-    fn buildMessages(self: *Self) !void {
+    fn buildMessages(self: *Self, seed: u64) !void {
         var loop_timer = try sig.time.Timer.start();
         var active_set_timer = try sig.time.Timer.start();
         var pull_req_timer = try sig.time.Timer.start();
         var stats_publish_timer = try sig.time.Timer.start();
         var trim_memory_timer = try sig.time.Timer.start();
+
+        var prng = std.rand.DefaultPrng.init(seed);
+        const rng = prng.random();
 
         var push_cursor: u64 = 0;
         var entrypoints_identified = false;
@@ -801,11 +803,11 @@ pub const GossipService = struct {
             if (pull_req_timer.read().asNanos() > PULL_REQUEST_RATE.asNanos()) pull_blk: {
                 defer pull_req_timer.reset();
                 // this also includes sending ping messages to other peers
-                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-                var prng = std.Random.Xoshiro256.init(prng_seed);
+                const now = getWallclockMs();
                 const packets = self.buildPullRequests(
-                    prng.random(),
+                    rng,
                     pull_request.MAX_BLOOM_SIZE,
+                    now,
                 ) catch |e| {
                     self.logger.errf("failed to generate pull requests: {any}", .{e});
                     break :pull_blk;
@@ -858,9 +860,7 @@ pub const GossipService = struct {
                     try push_msg_queue.append(my_legacy_contact_info_value);
                 }
 
-                const prng_seed: u64 = @intCast(std.time.milliTimestamp());
-                var prng = std.Random.Xoshiro256.init(prng_seed);
-                try self.rotateActiveSet(prng.random());
+                try self.rotateActiveSet(rng);
             }
 
             // publish metrics
@@ -1053,10 +1053,10 @@ pub const GossipService = struct {
         rand: std.Random,
         /// the bloomsize of the pull request's filters
         bloom_size: usize,
+        now: u64,
     ) !ArrayList(Packet) {
         // get nodes from gossip table
         var buf: [MAX_NUM_PULL_REQUESTS]ThreadSafeContactInfo = undefined;
-        const now = getWallclockMs();
         const peers = try self.getThreadSafeGossipNodes(
             &buf,
             MAX_NUM_PULL_REQUESTS,
@@ -1178,6 +1178,7 @@ pub const GossipService = struct {
         output: ArrayList(Packet),
         output_limit: *std.atomic.Value(i64),
         output_consumed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+        seed: u64,
 
         task: Task,
         done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -1197,10 +1198,9 @@ pub const GossipService = struct {
                 return;
             }
 
-            const filter_rng_seed: u64 = @intCast(std.time.milliTimestamp());
-            var filter_prng = std.Random.Xoshiro256.init(filter_rng_seed);
+            var rng = std.Random.Xoshiro256.init(self.seed);
             const response_gossip_values = pull_response.filterSignedGossipDatas(
-                filter_prng.random(),
+                rng.random(),
                 self.allocator,
                 self.gossip_table,
                 self.filter,
@@ -1239,6 +1239,7 @@ pub const GossipService = struct {
     fn handleBatchPullRequest(
         self: *Self,
         pull_requests: ArrayList(PullRequestMessage),
+        seed: u64,
     ) !void {
         // update the callers
         // TODO: parallelize this?
@@ -1312,6 +1313,7 @@ pub const GossipService = struct {
                     .output = ArrayList(Packet).init(self.allocator),
                     .allocator = self.allocator,
                     .output_limit = &output_limit,
+                    .seed = seed + i,
                 };
 
                 // run it
@@ -1698,7 +1700,6 @@ pub const GossipService = struct {
             //   - if all nodes have zero stake: epoch duration
             //   - if any other nodes have non-zero stake: GOSSIP_PULL_TIMEOUT_MS (15s)
             const n_values_removed = try gossip_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION);
-            self.logger.infof("gossip table: removed {} old labels", .{n_values_removed});
             self.stats.table_old_values_removed.add(n_values_removed);
             self.stats.table_remove_old_values_call_count.inc();
         }
@@ -2252,10 +2253,12 @@ test "build messages startup and shutdown" {
     );
     defer gossip_service.deinit();
 
-    var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{&gossip_service});
+    var prng = std.Random.Xoshiro256.init(0);
+    const rng = prng.random();
+
+    var build_messages_handle = try Thread.spawn(.{}, GossipService.buildMessages, .{ &gossip_service, 19 });
 
     // add some gossip values to push
-    var rng = std.rand.DefaultPrng.init(91);
     var lg = gossip_service.gossip_table_rw.write();
     var ping_lock = gossip_service.ping_cache_rw.write();
     var ping_cache: *PingCache = ping_lock.mut();
@@ -2265,7 +2268,7 @@ test "build messages startup and shutdown" {
 
     for (0..10) |_| {
         var rand_keypair = try KeyPair.create(null);
-        var value = try SignedGossipData.randomWithIndex(rng.random(), &rand_keypair, 0); // contact info
+        var value = try SignedGossipData.randomWithIndex(rng, &rand_keypair, 0); // contact info
         // make gossip valid
         value.data.LegacyContactInfo.gossip = SocketAddr.initIpv4(.{ 127, 0, 0, 1 }, 8000);
         _ = try lg.mut().insert(value, getWallclockMs());
@@ -2634,7 +2637,7 @@ test "handle pull request" {
         .value = ci,
     });
 
-    try gossip_service.handleBatchPullRequest(pull_requests);
+    try gossip_service.handleBatchPullRequest(pull_requests, 19);
 
     {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
@@ -2748,9 +2751,9 @@ test "test build prune messages and handle push messages" {
     try std.testing.expectEqual(prune_data.prunes.len, 10);
 }
 
-test "test build pull requests" {
+test "build pull requests" {
     const allocator = std.testing.allocator;
-    var rng = std.rand.DefaultPrng.init(91);
+    var prng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
     var my_keypair = try KeyPair.create([_]u8{1} ** 32);
     const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
@@ -2772,6 +2775,7 @@ test "test build pull requests" {
     defer gossip_service.deinit();
 
     // insert peers to send msgs to
+    const now = getWallclockMs();
     {
         var ping_lock = gossip_service.ping_cache_rw.write();
         var lg = gossip_service.gossip_table_rw.write();
@@ -2781,10 +2785,9 @@ test "test build pull requests" {
         }
 
         var pc: *PingCache = ping_lock.mut();
-        const now = getWallclockMs();
         for (0..20) |i| {
             var rando_keypair = try KeyPair.create(null);
-            var value = try SignedGossipData.randomWithIndex(rng.random(), &rando_keypair, 0);
+            var value = try SignedGossipData.randomWithIndex(prng.random(), &rando_keypair, 0);
             value.wallclockPtr().* = now + 10 * i;
 
             _ = try lg.mut().insert(value, now + 10 * i);
@@ -2792,10 +2795,8 @@ test "test build pull requests" {
         }
     }
 
-    const maybe_failing_seed: u64 = @intCast(std.time.milliTimestamp());
-    var maybe_failing_prng = std.Random.Xoshiro256.init(maybe_failing_seed);
-    var packets = gossip_service.buildPullRequests(maybe_failing_prng.random(), 2) catch |err| {
-        std.log.err("\nThe failing seed is: '{d}'\n", .{maybe_failing_seed});
+    var packets = gossip_service.buildPullRequests(prng.random(), 2, now) catch |err| {
+        std.log.err("\nThe failing now time is: '{d}'\n", .{now});
         return err;
     };
     defer packets.deinit();
@@ -3107,7 +3108,7 @@ test "process contact info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.processMessages,
-        .{&gossip_service},
+        .{ &gossip_service, 19 },
     );
 
     // send a push message

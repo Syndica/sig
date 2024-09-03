@@ -1,11 +1,12 @@
 const std = @import("std");
-const SignedGossipData = @import("../gossip/data.zig").SignedGossipData;
-const GossipTable = @import("../gossip/table.zig").GossipTable;
-const Logger = @import("../trace/log.zig").Logger;
-const RwMux = @import("../sync/mux.zig").RwMux;
+const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
+const SignedGossipData = sig.gossip.data.SignedGossipData;
+const GossipTable = sig.gossip.table.GossipTable;
+const Logger = sig.trace.log.Logger;
+const RwMux = sig.sync.mux.RwMux;
 
 pub const GossipDumpService = struct {
     allocator: Allocator,

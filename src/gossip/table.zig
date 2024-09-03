@@ -23,7 +23,6 @@ const Pubkey = sig.core.Pubkey;
 const SocketAddr = sig.net.SocketAddr;
 
 const PACKET_DATA_SIZE = sig.net.packet.PACKET_DATA_SIZE;
-
 pub const UNIQUE_PUBKEY_CAPACITY: usize = 8_192;
 pub const MAX_TABLE_SIZE: usize = 100_000; // TODO: better value for this
 
@@ -944,7 +943,7 @@ pub const HashTimeQueue = struct {
     }
 };
 
-test "gossip.table: remove old values" {
+test "remove old values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     const seed: u64 = @intCast(std.time.milliTimestamp());
@@ -975,7 +974,7 @@ test "gossip.table: remove old values" {
     try std.testing.expectEqual(table.len(), 0);
 }
 
-test "gossip.table: insert and remove value" {
+test "insert and remove value" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     const seed: u64 = @intCast(std.time.milliTimestamp());
@@ -995,7 +994,7 @@ test "gossip.table: insert and remove value" {
     try table.remove(label, 100);
 }
 
-test "gossip.table: trim pruned values" {
+test "trim pruned values" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     const seed: u64 = @intCast(std.time.milliTimestamp());
@@ -1096,7 +1095,7 @@ test "gossip.HashTimeQueue: trim pruned values" {
     try std.testing.expectEqual(table.purged.len(), 0);
 }
 
-test "gossip.table: insert and get" {
+test "insert and get" {
     const keypair = try KeyPair.create([_]u8{1} ** 32);
 
     const seed: u64 = @intCast(std.time.milliTimestamp());
@@ -1115,7 +1114,7 @@ test "gossip.table: insert and get" {
     _ = x;
 }
 
-test "gossip.table: insert and get contact_info" {
+test "insert and get contact_info" {
     const kp = try KeyPair.create([_]u8{1} ** 32);
     var id = Pubkey.fromPublicKey(&kp.public_key);
 

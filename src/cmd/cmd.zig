@@ -28,7 +28,7 @@ const StatusCache = sig.accounts_db.StatusCache;
 const downloadSnapshotsFromGossip = sig.accounts_db.downloadSnapshotsFromGossip;
 const getOrInitIdentity = helpers.getOrInitIdentity;
 const globalRegistry = sig.prometheus.globalRegistry;
-const getWallclockMs = sig.gossip.getWallclockMs;
+const getWallclockMs = sig.time.getWallclockMs;
 const leaderScheduleFromBank = sig.core.leader_schedule.leaderScheduleFromBank;
 const parallelUnpackZstdTarBall = sig.accounts_db.parallelUnpackZstdTarBall;
 const parseLeaderSchedule = sig.core.leader_schedule.parseLeaderSchedule;
@@ -909,7 +909,7 @@ fn validateSnapshot() !void {
         allocator,
         app_base.logger,
         null,
-        false,
+        true,
         geyser_writer,
     );
     defer snapshot_result.deinit();

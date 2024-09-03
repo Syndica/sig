@@ -4,12 +4,14 @@ original src: https://github.com/docker/awesome-compose/tree/master/prometheus-g
 
 requirements: 
 - `docker compose` 
+  - [https://docs.docker.com/engine/install/ubuntu/](https://docs.docker.com/engine/install/ubuntu/)
 - either mac or linux supported 
 
 modify `/etc/hosts` to include the following line: 
 ```
 127.0.0.1 prometheus
 ```
+
 
 ## Running 
 
