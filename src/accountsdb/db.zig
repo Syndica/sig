@@ -1906,11 +1906,15 @@ pub const AccountsDB = struct {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
 
-                    const ptr_to_ref_field, var ref_lg = self.account_index.getReferencePtrPtrWrite(pubkey, slot) catch |err| switch (err) {
+                    const ref_parent, var ref_lg = self.account_index.getReferenceParent(pubkey, slot) catch |err| switch (err) {
                         // SAFE: we know the pubkey exists in the index because its alive
                         error.SlotNotFound, error.PubkeyNotFound => unreachable,
                     };
                     defer ref_lg.unlock();
+                    const ptr_to_ref_field = switch (ref_parent) {
+                        .head => |head| &head.ref_ptr,
+                        .parent => |parent| &parent.next_ptr.?,
+                    };
 
                     // copy + update the values
                     const new_ref_ptr = new_reference_block.addOneAssumeCapacity();

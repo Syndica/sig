@@ -196,25 +196,30 @@ pub const AccountIndex = struct {
         return .{ ref_head, bin_lg };
     }
 
+    pub const ReferenceParent = union(enum) {
+        head: *AccountReferenceHead,
+        parent: *AccountRef,
+    };
+
     /// Get a pointer to the account reference pointer with slot `slot` and pubkey `pubkey`,
     /// alongside the write lock guard for the parent bin, and thus by extension the account
     /// reference; this also locks access to all other account references in the parent bin.
     /// This can be used to update an account reference (ie by replacing the `*AccountRef`).
-    pub fn getReferencePtrPtrWrite(
+    pub fn getReferenceParent(
         self: *const Self,
         pubkey: *const Pubkey,
         slot: Slot,
-    ) GetAccountRefError!struct { **AccountRef, RwMux(RefMap).WLockGuard } {
+    ) GetAccountRefError!struct { ReferenceParent, RwMux(RefMap).WLockGuard } {
         const bin, var bin_lg = self.getBinFromPubkey(pubkey).writeWithLock();
         errdefer bin_lg.unlock();
 
         const head_ref = bin.getPtr(pubkey.*) orelse return error.PubkeyNotFound;
-        const ref_ptr_ptr = switch (head_ref.getParentRefOf(slot)) {
+        const ref_parent: ReferenceParent = switch (head_ref.getParentRefOf(slot)) {
             .null => return error.SlotNotFound,
-            .head => &head_ref.ref_ptr,
-            .parent => |parent| &parent.next_ptr.?,
+            .head => .{ .head = head_ref },
+            .parent => |parent| .{ .parent = parent },
         };
-        return .{ ref_ptr_ptr, bin_lg };
+        return .{ ref_parent, bin_lg };
     }
 
     /// returns a reference to the slot in the index which is a local copy
@@ -312,7 +317,7 @@ pub const AccountIndex = struct {
         slot: Slot,
         new_ref: *AccountRef,
     ) GetAccountRefError!void {
-        const ref_ptr_ptr, var bin_lg = try self.getReferencePtrPtrWrite(pubkey, slot);
+        const ref_ptr_ptr, var bin_lg = try self.getReferenceParent(pubkey, slot);
         defer bin_lg.unlock();
         std.debug.assert(ref_ptr_ptr.*.slot == slot);
         std.debug.assert(ref_ptr_ptr.*.pubkey.equals(pubkey));
