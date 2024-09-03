@@ -36,7 +36,7 @@ pub const SingleEpochLeaderSchedule = struct {
         return SlotLeaderProvider.init(self, Self.getLeader);
     }
 
-    fn fromRpc(allocator: Allocator, start_slot: Slot, rpc_client: *RpcClient) !SingleEpochLeaderSchedule {
+    pub fn fromRpc(allocator: Allocator, start_slot: Slot, rpc_client: *RpcClient) !SingleEpochLeaderSchedule {
         const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, null, .{});
         defer rpc_leader_schedule_response.deinit();
         const rpc_leader_schedule = try rpc_leader_schedule_response.result();

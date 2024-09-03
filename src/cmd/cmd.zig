@@ -990,7 +990,7 @@ pub fn testTransactionSenderService() !void {
     const transaction_channel = sig.sync.Channel(sig.transaction_sender.TransactionInfo).init(gpa_allocator, 100);
     defer transaction_channel.deinit();
 
-    const transaction_sender_config = sig.transaction_sender.Config{
+    const transaction_sender_config = sig.transaction_sender.service.Config{
         .cluster = .Testnet,
         .socket = SocketAddr.init(app_base.my_ip, 0),
     };

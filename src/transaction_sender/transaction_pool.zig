@@ -28,7 +28,7 @@ pub const TransactionPool = struct {
 
     pub fn init(allocator: Allocator, max_transactions: usize) TransactionPool {
         return .{
-            .pending_transactions = RwMux(PendingTransactions).init(PendingTransactions.init(allocator)),
+            .pending_transactions_rw = RwMux(PendingTransactions).init(PendingTransactions.init(allocator)),
             .retry_signatures = std.ArrayList(Signature).init(allocator),
             .drop_signatures = std.ArrayList(Signature).init(allocator),
             .max_transactions = max_transactions,
