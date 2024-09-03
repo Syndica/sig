@@ -985,6 +985,18 @@ fn getLeaderScheduleFromCli(allocator: Allocator) !?SingleEpochLeaderSchedule {
 pub fn testTransactionSenderService() !void {
     var app_base = try AppBase.init(gpa_allocator);
 
+    if (config.current.gossip.network) |net| {
+        if (!std.mem.eql(u8, net, "testnet")) {
+            @panic("Can only run transaction sender service on testnet!");
+        }
+    }
+
+    for (config.current.gossip.entrypoints) |entrypoint| {
+        if (std.mem.indexOf(u8, entrypoint, "testnet") == null) {
+            @panic("Can only run transaction sender service on testnet!");
+        }
+    }
+
     const gossip_service, var gossip_manager = try startGossip(gpa_allocator, &app_base, &.{});
     defer gossip_manager.deinit();
 
