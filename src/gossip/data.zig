@@ -1773,7 +1773,7 @@ test "sig verify duplicateShreds" {
     try std.testing.expect(try value.verify(pubkey));
 }
 
-test "test sanitize GossipData" {
+test "sanitize GossipData" {
     var rng = std.rand.DefaultPrng.init(0);
     const rand = rng.random();
 
