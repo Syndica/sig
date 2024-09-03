@@ -563,6 +563,7 @@ pub fn run() !void {
                         },
                         .options = &.{
                             // gossip
+                            &network_option,
                             &gossip_host_option,
                             &gossip_port_option,
                             &gossip_entrypoints_option,
