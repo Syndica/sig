@@ -86,6 +86,9 @@ pub fn StandardLogger(comptime scope: ?type) type {
                     logfmt.writeLog(writer, message) catch @panic("logging failed");
                     defer self.allocator.destroy(message);
                 }
+                self.recycle_fba.mux.lock();
+                self.recycle_fba.alloc_allocator.reset();
+                self.recycle_fba.mux.unlock();
             }
         }
 
