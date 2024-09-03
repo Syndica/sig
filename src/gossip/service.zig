@@ -2750,7 +2750,7 @@ test "test build prune messages and handle push messages" {
     try std.testing.expectEqual(prune_data.prunes.len, 10);
 }
 
-test "test build pull requests" {
+test "build pull requests" {
     const allocator = std.testing.allocator;
     var prng = std.rand.DefaultPrng.init(91);
     var exit = AtomicBool.init(false);
