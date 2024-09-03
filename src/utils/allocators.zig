@@ -136,130 +136,6 @@ pub fn RecycleFBA(config: struct {
     };
 }
 
-/// thread safe disk memory allocator
-pub const DiskMemoryAllocator = struct {
-    filepath: []const u8,
-    count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
-
-    const Self = @This();
-
-    pub fn init(filepath: []const u8) Self {
-        return Self{
-            .filepath = filepath,
-        };
-    }
-
-    /// deletes all allocated files + optionally frees the filepath with the allocator
-    pub fn deinit(self: *Self, str_allocator: ?std.mem.Allocator) void {
-        // delete all files
-        var buf: [1024]u8 = undefined;
-        for (0..self.count.load(.acquire)) |i| {
-            // this should never fail since we know the file exists in alloc()
-            const filepath = std.fmt
-                .bufPrint(&buf, "{s}_{d}", .{ self.filepath, i }) catch unreachable;
-            std.fs.cwd().deleteFile(filepath) catch |err| {
-                std.debug.print("Disk Memory Allocator deinit: error: {}\n", .{err});
-            };
-        }
-        if (str_allocator) |a| {
-            a.free(self.filepath);
-        }
-    }
-
-    pub fn allocator(self: *Self) std.mem.Allocator {
-        return std.mem.Allocator{
-            .ptr = self,
-            .vtable = &.{
-                .alloc = alloc,
-                .resize = resize,
-                .free = free,
-            },
-        };
-    }
-
-    /// creates a new file with size aligned to page_size and returns a pointer to it
-    pub fn alloc(ctx: *anyopaque, n: usize, log2_align: u8, return_address: usize) ?[*]u8 {
-        _ = log2_align;
-        _ = return_address;
-        const self: *Self = @ptrCast(@alignCast(ctx));
-
-        const count = self.count.fetchAdd(1, .monotonic);
-
-        var buf: [1024]u8 = undefined;
-        const filepath = std.fmt.bufPrint(&buf, "{s}_{d}", .{ self.filepath, count }) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-            return null;
-        };
-
-        var file = std.fs.cwd().createFile(filepath, .{ .read = true }) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {} filepath: {s}\n", .{ err, filepath });
-            return null;
-        };
-        defer file.close();
-
-        const aligned_size = std.mem.alignForward(usize, n, std.mem.page_size);
-        const file_size = (file.stat() catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-            return null;
-        }).size;
-
-        if (file_size < aligned_size) {
-            // resize the file
-            file.seekTo(aligned_size - 1) catch |err| {
-                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-                return null;
-            };
-            _ = file.write(&[_]u8{1}) catch |err| {
-                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-                return null;
-            };
-            file.seekTo(0) catch |err| {
-                std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-                return null;
-            };
-        }
-
-        const memory = std.posix.mmap(
-            null,
-            aligned_size,
-            std.posix.PROT.READ | std.posix.PROT.WRITE,
-            std.posix.MAP{ .TYPE = .SHARED },
-            file.handle,
-            0,
-        ) catch |err| {
-            std.debug.print("Disk Memory Allocator error: {}\n", .{err});
-            return null;
-        };
-
-        return memory.ptr;
-    }
-
-    /// unmaps the memory (file still exists and is removed on deinit())
-    pub fn free(_: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
-        _ = log2_align;
-        _ = return_address;
-        // TODO: build a mapping from ptr to file so we can delete the corresponding file on free
-        const buf_aligned_len = std.mem.alignForward(usize, buf.len, std.mem.page_size);
-        std.posix.munmap(@alignCast(buf.ptr[0..buf_aligned_len]));
-    }
-
-    /// not supported rn
-    fn resize(
-        _: *anyopaque,
-        buf_unaligned: []u8,
-        log2_buf_align: u8,
-        new_size: usize,
-        return_address: usize,
-    ) bool {
-        // not supported
-        _ = buf_unaligned;
-        _ = log2_buf_align;
-        _ = new_size;
-        _ = return_address;
-        return false;
-    }
-};
-
 test "recycle allocator" {
     const backing_allocator = std.testing.allocator;
     var allocator = try RecycleFBA(.{}).init(backing_allocator, 1024);
@@ -287,11 +163,183 @@ test "recycle allocator" {
     allocator.allocator().free(bytes4);
 }
 
+/// thread safe disk memory allocator
+pub const DiskMemoryAllocator = struct {
+    dir: std.fs.Dir,
+    logger: sig.trace.Logger,
+    count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    const Self = @This();
+
+    pub inline fn init(
+        index_dir: std.fs.Dir,
+        logger: sig.trace.Logger,
+    ) Self {
+        return .{
+            .dir = index_dir,
+            .logger = logger,
+        };
+    }
+
+    pub inline fn allocator(self: *Self) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .free = free,
+            },
+        };
+    }
+
+    /// creates a new file with size aligned to page_size and returns a pointer to it
+    fn alloc(ctx: *anyopaque, size: usize, log2_align: u8, return_address: usize) ?[*]u8 {
+        _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        const alignment = @as(usize, 1) << @intCast(log2_align);
+        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+
+        const aligned_size = fullMmapSize(size);
+
+        const file_index = self.count.fetchAdd(1, .monotonic);
+        const file_name_bounded = fileNameBounded(file_index);
+        const file_name = file_name_bounded.constSlice();
+        const file = self.dir.createFile(file_name, .{ .read = true, .truncate = true }) catch |err| {
+            self.logFailure(err, file_name);
+            return null;
+        };
+        defer file.close();
+
+        // resize the file
+        file.setEndPos(aligned_size) catch |err| {
+            self.logFailure(err, file_name);
+            return null;
+        };
+
+        const full_alloc = std.posix.mmap(
+            null,
+            aligned_size,
+            std.posix.PROT.READ | std.posix.PROT.WRITE,
+            std.posix.MAP{ .TYPE = .SHARED },
+            file.handle,
+            0,
+        ) catch |err| {
+            self.logFailure(err, file_name);
+            return null;
+        };
+
+        std.mem.bytesAsValue(Metadata, full_alloc[size..][0..@sizeOf(Metadata)]).* = .{
+            .file_index = file_index,
+        };
+        return full_alloc.ptr;
+    }
+
+    /// not supported rn
+    fn resize(
+        ctx: *anyopaque,
+        buf: []u8,
+        log2_align: u8,
+        new_size: usize,
+        return_address: usize,
+    ) bool {
+        _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        const alignment = @as(usize, 1) << @intCast(log2_align);
+        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const aligned_size = fullMmapSize(buf.len);
+        const new_aligned_size = fullMmapSize(new_size);
+
+        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+        const file_name_bounded = fileNameBounded(metadata.file_index);
+        const file_name = file_name_bounded.constSlice();
+
+        if (aligned_size == new_aligned_size) return true;
+
+        if (new_aligned_size < aligned_size) {
+            std.posix.munmap(@alignCast(buf_ptr[new_aligned_size..aligned_size]));
+            std.mem.bytesAsValue(Metadata, buf_ptr[new_size..][0..@sizeOf(Metadata)]).* = .{
+                .file_index = metadata.file_index,
+            };
+            return true;
+        } else {
+            const file = self.dir.openFile(file_name, .{ .mode = .read_write }) catch |err| {
+                self.logFailure(err, file_name);
+                return false;
+            };
+            defer file.close();
+
+            const mapped = std.posix.mmap(
+                buf_ptr,
+                new_aligned_size,
+                std.posix.PROT.READ | std.posix.PROT.WRITE,
+                std.posix.MAP{ .TYPE = .SHARED },
+                file.handle,
+                0,
+            ) catch |err| {
+                self.logFailure(err, file_name);
+                return false;
+            };
+            std.debug.assert(mapped.ptr == buf_ptr);
+
+            return true;
+        }
+    }
+
+    /// unmaps the memory (file still exists and is removed on deinit())
+    fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, return_address: usize) void {
+        _ = return_address;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        const alignment = @as(usize, 1) << @intCast(log2_align);
+        std.debug.assert(alignment <= std.mem.page_size); // the allocator interface shouldn't allow this (aside from the *Raw methods).
+
+        const buf_ptr: [*]align(std.mem.page_size) u8 = @alignCast(buf.ptr);
+        const aligned_size = fullMmapSize(buf.len);
+
+        const metadata: Metadata = @bitCast(buf_ptr[buf.len..][0..@sizeOf(Metadata)].*);
+        const file_name_bounded = fileNameBounded(metadata.file_index);
+        const file_name = file_name_bounded.constSlice();
+
+        std.posix.munmap(buf_ptr[0..aligned_size]);
+        self.dir.deleteFile(file_name) catch |err| {
+            self.logFailure(err, file_name);
+        };
+    }
+
+    const Metadata = extern struct {
+        file_index: usize,
+    };
+
+    /// Returns the aligned size with enough space for `size` and `Metadata` at the end.
+    inline fn fullMmapSize(size: usize) usize {
+        return std.mem.alignForward(usize, size + @sizeOf(Metadata), std.mem.page_size);
+    }
+
+    fn logFailure(self: Self, err: anyerror, file_name: []const u8) void {
+        self.logger.errf("Disk Memory Allocator error: {s}, filepath: {s}", .{
+            @errorName(err), sig.utils.fmt.tryRealPath(self.dir, file_name),
+        });
+    }
+
+    const file_name_max_len = sig.utils.fmt.boundedLenValue("bin_{d}", .{std.math.maxInt(usize)});
+    inline fn fileNameBounded(file_index: usize) std.BoundedArray(u8, file_name_max_len) {
+        return sig.utils.fmt.boundedFmt("bin_{d}", .{file_index});
+    }
+};
+
 test "disk allocator on hashmaps" {
-    var allocator = DiskMemoryAllocator.init(sig.TEST_DATA_DIR ++ "tmp");
-    defer allocator.deinit(null);
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
+
+    var allocator = DiskMemoryAllocator.init(tmp_dir, .noop);
 
     var refs = std.AutoHashMap(u8, u8).init(allocator.allocator());
+    defer refs.deinit();
+
     try refs.ensureTotalCapacity(100);
 
     try refs.put(10, 19);
@@ -301,42 +349,40 @@ test "disk allocator on hashmaps" {
 }
 
 test "disk allocator on arraylists" {
-    var allocator = DiskMemoryAllocator.init(sig.TEST_DATA_DIR ++ "tmp");
+    var tmp_dir_root = std.testing.tmpDir(.{});
+    defer tmp_dir_root.cleanup();
+    const tmp_dir = tmp_dir_root.dir;
 
-    var disk_account_refs = try std.ArrayList(u8).initCapacity(
-        allocator.allocator(),
-        1,
-    );
-    defer disk_account_refs.deinit();
+    var dma_state = DiskMemoryAllocator.init(tmp_dir, .noop);
+    const dma = dma_state.allocator();
 
-    disk_account_refs.appendAssumeCapacity(19);
+    {
+        try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_0", .{})); // this should not exist
 
-    try std.testing.expectEqual(19, disk_account_refs.items[0]);
+        var disk_account_refs = try std.ArrayList(u8).initCapacity(dma, 1);
+        defer disk_account_refs.deinit();
 
-    // this will lead to another allocation
-    try disk_account_refs.append(21);
+        disk_account_refs.appendAssumeCapacity(19);
 
-    try std.testing.expectEqual(19, disk_account_refs.items[0]);
-    try std.testing.expectEqual(21, disk_account_refs.items[1]);
+        try std.testing.expectEqual(19, disk_account_refs.items[0]);
 
-    // these should exist
-    try std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_0", .{});
-    try std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_1", .{});
+        try disk_account_refs.append(21);
 
-    // this should delete them
-    allocator.deinit(null);
+        try std.testing.expectEqual(19, disk_account_refs.items[0]);
+        try std.testing.expectEqual(21, disk_account_refs.items[1]);
 
-    // these should no longer exist
-    var did_error = false;
-    std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_0", .{}) catch {
-        did_error = true;
-    };
-    try std.testing.expect(did_error);
-    did_error = false;
-    std.fs.cwd().access(sig.TEST_DATA_DIR ++ "tmp_1", .{}) catch {
-        did_error = true;
-    };
-    try std.testing.expect(did_error);
+        try tmp_dir.access("bin_0", .{}); // this should exist
+        try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_1", .{})); // this should not exist
+
+        const array_ptr = try dma.create([4096]u8);
+        defer dma.destroy(array_ptr);
+        @memset(array_ptr, 0);
+
+        try tmp_dir.access("bin_1", .{}); // this should now exist
+    }
+
+    try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_0", .{}));
+    try std.testing.expectError(error.FileNotFound, tmp_dir.access("bin_1", .{}));
 }
 
 /// Namespace housing the different components for the stateless failing allocator.
