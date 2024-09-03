@@ -46,7 +46,7 @@ pub const LeaderInfo = struct {
             .{ .max_retries = config.rpc_retries, .logger = logger },
         );
 
-        const epoch_info_response = try rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
+        const epoch_info_response = try rpc_client.getEpochInfo(allocator, .{ .commitment = .processed });
         defer epoch_info_response.deinit(); // Deinit safe because EpochInfo contians only u64's.
         const epoch_info = try epoch_info_response.result();
 
@@ -69,7 +69,7 @@ pub const LeaderInfo = struct {
 
         // TODO: Scrutinize edge cases here.
         if (current_slot > self.epoch_info.slotsInEpoch + self.leader_schedule.start_slot) {
-            const epoch_info_response = try self.rpc_client.getEpochInfo(allocator, null, .{ .commitment = .processed });
+            const epoch_info_response = try self.rpc_client.getEpochInfo(allocator, .{ .commitment = .processed });
             defer epoch_info_response.deinit();
             self.epoch_info = try epoch_info_response.result();
             self.leader_schedule = try getLeaderSchedule(allocator, &self.epoch_info, &self.rpc_client);

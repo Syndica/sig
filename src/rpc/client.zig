@@ -59,7 +59,7 @@ pub const Client = struct {
         defer request.deinit();
         try request.addParameter(pubkey.string().slice());
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.AccountInfo, request);
+        return self.sendFetchRequest(allocator, types.AccountInfo, request, .{});
     }
 
     pub const GetBalanceConfig = struct {
@@ -72,7 +72,7 @@ pub const Client = struct {
         defer request.deinit();
         try request.addParameter(pubkey.string().slice());
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.Balance, request);
+        return self.sendFetchRequest(allocator, types.Balance, request, .{});
     }
 
     pub const GetBlockConfig = struct {
@@ -87,7 +87,7 @@ pub const Client = struct {
         var request = try Request.init(allocator, "getBlockCommitment");
         defer request.deinit();
         try request.addParameter(block);
-        return self.sendFetchRequest(allocator, types.BlockCommitment, request);
+        return self.sendFetchRequest(allocator, types.BlockCommitment, request, .{});
     }
 
     pub const GetBlockHeightConfig = struct {
@@ -99,7 +99,7 @@ pub const Client = struct {
         var request = try Request.init(allocator, "getBlockHeight");
         defer request.deinit();
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, u64, request);
+        return self.sendFetchRequest(allocator, u64, request, .{});
     }
 
     // TODO: getBlockProduction()
@@ -113,12 +113,11 @@ pub const Client = struct {
         minContextSlot: ?u64 = null,
     };
 
-    pub fn getEpochInfo(self: *Client, allocator: std.mem.Allocator, maybe_epoch: ?Epoch, config: GetEpochInfoConfig) !Response(types.EpochInfo) {
+    pub fn getEpochInfo(self: *Client, allocator: std.mem.Allocator, config: GetEpochInfoConfig) !Response(types.EpochInfo) {
         var request = try Request.init(allocator, "getEpochInfo");
         defer request.deinit();
-        try request.addParameter(maybe_epoch);
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.EpochInfo, request);
+        return self.sendFetchRequest(allocator, types.EpochInfo, request, .{});
     }
 
     // TODO: getEpochSchedule()
@@ -142,7 +141,7 @@ pub const Client = struct {
         var request = try Request.init(allocator, "getLatestBlockhash");
         defer request.deinit();
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.LatestBlockhash, request);
+        return self.sendFetchRequest(allocator, types.LatestBlockhash, request, .{});
     }
 
     pub const GetLeaderScheduleConfig = struct {
@@ -165,7 +164,7 @@ pub const Client = struct {
         defer request.deinit();
         try request.addParameter(maybe_epoch);
         try request.addConfig(config);
-        const json_response = try self.sendFetchRequest(allocator, std.json.Value, request);
+        const json_response = try self.sendFetchRequest(allocator, std.json.Value, request, .{});
 
         // Convert the result type from std.json.Value to types.LeaderSchedule
         var type_converted_result: ?types.LeaderSchedule = null;
@@ -197,6 +196,7 @@ pub const Client = struct {
                 .result = type_converted_result,
                 .@"error" = json_response.parsed.@"error",
             },
+            .parse_options = json_response.parse_options,
         };
     }
 
@@ -217,7 +217,7 @@ pub const Client = struct {
         defer request.deinit();
         try request.addParameter(signatures);
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, types.SignatureStatuses, request);
+        return self.sendFetchRequest(allocator, types.SignatureStatuses, request, .{ .ignore_unknown_fields = true });
     }
 
     // TODO: getSignaturesForAddress()
@@ -231,7 +231,7 @@ pub const Client = struct {
         var request = try Request.init(allocator, "getSlot");
         defer request.deinit();
         try request.addConfig(config);
-        return self.sendFetchRequest(allocator, Slot, request);
+        return self.sendFetchRequest(allocator, Slot, request, .{});
     }
 
     // TODO: getSlotLeader()
@@ -257,8 +257,8 @@ pub const Client = struct {
     /// Sends a JSON-RPC request to the HTTP endpoint and parses the response.
     /// If the request fails, it will be retried up to `max_retries` times, restarting the HTTP client
     /// if necessary. If the response fails to parse, an error will be returned.
-    fn sendFetchRequest(self: *Client, allocator: std.mem.Allocator, comptime T: type, request: Request) !Response(T) {
-        var response = try Response(T).init(allocator);
+    fn sendFetchRequest(self: *Client, allocator: std.mem.Allocator, comptime T: type, request: Request, response_parse_options: std.json.ParseOptions) !Response(T) {
+        var response = try Response(T).init(allocator, response_parse_options);
         errdefer response.deinit();
 
         const payload = try request.toJsonString(allocator);
@@ -284,7 +284,7 @@ pub const Client = struct {
         }
 
         response.parse() catch |err| {
-            self.logger.errf("Failed to parse response: error={} response={s}", .{ err, response.bytes.items });
+            self.logger.errf("Failed to parse response: error={} request_payload={s} response={s}", .{ err, payload, response.bytes.items });
             return err;
         };
 
@@ -363,7 +363,7 @@ test "getEpochInfo" {
     const allocator = std.testing.allocator;
     var client = Client.init(allocator, .Testnet, .{});
     defer client.deinit();
-    const response = try client.getEpochInfo(allocator, null, .{});
+    const response = try client.getEpochInfo(allocator, .{});
     defer response.deinit();
     _ = try response.result();
 }

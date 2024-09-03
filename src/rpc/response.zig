@@ -11,14 +11,16 @@ pub fn Response(comptime T: type) type {
         arena: *std.heap.ArenaAllocator,
         bytes: std.ArrayList(u8),
         parsed: ParsedResponse(T),
+        parse_options: std.json.ParseOptions,
 
-        pub fn init(allocator: std.mem.Allocator) !Response(T) {
+        pub fn init(allocator: std.mem.Allocator, parse_options: std.json.ParseOptions) !Response(T) {
             const arena = try allocator.create(std.heap.ArenaAllocator);
             arena.* = std.heap.ArenaAllocator.init(allocator);
             return .{
                 .arena = arena,
                 .bytes = std.ArrayList(u8).init(arena.allocator()),
                 .parsed = undefined,
+                .parse_options = parse_options,
             };
         }
 
@@ -33,7 +35,7 @@ pub fn Response(comptime T: type) type {
                 ParsedResponse(T),
                 self.arena.allocator(),
                 self.bytes.items,
-                .{},
+                self.parse_options,
             );
         }
 
