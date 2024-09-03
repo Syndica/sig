@@ -317,11 +317,15 @@ pub const AccountIndex = struct {
         slot: Slot,
         new_ref: *AccountRef,
     ) GetAccountRefError!void {
-        const ref_ptr_ptr, var bin_lg = try self.getReferenceParent(pubkey, slot);
+        const ref_parent, var bin_lg = try self.getReferenceParent(pubkey, slot);
         defer bin_lg.unlock();
-        std.debug.assert(ref_ptr_ptr.*.slot == slot);
-        std.debug.assert(ref_ptr_ptr.*.pubkey.equals(pubkey));
-        ref_ptr_ptr.* = new_ref;
+        const ptr_to_ref_field = switch (ref_parent) {
+            .head => |head| &head.ref_ptr,
+            .parent => |parent| &parent.next_ptr.?,
+        };
+        std.debug.assert(ptr_to_ref_field.*.slot == slot);
+        std.debug.assert(ptr_to_ref_field.*.pubkey.equals(pubkey));
+        ptr_to_ref_field.* = new_ref;
     }
 
     pub fn removeReference(self: *Self, pubkey: *const Pubkey, slot: Slot) error{ SlotNotFound, PubkeyNotFound }!void {
