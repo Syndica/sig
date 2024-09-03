@@ -321,6 +321,12 @@ test "disk allocator on arraylists" {
     try std.testing.expect(did_error);
 }
 
+/// Namespace housing the different components for the stateless failing allocator.
+/// This allows easily importing everything related therein.
+/// NOTE: we represent it in this way instead of as a struct like GPA, because
+/// the allocator doesn't have any meaningful state to point to, being much more
+/// similar to allocators like `page_allocator`, `c_allocator`, etc, except
+/// parameterized at compile time.
 pub const failing = struct {
     pub const Config = struct {
         alloc: Mode = .noop_or_fail,
