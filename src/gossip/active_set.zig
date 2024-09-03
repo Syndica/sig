@@ -128,7 +128,7 @@ pub const ActiveSet = struct {
     }
 };
 
-test "active_set init/deinit" {
+test "init/denit" {
     const alloc = std.testing.allocator;
 
     const ThreadPool = @import("../sync/thread_pool.zig").ThreadPool;
