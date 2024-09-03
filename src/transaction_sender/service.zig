@@ -36,8 +36,6 @@ const globalRegistry = sig.prometheus.globalRegistry;
 /// The leader schedule and current slot are loaded via RPC calls to the cluster.
 /// The leader TPU addresses are loaded from the gossip table.
 /// TODO:
-/// - Add logging
-/// - Add stats tracking
 /// - Add nonce handling
 /// - Remove RPC calls
 pub const Service = struct {
@@ -168,7 +166,7 @@ pub const Service = struct {
 
         while (!self.exit.load(.unordered)) {
             std.time.sleep(self.config.pool_process_rate.asNanos());
-            if (self.transaction_pool.isEmpty()) continue;
+            if (self.transaction_pool.count() == 0) continue;
             var timer = try Timer.start();
 
             try self.processTransactions(&rpc_client);
@@ -213,31 +211,31 @@ pub const Service = struct {
         for (signature_statuses.value, signatures, transactions) |maybe_signature_status, signature, transaction_info| {
             if (maybe_signature_status) |signature_status| {
                 if (signature_status.confirmations == null) {
-                    try self.transaction_pool.addDropSignature(signature);
+                    try self.transaction_pool.drop_signatures.append(signature);
                     self.stats.transactions_rooted_count.add(1);
                     continue;
                 }
 
                 if (signature_status.err) |_| {
-                    try self.transaction_pool.addDropSignature(signature);
+                    try self.transaction_pool.drop_signatures.append(signature);
                     self.stats.transactions_failed_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.isExpired(block_height)) {
-                    try self.transaction_pool.addDropSignature(signature);
+                    try self.transaction_pool.drop_signatures.append(signature);
                     self.stats.transactions_expired_count.add(1);
                     continue;
                 }
             } else {
                 if (transaction_info.exceededMaxRetries(self.config.default_max_retries)) {
-                    try self.transaction_pool.addDropSignature(signature);
+                    try self.transaction_pool.drop_signatures.append(signature);
                     self.stats.transactions_exceeded_max_retries_count.add(1);
                     continue;
                 }
 
                 if (transaction_info.shouldRetry(self.config.retry_rate)) {
-                    try self.transaction_pool.addRetrySignature(signature);
+                    try self.transaction_pool.retry_signatures.append(signature);
                     self.stats.transactions_retry_count.add(1);
                 }
             }
