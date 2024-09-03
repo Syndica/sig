@@ -140,7 +140,7 @@ pub const ReedSolomon = struct {
                 }
             } else if (matrix_row >= data_shard_count and data_only) {
                 // this is a parity shard and we're not going to recover it
-                invalid_indices.appendAssumeCapacity(matrix_row);
+                try invalid_indices.append(matrix_row); // TODO should be able to assume capacity but this failed
             } else {
                 // missing shard that we need to recover
                 const new_shard = try allocator.alloc(u8, shard_len);
@@ -151,7 +151,7 @@ pub const ReedSolomon = struct {
                 } else {
                     missing_parity_slices.appendAssumeCapacity(new_shard);
                 }
-                invalid_indices.appendAssumeCapacity(matrix_row);
+                try invalid_indices.append(matrix_row); // TODO should be able to assume capacity but this failed
             }
         }
 
@@ -662,4 +662,19 @@ test "ReedSolomon.reconstruct lorem ipsum with any missing combination" {
             try std.testing.expectEqualSlices(u8, master_copy[s], data.items[s].?);
         }
     };
+}
+
+test "ReedSolomon.reconstruct shards constructed from mainnet shreds" {
+    const input = @import("test_shreds.zig").mainnet_recovery_shards;
+    const expected = @import("test_shreds.zig").mainnet_expected_recovered_shards;
+    var actual = std.ArrayList(?[]const u8).init(std.testing.allocator);
+    defer actual.deinit();
+    for (input) |i| try actual.append(i);
+    var rs = try ReedSolomon.init(std.testing.allocator, 7, 21);
+    defer rs.deinit();
+    try rs.reconstruct(std.testing.allocator, actual.items, false);
+    defer for (input, actual.items) |i, a| if (i == null) std.testing.allocator.free(a.?);
+    for (expected, actual.items) |e, a| {
+        try std.testing.expectEqualSlices(u8, e, a.?);
+    }
 }

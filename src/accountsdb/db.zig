@@ -27,12 +27,13 @@ const AllSnapshotFields = sig.accounts_db.snapshots.AllSnapshotFields;
 const SnapshotFiles = sig.accounts_db.snapshots.SnapshotFiles;
 const AccountIndex = sig.accounts_db.index.AccountIndex;
 const AccountRef = sig.accounts_db.index.AccountRef;
-const DiskMemoryAllocator = sig.accounts_db.index.DiskMemoryAllocator;
+const DiskMemoryAllocator = sig.utils.allocators.DiskMemoryAllocator;
 const RwMux = sig.sync.RwMux;
 const Logger = sig.trace.log.Logger;
 const NestedHashTree = sig.common.merkle_tree.NestedHashTree;
 const GetMetricError = sig.prometheus.registry.GetMetricError;
 const Counter = sig.prometheus.counter.Counter;
+const Histogram = sig.prometheus.histogram.Histogram;
 const ClientVersion = sig.version.ClientVersion;
 const StatusCache = sig.accounts_db.StatusCache;
 const BankFields = sig.accounts_db.snapshots.BankFields;
@@ -46,22 +47,68 @@ const spawnThreadTasks = sig.utils.thread.spawnThreadTasks;
 const printTimeEstimate = sig.time.estimate.printTimeEstimate;
 const globalRegistry = sig.prometheus.registry.globalRegistry;
 
-// NOTE: this constant has a large impact on performance due to allocations (best to overestimate)
-pub const ACCOUNTS_PER_FILE_EST: usize = 1_500; // devnet/testnet
-// pub const ACCOUNTS_PER_FILE_EST: usize = 3_000; // mainnet
-
 pub const DB_LOG_RATE = sig.time.Duration.fromSecs(5);
 pub const DB_MANAGER_LOOP_MIN = sig.time.Duration.fromSecs(5);
 
 pub const MERKLE_FANOUT: usize = 16;
 pub const ACCOUNT_INDEX_BINS: usize = 8192;
 pub const ACCOUNT_FILE_SHRINK_THRESHOLD = 70; // shrink account files with more than X% dead bytes
+pub const DELETE_ACCOUNT_FILES_MIN = 100;
 
 pub const AccountsDBStats = struct {
+    const HistogramKind = enum {
+        flush_account_file_size,
+        shrink_file_shrunk_by,
+        shrink_alive_accounts,
+        shrink_dead_accounts,
+        time_flush,
+        time_clean,
+        time_shrink,
+        time_purge,
+
+        fn buckets(self: HistogramKind) []const f64 {
+            const account_size_buckets = &.{
+                // 10 bytes -> 10MB (solana max account size)
+                10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000,
+            };
+            const account_count_buckets = &.{ 1, 5, 10, 50, 100, 500, 1_000, 10_000 };
+            const nanosecond_buckets = &.{
+                // 0.01ms -> 10ms
+                1_000,      10_000,      100_000,     1_000_000,   10_000_000,
+                // 50ms -> 1000ms
+                50_000_000, 100_000_000, 200_000_000, 400_000_000, 1_000_000_000,
+            };
+
+            return switch (self) {
+                .flush_account_file_size, .shrink_file_shrunk_by => account_size_buckets,
+                .shrink_alive_accounts, .shrink_dead_accounts => account_count_buckets,
+                .time_flush, .time_clean, .time_shrink, .time_purge => nanosecond_buckets,
+            };
+        }
+    };
+
     number_files_flushed: *Counter,
     number_files_cleaned: *Counter,
     number_files_shrunk: *Counter,
     number_files_deleted: *Counter,
+
+    time_flush: *Histogram,
+    time_clean: *Histogram,
+    time_shrink: *Histogram,
+    time_purge: *Histogram,
+
+    flush_account_file_size: *Histogram,
+    flush_accounts_written: *Counter,
+
+    clean_references_deleted: *Counter,
+    clean_files_queued_deletion: *Counter,
+    clean_files_queued_shrink: *Counter,
+    clean_slot_old_state: *Counter,
+    clean_slot_zero_lamports: *Counter,
+
+    shrink_file_shrunk_by: *Histogram,
+    shrink_alive_accounts: *Histogram,
+    shrink_dead_accounts: *Histogram,
 
     const Self = @This();
 
@@ -70,8 +117,19 @@ pub const AccountsDBStats = struct {
         const registry = globalRegistry();
         const stats_struct_info = @typeInfo(Self).Struct;
         inline for (stats_struct_info.fields) |field| {
-            const field_counter: *Counter = try registry.getOrCreateCounter(field.name);
-            @field(self, field.name) = field_counter;
+            @field(self, field.name) = switch (field.type) {
+                *Counter => try registry.getOrCreateCounter(field.name),
+                *Histogram => blk: {
+                    @setEvalBranchQuota(2000); // stringToEnum requires a little more than default
+                    const histogram_kind = comptime std.meta.stringToEnum(
+                        HistogramKind,
+                        field.name,
+                    ) orelse @compileError("no matching HistogramKind for AccountsDBStats *Histogram field");
+
+                    break :blk try registry.getOrCreateHistogram(field.name, histogram_kind.buckets());
+                },
+                else => @compileError("Unsupported field type"),
+            };
         }
         return self;
     }
@@ -89,19 +147,30 @@ pub const AccountsDB = struct {
 
     /// track per-slot for purge/flush
     account_cache: RwMux(AccountCache),
-    file_map: RwMux(FileMap),
+
+    /// NOTE: see accountsdb/readme.md for more details on how these are used
+    file_map: RwMux(FileMap) = RwMux(FileMap).init(.{}),
+    /// `file_map_fd_rw` is used to ensure files in the file_map are not closed while its held as a read-lock.
+    /// NOTE: see accountsdb/readme.md for more details on how these are used
+    file_map_fd_rw: std.Thread.RwLock = .{},
 
     geyser_writer: ?*GeyserWriter,
 
+    /// Tracks how many accounts (which we have stored) are dead for a specific slot.
+    /// Used during clean to queue an AccountFile for shrink if it contains
+    /// a large percentage of dead accounts, or deletion if the file contains only
+    /// dead accounts.
+    ///
+    /// When a given counter reaches 0, it is to be removed (ie, if a slot does not exist
+    /// in this map, then its safe to assume it has 0 dead accounts).
+    /// When a counter is first added, it must be initialized to 0.
     dead_accounts_counter: RwMux(DeadAccountsCounter),
 
     /// Used for filenames when flushing accounts to disk.
     // TODO: do we need this? since flushed slots will be unique
     largest_file_id: FileId = FileId.fromInt(0),
 
-    // TODO: when working on consensus, we'll swap the main rooted slot field out,
-    // and evaluate the rest.
-
+    // TODO: integrate these values into consensus
     /// Used for flushing/cleaning/purging/shrinking.
     largest_rooted_slot: std.atomic.Value(Slot) = std.atomic.Value(Slot).init(0),
     /// Represents the largest slot for which all account data has been flushed to disk.
@@ -116,6 +185,7 @@ pub const AccountsDB = struct {
     snapshot_dir: std.fs.Dir,
 
     // TODO: populate this during snapshot load
+    // TODO: move to Bank struct
     bank_hash_stats: RwMux(BankHashStatsMap) = RwMux(BankHashStatsMap).init(.{}),
 
     stats: AccountsDBStats,
@@ -124,11 +194,11 @@ pub const AccountsDB = struct {
 
     const Self = @This();
 
-    pub const FileMap = std.AutoArrayHashMap(FileId, RwMux(AccountFile));
     pub const PubkeysAndAccounts = struct { []const Pubkey, []const Account };
     pub const AccountCache = std.AutoHashMap(Slot, PubkeysAndAccounts);
     pub const DeadAccountsCounter = std.AutoArrayHashMap(Slot, u64);
     pub const BankHashStatsMap = std.AutoArrayHashMapUnmanaged(Slot, BankHashStats);
+    pub const FileMap = std.AutoArrayHashMapUnmanaged(FileId, AccountFile);
 
     pub const InitConfig = struct {
         number_of_index_bins: usize,
@@ -158,6 +228,7 @@ pub const AccountsDB = struct {
 
                 break :blk .{ ptr, ptr.allocator() };
             } else {
+                logger.infof("using ram index", .{});
                 break :blk .{ null, std.heap.page_allocator };
             }
         };
@@ -188,7 +259,6 @@ pub const AccountsDB = struct {
             .logger = logger,
             .config = config,
             .account_cache = RwMux(AccountCache).init(AccountCache.init(allocator)),
-            .file_map = RwMux(FileMap).init(FileMap.init(allocator)),
             .snapshot_dir = snapshot_dir,
             .dead_accounts_counter = RwMux(DeadAccountsCounter).init(DeadAccountsCounter.init(allocator)),
             .stats = stats,
@@ -227,7 +297,7 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
-            file_map.deinit();
+            file_map.deinit(self.allocator);
         }
         {
             const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
@@ -248,6 +318,7 @@ pub const AccountsDB = struct {
         snapshot_fields_and_paths: *AllSnapshotFields,
         n_threads: u32,
         validate: bool,
+        accounts_per_file_estimate: u64,
     ) !SnapshotFields {
         const snapshot_fields = try snapshot_fields_and_paths.collapse();
 
@@ -255,6 +326,7 @@ pub const AccountsDB = struct {
             snapshot_fields.accounts_db_fields,
             n_threads,
             std.heap.page_allocator,
+            accounts_per_file_estimate,
         );
         self.logger.infof("loaded from snapshot in {s}", .{load_duration});
 
@@ -279,6 +351,7 @@ pub const AccountsDB = struct {
         snapshot_manifest: AccountsDbFields,
         n_threads: u32,
         per_thread_allocator: std.mem.Allocator,
+        accounts_per_file_estimate: u64,
     ) !sig.time.Duration {
         self.logger.infof("loading from snapshot...", .{});
 
@@ -303,18 +376,11 @@ pub const AccountsDB = struct {
             bhs.accumulate(snapshot_manifest.bank_hash_info.stats);
         }
 
-        const use_disk_index = self.config.use_disk_index;
-        if (self.config.use_disk_index) {
-            self.logger.info("using disk index");
-        } else {
-            self.logger.info("using ram index");
-        }
-
         // short path
         if (n_threads == 1) {
             try self.loadAndVerifyAccountsFiles(
                 accounts_dir,
-                ACCOUNTS_PER_FILE_EST,
+                accounts_per_file_estimate,
                 snapshot_manifest.file_map,
                 0,
                 n_account_files,
@@ -325,6 +391,7 @@ pub const AccountsDB = struct {
         }
 
         // setup the parallel indexing
+        const use_disk_index = self.config.use_disk_index;
         var loading_threads = try ArrayList(AccountsDB).initCapacity(
             self.allocator,
             n_parse_threads,
@@ -333,15 +400,17 @@ pub const AccountsDB = struct {
             var thread_db = loading_threads.addOneAssumeCapacity();
             thread_db.* = try AccountsDB.init(
                 per_thread_allocator,
-                self.logger,
+                .noop, // dont spam the logs with init information (we set it after)
                 self.snapshot_dir,
                 self.config,
                 self.geyser_writer,
             );
+            thread_db.logger = self.logger;
 
             // set the disk allocator after init() doesnt create a new one
             if (use_disk_index) {
                 thread_db.disk_allocator_ptr = self.disk_allocator_ptr;
+                thread_db.account_index.reference_allocator = thread_db.disk_allocator_ptr.?.allocator();
             }
         }
         defer {
@@ -358,9 +427,9 @@ pub const AccountsDB = struct {
                 // NOTE: deinit hashmap, dont close the files
                 const file_map, var file_map_lg = loading_thread.file_map.writeWithLock();
                 defer file_map_lg.unlock();
-                file_map.deinit();
+                file_map.deinit(per_thread_allocator);
 
-                // NOTE: important `false` (ie, 1))
+                // NOTE: important `false` (ie, 1)
                 loading_thread.account_index.deinit(false);
             }
             loading_threads.deinit();
@@ -381,6 +450,7 @@ pub const AccountsDB = struct {
                     loading_threads.items,
                     accounts_dir,
                     snapshot_manifest.file_map,
+                    accounts_per_file_estimate,
                 },
                 n_account_files,
                 n_parse_threads,
@@ -396,11 +466,12 @@ pub const AccountsDB = struct {
         return timer.read();
     }
 
-    /// multithread entrypoint into parseAndBinAccountFiles.
+    /// multithread entrypoint into loadAndVerifyAccountsFiles.
     pub fn loadAndVerifyAccountsFilesMultiThread(
         loading_threads: []AccountsDB,
         accounts_dir: std.fs.Dir,
         file_info_map: AccountsDbFields.FileMap,
+        accounts_per_file_estimate: u64,
         // task specific
         start_index: usize,
         end_index: usize,
@@ -410,7 +481,7 @@ pub const AccountsDB = struct {
 
         try thread_db.loadAndVerifyAccountsFiles(
             accounts_dir,
-            ACCOUNTS_PER_FILE_EST,
+            accounts_per_file_estimate,
             file_info_map,
             start_index,
             end_index,
@@ -437,7 +508,7 @@ pub const AccountsDB = struct {
         defer file_map_lg.unlock();
 
         const n_account_files = file_map_end_index - file_map_start_index;
-        try file_map.ensureTotalCapacity(n_account_files);
+        try file_map.ensureTotalCapacity(self.allocator, n_account_files);
 
         const bin_counts = try self.allocator.alloc(usize, self.account_index.numberOfBins());
         defer self.allocator.free(bin_counts);
@@ -447,7 +518,6 @@ pub const AccountsDB = struct {
         // without this large allocation, snapshot loading is very slow
         const n_accounts_estimate = n_account_files * accounts_per_file_est;
         var references = try ArrayList(AccountRef).initCapacity(
-            // TODO: wrap in FBA for correct OOM OR use UnmanagedArrayList instead
             self.account_index.reference_allocator,
             n_accounts_estimate,
         );
@@ -474,7 +544,6 @@ pub const AccountsDB = struct {
         var geyser_slot_storage: ?*GeyserTmpStorage = null;
         const geyser_is_enabled = self.geyser_writer != null;
         if (geyser_is_enabled) {
-            // TODO: make size config value
             geyser_slot_storage = try self.allocator.create(GeyserTmpStorage);
             geyser_slot_storage.?.* = try GeyserTmpStorage.init(self.allocator, n_accounts_estimate);
         }
@@ -515,21 +584,19 @@ pub const AccountsDB = struct {
                 &references,
                 geyser_slot_storage,
             ) catch |err| {
-                switch (err) {
-                    error.OutOfReferenceMemory => {
-                        // TODO: support retry - error for now
-                        self.logger.err("out of reference memory set ACCOUNTS_PER_FILE_EST larger and retry\n");
-                    },
-                    else => {
-                        self.logger.errf("failed to *validate/index* AccountsFile: {d}.{d}: {s}\n", .{
-                            accounts_file.slot,
-                            accounts_file.id.toInt(),
-                            @errorName(err),
-                        });
-                    },
-                }
+                self.logger.errf("failed to *validate/index* AccountsFile: {d}.{d}: {s}\n", .{
+                    accounts_file.slot,
+                    accounts_file.id.toInt(),
+                    @errorName(err),
+                });
                 return err;
             };
+
+            // NOTE: rn we dont support resizing because it invalidates pointers
+            // - something went wrong if we resized
+            if (references.items.ptr != references_ptr) {
+                std.debug.panic("accounts-per-file-estimate too small ({d}), increase (using flag '-a') and try again...", .{accounts_per_file_est});
+            }
 
             if (geyser_is_enabled) {
                 var geyser_storage = geyser_slot_storage.?; // SAFE: will always be set if geyser_is_enabled
@@ -559,13 +626,12 @@ pub const AccountsDB = struct {
                     ref_slice,
                 );
                 counting_alloc.count += 1;
-
-                try reference_memory.putNoClobber(slot, ref_list);
+                reference_memory.putAssumeCapacityNoClobber(slot, ref_list);
             }
 
             const file_id = file_info.id;
 
-            file_map.putAssumeCapacityNoClobber(file_id, RwMux(AccountFile).init(accounts_file));
+            file_map.putAssumeCapacityNoClobber(file_id, accounts_file);
             self.largest_file_id = FileId.max(self.largest_file_id, file_id);
             _ = self.largest_rooted_slot.fetchMax(slot, .monotonic);
             self.largest_flushed_slot.store(self.largest_rooted_slot.load(.monotonic), .monotonic);
@@ -583,11 +649,6 @@ pub const AccountsDB = struct {
             }
         }
 
-        // rn we dont support resizing - something went wrong if we resized
-        if (references.items.ptr != references_ptr) {
-            std.debug.panic("ACCOUNTS_PER_FILE_EST too small, increase and try again...", .{});
-        }
-
         // allocate enough memory for the bins
         var total_accounts: usize = 0;
         for (bin_counts, 0..) |count, bin_index| {
@@ -596,17 +657,21 @@ pub const AccountsDB = struct {
                 const bin, var bin_lg = bin_rw.writeWithLock();
                 defer bin_lg.unlock();
 
-                try bin.ensureTotalCapacity(@intCast(count));
+                try bin.ensureTotalCapacity(count);
                 total_accounts += count;
             }
         }
 
-        // // NOTE: this is good for debugging what to set `accounts_per_file_est` to
-        // std.debug.print("n_accounts vs estimated: {d} vs {d}", .{ total_accounts, n_accounts_est });
+        // NOTE: this is good for debugging what to set `accounts_per_file_est` to
+        if (print_progress) {
+            self.logger.infof("accounts_per_file: actual vs estimated: {d} vs {d}", .{
+                total_accounts / n_account_files,
+                accounts_per_file_est,
+            });
+        }
 
-        // TODO: PERF: can probs be faster if you sort the pubkeys first, and then you know
+        // PERF: can probs be faster if you sort the pubkeys first, and then you know
         // it will always be a search for a free spot, and not search for a match
-
         var ref_count: usize = 0;
         timer.reset();
 
@@ -678,11 +743,18 @@ pub const AccountsDB = struct {
         for (thread_dbs) |*thread_db| {
             // combine file maps
             {
-                const thread_file_map: *const FileMap, var thread_file_map_lg = thread_db.file_map.readWithLock();
+                thread_db.file_map_fd_rw.lockShared();
+                defer thread_db.file_map_fd_rw.unlockShared();
+
+                const thread_file_map, var thread_file_map_lg = thread_db.file_map.readWithLock();
                 defer thread_file_map_lg.unlock();
 
-                for (thread_file_map.keys(), thread_file_map.values()) |file_id, *account_file_rw| {
-                    try file_map.putNoClobber(file_id, account_file_rw.*);
+                try file_map.ensureUnusedCapacity(self.allocator, thread_file_map.count());
+                for (
+                    thread_file_map.keys(),
+                    thread_file_map.values(),
+                ) |file_id, account_file| {
+                    file_map.putAssumeCapacityNoClobber(file_id, account_file);
                 }
             }
             self.largest_file_id = FileId.max(self.largest_file_id, thread_db.largest_file_id);
@@ -736,11 +808,11 @@ pub const AccountsDB = struct {
                 const index_bin, var index_bin_lg = index_bin_rw.writeWithLock();
                 defer index_bin_lg.unlock();
 
-                try index_bin.ensureTotalCapacity(@intCast(bin_n_accounts));
+                try index_bin.ensureTotalCapacity(bin_n_accounts);
             }
 
             for (thread_dbs) |*thread_db| {
-                var bin_rw = thread_db.account_index.getBin(bin_index);
+                const bin_rw = thread_db.account_index.getBin(bin_index);
                 const bin, var bin_lg = bin_rw.readWithLock();
                 defer bin_lg.unlock();
 
@@ -982,7 +1054,7 @@ pub const AccountsDB = struct {
         var progress_timer = try std.time.Timer.start();
         for (thread_bins, 1..) |*bin_rw, count| {
             // get and sort pubkeys in bin
-            // TODO: may be holding this lock for too long
+            // PERF: may be holding this lock for too long
             const bin, var bin_lg = bin_rw.readWithLock();
             defer bin_lg.unlock();
 
@@ -1027,10 +1099,7 @@ pub const AccountsDB = struct {
                     .FullAccountHash => |full_config| slotListMaxWithinBounds(ref_ptr, full_config.min_slot, full_config.max_slot),
                     .IncrementalAccountHash => |inc_config| slotListMaxWithinBounds(ref_ptr, inc_config.min_slot, inc_config.max_slot),
                 } orelse continue;
-                const result = try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
-
-                const lamports = result.lamports;
-                var account_hash = result.hash;
+                var account_hash, const lamports = try self.getAccountHashAndLamportsFromRef(max_slot_ref.location);
                 if (lamports == 0) {
                     switch (config) {
                         // for full snapshots, only include non-zero lamport accounts
@@ -1044,7 +1113,17 @@ pub const AccountsDB = struct {
                         const account, var lock_guard = try self.getAccountFromRefWithReadLock(max_slot_ref);
                         defer lock_guard.unlock();
 
-                        account_hash = account.hash(&key);
+                        account_hash = switch (account) {
+                            .file => |in_file| sig.core.account.hashAccount(
+                                in_file.lamports().*,
+                                in_file.data,
+                                &in_file.owner().data,
+                                in_file.executable().*,
+                                in_file.rent_epoch().*,
+                                &in_file.pubkey().data,
+                            ),
+                            .cache => |cached| cached.hash(&key),
+                        };
                     }
                 }
 
@@ -1188,11 +1267,9 @@ pub const AccountsDB = struct {
                 flush_slots.clearRetainingCapacity();
                 unclean_account_files.clearRetainingCapacity();
                 shrink_account_files.clearRetainingCapacity();
-                delete_account_files.clearRetainingCapacity();
             };
 
             if (must_flush_slots) {
-                // self.logger.debugf("flushing slots: {any}", .{flush_slots.items});
                 self.logger.debugf("flushing slots: min: {}...{}", std.mem.minMax(Slot, flush_slots.items));
 
                 // flush the slots
@@ -1304,12 +1381,18 @@ pub const AccountsDB = struct {
                 // self.logger.debugf("clean_result: {any}", .{clean_result});
 
                 // shrink any account files which have been cleaned
-                const shrink_result = try self.shrinkAccountFiles(shrink_account_files.keys());
+                const shrink_result = try self.shrinkAccountFiles(
+                    shrink_account_files.keys(),
+                    &delete_account_files,
+                );
                 _ = shrink_result;
                 // self.logger.debugf("shrink_results: {any}", .{shrink_results});
 
                 // delete any empty account files
-                self.deleteAccountFiles(delete_account_files.keys());
+                if (delete_account_files.count() > DELETE_ACCOUNT_FILES_MIN) {
+                    defer delete_account_files.clearRetainingCapacity();
+                    try self.deleteAccountFiles(delete_account_files.keys());
+                }
             }
         }
     }
@@ -1370,6 +1453,8 @@ pub const AccountsDB = struct {
     /// as the data field ([]u8) for each account.
     /// Returns the unclean file id.
     pub fn flushSlot(self: *Self, slot: Slot) !FileId {
+        var timer = try sig.time.Timer.start();
+
         defer self.stats.number_files_flushed.inc();
 
         const pubkeys, const accounts: []const Account = blk: {
@@ -1386,8 +1471,11 @@ pub const AccountsDB = struct {
         // create account file which is big enough
         var size: usize = 0;
         for (accounts) |*account| {
-            size += account.getSizeInFile();
+            const account_size_in_file = account.getSizeInFile();
+            size += account_size_in_file;
+            self.stats.flush_account_file_size.observe(@floatFromInt(account_size_in_file));
         }
+
         const file, const file_id, const memory = try self.createAccountFile(size, slot);
 
         const offsets = try self.allocator.alloc(u64, accounts.len);
@@ -1410,8 +1498,10 @@ pub const AccountsDB = struct {
         {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
-            try file_map.putNoClobber(file_id, RwMux(AccountFile).init(account_file));
+            try file_map.putNoClobber(self.allocator, file_id, account_file);
         }
+
+        self.stats.flush_accounts_written.add(account_file.number_of_accounts);
 
         // update the reference AFTER the data exists
         for (pubkeys, offsets) |pubkey, offset| {
@@ -1436,6 +1526,8 @@ pub const AccountsDB = struct {
             std.debug.assert(did_update);
         }
 
+        self.logger.debugf("flushed {} accounts, totalling size {}", .{ account_file.number_of_accounts, size });
+
         // remove old references
         {
             const account_cache, var account_cache_lg = self.account_cache.writeWithLock();
@@ -1452,6 +1544,8 @@ pub const AccountsDB = struct {
             self.allocator.free(accounts);
             self.allocator.free(pubkeys);
         }
+
+        self.stats.time_flush.observe(@floatFromInt(timer.read().asNanos()));
 
         // return to queue for cleaning
         return file_id;
@@ -1473,6 +1567,8 @@ pub const AccountsDB = struct {
         num_zero_lamports: usize,
         num_old_states: usize,
     } {
+        var timer = try sig.time.Timer.start();
+
         defer {
             const number_of_files = unclean_account_files.len;
             self.stats.number_files_cleaned.add(number_of_files);
@@ -1491,20 +1587,17 @@ pub const AccountsDB = struct {
         defer cleaned_pubkeys.deinit();
 
         for (unclean_account_files) |file_id| {
-            var account_file_rw = blk: {
-                const file_map, var file_map_lg = self.file_map.readWithLock();
-                defer file_map_lg.unlock();
-
-                break :blk file_map.get(file_id).?;
-            };
-
             // NOTE: this read-lock is held for a while but
             // is not expensive since writes only happen
             // during shrink/delete (which dont happen in parallel to this fcn)
-            const account_file, var account_file_lg = account_file_rw.readWithLock();
-            defer account_file_lg.unlock();
+            self.file_map_fd_rw.lockShared();
+            defer self.file_map_fd_rw.unlockShared();
 
-            // self.logger.debugf("cleaning slot: {}...", .{account_file.slot});
+            const account_file = blk: {
+                const file_map, var file_map_lg = self.file_map.readWithLock();
+                defer file_map_lg.unlock();
+                break :blk file_map.get(file_id).?;
+            };
 
             var account_iter = account_file.iterator();
             while (account_iter.next()) |account| {
@@ -1536,8 +1629,8 @@ pub const AccountsDB = struct {
                     var is_largest_root_zero_lamports = false;
                     if (ref.slot == ref_slot_max) {
                         // check if account is zero-lamports
-                        const ref_info = try self.getAccountHashAndLamportsFromRef(ref.location);
-                        is_largest_root_zero_lamports = ref_info.lamports == 0;
+                        _, const lamports = try self.getAccountHashAndLamportsFromRef(ref.location);
+                        is_largest_root_zero_lamports = lamports == 0;
                     }
 
                     if (is_old_state) num_old_states += 1;
@@ -1545,7 +1638,7 @@ pub const AccountsDB = struct {
 
                     const should_delete_ref = is_largest_root_zero_lamports or is_old_state;
                     if (should_delete_ref) {
-                        // queeue for deletion
+                        // queue for deletion
                         try references_to_delete.append(ref);
 
                         // NOTE: we should never clean non-rooted references (ie, should always be in a file)
@@ -1556,8 +1649,10 @@ pub const AccountsDB = struct {
                             const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                             defer dead_accounts_counter_lg.unlock();
 
-                            const number_dead_accounts_ptr = dead_accounts_counter.getPtr(ref_slot).?;
-                            number_dead_accounts_ptr.* = number_dead_accounts_ptr.* + 1;
+                            // NOTE: if there is no counter for this slot, it may have been removed after reaching 0 dead accounts
+                            // previously. it is added back as needed.
+                            const number_dead_accounts_ptr = (try dead_accounts_counter.getOrPutValue(ref_slot, 0)).value_ptr;
+                            number_dead_accounts_ptr.* += 1;
                             const accounts_dead_count = number_dead_accounts_ptr.*;
 
                             if (ref_file_id == file_id) {
@@ -1565,14 +1660,11 @@ pub const AccountsDB = struct {
                                 break :blk .{ account_file.number_of_accounts, accounts_dead_count };
                             } else {
                                 // read number of accounts from another file
-                                var ref_account_file_rw = ref_blk: {
+                                const ref_account_file = ref_blk: {
                                     const file_map, var file_map_lg = self.file_map.readWithLock();
                                     defer file_map_lg.unlock();
-                                    break :ref_blk file_map.get(ref_file_id).?;
+                                    break :ref_blk file_map.get(ref_file_id).?; // we are holding a lock on `disk_accounts.file_rw`.
                                 };
-                                const ref_account_file, var ref_account_file_lg = ref_account_file_rw.readWithLock();
-                                defer ref_account_file_lg.unlock();
-
                                 break :blk .{ ref_account_file.number_of_accounts, accounts_dead_count };
                             }
                         };
@@ -1580,14 +1672,9 @@ pub const AccountsDB = struct {
 
                         const dead_percentage = 100 * accounts_dead_count / accounts_total_count;
                         if (dead_percentage == 100) {
-                            // queue for delete
+                            // if its queued for shrink, remove it and queue it for deletion
+                            _ = shrink_account_files.swapRemove(ref_file_id);
                             try delete_account_files.put(ref_file_id, {});
-
-                            // if its queued for shrink, remove it
-                            if (shrink_account_files.contains(ref_file_id)) {
-                                const did_remove = shrink_account_files.swapRemove(ref_file_id);
-                                std.debug.assert(did_remove);
-                            }
                         } else if (dead_percentage >= ACCOUNT_FILE_SHRINK_THRESHOLD) {
                             // queue for shrink
                             try shrink_account_files.put(ref_file_id, {});
@@ -1605,8 +1692,19 @@ pub const AccountsDB = struct {
                 }
             }
             references_to_delete.clearRetainingCapacity();
+            self.stats.clean_references_deleted.set(references_to_delete.items.len);
+            self.logger.debugf(
+                "cleaned slot {} - old_state: {}, zero_lamports: {}",
+                .{ account_file.slot, num_old_states, num_zero_lamports },
+            );
         }
 
+        self.stats.clean_files_queued_deletion.set(delete_account_files.count());
+        self.stats.clean_files_queued_shrink.set(delete_account_files.count());
+        self.stats.clean_slot_old_state.set(num_old_states);
+        self.stats.clean_slot_zero_lamports.set(num_zero_lamports);
+
+        self.stats.time_clean.observe(@floatFromInt(timer.read().asNanos()));
         return .{
             .num_zero_lamports = num_zero_lamports,
             .num_old_states = num_old_states,
@@ -1618,56 +1716,66 @@ pub const AccountsDB = struct {
     pub fn deleteAccountFiles(
         self: *Self,
         delete_account_files: []const FileId,
-    ) void {
+    ) !void {
+        const number_of_files = delete_account_files.len;
         defer {
-            const number_of_files = delete_account_files.len;
             self.stats.number_files_deleted.add(number_of_files);
         }
 
-        for (delete_account_files) |file_id| {
-            const slot = blk: {
-                const file_map, var file_map_lg = self.file_map.writeWithLock();
-                defer file_map_lg.unlock();
+        var delete_queue = try std.ArrayList(AccountFile).initCapacity(
+            self.allocator,
+            number_of_files,
+        );
+        defer delete_queue.deinit();
 
-                var account_file_rw = file_map.get(file_id).?;
-                const account_file, var account_file_lg = account_file_rw.writeWithLock();
-                defer account_file_lg.unlock();
+        {
+            // we acquire this lock to ensure no account files are being accessed
+            self.file_map_fd_rw.lock();
+            defer self.file_map_fd_rw.unlock();
 
-                const slot = account_file.slot;
-                self.logger.infof("deleting slot: {}...", .{slot});
+            // we acquire this lock to saftely remove file_id's from the file_map
+            const file_map, var file_map_lg = self.file_map.writeWithLock();
+            defer file_map_lg.unlock();
 
-                // sanity check
-                {
-                    const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.readWithLock();
-                    defer dead_accounts_counter_lg.unlock();
-                    const number_of_dead_accounts = dead_accounts_counter.get(account_file.slot).?;
-                    std.debug.assert(account_file.number_of_accounts == number_of_dead_accounts);
-                }
+            for (delete_account_files) |file_id| {
+                const account_file = file_map.get(file_id).?;
 
                 // remove from file map
                 const did_remove = file_map.swapRemove(file_id);
                 std.debug.assert(did_remove);
 
-                // delete file
-                account_file.deinit();
+                // NOTE: we can queue the actual removal of the account file without the lock because
+                // because we know 1) no account files are being accessed and 2) no files are reading
+                // from the file_map, so its no possible to access the file after this block returns.
+                delete_queue.appendAssumeCapacity(account_file);
+            }
+        }
 
-                break :blk slot;
-            };
+        for (delete_queue.items) |account_file| {
+            const slot = account_file.slot;
+            self.logger.infof("deleting slot: {}...", .{slot});
+            account_file.deinit();
 
-            // NOTE: this should always succeed or something is wrong
-            // remove from map - delete file from disk
-            self.deleteAccountFile(slot, file_id) catch |err| {
+            // delete file from disk
+            self.deleteAccountFile(slot, account_file.id) catch |err| {
+                // NOTE: this should always succeed or something is wrong
                 self.logger.errf(
                     "failed to delete account file slot.file_id: {d}.{d}: {s}",
-                    .{ slot, file_id.toInt(), @errorName(err) },
+                    .{ slot, account_file.id, @errorName(err) },
                 );
             };
+        }
 
-            {
-                const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
-                defer dead_accounts_counter_lg.unlock();
-                const did_remove = dead_accounts_counter.swapRemove(slot);
-                std.debug.assert(did_remove);
+        {
+            const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
+            defer dead_accounts_counter_lg.unlock();
+
+            for (delete_queue.items) |account_file| {
+                const slot = account_file.slot;
+                // there are two cases for an account file being queued for deletion from cleaning:
+                // 1) it was queued for shrink, and this is the *old* accountFile: dead_count == 0 and the slot DNE in the map (shrink removed it)
+                // 2) it contains 100% dead accounts (in which dead_count > 0 and we can remove it from the map)
+                _ = dead_accounts_counter.swapRemove(slot);
             }
         }
     }
@@ -1691,7 +1799,10 @@ pub const AccountsDB = struct {
     pub fn shrinkAccountFiles(
         self: *Self,
         shrink_account_files: []const FileId,
+        delete_account_files: *std.AutoArrayHashMap(FileId, void),
     ) !struct { num_accounts_deleted: usize } {
+        var timer = try sig.time.Timer.start();
+
         defer {
             const number_of_files = shrink_account_files.len;
             self.stats.number_files_shrunk.add(number_of_files);
@@ -1700,16 +1811,18 @@ pub const AccountsDB = struct {
         var alive_pubkeys = std.AutoArrayHashMap(Pubkey, void).init(self.allocator);
         defer alive_pubkeys.deinit();
 
+        try delete_account_files.ensureUnusedCapacity(shrink_account_files.len);
+
         var total_accounts_deleted: u64 = 0;
         for (shrink_account_files) |shrink_file_id| {
-            var shrink_account_file_rw = blk: {
+            self.file_map_fd_rw.lockShared();
+            defer self.file_map_fd_rw.unlockShared();
+
+            const shrink_account_file = blk: {
                 const file_map, var file_map_lg = self.file_map.readWithLock();
                 defer file_map_lg.unlock();
                 break :blk file_map.get(shrink_file_id).?;
             };
-
-            const shrink_account_file, var shrink_account_file_lg = shrink_account_file_rw.readWithLock();
-            errdefer shrink_account_file_lg.unlock();
 
             const slot = shrink_account_file.slot;
             self.logger.debugf("shrinking slot: {}...", .{slot});
@@ -1728,6 +1841,7 @@ pub const AccountsDB = struct {
             try alive_pubkeys.ensureTotalCapacity(shrink_account_file.number_of_accounts);
 
             var accounts_alive_size: u64 = 0;
+            var accounts_dead_size: u64 = 0;
             var account_iter = shrink_account_file.iterator();
             while (account_iter.next()) |*account_in_file| {
                 const pubkey = account_in_file.pubkey();
@@ -1742,6 +1856,7 @@ pub const AccountsDB = struct {
                     is_alive_flags.appendAssumeCapacity(true);
                     alive_pubkeys.putAssumeCapacity(pubkey.*, {});
                 } else {
+                    accounts_dead_size += account_in_file.getSizeInFile();
                     accounts_dead_count += 1;
                     is_alive_flags.appendAssumeCapacity(false);
                 }
@@ -1751,6 +1866,14 @@ pub const AccountsDB = struct {
             // if there are no dead accounts, it should have not been queued for shrink
             std.debug.assert(accounts_dead_count > 0);
             total_accounts_deleted += accounts_dead_count;
+
+            self.stats.shrink_alive_accounts.observe(@floatFromInt(accounts_alive_count));
+            self.stats.shrink_dead_accounts.observe(@floatFromInt(accounts_dead_count));
+            self.stats.shrink_file_shrunk_by.observe(@floatFromInt(accounts_dead_size));
+
+            self.logger.debugf("n alive accounts: {}", .{accounts_alive_count});
+            self.logger.debugf("n dead accounts: {}", .{accounts_dead_count});
+            self.logger.debugf("shrunk by: {}", .{accounts_dead_size});
 
             // alloc account file for accounts
             const new_file, const new_file_id, const new_memory = try self.createAccountFile(
@@ -1766,25 +1889,27 @@ pub const AccountsDB = struct {
             var offset: usize = 0;
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = &(account_iter.next().?);
+                const account = account_iter.next().?;
                 if (is_alive) {
                     offsets.appendAssumeCapacity(offset);
                     offset += account.writeToBuf(new_memory[offset..]);
                 }
             }
 
-            // add file to map
-            var new_account_file = try AccountFile.init(
-                new_file,
-                .{ .id = new_file_id, .length = offset },
-                slot,
-            );
-            new_account_file.number_of_accounts = accounts_alive_count;
-
             {
+                // add file to map
                 const file_map, var file_map_lg = self.file_map.writeWithLock();
                 defer file_map_lg.unlock();
-                try file_map.putNoClobber(new_file_id, RwMux(AccountFile).init(new_account_file));
+                try file_map.ensureUnusedCapacity(self.allocator, 1);
+
+                var new_account_file = try AccountFile.init(
+                    new_file,
+                    .{ .id = new_file_id, .length = offset },
+                    slot,
+                );
+                new_account_file.number_of_accounts = accounts_alive_count;
+
+                file_map.putAssumeCapacityNoClobber(new_file_id, new_account_file);
             }
 
             // update the references
@@ -1797,7 +1922,7 @@ pub const AccountsDB = struct {
             var offset_index: u64 = 0;
             for (is_alive_flags.items) |is_alive| {
                 // SAFE: we know is_alive_flags is the same length as the account_iter
-                const account = &(account_iter.next().?);
+                const account = account_iter.next().?;
                 if (is_alive) {
                     // find the slot in the reference list
                     const pubkey = account.pubkey();
@@ -1837,39 +1962,23 @@ pub const AccountsDB = struct {
                 reference_memory_entry.value_ptr.* = new_reference_block;
             }
 
-            // delete old account file
+            // queue the old account_file for deletion
+            delete_account_files.putAssumeCapacityNoClobber(shrink_file_id, {});
+
             {
-                shrink_account_file_lg.unlock();
-
-                // NOTE: we write lock the file_map and the account_file before
-                // we de-init the account-file that way we guarantee no-one else has
-                // a reference to the account file
-                const file_map, var file_map_lg = self.file_map.writeWithLock();
-                defer file_map_lg.unlock();
-
-                const shrink_account_file_write, var shrink_account_file_write_lg = shrink_account_file_rw.writeWithLock();
-                defer shrink_account_file_write_lg.unlock();
-
-                const did_remove = file_map.swapRemove(shrink_file_id);
-                std.debug.assert(did_remove);
-
-                shrink_account_file_write.deinit();
-            }
-
-            self.deleteAccountFile(slot, shrink_file_id) catch |err| {
-                self.logger.errf(
-                    "failed to delete account file slot.file_id: {d}.{d}: {s}",
-                    .{ slot, shrink_file_id.toInt(), @errorName(err) },
-                );
-            };
-
-            // reset to zero dead accounts
-            {
+                // remove the dead accounts counter entry, since there
+                // are no longer any dead accounts at this slot for now.
+                // there has to be a counter for it at this point, since
+                // cleanAccounts would only have added this file_id to
+                // the queue if it deleted any accounts refs.
                 const dead_accounts_counter, var dead_accounts_counter_lg = self.dead_accounts_counter.writeWithLock();
                 defer dead_accounts_counter_lg.unlock();
-                dead_accounts_counter.getPtr(slot).?.* = 0;
+                const removed = dead_accounts_counter.fetchSwapRemove(slot) orelse unreachable;
+                std.debug.assert(removed.value == accounts_dead_count);
             }
         }
+
+        self.stats.time_shrink.observe(@floatFromInt(timer.read().asNanos()));
 
         return .{
             .num_accounts_deleted = total_accounts_deleted,
@@ -1881,6 +1990,8 @@ pub const AccountsDB = struct {
     /// only exist in the cache, and not on disk). this is mainly used for dropping
     /// forks.
     pub fn purgeSlot(self: *Self, slot: Slot) void {
+        var timer = sig.time.Timer.start() catch @panic("Timer unsupported");
+
         const pubkeys, const accounts = blk: {
             const account_cache, var account_cache_lg = self.account_cache.readWithLock();
             defer account_cache_lg.unlock();
@@ -1930,17 +2041,19 @@ pub const AccountsDB = struct {
         }
         self.allocator.free(accounts);
         self.allocator.free(pubkeys);
+
+        self.stats.time_purge.observe(@floatFromInt(timer.read().asNanos()));
     }
 
     // NOTE: we need to acquire locks which requires `self: *Self` but we never modify any data
     pub fn getAccountFromRef(self: *Self, account_ref: *const AccountRef) !Account {
         switch (account_ref.location) {
             .File => |ref_info| {
-                const account = try self.getAccountInFile(
+                return try self.getAccountInFile(
+                    self.allocator,
                     ref_info.file_id,
                     ref_info.offset,
                 );
-                return account;
             },
             .Cache => |ref_info| {
                 const account_cache, var account_cache_lg = self.account_cache.readWithLock();
@@ -1954,119 +2067,124 @@ pub const AccountsDB = struct {
         }
     }
 
-    pub const AccountReadLock = union(enum) {
-        File: RwMux(AccountFile).RLockGuard,
-        Cache: RwMux(AccountCache).RLockGuard,
+    pub const AccountInCacheOrFileTag = enum { file, cache };
+    pub const AccountInCacheOrFile = union(AccountInCacheOrFileTag) {
+        file: AccountInFile,
+        cache: Account,
+    };
+    pub const AccountInCacheOrFileLock = union(AccountInCacheOrFileTag) {
+        file: *std.Thread.RwLock,
+        cache: RwMux(AccountCache).RLockGuard,
 
-        pub fn unlock(self: *AccountReadLock) void {
-            switch (self.*) {
-                .File => self.File.unlock(),
-                .Cache => self.Cache.unlock(),
+        pub fn unlock(lock: *AccountInCacheOrFileLock) void {
+            switch (lock.*) {
+                .file => |rwlock| rwlock.unlockShared(),
+                .cache => |*lg| lg.unlock(),
             }
         }
     };
 
-    pub fn getAccountFromRefWithReadLock(self: *Self, account_ref: *const AccountRef) !struct { Account, AccountReadLock } {
+    pub const GetAccountFromRefError = GetAccountInFileError || error{SlotNotFound};
+    pub fn getAccountFromRefWithReadLock(
+        self: *Self,
+        account_ref: *const AccountRef,
+    ) GetAccountFromRefError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
         switch (account_ref.location) {
             .File => |ref_info| {
-                const account, const account_file_lg = try self.getAccountInFileWithLock(
+                const account = try self.getAccountInFileAndLock(
                     ref_info.file_id,
                     ref_info.offset,
                 );
-
-                return .{ account, .{ .File = account_file_lg } };
+                return .{
+                    .{ .file = account },
+                    .{ .file = &self.file_map_fd_rw },
+                };
             },
             .Cache => |ref_info| {
-                const account_cache, const account_cache_lg = self.account_cache.readWithLock();
+                const account_cache, var account_cache_lg = self.account_cache.readWithLock();
+                errdefer account_cache_lg.unlock();
 
                 _, const accounts = account_cache.get(account_ref.slot) orelse return error.SlotNotFound;
-                const account = accounts[ref_info.index];
-
-                return .{ account, .{ .Cache = account_cache_lg } };
+                return .{
+                    .{ .cache = accounts[ref_info.index] },
+                    .{ .cache = account_cache_lg },
+                };
             },
         }
     }
 
-    /// gets an account given an file_id and offset value
+    pub const GetAccountInFileError = error{ FileIdNotFound, InvalidOffset };
+
+    /// Gets an account given an file_id and offset value.
+    /// Locks the account file entries, and then unlocks
+    /// them, after returning the clone of the account.
     pub fn getAccountInFile(
         self: *Self,
+        account_allocator: std.mem.Allocator,
         file_id: FileId,
         offset: usize,
-    ) !Account {
-        var account_file_rw: RwMux(AccountFile) = blk: {
-            const file_map, var file_map_lg = self.file_map.readWithLock();
-            defer file_map_lg.unlock();
-
-            break :blk file_map.get(file_id) orelse {
-                return error.FileIdNotFound;
-            };
-        };
-
-        const account_file, var account_file_lg = account_file_rw.readWithLock();
-        defer account_file_lg.unlock();
-
-        const account_in_file = account_file.readAccount(offset) catch {
-            return error.InvalidOffset;
-        };
-        const account = try account_in_file.toOwnedAccount(self.allocator);
-        return account;
+    ) (GetAccountInFileError || std.mem.Allocator.Error)!Account {
+        const account_in_file = try self.getAccountInFileAndLock(file_id, offset);
+        defer self.file_map_fd_rw.unlockShared();
+        return try account_in_file.toOwnedAccount(account_allocator);
     }
 
-    /// gets an account given an file_id and offset value
-    pub fn getAccountInFileWithLock(
+    /// Gets an account given an file_id and offset value.
+    /// Locks the account file entries, and returns the account.
+    /// Must call `self.disk_accounts.file_map_fd_rw.unlockShared()`
+    /// when done with the account.
+    pub fn getAccountInFileAndLock(
         self: *Self,
         file_id: FileId,
         offset: usize,
-    ) !struct { Account, RwMux(AccountFile).RLockGuard } {
-        var account_file_rw: RwMux(AccountFile) = blk: {
+    ) GetAccountInFileError!AccountInFile {
+        self.file_map_fd_rw.lockShared();
+        errdefer self.file_map_fd_rw.unlockShared();
+        return try self.getAccountInFileAssumeLock(file_id, offset);
+    }
+
+    /// Gets an account given a file_id and an offset value.
+    /// Assumes `self.disk_accounts.file_map_fd_rw` is at least
+    /// locked for reading (shared).
+    pub fn getAccountInFileAssumeLock(
+        self: *Self,
+        file_id: FileId,
+        offset: usize,
+    ) GetAccountInFileError!AccountInFile {
+        const account_file: AccountFile = blk: {
             const file_map, var file_map_lg = self.file_map.readWithLock();
             defer file_map_lg.unlock();
-
-            break :blk file_map.get(file_id) orelse {
-                return error.FileIdNotFound;
-            };
+            break :blk file_map.get(file_id) orelse return error.FileIdNotFound;
         };
-
-        const account_file, const account_file_lg = account_file_rw.readWithLock();
-        const account_in_file = account_file.readAccount(offset) catch {
-            return error.InvalidOffset;
-        };
-        const account = account_in_file.toAccount();
-
-        return .{ account, account_file_lg };
+        return account_file.readAccount(offset) catch error.InvalidOffset;
     }
 
     pub fn getAccountHashAndLamportsFromRef(
         self: *Self,
         location: AccountRef.AccountLocation,
-    ) !struct { hash: Hash, lamports: u64 } {
+    ) (GetAccountInFileError)!struct { Hash, u64 } {
         switch (location) {
             .File => |ref_info| {
-                var account_file_rw = blk: {
+                self.file_map_fd_rw.lockShared();
+                defer self.file_map_fd_rw.unlockShared();
+
+                const account_file = blk: {
                     const file_map, var file_map_lg = self.file_map.readWithLock();
                     defer file_map_lg.unlock();
-
-                    break :blk file_map.get(ref_info.file_id) orelse {
-                        return error.FileIdNotFound;
-                    };
+                    break :blk file_map.get(ref_info.file_id) orelse return error.FileIdNotFound;
                 };
-
-                const account_file, var account_file_lg = account_file_rw.readWithLock();
-                defer account_file_lg.unlock();
 
                 const result = account_file.getAccountHashAndLamports(
                     ref_info.offset,
                 ) catch return error.InvalidOffset;
 
                 return .{
-                    .hash = result.hash.*,
-                    .lamports = result.lamports.*,
+                    result.hash.*,
+                    result.lamports.*,
                 };
             },
-            .Cache => |_| {
-                // we dont use this method for cache
-                @panic("getAccountHashAndLamportsFromRef is not implemented on cache references");
-            },
+            // we dont use this method for cache
+            .Cache => @panic("getAccountHashAndLamportsFromRef is not implemented on cache references"),
         }
     }
 
@@ -2084,9 +2202,12 @@ pub const AccountsDB = struct {
         return account;
     }
 
-    pub fn getAccountWithReadLock(self: *Self, pubkey: *const Pubkey) !struct { Account, AccountReadLock } {
+    pub const GetAccountError = GetAccountFromRefError || error{PubkeyNotInIndex};
+    pub fn getAccountWithReadLock(
+        self: *Self,
+        pubkey: *const Pubkey,
+    ) GetAccountError!struct { AccountInCacheOrFile, AccountInCacheOrFileLock } {
         var head_ref_rw = self.account_index.getReference(pubkey) orelse return error.PubkeyNotInIndex;
-
         const head_ref, var head_ref_lg = head_ref_rw.readWithLock();
         defer head_ref_lg.unlock();
 
@@ -2095,12 +2216,21 @@ pub const AccountsDB = struct {
         return try self.getAccountFromRefWithReadLock(max_ref);
     }
 
-    pub fn getTypeFromAccount(self: *Self, comptime T: type, pubkey: *const Pubkey) !T {
+    pub const GetTypeFromAccountError = GetAccountError || error{DeserializationError};
+    pub fn getTypeFromAccount(
+        self: *Self,
+        comptime T: type,
+        pubkey: *const Pubkey,
+    ) GetTypeFromAccountError!T {
         const account, var lock_guard = try self.getAccountWithReadLock(pubkey);
         // NOTE: bincode will copy heap memory so its safe to unlock at the end of the function
         defer lock_guard.unlock();
 
-        const t = bincode.readFromSlice(self.allocator, T, account.data, .{}) catch {
+        const file_data: []const u8 = switch (account) {
+            .file => |in_file| in_file.data,
+            .cache => |cached| cached.data,
+        };
+        const t = bincode.readFromSlice(self.allocator, T, file_data, .{}) catch {
             return error.DeserializationError;
         };
         return t;
@@ -2144,10 +2274,7 @@ pub const AccountsDB = struct {
             const file_map, var file_map_lg = self.file_map.writeWithLock();
             defer file_map_lg.unlock();
 
-            try file_map.put(
-                account_file.id,
-                RwMux(AccountFile).init(account_file.*),
-            );
+            try file_map.put(self.allocator, account_file.id, account_file.*);
 
             // we update the bank hash stats while locking the file map to avoid
             // reading accounts from the file map and getting inaccurate/stale
@@ -2193,7 +2320,7 @@ pub const AccountsDB = struct {
             }
         }
 
-        {
+        if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
             try dead_accounts.putNoClobber(account_file.slot, accounts_dead_count);
@@ -2210,7 +2337,16 @@ pub const AccountsDB = struct {
         std.debug.assert(accounts.len == pubkeys.len);
         if (accounts.len == 0) return;
 
-        // TODO(x19): support geyser writes
+        if (self.geyser_writer) |geyser_writer| {
+            const data_versioned = sig.geyser.core.VersionedAccountPayload{
+                .AccountPayloadV1 = .{
+                    .accounts = accounts,
+                    .pubkeys = pubkeys,
+                    .slot = slot,
+                },
+            };
+            try geyser_writer.writePayloadToPipe(data_versioned);
+        }
 
         {
             const accounts_duped = try self.allocator.alloc(Account, accounts.len);
@@ -2256,7 +2392,7 @@ pub const AccountsDB = struct {
 
             const new_len = bin_counts[bin_index] + bin.count();
             if (new_len > 0) {
-                try bin.ensureTotalCapacity(@intCast(new_len));
+                try bin.ensureTotalCapacity(new_len);
             }
         }
 
@@ -2286,7 +2422,7 @@ pub const AccountsDB = struct {
             std.debug.assert(self.account_index.exists(&pubkeys[i], slot));
         }
 
-        {
+        if (accounts_dead_count != 0) {
             const dead_accounts, var dead_accounts_lg = self.dead_accounts_counter.writeWithLock();
             defer dead_accounts_lg.unlock();
             try dead_accounts.putNoClobber(slot, accounts_dead_count);
@@ -2397,6 +2533,11 @@ pub const AccountsDB = struct {
         /// For tests against older snapshots. Should just be 0 during normal operation.
         deprecated_stored_meta_write_version: u64,
     ) !struct { FullSnapshotGenerationPackage, FullSnapshotGenerationInfo } {
+        // NOTE: we hold the lock for the entire duration of the procedure to ensure
+        // flush and clean do not create files while generating a snapshot.
+        self.file_map_fd_rw.lockShared();
+        defer self.file_map_fd_rw.unlockShared();
+
         var file_map_rw = self.file_map.read();
         errdefer file_map_rw.unlock();
         const file_map = file_map_rw.get();
@@ -2409,10 +2550,7 @@ pub const AccountsDB = struct {
 
         var bank_hash_stats = BankHashStats.zero_init;
 
-        for (file_map.values()) |*account_file_rw| {
-            const account_file: *const AccountFile, var account_file_lg = account_file_rw.readWithLock();
-            defer account_file_lg.unlock();
-
+        for (file_map.values()) |account_file| {
             if (account_file.slot > target_slot) continue;
 
             const bank_hash_stats_map, var bank_hash_stats_map_lg = self.bank_hash_stats.readWithLock();
@@ -2584,8 +2722,11 @@ pub const AccountsDB = struct {
         /// For tests against older snapshots. Should just be 0 during normal operation.
         deprecated_stored_meta_write_version: u64,
     ) MakeIncSnapshotPackgeError!struct { IncSnapshotGenerationPackage, IncSnapshotGenerationInfo } {
-        // NOTE: we hold the lock for the entire duration of the function to ensure
+        // NOTE: we hold the lock for the entire duration of the procedure to ensure
         // flush and clean do not create files while generating a snapshot.
+        self.file_map_fd_rw.lockShared();
+        defer self.file_map_fd_rw.unlockShared();
+
         var file_map_rw = self.file_map.read();
         errdefer file_map_rw.unlock();
         const file_map = file_map_rw.get();
@@ -2600,10 +2741,7 @@ pub const AccountsDB = struct {
 
         var bank_hash_stats = BankHashStats.zero_init;
 
-        for (file_map.values()) |*account_file_rw| {
-            const account_file: *const AccountFile, var account_file_lg = account_file_rw.readWithLock();
-            defer account_file_lg.unlock();
-
+        for (file_map.values()) |account_file| {
             if (account_file.slot <= full_snapshot_info.slot) continue;
             if (account_file.slot > target_slot) continue;
 
@@ -2787,7 +2925,7 @@ pub const GeyserTmpStorage = struct {
 pub const ValidateAccountFileError = error{
     BinCountMismatch,
     InvalidAccountFileLength,
-    OutOfReferenceMemory,
+    OutOfMemory,
 } || AccountInFile.ValidateError || GeyserTmpStorage.Error;
 
 pub fn indexAndValidateAccountFile(
@@ -2812,7 +2950,7 @@ pub fn indexAndValidateAccountFile(
             try storage.cloneAndTrack(account);
         }
 
-        account_refs.append(.{
+        try account_refs.append(.{
             .pubkey = account.store_info.pubkey,
             .slot = accounts_file.slot,
             .location = .{
@@ -2821,9 +2959,7 @@ pub fn indexAndValidateAccountFile(
                     .offset = offset,
                 },
             },
-        }) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfReferenceMemory,
-        };
+        });
 
         const pubkey = &account.store_info.pubkey;
         const bin_index = pubkey_bin_calculator.binIndex(pubkey);
@@ -2969,10 +3105,7 @@ pub fn writeSnapshotTarWithFields(
 
     const file_info_map = &snapshot_fields.accounts_db_fields.file_map;
     for (file_info_map.keys(), file_info_map.values()) |account_slot, account_file_info| {
-        const account_file_rw = file_map.getPtr(account_file_info.id) orelse unreachable;
-        const account_file, var account_file_lg = account_file_rw.readWithLock();
-        defer account_file_lg.unlock();
-
+        const account_file = file_map.getPtr(account_file_info.id) orelse unreachable;
         std.debug.assert(account_file.id == account_file_info.id);
 
         const name_bounded = sig.utils.fmt.boundedFmt("accounts/{d}.{d}", .{ account_slot, account_file_info.id.toInt() });
@@ -3002,7 +3135,7 @@ fn testWriteSnapshotFull(
     var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
+    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3062,7 +3195,7 @@ fn testWriteSnapshotIncremental(
     var snap_fields = try SnapshotFields.decodeFromBincode(allocator, manifest_file.reader());
     defer snap_fields.deinit(allocator);
 
-    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator);
+    _ = try accounts_db.loadFromSnapshot(snap_fields.accounts_db_fields, 1, allocator, 1_500);
 
     var tmp_dir_root = std.testing.tmpDir(.{});
     defer tmp_dir_root.cleanup();
@@ -3109,7 +3242,7 @@ fn testWriteSnapshotIncremental(
 }
 
 test "testWriteSnapshot" {
-    var test_data_dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var test_data_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer test_data_dir.close();
 
     const snap_files = try SnapshotFiles.find(std.testing.allocator, test_data_dir);
@@ -3143,7 +3276,7 @@ test "testWriteSnapshot" {
 fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
-    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
 
     { // unpack both snapshots to get the acccount files
@@ -3175,7 +3308,7 @@ fn unpackTestSnapshot(allocator: std.mem.Allocator, n_threads: usize) !void {
 fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u32) !struct { AccountsDB, AllSnapshotFields } {
     std.debug.assert(builtin.is_test); // should only be used in tests
 
-    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
 
     try unpackTestSnapshot(allocator, n_threads);
@@ -3195,7 +3328,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
     }, null);
     errdefer accounts_db.deinit(true);
 
-    _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator);
+    _ = try accounts_db.loadFromSnapshot(snapshot.accounts_db_fields, n_threads, allocator, 1_500);
 
     return .{ accounts_db, snapshots };
 }
@@ -3204,7 +3337,7 @@ fn loadTestAccountsDB(allocator: std.mem.Allocator, use_disk: bool, n_threads: u
 test "geyser stream on load" {
     const allocator = std.testing.allocator;
 
-    var dir = try std.fs.cwd().openDir("test_data", .{ .iterate = true });
+    var dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR, .{ .iterate = true });
     defer dir.close();
     try unpackTestSnapshot(allocator, 2);
 
@@ -3216,7 +3349,7 @@ test "geyser stream on load" {
     var snapshots = try AllSnapshotFields.fromFiles(allocator, logger, dir, snapshot_files);
     errdefer snapshots.deinit(allocator);
 
-    const geyser_pipe_path = "test_data/geyser.pipe";
+    const geyser_pipe_path = sig.TEST_DATA_DIR ++ "geyser.pipe";
     var geyser_writer: ?*GeyserWriter = null;
 
     const geyser_exit = try allocator.create(std.atomic.Value(bool));
@@ -3267,13 +3400,14 @@ test "geyser stream on load" {
         snapshots.deinit(allocator);
     }
 
-    var accounts_dir = try std.fs.cwd().openDir("test_data/accounts", .{});
+    var accounts_dir = try std.fs.cwd().openDir(sig.TEST_DATA_DIR ++ "accounts", .{});
     defer accounts_dir.close();
 
     _ = try accounts_db.loadFromSnapshot(
         snapshot.accounts_db_fields,
         1,
         allocator,
+        1_500,
     );
 }
 
@@ -3411,7 +3545,7 @@ test "load other sysvars" {
 test "flushing slots works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3442,20 +3576,19 @@ test "flushing slots works" {
     defer unclean_account_files.deinit();
     try unclean_account_files.append(try accounts_db.flushSlot(slot));
 
+    accounts_db.file_map_fd_rw.lock();
+    defer accounts_db.file_map_fd_rw.unlock();
+
     // try the validation
     const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
     defer file_map_lg.unlock();
 
     const file_id = file_map.keys()[0];
-    var account_file_rw = file_map.get(file_id).?;
 
-    var account_file, var account_file_lg = account_file_rw.writeWithLock();
-    defer account_file_lg.unlock();
-    const n = try account_file.validate();
-    account_file.number_of_accounts = n;
+    const account_file = file_map.getPtr(file_id).?;
+    account_file.number_of_accounts = try account_file.validate();
 
     try std.testing.expect(account_file.number_of_accounts == n_accounts);
-
     try std.testing.expect(unclean_account_files.items.len == 1);
     try std.testing.expect(unclean_account_files.items[0] == file_id);
 }
@@ -3463,7 +3596,7 @@ test "flushing slots works" {
 test "purge accounts in cache works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3500,7 +3633,7 @@ test "purge accounts in cache works" {
 
     // ref backing memory is cleared
     {
-        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
         defer reference_memory_lg.unlock();
 
         try std.testing.expect(reference_memory.count() == 0);
@@ -3521,7 +3654,7 @@ test "purge accounts in cache works" {
 test "clean to shrink account file works with zero-lamports" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3597,7 +3730,7 @@ test "clean to shrink account file works with zero-lamports" {
 test "clean to shrink account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3665,7 +3798,7 @@ test "clean to shrink account file works" {
 test "full clean account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3738,19 +3871,19 @@ test "full clean account file works" {
         try std.testing.expect(file_map.get(delete_file_id) != null);
     }
 
-    accounts_db.deleteAccountFiles(delete_account_files.keys());
+    try accounts_db.deleteAccountFiles(delete_account_files.keys());
 
     {
         const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
         defer file_map_lg.unlock();
-        try std.testing.expect(file_map.get(delete_file_id) == null);
+        try std.testing.expectEqual(null, file_map.get(delete_file_id));
     }
 }
 
 test "shrink account file works" {
     const allocator = std.testing.allocator;
     const logger = Logger{ .noop = {} };
-    var snapshot_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer snapshot_dir.close();
     var accounts_db = try AccountsDB.init(allocator, logger, snapshot_dir, .{
         .number_of_index_bins = 4,
@@ -3818,20 +3951,23 @@ test "shrink account file works" {
     try std.testing.expect(shrink_account_files.count() == 1);
     try std.testing.expectEqual(9, clean_result.num_old_states);
 
-    const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
-    const slot_file_id: FileId = for (file_map.keys()) |file_id| {
-        var account_file_rw = file_map.get(file_id).?;
-        if (account_file_rw.readField("slot") == slot) {
-            break file_id;
-        }
-    } else return error.NoSlotFile;
-    var v = file_map.get(slot_file_id).?;
-    const pre_shrink_size = v.readField("file_size");
-    file_map_lg.unlock();
+    const pre_shrink_size = blk: {
+        accounts_db.file_map_fd_rw.lockShared();
+        defer accounts_db.file_map_fd_rw.unlockShared();
+
+        const file_map, var file_map_lg = accounts_db.file_map.readWithLock();
+        defer file_map_lg.unlock();
+
+        const slot_file_id: FileId = for (file_map.keys()) |file_id| {
+            const account_file = file_map.get(file_id).?;
+            if (account_file.slot == slot) break file_id;
+        } else return error.NoSlotFile;
+        break :blk file_map.get(slot_file_id).?.file_size;
+    };
 
     // full memory block
     {
-        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
         defer reference_memory_lg.unlock();
 
         const slot_mem = reference_memory.get(new_slot).?;
@@ -3839,27 +3975,44 @@ test "shrink account file works" {
     }
 
     // test: files were shrunk
-    const r = try accounts_db.shrinkAccountFiles(shrink_account_files.keys());
+    const r = try accounts_db.shrinkAccountFiles(
+        shrink_account_files.keys(),
+        &delete_account_files,
+    );
     try std.testing.expectEqual(9, r.num_accounts_deleted);
 
     // test: new account file is shrunk
-    const file_map2, var file_map_lg2 = accounts_db.file_map.readWithLock();
-    defer file_map_lg2.unlock();
+    {
+        accounts_db.file_map_fd_rw.lockShared();
+        defer accounts_db.file_map_fd_rw.unlockShared();
 
-    const new_slot_file_id: FileId = for (file_map2.keys()) |file_id| {
-        var account_file_rw = file_map2.get(file_id).?;
-        if (account_file_rw.readField("slot") == slot) {
-            break file_id;
-        }
-    } else return error.NoSlotFile;
+        const file_map2, var file_map_lg2 = accounts_db.file_map.readWithLock();
+        defer file_map_lg2.unlock();
 
-    var new_account_file = file_map2.get(new_slot_file_id).?;
-    const post_shrink_size = new_account_file.readField("file_size");
-    try std.testing.expect(post_shrink_size < pre_shrink_size);
+        const new_slot_file_id: FileId = blk: {
+            var maybe_max_file_id: ?FileId = null;
+            for (file_map2.keys(), file_map2.values()) |file_id, account_file| {
+                const max_file_id = maybe_max_file_id orelse {
+                    if (account_file.slot == slot) {
+                        maybe_max_file_id = file_id;
+                    }
+                    continue;
+                };
+                if (max_file_id.toInt() > file_id.toInt()) continue;
+                if (account_file.slot != slot) continue;
+                maybe_max_file_id = file_id;
+            }
+            break :blk maybe_max_file_id orelse return error.NoSlotFile;
+        };
+
+        const new_account_file = file_map2.get(new_slot_file_id).?;
+        const post_shrink_size = new_account_file.file_size;
+        try std.testing.expect(post_shrink_size < pre_shrink_size);
+    }
 
     // test: memory block is shrunk too
     {
-        var reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
+        const reference_memory, var reference_memory_lg = accounts_db.account_index.reference_memory.readWithLock();
         defer reference_memory_lg.unlock();
 
         const slot_mem = reference_memory.get(slot).?;
@@ -3867,7 +4020,7 @@ test "shrink account file works" {
     }
 
     // last account ref should still be accessible
-    var account = try accounts_db.getAccount(&pubkey_remain);
+    const account = try accounts_db.getAccount(&pubkey_remain);
     account.deinit(allocator);
 }
 
@@ -3901,7 +4054,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
         // NOTE: usually this will be an incremental snapshot
         // renamed as a full snapshot (mv {inc-snap-fmt}.tar.zstd {full-snap-fmt}.tar.zstd)
         // (because test snapshots are too small and full snapshots are too big)
-        const dir_path = "test_data/bench_snapshot/";
+        const dir_path = sig.TEST_DATA_DIR ++ "bench_snapshot/";
         const accounts_path = dir_path ++ "accounts";
 
         // const logger = Logger{ .noop = {} };
@@ -3946,6 +4099,7 @@ pub const BenchmarkAccountsDBSnapshotLoad = struct {
             snapshot.accounts_db_fields,
             bench_args.n_threads,
             allocator,
+            1_500,
         );
 
         // sanity check
@@ -4109,10 +4263,10 @@ pub const BenchmarkAccountsDB = struct {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         var allocator = gpa.allocator();
 
-        const disk_path = "test_data/tmp/";
+        const disk_path = sig.TEST_DATA_DIR ++ "tmp/";
         std.fs.cwd().makeDir(disk_path) catch {};
 
-        var snapshot_dir = try std.fs.cwd().makeOpenPath("ledger/accounts_db", .{});
+        var snapshot_dir = try std.fs.cwd().makeOpenPath(sig.VALIDATOR_DIR ++ "accounts_db", .{});
         defer snapshot_dir.close();
 
         const logger = Logger{ .noop = {} };

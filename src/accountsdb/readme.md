@@ -15,7 +15,7 @@ the main files include:
 
 `--help` output of accounts-db related flags:
 ```
--s, --snapshot-dir <snapshot_dir>                                    path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test_data/
+-s, --snapshot-dir <snapshot_dir>                                    path to snapshot directory (where snapshots are downloaded and/or unpacked to/from) - default: test-data/
 
 -t, --n-threads-snapshot-load <n_threads_snapshot_load>              number of threads to load snapshots: - default: ncpus
 
@@ -39,7 +39,7 @@ Additional context on specific cli flags is given throughout these docs.
 ```bash
 zig-out/bin/sig snapshot-download \
     # where to save snapshot
-    -s test_data/tmp \
+    -s test-data/tmp \
     # gossip peers to join network from
     --entrypoint 34.83.231.102:8001 \
     --entrypoint 145.40.67.83:8001 \
@@ -49,8 +49,9 @@ zig-out/bin/sig snapshot-download \
     --min-snapshot-download-speed 50 \
 ```
 
-
 # background 
+
+checkout the full accounts-db deep-dive blog post here: [https://blog.syndica.io/sig-engineering-part-3-solanas-accountsdb/](https://blog.syndica.io/sig-engineering-part-3-solanas-accountsdb/)
 
 ## snapshots 
 
@@ -106,9 +107,48 @@ the two major components in the db include:
 - a account_file map which maps a file_id to the mmap'd contents of that file
 - the account index which maps a pubkey to a file_id and an offset of where the account's bytes begin
 
-the account_file map uses a std hashmap and is straightforward.
+## account file_map
 
-the account index is more involved.
+To make the file_map thread-safe we had to modify a few things.
+
+To better understand this, theres three main thread-safe scenarios we care about:
+- adding new account files (flushing)
+- reading account files (snapshot generation, account queries)
+- removing account files (shrinking and purging)
+
+the two main fields are: 
+- `file_map_fd_rw`: a read-lock on this mux should be held whenever an account file is being held.
+A write-lock on this mux should be held whenever we are closing a file.
+
+### Adding new account files (flushing):
+
+Adding an account file should never invalidate the
+account files observed by another thread. The file-map should be
+write-locked so any map resizing (if theres not enough space) doesnt 
+invalidate other threads values.
+
+### Reading account files (snapshot generation, account queries):
+
+All reading threads must first acquire a read (shared) lock on the file_map_fd_rw,
+before acquiring a lock on the file map, and reading an account file - to ensure
+account files will not be closed while being read.
+
+After doing so, the file_map_rw may be unlocked, without
+releasing the file_map_fd_rw, allowing other threads to modify the file_map,
+whilst preventing any files being closed until all reading threads have finished their work.
+
+### Removing account files (deleting):
+
+A thread which wants to delete/close an account files must first
+acquire a write (exclusive) lock on `file_map_fd_rw`, before acquiring
+a write-lock on the file map to access the account_file and close/delete/remove it.
+
+NOTE: Holding a write lock on `file_map_fd_rw` is very expensive, so we only acquire
+a write-lock inside `deleteAccountFiles` which has a minimal amount of logic.
+
+NOTE: no method modifieds/mutates account files after they have been
+flushed. They are 'shrunk' with deletion + creating a 'smaller' file, or purged
+with deletion. This allows us to *not* use a lock per-account-file.
 
 ## account index
 
@@ -134,11 +174,48 @@ to support disk-based account references, we created a general purpose
 disk allocator which creates memory from mmap-ing files stored on disk.
 
 ```zig
-// files are created using `test_data/tmp_{i}` format where `i` is 
+// files are created using `data/test-data/tmp_{i}` format where `i` is 
 // incremented by one for each alloc call.
-var allocator = try DiskMemoryAllocator.init("test_data/tmp");
+var allocator = try DiskMemoryAllocator.init("data/test-data/tmp");
 defer allocator.deinit(null);
 ```
+
+### background-threads
+
+we also run background threads in the `runManagerLoop` method which does the following:
+1) flush the cache to account files in `flushSlot`
+2) clean account files in `cleanAccountFiles`
+3) shrink account files in `shrinkAccountFiles`
+4) deletes account files in `deleteAccountFiles`
+5) periodically create full snapshots and incremental snapshots
+
+for an overview on how the methods should work checkout the blogpost details on background threads.
+
+#### shrink + delete and thread-saftey
+
+since acquiring a write-lock on `file_map_fd_rw` is very expensive (ensuring no account-files
+can have read-access), we ensure its only write-locked during deletion in `deleteAccountFiles` and
+contains the minimal amount of logic.
+
+we also limit how often the method is called by requiring a minimum number of account files to delete
+per call (defined by `DELETE_ACCOUNT_FILES_MIN`).
+
+#### snapshot creation
+
+we creat both full snapshots and incremental snapshots every N roots (defined in `ManagerLoopConfig`). 
+- full snapshots: `makeFullSnapshotGenerationPackage`
+- incremental snapshots: `makeIncrementalSnapshotGenerationPackage`
+
+the general usage is to create a snapshot package which implements a write method that can 
+be used to write a tar-archive of the snapshot (using the method `writeSnapshotTarWithFields`). the 
+package collects all the account files which should be included in the snapshot and also computes
+the accounts-hash and total number of lamports to populate the manifest with.
+
+in the loop, we create the package and then write the tar-archive into a zstd compression library 
+(`zstd.writerCtx`) which itself pipes into a file on disk.
+
+After the writing has been complete the internal accounts-db state is updated using `commitFullSnapshotInfo` and `commitIncrementalSnapshotInfo` which tracks the new snapshot 
+created and either deletes or ignores older snapshots (which arent needed anymore).
 
 # methods
 

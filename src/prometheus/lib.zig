@@ -16,3 +16,4 @@ pub const Registry = registry.Registry;
 
 pub const globalRegistry = registry.globalRegistry;
 pub const servePrometheus = http.servePrometheus;
+pub const spawnMetrics = http.spawnMetrics;

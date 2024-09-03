@@ -1,15 +1,14 @@
 //! includes the main struct for reading + validating account files
-
 const std = @import("std");
+const sig = @import("../sig.zig");
 
-const Account = @import("../core/account.zig").Account;
-const writeIntLittleMem = @import("../core/account.zig").writeIntLittleMem;
-const Hash = @import("../core/hash.zig").Hash;
-const Slot = @import("../core/time.zig").Slot;
-const Epoch = @import("../core/time.zig").Epoch;
-const Pubkey = @import("../core/pubkey.zig").Pubkey;
-
-const AccountFileInfo = @import("snapshots.zig").AccountFileInfo;
+const Account = sig.core.Account;
+const writeIntLittleMem = sig.core.account.writeIntLittleMem;
+const Hash = sig.core.Hash;
+const Slot = sig.core.Slot;
+const Epoch = sig.core.Epoch;
+const Pubkey = sig.core.Pubkey;
+const AccountFileInfo = sig.accounts_db.snapshots.AccountFileInfo;
 
 /// Simple strictly-typed alias for an integer, used to represent a file ID.
 ///
@@ -162,7 +161,7 @@ pub const AccountInFile = struct {
         }
     }
 
-    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) !Account {
+    pub fn toOwnedAccount(self: *const Self, allocator: std.mem.Allocator) std.mem.Allocator.Error!Account {
         const owned_data = try allocator.dupe(u8, self.data);
         return .{
             .data = owned_data,
@@ -268,7 +267,7 @@ pub const AccountFile = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: Self) void {
         std.posix.munmap(self.memory);
         self.file.close();
     }
@@ -400,7 +399,7 @@ pub const AccountFile = struct {
 };
 
 test "core.accounts_file: verify accounts file" {
-    const path = "test_data/test_account_file";
+    const path = sig.TEST_DATA_DIR ++ "test_account_file";
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
     const file_info = AccountFileInfo{
         .id = FileId.fromInt(0),

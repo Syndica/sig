@@ -61,7 +61,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
 
     const use_disk = rand.boolean();
 
-    var test_data_dir = try std.fs.cwd().makeOpenPath("test_data", .{});
+    var test_data_dir = try std.fs.cwd().makeOpenPath(sig.TEST_DATA_DIR, .{});
     defer test_data_dir.close();
 
     const snapshot_dir_name = "accountsdb_fuzz";
@@ -245,7 +245,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
                 break :full .{ archive_name, snapshot_info };
             };
 
-            var archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
+            const archive_file = try alternative_snapshot_dir.openFile(archive_name.slice(), .{});
             defer archive_file.close();
 
             try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
@@ -258,7 +258,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             );
 
             logger.infof("fuzz[validate]: unpacked full snapshot at slot: {}", .{snapshot_info.slot});
-            var snapshot_files = sig.accounts_db.SnapshotFiles{
+            var snapshot_files: sig.accounts_db.SnapshotFiles = .{
                 .full_snapshot = .{
                     .hash = snapshot_info.hash,
                     .slot = snapshot_info.slot,
@@ -296,7 +296,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             if (inc_result) |result| {
                 const inc_archive_name, const inc_snapshot_info = result;
 
-                var inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name.slice(), .{});
+                const inc_archive_file = try alternative_snapshot_dir.openFile(inc_archive_name.slice(), .{});
                 defer inc_archive_file.close();
 
                 try sig.accounts_db.snapshots.parallelUnpackZstdTarBall(
@@ -328,7 +328,7 @@ pub fn run(seed: u64, args: *std.process.ArgIterator) !void {
             var alt_accounts_db = try AccountsDB.init(std.heap.page_allocator, .noop, alternative_snapshot_dir, accounts_db.config, null);
             defer alt_accounts_db.deinit(true);
 
-            _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true);
+            _ = try alt_accounts_db.loadWithDefaults(&snapshot_fields, 1, true, 1_500);
             const maybe_inc_slot = if (snapshot_files.incremental_snapshot) |inc| inc.slot else null;
             logger.infof("loaded and validated snapshot at slot: {} (and inc snapshot @ slot {any})", .{ snapshot_info.slot, maybe_inc_slot });
         }

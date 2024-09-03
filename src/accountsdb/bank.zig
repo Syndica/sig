@@ -1,10 +1,12 @@
 //! minimal logic for bank (still being built out)
 
 const std = @import("std");
-const AccountsDB = @import("db.zig").AccountsDB;
-const GenesisConfig = @import("genesis_config.zig").GenesisConfig;
-const BankFields = @import("snapshots.zig").BankFields;
-const SnapshotFields = @import("snapshots.zig").SnapshotFields;
+const sig = @import("../sig.zig");
+
+const AccountsDB = sig.accounts_db.AccountsDB;
+const GenesisConfig = sig.accounts_db.GenesisConfig;
+const BankFields = sig.accounts_db.snapshots.BankFields;
+const SnapshotFields = sig.accounts_db.snapshots.SnapshotFields;
 
 // TODO: we can likley come up with a better name for this struct
 /// Analogous to [Bank](https://github.com/anza-xyz/agave/blob/ad0a48c7311b08dbb6c81babaf66c136ac092e79/runtime/src/bank.rs#L718)
@@ -62,7 +64,7 @@ pub fn yearsAsSlots(years: f64, tick_duration_ns: u32, ticks_per_slot: u64) f64 
 test "core.bank: load and validate from test snapshot" {
     const allocator = std.testing.allocator;
 
-    const full_metadata_path = "test_data/10";
+    const full_metadata_path = sig.TEST_DATA_DIR ++ "10";
     var full_snapshot_fields = try SnapshotFields.readFromFilePath(
         allocator,
         full_metadata_path,
@@ -70,7 +72,7 @@ test "core.bank: load and validate from test snapshot" {
     defer full_snapshot_fields.deinit(allocator);
 
     // use the genesis to verify loading
-    const genesis_path = "test_data/genesis.bin";
+    const genesis_path = sig.TEST_DATA_DIR ++ "genesis.bin";
     const genesis_config = try GenesisConfig.init(allocator, genesis_path);
     defer genesis_config.deinit(allocator);
 

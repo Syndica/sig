@@ -11,8 +11,6 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-const SIGNATURE_LENGTH = sig.core.SIGNATURE_LENGTH;
-
 /// Analogous to [SIGNED_REPAIR_TIME_WINDOW](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L89)
 const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
 
@@ -80,8 +78,8 @@ pub fn serializeRepairRequest(
 
     var signer = try keypair.signer(null); // TODO noise
     signer.update(serialized[0..4]);
-    signer.update(serialized[4 + SIGNATURE_LENGTH ..]);
-    @memcpy(serialized[4 .. 4 + SIGNATURE_LENGTH], &signer.finalize().toBytes());
+    signer.update(serialized[4 + Signature.size ..]);
+    @memcpy(serialized[4 .. 4 + Signature.size], &signer.finalize().toBytes());
 
     return serialized;
 }
@@ -166,14 +164,14 @@ pub const RepairMessage = union(enum(u8)) {
                 }
 
                 // signature is valid
-                if (serialized.len < 4 + SIGNATURE_LENGTH) {
+                if (serialized.len < 4 + Signature.size) {
                     return error.Malformed;
                 }
                 var verifier = header.signature.verifier(header.sender) catch {
                     return error.InvalidSignature;
                 };
                 verifier.update(serialized[0..4]);
-                verifier.update(serialized[4 + SIGNATURE_LENGTH ..]);
+                verifier.update(serialized[4 + Signature.size ..]);
                 verifier.verify() catch {
                     return error.InvalidSignature;
                 };
@@ -238,7 +236,7 @@ test "signed/serialized RepairRequest is valid" {
 
 test "RepairRequestHeader serialization round trip" {
     var rng = std.rand.DefaultPrng.init(5224);
-    var signature: [SIGNATURE_LENGTH]u8 = undefined;
+    var signature: [Signature.size]u8 = undefined;
     rng.fill(&signature);
 
     const header = RepairRequestHeader{
@@ -405,7 +403,7 @@ const testHelpers = struct {
     }
 
     fn randomRepairRequestHeader(rng: std.rand.Random) RepairRequestHeader {
-        var signature: [SIGNATURE_LENGTH]u8 = undefined;
+        var signature: [Signature.size]u8 = undefined;
         rng.bytes(&signature);
 
         return RepairRequestHeader{

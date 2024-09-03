@@ -4,7 +4,7 @@ const sig = @import("../sig.zig");
 const Allocator = std.mem.Allocator;
 
 const BitFlags = sig.utils.bitflags.BitFlags;
-const CodingShred = sig.ledger.shred.CodingShred;
+const CodeShred = sig.ledger.shred.CodeShred;
 const Slot = sig.core.Slot;
 const SortedSet = sig.utils.collections.SortedSet;
 
@@ -171,38 +171,38 @@ pub const DuplicateSlotProof = struct {
     shred2: []const u8,
 };
 
-/// Erasure coding information
+/// Erasure code information
 /// TODO: why does this need such large integer types?
 pub const ErasureMeta = struct {
     /// Which erasure set in the slot this is
     fec_set_index: u64,
-    /// First coding index in the FEC set
-    first_coding_index: u64,
-    /// Index of the first received coding shred in the FEC set
-    first_received_coding_index: u64,
+    /// First code index in the FEC set
+    first_code_index: u64,
+    /// Index of the first received code shred in the FEC set
+    first_received_code_index: u64,
     /// Erasure configuration for this erasure set
     config: ErasureConfig,
 
     const Self = @This();
 
-    pub fn fromCodingShred(shred: CodingShred) ?Self {
+    pub fn fromCodeShred(shred: CodeShred) ?Self {
         return .{
             .fec_set_index = @intCast(shred.fields.common.fec_set_index),
             .config = ErasureConfig{
                 .num_data = @intCast(shred.fields.custom.num_data_shreds),
-                .num_coding = @intCast(shred.fields.custom.num_coding_shreds),
+                .num_code = @intCast(shred.fields.custom.num_code_shreds),
             },
-            .first_coding_index = @intCast(shred.firstCodingIndex() catch return null),
-            .first_received_coding_index = @intCast(shred.fields.common.index),
+            .first_code_index = @intCast(shred.firstCodeIndex() catch return null),
+            .first_received_code_index = @intCast(shred.fields.common.index),
         };
     }
 
     /// Returns true if the erasure fields on the shred
     /// are consistent with the erasure-meta.
-    pub fn checkCodingShred(self: Self, shred: CodingShred) bool {
-        var other = fromCodingShred(shred) orelse return false;
-        other.first_received_coding_index = self.first_received_coding_index;
-        return sig.utils.types.eql(self, other);
+    pub fn checkCodeShred(self: Self, shred: CodeShred) bool {
+        var other = fromCodeShred(shred) orelse return false;
+        other.first_received_code_index = self.first_received_code_index;
+        return sig.utils.types.eql(self, other, .{});
     }
 
     /// Analogous to [status](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L442)
@@ -211,7 +211,7 @@ pub const ErasureMeta = struct {
         data_full,
         still_need: usize,
     } {
-        const c_start, const c_end = self.codingShredsIndices();
+        const c_start, const c_end = self.codeShredsIndices();
         const d_start, const d_end = self.dataShredsIndices();
         const num_code = index.code.range(c_start, c_end).len;
         const num_data = index.data.range(d_start, d_end).len;
@@ -233,10 +233,10 @@ pub const ErasureMeta = struct {
         return .{ self.fec_set_index, self.fec_set_index + num_data };
     }
 
-    /// Analogous to [coding_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L428)
-    pub fn codingShredsIndices(self: Self) [2]u64 {
-        const num_coding = self.config.num_coding;
-        return .{ self.first_coding_index, self.first_coding_index + num_coding };
+    /// Analogous to [code_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L428)
+    pub fn codeShredsIndices(self: Self) [2]u64 {
+        const num_code = self.config.num_code;
+        return .{ self.first_code_index, self.first_code_index + num_code };
     }
 
     /// Analogous to [next_fec_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
@@ -252,7 +252,7 @@ pub const ErasureMeta = struct {
 /// TODO: usize seems like a poor choice here, but i just copied agave
 pub const ErasureConfig = struct {
     num_data: usize,
-    num_coding: usize,
+    num_code: usize,
 };
 
 /// Index recording presence/absence of shreds
@@ -349,7 +349,7 @@ pub const MerkleRootMeta = struct {
     pub fn fromShred(shred: anytype) MerkleRootMeta {
         comptime std.debug.assert(
             @TypeOf(shred) == sig.ledger.shred.DataShred or
-                @TypeOf(shred) == sig.ledger.shred.CodingShred,
+                @TypeOf(shred) == sig.ledger.shred.CodeShred,
         );
         return MerkleRootMeta{
             // An error here after the shred has already sigverified
@@ -360,7 +360,7 @@ pub const MerkleRootMeta = struct {
             // a valid duplicate shred proof.
             .merkle_root = shred.fields.merkleRoot() catch null,
             .first_received_shred_index = shred.fields.common.index,
-            .first_received_shred_type = shred.fields.common.shred_variant.shred_type,
+            .first_received_shred_type = shred.fields.common.variant.shred_type,
         };
     }
 };

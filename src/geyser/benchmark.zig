@@ -9,7 +9,7 @@ const GeyserWriter = sig.geyser.GeyserWriter;
 const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;
 
 const MEASURE_RATE = sig.time.Duration.fromSecs(2);
-const PIPE_PATH = "../sig/test_data/accountsdb_fuzz.pipe";
+const PIPE_PATH = "../sig/" ++ sig.TEST_DATA_DIR ++ "accountsdb_fuzz.pipe";
 
 pub fn streamWriter(exit: *std.atomic.Value(bool)) !void {
     const allocator = std.heap.page_allocator;

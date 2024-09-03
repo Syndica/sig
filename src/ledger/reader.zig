@@ -171,7 +171,7 @@ pub const BlockstoreReader = struct {
     }
 
     /// Analogous to [get_coding_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2287-L2288)
-    pub fn getCodingShredsForSlot(
+    pub fn getCodeShredsForSlot(
         self: *Self,
         slot: Slot,
         start_index: u64,
@@ -1469,7 +1469,7 @@ pub const AncestorIterator = struct {
 
 const bincode = sig.bincode;
 const Blockstore = sig.ledger.BlockstoreDB;
-const CodingShred = sig.ledger.shred.CodingShred;
+const CodeShred = sig.ledger.shred.CodeShred;
 const TestState = sig.ledger.insert_shred.TestState;
 
 const test_shreds = @import("test_shreds.zig");
@@ -1554,7 +1554,7 @@ test "getFirstDuplicateProof" {
     const logger = .noop;
     const registry = sig.prometheus.globalRegistry();
 
-    const path = std.fmt.comptimePrint("{s}/{s}", .{ "test_data/blockstore/insert_shred", "getFirstDuplicateProof" });
+    const path = std.fmt.comptimePrint("{s}/{s}", .{ sig.TEST_DATA_DIR ++ "blockstore/insert_shred", "getFirstDuplicateProof" });
     try sig.ledger.tests.freshDir(path);
     var db = try BlockstoreDB.open(allocator, logger, path);
     defer db.deinit(true);
@@ -2037,7 +2037,7 @@ test "findMissingDataIndexes" {
         .chained = false,
         .resigned = false,
     };
-    shred.data.fields.common.shred_variant = variant;
+    shred.data.fields.common.variant = variant;
     try shred.data.fields.writePayload(&(.{2} ** 100));
 
     var slot_meta = SlotMeta.init(allocator, shred_slot, null);
@@ -2090,7 +2090,7 @@ test "getCodeShred" {
         &max_root,
     );
 
-    var shred = Shred{ .code = try CodingShred.default(allocator) };
+    var shred = Shred{ .code = try CodeShred.default(allocator) };
     defer shred.deinit();
     shred.code.fields.common.slot = 10;
     shred.code.fields.common.index = 10;
@@ -2104,7 +2104,7 @@ test "getCodeShred" {
         .chained = false,
         .resigned = false,
     };
-    shred.code.fields.common.shred_variant = variant;
+    shred.code.fields.common.variant = variant;
     try shred.code.fields.writePayload(&(.{2} ** 100));
 
     const shred_slot = shred.commonHeader().slot;
@@ -2138,7 +2138,7 @@ test "getCodeShred" {
     const is_full = try reader.isFull(shred_slot);
     try std.testing.expectEqual(false, is_full);
 
-    var shreds = try reader.getCodingShredsForSlot(shred_slot, shred_index);
+    var shreds = try reader.getCodeShredsForSlot(shred_slot, shred_index);
     defer {
         for (shreds.items) |*s| s.deinit();
         shreds.deinit();

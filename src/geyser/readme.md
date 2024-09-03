@@ -60,7 +60,7 @@ when free is called, we find the buffer in the records and set the record's `is_
 // setup writer
 var stream_writer = try GeyserWriter.init(
     allocator,
-    "test_data/stream_test.pipe",
+    "test-data/stream_test.pipe",
     exit,
     1 << 18, // 256kb
 );

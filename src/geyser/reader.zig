@@ -15,7 +15,7 @@ pub fn main() !void {
         if (maybe_pipe_path) |pipe_path| {
             break :blk pipe_path;
         } else {
-            break :blk "ledger/geyser.pipe";
+            break :blk sig.VALIDATOR_DIR ++ "geyser.pipe";
         }
     };
     std.debug.print("using pipe path: {s}\n", .{pipe_path});
