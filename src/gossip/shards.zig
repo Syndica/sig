@@ -104,7 +104,7 @@ pub const GossipTableShards = struct {
 
 const GossipTable = sig.gossip.table.GossipTable;
 
-test "tests GossipTableShards" {
+test "GossipTableShards" {
     var shards = try GossipTableShards.init(std.testing.allocator);
     defer shards.deinit();
 
