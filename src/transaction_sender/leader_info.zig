@@ -75,7 +75,7 @@ pub const LeaderInfo = struct {
             self.epoch_info = try epoch_info_response.result();
             self.leader_schedule.deinit();
             self.leader_schedule = try LeaderSchedule.fromRpc(allocator, self.epoch_info.absoluteSlot - self.epoch_info.slotIndex, &self.rpc_client);
-            try self.updateLeaderAddressesCache();
+            try self.updateLeaderAddressesCache(allocator);
         }
 
         var leader_addresses = std.ArrayList(SocketAddr).init(allocator);
@@ -87,21 +87,22 @@ pub const LeaderInfo = struct {
         }
 
         if (leader_addresses.items.len <= @divFloor(self.config.max_leaders_to_send_to, 2)) {
-            try self.updateLeaderAddressesCache();
+            try self.updateLeaderAddressesCache(allocator);
         }
 
         return leader_addresses;
     }
 
-    fn updateLeaderAddressesCache(self: *LeaderInfo) !void {
-        const gossip_table: *const GossipTable, var gossip_table_lock = self.gossip_table_rw.readWithLock();
-        defer gossip_table_lock.unlock();
+    fn updateLeaderAddressesCache(self: *LeaderInfo, allocator: std.mem.Allocator) !void {
+        const gossip_table: *const GossipTable, var gossip_table_lg = self.gossip_table_rw.readWithLock();
+        defer gossip_table_lg.unlock();
 
+        var checked_leaders = std.AutoArrayHashMap(Pubkey, void).init(allocator);
         for (self.leader_schedule.slot_leaders) |leader| {
-            if (self.leader_addresses_cache.contains(leader)) continue;
+            if (self.leader_addresses_cache.contains(leader) or checked_leaders.contains(leader)) continue;
+            try checked_leaders.put(leader, void{});
             const contact_info = gossip_table.getThreadSafeContactInfo(leader);
-            if (contact_info == null) continue;
-            if (contact_info.?.tpu_addr == null) continue;
+            if (contact_info == null or contact_info.?.tpu_addr == null) continue;
             try self.leader_addresses_cache.put(leader, contact_info.?.tpu_addr.?);
         }
     }

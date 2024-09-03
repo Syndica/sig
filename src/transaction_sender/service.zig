@@ -195,8 +195,8 @@ pub const Service = struct {
 
         // We need to hold a read lock until we are finished using the signatures and transactions, otherwise
         // the receiver thread could add new transactions and corrupt the underlying array
-        const signatures, const transactions, var lock = self.transaction_pool.readSignaturesAndTransactionsWithLock();
-        defer lock.unlock();
+        const signatures, const transactions, var transactions_lg = self.transaction_pool.readSignaturesAndTransactionsWithLock();
+        defer transactions_lg.unlock();
 
         var signature_statuses_timer = try Timer.start();
         const signature_statuses_response = try rpc_client.getSignatureStatuses(
@@ -247,10 +247,10 @@ pub const Service = struct {
         if (self.transaction_pool.hasRetrySignatures()) {
             // We need to hold a read lock until we are finished using the retry transactions, otherwise
             // the receiver thread could add new transactions and corrupt the underlying array
-            const retry_transactions, var lock = try self.transaction_pool.readRetryTransactionsWithLock(self.allocator);
+            const retry_transactions, var transactions_lg = try self.transaction_pool.readRetryTransactionsWithLock(self.allocator);
             defer {
                 self.allocator.free(retry_transactions);
-                lock.unlock();
+                transactions_lg.unlock();
             }
 
             const leader_addresses = try self.getLeaderAddresses();
@@ -270,8 +270,8 @@ pub const Service = struct {
     fn getLeaderAddresses(self: *Service) !std.ArrayList(SocketAddr) {
         var get_leader_addresses_timer = try Timer.start();
         const leader_addresses = blk: {
-            const leader_info: *LeaderInfo, var leader_info_lock = self.leader_info_rw.writeWithLock();
-            defer leader_info_lock.unlock();
+            const leader_info: *LeaderInfo, var leader_info_lg = self.leader_info_rw.writeWithLock();
+            defer leader_info_lg.unlock();
             break :blk try leader_info.getLeaderAddresses(self.allocator);
         };
         self.stats.get_leader_addresses_latency_millis.set(get_leader_addresses_timer.read().asMillis());

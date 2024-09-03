@@ -63,6 +63,7 @@ pub const MockTransferService = struct {
                 lamports,
                 latest_blockhash,
             );
+            defer transaction.deinit(self.allocator);
 
             const transaction_info = try TransactionInfo.new(
                 transaction,
