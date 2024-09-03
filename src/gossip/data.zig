@@ -1783,7 +1783,7 @@ test "sanitize GossipData" {
     }
 }
 
-test "test SignedGossipData label() and id() methods" {
+test "SignedGossipData label() and id() methods" {
     const kp_bytes = [_]u8{1} ** 32;
     var kp = try KeyPair.create(kp_bytes);
     const pk = kp.public_key;
