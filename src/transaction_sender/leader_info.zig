@@ -17,7 +17,7 @@ const RpcClient = sig.rpc.Client;
 const RpcEpochInfo = sig.rpc.types.EpochInfo;
 const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
 const Logger = sig.trace.log.Logger;
-const Config = sig.transaction_sender.Config;
+const Config = sig.transaction_sender.service.Config;
 
 /// LeaderInfo contains information about the cluster that is used to send transactions.
 /// It uses the RpcClient to get the epoch info and leader schedule.

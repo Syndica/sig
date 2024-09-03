@@ -8,22 +8,27 @@ const AtomicBool = std.atomic.Value(bool);
 const AtomicSlot = std.atomic.Value(Slot);
 const UdpSocket = network.Socket;
 
+const ClusterType = sig.accounts_db.genesis_config.ClusterType;
+const Slot = sig.core.Slot;
+const Signature = sig.core.Signature;
+const GossipTable = sig.gossip.GossipTable;
 const SocketAddr = sig.net.SocketAddr;
 const Packet = sig.net.Packet;
-const Slot = sig.core.Slot;
-const RwMux = sig.sync.RwMux;
-const Signature = sig.core.Signature;
-const Channel = sig.sync.Channel;
-const Instant = sig.time.Instant;
-const GossipTable = sig.gossip.GossipTable;
+const Counter = sig.prometheus.Counter;
+const Gauge = sig.prometheus.Gauge;
+const GetMetricError = sig.prometheus.registry.GetMetricError;
 const RpcClient = sig.rpc.Client;
+const RwMux = sig.sync.RwMux;
+const Channel = sig.sync.Channel;
+const Duration = sig.time.Duration;
+const Instant = sig.time.Instant;
 const Timer = sig.time.Timer;
 const Logger = sig.trace.log.Logger;
-const Config = sig.transaction_sender.Config;
-const Stats = sig.transaction_sender.Stats;
 const LeaderInfo = sig.transaction_sender.LeaderInfo;
 const TransactionInfo = sig.transaction_sender.TransactionInfo;
 const TransactionPool = sig.transaction_sender.TransactionPool;
+
+const globalRegistry = sig.prometheus.globalRegistry;
 
 /// Basic send transaction service that listens for transactions on a channel.
 /// Transactions are added to the pool and retried until they are confirmed, failed,
@@ -302,5 +307,76 @@ pub const Service = struct {
         }
 
         self.stats.transactions_sent_count.add(transactions.len);
+    }
+};
+
+pub const Config = struct {
+    // Cluster type
+    cluster: ClusterType,
+    // Socket to send transactions from
+    socket: SocketAddr,
+    // Maximum number of transactions to send in a batch
+    batch_size: usize = 1,
+    // Time waited between sending transaction batches
+    batch_send_rate: Duration = Duration.fromSecs(1),
+    // Maximum number of transactions allowed in the transaction pool
+    pool_max_size: usize = 1000,
+    // Time waited between processing the transaction pool
+    pool_process_rate: Duration = Duration.fromSecs(1),
+    // Maximum number of leaders to forward to ahead of the current leader
+    max_leaders_to_send_to: usize = 5,
+    // Number of consecutive leader slots (TODO: this should come from other config somewhere)
+    number_of_consecutive_leader_slots: u64 = 4,
+    // Maximum number of retries for a transaction whoes max_retries is null
+    default_max_retries: ?usize = null,
+    // Time waited between retrying transactions
+    retry_rate: Duration = Duration.fromSecs(1),
+    // Maximum number of rpc http request retries before a request raises an error
+    rpc_retries: usize = 3,
+};
+
+pub const Stats = struct {
+    transactions_pending: *Gauge(u64),
+    transactions_received_count: *Counter,
+    transactions_retry_count: *Counter,
+    transactions_sent_count: *Counter,
+    transactions_rooted_count: *Counter,
+    transactions_failed_count: *Counter,
+    transactions_expired_count: *Counter,
+    transactions_exceeded_max_retries_count: *Counter,
+    number_of_leaders_identified: *Gauge(u64),
+
+    process_transactions_latency_millis: *Gauge(u64),
+    retry_transactions_latency_millis: *Gauge(u64),
+    get_leader_addresses_latency_millis: *Gauge(u64),
+
+    rpc_block_height_latency_millis: *Gauge(u64),
+    rpc_signature_statuses_latency_millis: *Gauge(u64),
+
+    pub fn init() GetMetricError!Stats {
+        var self: Stats = undefined;
+        const registry = globalRegistry();
+        const stats_struct_info = @typeInfo(Stats).Struct;
+        inline for (stats_struct_info.fields) |field| {
+            if (field.name[0] != '_') {
+                @field(self, field.name) = switch (field.type) {
+                    *Counter => try registry.getOrCreateCounter(field.name),
+                    *Gauge(u64) => try registry.getOrCreateGauge(field.name, u64),
+                    else => @compileError("Unhandled field type: " ++ field.name ++ ": " ++ @typeName(field.type)),
+                };
+            }
+        }
+        return self;
+    }
+
+    pub fn log(self: *const Stats, logger: Logger) void {
+        logger.infof("transaction-sender: {} received, {} pending, {} rooted, {} failed, {} expired, {} exceeded_retries", .{
+            self.transactions_received_count.get(),
+            self.transactions_pending.get(),
+            self.transactions_rooted_count.get(),
+            self.transactions_failed_count.get(),
+            self.transactions_expired_count.get(),
+            self.transactions_exceeded_max_retries_count.get(),
+        });
     }
 };
