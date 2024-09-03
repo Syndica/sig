@@ -1,21 +1,49 @@
-# service.zig: Transaction Sender Service
+# Transaction Sender Service
 
 - The transaction sender is responsible for sending transactions to the leader's TPU for incorporation into the ledger. It must have up to date information about who the current and future leaders are so that it can successfuly get transactions onto the ledger before they expire. 
 
 - The transaction sender receives transaction information from a channel, sends the transactions to the leader TPU addresses and then adds the transactions to a pool where they are retried until they are either expired, failed, or rooted. 
 
-## transaction_info.zig :TransactionInfo
-- TransactionInfo is a wrapper around a serialised transaction which includes additional information need to send the transaction such as tracking retries and expiration.
+<p>
+<img alt="Transaction Sender Service Diagram" src="imgs/transaction-sender-service.png" style="width: 800px; margin: auto;">
+</p>
 
-- TODO: `durable_nonce_info` research / usage
+## Receive Transactions Thread (service.zig)
+1. Receives new transactions from channel
+3. Loads current leader tpu addresses using LeaderInfo
+3. Performs initial send of new transactions
+4. Adds new transactions to the pool
 
-## transaction_pool.zig: TransactionPool
-- TransactionPool keeps a record of pending transactions, it also provides methods for safely accessing the underlying pending transaction data while sending retries.
+## Process Transactions Thread (service.zig)
+1. Fetches pending transaction statuses via rpc call to **getSignatureStatuses**
+2. Removes successful, failed and expired transactions from the pool
+3. Loads current leader tpu addresses using LeaderInfo
+4. Retries transactions which are still valid but not rooted
 
-## leader_info.zig: LeaderInfo
-- LeaderInfo uses and rpc client and gossip table reference to fetch and maintain the leader schedule as well as the leader tpu addresses.
-- Its core functionality is to provide a list of the next N leaders tpu addresses, where N is configured in the service config by `max_leaders_to_send_to`
+## TransactionInfo (transaction_info.zig)
+- Wrapper around a serialised transaction which includes additional metadata required to send and retry the transaction 
+    - `retries`: number of times the transaction as been retried
+    - `max_retries`: maximum number of times the transaction can be retried
+    - `last_sent_time`: last time the transaction was sent
+    - `last_valid_blockheight`: last block before the transaction will be considered expired
+    - `durable_nonce_info`: TODO
 
-## mock_transfer_generator.zig: Mock Transfer Generator 
-- This is a temporary testing service used to confirm that transactions land on chain successfully.
-- It simply sends small transfer instructions between two tesnet accounts to a channel
+## TransactionPool (transaction_pool.zig)
+- Provides thread safe mechanism for keeping track of pending transactions
+- Provides means to efficiently keep track of which transactions should be retried and dropped
+
+## LeaderInfo (leader_info.zig)
+- Used to obtain the tpu addresses of the next `n` leaders (`Config.max_leaders_to_send_to`)
+- Keeps a cache of leader tpu addresses
+- Uses gossip table to populate cache for all leaders in the leader schedule
+- Keeps track of the current epoch info and leader schedule via rpc calls to **getEpochInfo** and **getLeaderSchedule**
+- Provides one public method `getLeaderAddresses`:
+    1. Gets the current slot via rpc call to **getSlot**
+    2. Check that the slot is within the current epoch and leader schedule, otherwise update epoch info and leader schedule
+    3. For each of the next `n` leaders in the leader schedule, attempt to load their tpu address from the cache
+    4. If the number of leaders which had cached addresses is less than floor(n/2), then perform a cache update 
+    5. Return leader addresses
+
+## Mock Transfer Generator (mock_transfer_generator.zig)
+- Temporary testing service used to confirm that transactions land on chain successfully
+- Sends small transfer instructions between two tesnet accounts to a channel
