@@ -5,7 +5,7 @@ const std = @import("std");
 const sig = @import("../sig.zig");
 const accounts_db = sig.accounts_db;
 
-pub fn SwissMapManaged(
+pub fn SwissMap(
     comptime Key: type,
     comptime Value: type,
     comptime hash_fn: fn (Key) callconv(.Inline) u64,
@@ -498,7 +498,7 @@ pub fn SwissMapUnmanaged(
 }
 
 test "swissmap resize" {
-    var map = SwissMapManaged(sig.core.Pubkey, accounts_db.index.AccountRef, accounts_db.index.pubkey_hash, accounts_db.index.pubkey_eql).init(std.testing.allocator);
+    var map = SwissMap(sig.core.Pubkey, accounts_db.index.AccountRef, accounts_db.index.pubkey_hash, accounts_db.index.pubkey_eql).init(std.testing.allocator);
     defer map.deinit();
 
     try map.ensureTotalCapacity(100);
@@ -522,7 +522,7 @@ test "swissmap read/write/delete" {
         allocator.free(pubkeys);
     }
 
-    var map = try SwissMapManaged(
+    var map = try SwissMap(
         sig.core.Pubkey,
         *accounts_db.index.AccountRef,
         accounts_db.index.pubkey_hash,
@@ -573,7 +573,7 @@ test "swissmap read/write" {
         allocator.free(pubkeys);
     }
 
-    var map = try SwissMapManaged(
+    var map = try SwissMap(
         sig.core.Pubkey,
         *accounts_db.index.AccountRef,
         accounts_db.index.pubkey_hash,
@@ -646,7 +646,7 @@ pub const BenchmarkSwissMap = struct {
         const accounts, const pubkeys = try generateData(allocator, n_accounts);
 
         const write_time, const read_time = try benchGetOrPut(
-            SwissMapManaged(
+            SwissMap(
                 sig.core.Pubkey,
                 *accounts_db.index.AccountRef,
                 accounts_db.index.pubkey_hash,

@@ -7,7 +7,7 @@ const Pubkey = sig.core.pubkey.Pubkey;
 const FileId = sig.accounts_db.accounts_file.FileId;
 const RwMux = sig.sync.RwMux;
 
-pub const SwissMapManaged = sig.accounts_db.swiss_map.SwissMapManaged;
+pub const SwissMap = sig.accounts_db.swiss_map.SwissMap;
 pub const SwissMapUnmanaged = sig.accounts_db.swiss_map.SwissMapUnmanaged;
 pub const BenchHashMap = sig.accounts_db.swiss_map.BenchHashMap;
 pub const BenchmarkSwissMap = sig.accounts_db.swiss_map.BenchmarkSwissMap;
@@ -105,7 +105,7 @@ pub const AccountIndex = struct {
     const Self = @This();
 
     pub const ReferenceMemory = std.AutoHashMap(Slot, std.ArrayList(AccountRef));
-    pub const RefMap = SwissMapManaged(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
+    pub const RefMap = SwissMap(Pubkey, AccountReferenceHead, pubkey_hash, pubkey_eql);
 
     pub const GetAccountRefError = error{ SlotNotFound, PubkeyNotFound };
 
