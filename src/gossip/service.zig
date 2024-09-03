@@ -321,7 +321,7 @@ pub const GossipService = struct {
             self.logger,
         });
         try manager.spawn("gossip verifyPackets", verifyPackets, .{self});
-        try manager.spawn("gossip processMessages", processMessages, .{self});
+        try manager.spawn("gossip processMessages", processMessages, .{ self, 19 });
 
         if (!params.spy_node) {
             try manager.spawn("gossip buildMessages", buildMessages, .{ self, 19 });
@@ -471,7 +471,7 @@ pub const GossipService = struct {
     };
 
     /// main logic for recieving and processing gossip messages.
-    pub fn processMessages(self: *Self) !void {
+    pub fn processMessages(self: *Self, seed: u64) !void {
         var trim_table_timer = try sig.time.Timer.start();
         var msg_count: usize = 0;
 
@@ -689,7 +689,7 @@ pub const GossipService = struct {
 
             if (pull_requests.items.len > 0) {
                 var x_timer = sig.time.Timer.start() catch unreachable;
-                self.handleBatchPullRequest(pull_requests) catch |err| {
+                self.handleBatchPullRequest(pull_requests, seed + msg_count) catch |err| {
                     self.logger.errf("handleBatchPullRequest failed: {}", .{err});
                 };
                 const elapsed = x_timer.read().asMillis();
@@ -1239,6 +1239,7 @@ pub const GossipService = struct {
     fn handleBatchPullRequest(
         self: *Self,
         pull_requests: ArrayList(PullRequestMessage),
+        seed: u64,
     ) !void {
         // update the callers
         // TODO: parallelize this?
@@ -1312,7 +1313,7 @@ pub const GossipService = struct {
                     .output = ArrayList(Packet).init(self.allocator),
                     .allocator = self.allocator,
                     .output_limit = &output_limit,
-                    .seed = 19 + i,
+                    .seed = seed + i,
                 };
 
                 // run it
@@ -2636,7 +2637,7 @@ test "handle pull request" {
         .value = ci,
     });
 
-    try gossip_service.handleBatchPullRequest(pull_requests);
+    try gossip_service.handleBatchPullRequest(pull_requests, 19);
 
     {
         const outgoing_packets = gossip_service.packet_outgoing_channel;
@@ -3107,7 +3108,7 @@ test "process contact info push packet" {
     var packet_handle = try Thread.spawn(
         .{},
         GossipService.processMessages,
-        .{&gossip_service},
+        .{ &gossip_service, 19 },
     );
 
     // send a push message
