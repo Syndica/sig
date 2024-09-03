@@ -104,7 +104,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -114,7 +114,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 null,
                 null,
             );
-            self.channel.send(logMessage) catch @panic("could not send to channel");
+            self.channel.send(log_message) catch @panic("could not send to channel");
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
@@ -130,7 +130,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -140,7 +140,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 null,
                 null,
             );
-            self.channel.send(logMessage) catch @panic("could not send to channel");
+            self.channel.send(log_message) catch @panic("could not send to channel");
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
@@ -156,7 +156,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -166,7 +166,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 fmt,
                 args,
             );
-            self.channel.send(logMessage) catch @panic("could not send to channel");
+            self.channel.send(log_message) catch @panic("could not send to channel");
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
@@ -182,7 +182,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -192,7 +192,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 fmt,
                 args,
             );
-            self.channel.send(logMessage) catch @panic("could not send to channel");
+            self.channel.send(log_message) catch @panic("could not send to channel");
         }
     };
 
@@ -242,7 +242,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -253,7 +253,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 null,
             );
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
         }
 
         pub fn logWithFields(self: *Self, level: Level, message: []const u8, fields: anytype) void {
@@ -269,7 +269,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -280,7 +280,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 null,
             );
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
         }
 
         pub fn logf(self: *Self, level: Level, comptime fmt: []const u8, args: anytype) void {
@@ -296,7 +296,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -307,7 +307,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 args,
             );
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
         }
 
         pub fn logfWithFields(self: *Self, level: Level, comptime fmt: []const u8, args: anytype, fields: anytype) void {
@@ -323,7 +323,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 }
             };
 
-            const logMessage = logfmt.createLogMessage(
+            const log_message = logfmt.createLogMessage(
                 &self.recycle_fba,
                 self.max_buffer,
                 level,
@@ -334,7 +334,7 @@ pub fn StandardLogger(comptime scope: ?type) type {
                 args,
             );
             const writer = self.log_msg.?.writer();
-            logfmt.writeLog(writer, logMessage) catch @panic("Failed to write log");
+            logfmt.writeLog(writer, log_message) catch @panic("Failed to write log");
         }
     };
 
