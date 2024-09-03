@@ -19,6 +19,8 @@ const LeaderSchedule = sig.core.leader_schedule.SingleEpochLeaderSchedule;
 const Logger = sig.trace.log.Logger;
 const Config = sig.transaction_sender.service.Config;
 
+const leaderScheduleFromRpc = sig.core.leader_schedule.leaderScheduleFromRpc;
+
 /// LeaderInfo contains information about the cluster that is used to send transactions.
 /// It uses the RpcClient to get the epoch info and leader schedule.
 /// It also uses the GossipTable to get the leader addresses.
@@ -49,7 +51,7 @@ pub const LeaderInfo = struct {
         const epoch_info_response = try rpc_client.getEpochInfo(allocator, .{ .commitment = .processed });
         defer epoch_info_response.deinit(); // Deinit safe because EpochInfo contians only u64's.
         const epoch_info = try epoch_info_response.result();
-        const leader_schedule = try LeaderSchedule.fromRpc(allocator, epoch_info.absoluteSlot - epoch_info.slotIndex, &rpc_client);
+        const leader_schedule = try leaderScheduleFromRpc(allocator, epoch_info.absoluteSlot - epoch_info.slotIndex, &rpc_client);
 
         return .{
             .rpc_client = rpc_client,
