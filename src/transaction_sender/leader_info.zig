@@ -49,12 +49,13 @@ pub const LeaderInfo = struct {
         const epoch_info_response = try rpc_client.getEpochInfo(allocator, .{ .commitment = .processed });
         defer epoch_info_response.deinit(); // Deinit safe because EpochInfo contians only u64's.
         const epoch_info = try epoch_info_response.result();
+        const leader_schedule = try LeaderSchedule.fromRpc(allocator, epoch_info.absoluteSlot - epoch_info.slotIndex, &rpc_client);
 
         return .{
             .rpc_client = rpc_client,
             .config = config,
             .epoch_info = epoch_info,
-            .leader_schedule = try getLeaderSchedule(allocator, &epoch_info, &rpc_client),
+            .leader_schedule = leader_schedule,
             .leader_addresses_cache = std.AutoArrayHashMap(Pubkey, SocketAddr).init(allocator),
             .gossip_table_rw = gossip_table_rw,
         };
@@ -72,7 +73,8 @@ pub const LeaderInfo = struct {
             const epoch_info_response = try self.rpc_client.getEpochInfo(allocator, .{ .commitment = .processed });
             defer epoch_info_response.deinit();
             self.epoch_info = try epoch_info_response.result();
-            self.leader_schedule = try getLeaderSchedule(allocator, &self.epoch_info, &self.rpc_client);
+            self.leader_schedule.deinit();
+            self.leader_schedule = try LeaderSchedule.fromRpc(allocator, self.epoch_info.absoluteSlot - self.epoch_info.slotIndex, &self.rpc_client);
             try self.updateLeaderAddressesCache();
         }
 
@@ -104,49 +106,3 @@ pub const LeaderInfo = struct {
         }
     }
 };
-
-fn getLeaderSchedule(allocator: Allocator, epoch_info: *const RpcEpochInfo, rpc_client: *RpcClient) !LeaderSchedule {
-    const rpc_leader_schedule_response = try rpc_client.getLeaderSchedule(allocator, null, .{});
-    defer rpc_leader_schedule_response.deinit();
-    const rpc_leader_schedule = try rpc_leader_schedule_response.result();
-
-    var num_leaders: u64 = 0;
-    for (rpc_leader_schedule.values()) |leader_slots| {
-        num_leaders += leader_slots.len;
-    }
-
-    const Record = struct { slot: Slot, key: Pubkey };
-
-    var leaders_index: usize = 0;
-    var leaders = try allocator.alloc(Record, num_leaders);
-    defer allocator.free(leaders);
-
-    var rpc_leader_iter = rpc_leader_schedule.iterator();
-    while (rpc_leader_iter.next()) |entry| {
-        const key = try Pubkey.fromString(entry.key_ptr.*);
-        for (entry.value_ptr.*) |slot| {
-            leaders[leaders_index] = .{ .slot = slot, .key = key };
-            leaders_index += 1;
-        }
-    }
-
-    std.mem.sortUnstable(Record, leaders, {}, struct {
-        fn gt(_: void, lhs: Record, rhs: Record) bool {
-            return switch (std.math.order(lhs.slot, rhs.slot)) {
-                .gt => false,
-                else => true,
-            };
-        }
-    }.gt);
-
-    var leader_pubkeys = try allocator.alloc(Pubkey, leaders.len);
-    for (leaders, 0..) |record, i| {
-        leader_pubkeys[i] = record.key;
-    }
-
-    return LeaderSchedule{
-        .allocator = allocator,
-        .slot_leaders = leader_pubkeys,
-        .start_slot = epoch_info.absoluteSlot - epoch_info.slotIndex,
-    };
-}
