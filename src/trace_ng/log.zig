@@ -379,33 +379,35 @@ pub fn StandardLogger(comptime scope: ?type) type {
     };
 }
 
-const Stuff = struct {
-    logger: *StandardLogger(Stuff),
-
-    pub fn init(logger: *UnscopedLogger) Stuff {
-        return .{ .logger = logger.withScope(Stuff) };
-    }
-
-    pub fn doStuff(self: *Stuff) void {
-        self.logger.log(.info, "doing stuff");
-        var child = StuffChild.init(self.logger.unscoped());
-        child.doStuffDetails();
-    }
-};
-
-const StuffChild = struct {
-    logger: *StandardLogger(StuffChild),
-
-    pub fn init(logger: *UnscopedLogger) StuffChild {
-        return .{ .logger = logger.withScope(StuffChild) };
-    }
-
-    pub fn doStuffDetails(self: *StuffChild) void {
-        self.logger.log(.info, "doing stuff details");
-    }
-};
-
 test "trace_ng: scope switch" {
+    const StuffChild = struct {
+        const StuffChild = @This();
+        logger: *StandardLogger(StuffChild),
+
+        pub fn init(logger: *UnscopedLogger) StuffChild {
+            return .{ .logger = logger.withScope(StuffChild) };
+        }
+
+        pub fn doStuffDetails(self: *StuffChild) void {
+            self.logger.log(.info, "doing stuff details");
+        }
+    };
+
+    const Stuff = struct {
+        const Stuff = @This();
+        logger: *StandardLogger(Stuff),
+
+        pub fn init(logger: *UnscopedLogger) Stuff {
+            return .{ .logger = logger.withScope(Stuff) };
+        }
+
+        pub fn doStuff(self: *Stuff) void {
+            self.logger.log(.info, "doing stuff");
+            var child = StuffChild.init(self.logger.unscoped());
+            child.doStuffDetails();
+        }
+    };
+
     const allocator = std.testing.allocator;
 
     const exit = try allocator.create(std.atomic.Value(bool));
