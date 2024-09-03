@@ -1761,7 +1761,7 @@ test "SocketEntry serializer works" {
     try testing.expect(other_se.offset == se.offset);
 }
 
-test "test sig verify duplicateShreds" {
+test "sig verify duplicateShreds" {
     var keypair = try KeyPair.create([_]u8{1} ** 32);
     const pubkey = Pubkey.fromPublicKey(&keypair.public_key);
     var rng = std.rand.DefaultPrng.init(0);
